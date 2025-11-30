@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
+## [0.1.2] - 2025-11-30
+
+### Added
+- **Storage Interfaces** - New interfaces for custom storage implementations
+  - `ServiceKeyStore` interface - for reading service keys
+  - `SessionStore` interface - for reading/writing session data (tokens, configuration)
+  - `FileServiceKeyStore` - default file-based implementation for service keys
+  - `FileSessionStore` - default file-based implementation for sessions
+- **AuthBroker.getSapUrl()** - New method to get SAP URL for destination
+  - Loads URL from session store first, then from service key store
+  - Returns `undefined` if URL not found
+  - Useful for destination-based authentication where URL comes from destination, not headers
+- **Dependency Injection Support** - AuthBroker now accepts custom stores via constructor
+  - Can provide custom `ServiceKeyStore` and `SessionStore` implementations
+  - Default to file-based stores if not provided (backward compatible)
+  - Enables custom storage backends (database, cloud, etc.) without creating new packages
+
+### Changed
+- **AuthBroker Constructor** - Now accepts stores as first parameter (optional)
+  - Backward compatible: still accepts `searchPaths` as first parameter (string/array)
+  - New API: accepts object with `serviceKeyStore` and `sessionStore` properties
+  - Default behavior unchanged: creates file-based stores with provided search paths
+
+### Technical Details
+- Storage abstraction allows consumers to provide custom implementations
+- No breaking changes - existing code continues to work
+- File-based stores remain the default implementation
+
 ## [0.1.1] - 2025-11-30
 
 ### Added

@@ -24,72 +24,62 @@ The current implementation is a monolithic package that provides:
 
 ## Phase 1: Interface Abstraction (v0.2.0)
 
-**Goal**: Introduce storage interfaces without breaking existing API
+**Goal**: Introduce storage interfaces directly in auth-broker without breaking existing API
+
+**Rationale**: Instead of creating a separate `auth-broker-core` package, we add interfaces directly to `auth-broker`. This keeps the core logic (`AuthBroker` class) in the main package while allowing consumers to provide custom storage implementations. The default implementation uses file system, but consumers can inject their own stores (e.g., for database, cloud storage, etc.).
 
 ### Tasks
 
 1. **Define Core Interfaces**
-   - [ ] Create `ServiceKeyStore` interface
-   - [ ] Create `SessionStore` interface
-   - [ ] Create `BrowserOpener` interface
-   - [ ] Export interfaces from `src/core/interfaces.ts`
+   - [ ] Create `ServiceKeyStore` interface in `src/stores/interfaces.ts`
+     - `getServiceKey(destination: string): Promise<ServiceKey | null>`
+   - [ ] Create `SessionStore` interface in `src/stores/interfaces.ts`
+     - `loadSession(destination: string): Promise<EnvConfig | null>`
+     - `saveSession(destination: string, config: EnvConfig): Promise<void>`
+     - `deleteSession?(destination: string): Promise<void>` (optional)
+   - [ ] Export interfaces from `src/stores/interfaces.ts`
 
-2. **Refactor Current Implementation**
-   - [ ] Extract file-based logic into `FileServiceKeyStore` class
-   - [ ] Extract file-based logic into `FileSessionStore` class
-   - [ ] Make `AuthBroker` accept stores via constructor (DI)
-   - [ ] Maintain backward compatibility (default to file stores)
+2. **Create Default File-Based Implementations**
+   - [ ] Create `FileServiceKeyStore` class in `src/stores/FileServiceKeyStore.ts`
+     - Implements `ServiceKeyStore`
+     - Uses existing `loadServiceKey` logic
+     - Supports search paths (constructor parameter or `AUTH_BROKER_PATH` env var)
+   - [ ] Create `FileSessionStore` class in `src/stores/FileSessionStore.ts`
+     - Implements `SessionStore`
+     - Uses existing `loadEnvFile` and `saveTokenToEnv` logic
+     - Supports search paths (constructor parameter or `AUTH_BROKER_PATH` env var)
+   - [ ] Export default implementations from `src/stores/index.ts`
 
-3. **Update Documentation**
+3. **Refactor AuthBroker**
+   - [ ] Update `AuthBroker` constructor to accept optional `ServiceKeyStore` and `SessionStore`
+   - [ ] Default to `FileServiceKeyStore` and `FileSessionStore` if not provided
+   - [ ] Update `AuthBroker` methods to use injected stores instead of direct file operations
+   - [ ] Maintain backward compatibility (searchPaths parameter still works, creates file stores internally)
+
+4. **Update Internal Functions**
+   - [ ] Refactor `getToken`, `refreshToken`, `getSapUrl` to accept stores as parameters
+   - [ ] Update `AuthBroker` methods to pass stores to internal functions
+   - [ ] Keep internal functions for backward compatibility (used by AuthBroker)
+
+5. **Update Documentation**
    - [ ] Document new interfaces
+   - [ ] Add examples of custom store implementations
    - [ ] Add migration guide from v0.1.0 to v0.2.0
    - [ ] Update architecture documentation
 
 **Timeline**: 2-3 weeks
 
-**Breaking Changes**: None (backward compatible)
+**Breaking Changes**: None (backward compatible - default file stores are used if not provided)
+
+**Benefits**:
+- No need for separate `auth-broker-core` package
+- Core logic stays in main package
+- Consumers can inject custom stores without creating new packages
+- Future packages (e.g., `auth-broker-redis`, `auth-broker-db`) can provide store implementations
 
 ---
 
-## Phase 2: Core Package Extraction (v0.3.0)
-
-**Goal**: Extract core logic into zero-dependency package
-
-### Tasks
-
-1. **Create `@mcp-abap-adt/auth-broker-core` Package**
-   - [ ] Extract `AuthBroker` class to core
-   - [ ] Extract token validation logic
-   - [ ] Extract token refresh logic
-   - [ ] Extract browser auth flow (PKCE/device flow)
-   - [ ] Remove all `fs` and `path` dependencies
-   - [ ] Zero runtime dependencies (only dev dependencies for types)
-
-2. **Update Current Package**
-   - [ ] Rename current package to `@mcp-abap-adt/auth-broker-fs`
-   - [ ] Implement `FileServiceKeyStore` and `FileSessionStore`
-   - [ ] Re-export `AuthBroker` from core with default file stores
-   - [ ] Maintain backward compatibility
-
-3. **Package Structure**
-   ```
-   packages/
-     auth-broker-core/        # Zero deps, pure logic
-     auth-broker-fs/           # File system implementation
-   ```
-
-4. **Testing**
-   - [ ] Unit tests for core (mocked stores)
-   - [ ] Integration tests for fs package
-   - [ ] Ensure all existing tests pass
-
-**Timeline**: 3-4 weeks
-
-**Breaking Changes**: Minimal (package name change, but re-exports maintain compatibility)
-
----
-
-## Phase 3: Cache Package (v0.4.0)
+## Phase 2: Cache Package (v0.3.0)
 
 **Goal**: Extract caching layer into separate package
 

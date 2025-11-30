@@ -7,3 +7,7 @@ export { AuthBroker } from './AuthBroker';
 export type { EnvConfig, ServiceKey } from './types';
 export { resolveSearchPaths, findFileInPaths } from './pathResolver';
 
+// Export storage interfaces and implementations
+export { ServiceKeyStore, SessionStore } from './stores/interfaces';
+export { FileServiceKeyStore, FileSessionStore } from './stores';
+
