@@ -1,0 +1,72 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## Contributors
+
+Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
+
+## [0.1.0] - 2025-01-XX
+
+### Added
+- **AuthBroker class** - Main class for managing JWT authentication tokens
+  - `getToken(destination)` - Get token for destination (loads, validates, refreshes if needed)
+  - `refreshToken(destination)` - Force refresh token using service key or browser authentication
+  - `clearCache(destination)` - Clear cached token for specific destination
+  - `clearAllCache()` - Clear all cached tokens
+- **Multi-path file search** - Configurable search paths for `.env` and `.json` files
+  - Constructor parameter (highest priority)
+  - `AUTH_BROKER_PATH` environment variable
+  - Current working directory (fallback)
+- **Token management**
+  - Automatic token validation before use
+  - Automatic token refresh when expired
+  - In-memory token caching for performance
+  - Token expiry information in `.env` file comments
+- **Browser-based OAuth2 authentication**
+  - Automatic browser opening for initial authentication
+  - Configurable browser selection (chrome, edge, firefox, system, none)
+  - Manual URL copy option when browser cannot be opened
+  - OAuth2 callback server with success page
+- **Service key support**
+  - Load service keys from `{destination}.json` files
+  - Support for multiple service key formats (url, abap.url, sap_url)
+  - Extract UAA credentials for token refresh
+- **Environment file management**
+  - Load tokens from `{destination}.env` files
+  - Automatic `.env` file creation after authentication
+  - Atomic file writes for safe updates
+  - Format compatible with `sap-abap-auth` utility
+- **Comprehensive error handling**
+  - Clear error messages with file location instructions
+  - Searched paths listed in error messages
+  - Graceful handling of missing files and invalid configurations
+- **TypeScript support**
+  - Full TypeScript definitions
+  - Type-safe API
+  - Exported types: `EnvConfig`, `ServiceKey`
+- **Testing infrastructure**
+  - Unit tests for all components
+  - Integration tests for authentication flows
+  - Sequential test execution for reliable results
+  - Test scenarios covering error cases, browser auth, and token refresh
+- **Documentation**
+  - Complete API documentation
+  - Architecture documentation
+  - Installation guide
+  - Usage guide with examples
+  - Testing methodology guide
+
+### Technical Details
+- **Dependencies**
+  - `@mcp-abap-adt/connection` - Token refresh utilities
+  - `axios` - HTTP requests
+  - `express` - OAuth callback server
+  - `open` - Browser opening utility
+- **Node.js version**: >= 18.0.0
+- **Module system**: CommonJS
+- **Build output**: TypeScript compiled to JavaScript with type definitions
+
