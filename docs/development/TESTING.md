@@ -186,6 +186,19 @@ These tests use **real implementations** without mocks:
 - Validates actual integration with SAP systems
 - Catches issues that mocks might miss
 
+### Test Output
+
+Tests are designed to be **silent by default**:
+- No verbose logging during test execution
+- Only test results and errors are shown
+- Clean, focused output that highlights failures
+- No informational messages about expected test flow
+
+This approach ensures:
+- **Clear visibility** when tests fail (no noise from passing tests)
+- **Fast feedback** - only important information is displayed
+- **Better CI/CD integration** - minimal output in automated pipelines
+
 ### Unit Tests (pathResolver.test.ts, envLoader.test.ts, etc.)
 
 These tests focus on individual components:
@@ -227,7 +240,20 @@ These scenarios are covered implicitly or would require complex setup:
 
 ## Debugging Tests
 
-### Enable Verbose Output
+### Enable Debug Logging
+
+To see detailed authentication flow during tests:
+
+```bash
+DEBUG_AUTH_LOG=true npm test
+```
+
+This will show:
+- Browser authentication flow details
+- Token refresh operations
+- Debug messages from AuthBroker
+
+### Enable Verbose Jest Output
 
 Jest is configured with `verbose: true` by default, showing:
 - Test names

@@ -12,6 +12,9 @@ import { startBrowserAuth } from './browserAuth';
 import { getCachedToken, setCachedToken, clearCache, clearAllCache } from './cache';
 import { resolveSearchPaths } from './pathResolver';
 import { EnvConfig, ServiceKey } from './types';
+import { Logger, defaultLogger } from './logger';
+import { refreshToken as refreshTokenFunction } from './refreshToken';
+import { getToken as getTokenFunction } from './getToken';
 
 /**
  * AuthBroker manages JWT authentication tokens for destinations
@@ -19,6 +22,7 @@ import { EnvConfig, ServiceKey } from './types';
 export class AuthBroker {
   private searchPaths: string[];
   private browser: string | undefined;
+  private logger: Logger;
 
   /**
    * Create a new AuthBroker instance
@@ -31,10 +35,12 @@ export class AuthBroker {
    * @param browser Optional browser name for authentication (chrome, edge, firefox, system, none).
    *                Default: 'system' (system default browser).
    *                Use 'none' to print URL instead of opening browser.
+   * @param logger Optional logger instance. If not provided, uses default logger.
    */
-  constructor(searchPaths?: string | string[], browser?: string) {
+  constructor(searchPaths?: string | string[], browser?: string, logger?: Logger) {
     this.searchPaths = resolveSearchPaths(searchPaths);
     this.browser = browser || 'system';
+    this.logger = logger || defaultLogger;
   }
 
   /**
@@ -45,51 +51,8 @@ export class AuthBroker {
    * @throws Error if neither .env file nor service key found
    */
   async getToken(destination: string): Promise<string> {
-    // Check cache first
-    const cachedToken = getCachedToken(destination);
-    if (cachedToken) {
-      // Validate cached token
-      const envConfig = await loadEnvFile(destination, this.searchPaths);
-      if (envConfig) {
-        const isValid = await validateToken(cachedToken, envConfig.sapUrl);
-        if (isValid) {
-          return cachedToken;
-        }
-        // Token expired, remove from cache
-      }
-    }
-
-    // Load from .env file
-    const envConfig = await loadEnvFile(destination, this.searchPaths);
-    if (envConfig && envConfig.jwtToken) {
-      // Validate token
-      const isValid = await validateToken(envConfig.jwtToken, envConfig.sapUrl);
-      if (isValid) {
-        setCachedToken(destination, envConfig.jwtToken);
-        return envConfig.jwtToken;
-      }
-    }
-
-    // Token not found or expired, check if we have service key for browser auth
-    const serviceKey = await loadServiceKey(destination, this.searchPaths);
-    if (!serviceKey) {
-      // No service key and no valid token - throw error
-      const searchedPaths = this.searchPaths.map(p => `  - ${p}`).join('\n');
-      const firstPath = this.searchPaths[0];
-      throw new Error(
-        `No authentication found for destination "${destination}".\n` +
-        `Neither ${destination}.env file nor ${destination}.json service key found.\n` +
-        `Please create one of:\n` +
-        `  - ${firstPath}/${destination}.env (with SAP_JWT_TOKEN)\n` +
-        `  - ${firstPath}/${destination}.json (service key)\n` +
-        `Searched in:\n${searchedPaths}`
-      );
-    }
-
-    // Try to refresh (will use browser auth if no refresh token)
-    const newToken = await this.refreshToken(destination);
-    setCachedToken(destination, newToken);
-    return newToken;
+    // Use getToken function with logger
+    return getTokenFunction(destination, this.searchPaths, this.logger);
   }
 
   /**
@@ -99,75 +62,8 @@ export class AuthBroker {
    * @returns Promise that resolves to new JWT token string
    */
   async refreshToken(destination: string): Promise<string> {
-    // Load service key
-    const serviceKey = await loadServiceKey(destination, this.searchPaths);
-    if (!serviceKey) {
-      const searchedPaths = this.searchPaths.map(p => `  - ${p}`).join('\n');
-      const firstPath = this.searchPaths[0];
-      throw new Error(
-        `Service key file not found for destination "${destination}".\n` +
-        `Please create file: ${firstPath}/${destination}.json\n` +
-        `Searched in:\n${searchedPaths}`
-      );
-    }
-
-    // Extract UAA configuration
-    const { url: uaaUrl, clientid: clientId, clientsecret: clientSecret } = serviceKey.uaa;
-    if (!uaaUrl || !clientId || !clientSecret) {
-      throw new Error(
-        `Invalid service key for destination "${destination}". ` +
-        `Missing required UAA fields: url, clientid, clientsecret`
-      );
-    }
-
-    // Try to load existing refresh token from .env file
-    const envConfig = await loadEnvFile(destination, this.searchPaths);
-    let refreshTokenValue: string | undefined = envConfig?.refreshToken;
-
-    let result: { accessToken: string; refreshToken?: string };
-
-    // If no refresh token, start browser authentication flow
-    if (!refreshTokenValue) {
-      const browserMsg = this.browser && this.browser !== 'none' 
-        ? 'Browser will open automatically.' 
-        : 'Please open browser manually.';
-      console.log(`🌐 No refresh token for "${destination}". Starting browser auth. ${browserMsg}`);
-      result = await startBrowserAuth(serviceKey, this.browser);
-    } else {
-      // Refresh token using refresh token
-      result = await refreshJwtToken(refreshTokenValue, uaaUrl, clientId, clientSecret);
-    }
-
-    // Extract SAP URL from service key
-    const sapUrl = serviceKey.url || serviceKey.abap?.url || serviceKey.sap_url;
-    if (!sapUrl) {
-      throw new Error(
-        `Service key for destination "${destination}" does not contain SAP URL. ` +
-        `Expected field: url, abap.url, or sap_url`
-      );
-    }
-
-    // Extract optional fields from service key
-    const abapClient = serviceKey.client || serviceKey.abap?.client || serviceKey.sap_client;
-    const language = serviceKey.language || serviceKey.abap?.language;
-
-    // Save to first search path (highest priority)
-    const savePath = this.searchPaths[0];
-    await this.saveTokenToEnv(destination, savePath, {
-      sapUrl,
-      jwtToken: result.accessToken,
-      refreshToken: result.refreshToken || refreshTokenValue,
-      uaaUrl,
-      uaaClientId: clientId,
-      uaaClientSecret: clientSecret,
-      sapClient: abapClient,
-      language: language,
-    });
-
-    // Update cache with new token
-    setCachedToken(destination, result.accessToken);
-
-    return result.accessToken;
+    // Use refreshToken function with logger and browser
+    return refreshTokenFunction(destination, this.searchPaths, this.logger);
   }
 
   /**

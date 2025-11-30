@@ -8,6 +8,7 @@
     "dist",
     "README.md",
     "CHANGELOG.md",
+    "CONTRIBUTORS.md",
     "LICENSE"
   ],
   "keywords": [
@@ -39,6 +40,7 @@
     "build": "npm run clean --silent && npx tsc -p tsconfig.json",
     "build:fast": "npx tsc -p tsconfig.json",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:check": "npx tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
   "engines": {

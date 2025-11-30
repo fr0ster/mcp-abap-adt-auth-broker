@@ -16,7 +16,8 @@ docs/
 ├── architecture/
 │   └── ARCHITECTURE.md         # System architecture and design
 ├── development/
-│   └── TESTING.md              # Testing methodology and guide
+│   ├── TESTING.md              # Testing methodology and guide
+│   └── DEVELOPMENT_ROADMAP.md  # Development roadmap and future plans
 ├── installing/
 │   └── INSTALLATION.md         # Installation and setup guide
 └── using/
@@ -33,13 +34,10 @@ Technical documentation about the system architecture, design decisions, and int
 - File system structure
 - Search path resolution
 
-### [Development](development/TESTING.md)
+### [Development](development/)
 Documentation for developers:
-- Testing methodology
-- Test structure and organization
-- Running tests
-- Test scenarios
-- Debugging
+- **[TESTING.md](development/TESTING.md)** - Testing methodology, test structure, running tests
+- **[DEVELOPMENT_ROADMAP.md](development/DEVELOPMENT_ROADMAP.md)** - Development roadmap and future plans
 
 ### [Installing](installing/INSTALLATION.md)
 Installation and setup guide:

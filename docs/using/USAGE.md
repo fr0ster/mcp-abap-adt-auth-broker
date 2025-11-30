@@ -335,6 +335,46 @@ set AUTH_BROKER_PATH=C:\path1;C:\path2;C:\path3
 const broker = new AuthBroker();
 ```
 
+#### DEBUG_AUTH_LOG
+
+Control debug logging output:
+
+```bash
+# Enable debug logging
+export DEBUG_AUTH_LOG=true
+
+# Disable debug logging (default)
+unset DEBUG_AUTH_LOG
+# or
+export DEBUG_AUTH_LOG=false
+```
+
+**Behavior**:
+- **When `DEBUG_AUTH_LOG=true`**: Shows detailed debug messages including:
+  - Browser opening notifications
+  - Token refresh operations
+  - Authentication flow details
+- **When `DEBUG_AUTH_LOG=false` or unset** (default): Only shows:
+  - Error messages (always visible)
+  - URL for manual browser opening (when browser is not opened automatically)
+  - No debug messages
+
+**Example**:
+```typescript
+// With debug logging enabled
+process.env.DEBUG_AUTH_LOG = 'true';
+const broker = new AuthBroker();
+await broker.getToken('TRIAL');
+// Output: [DEBUG] No refresh token found for destination "TRIAL". Starting browser authentication...
+//         [DEBUG] 🌐 Opening browser for authentication...
+
+// Without debug logging (default)
+process.env.DEBUG_AUTH_LOG = 'false';
+const broker = new AuthBroker();
+await broker.getToken('TRIAL');
+// Output: (only errors and manual URL if browser cannot be opened)
+```
+
 ### File Naming Convention
 
 Files must follow the naming pattern:
@@ -394,6 +434,39 @@ Expected field: url, abap.url, or sap_url
 
 **Solution**: Ensure service key has `url`, `abap.url`, or `sap_url` field.
 
+## Logging
+
+The package uses a configurable logger that respects the `DEBUG_AUTH_LOG` environment variable.
+
+### Log Levels
+
+- **Info**: Always visible (errors, manual URLs)
+- **Debug**: Only visible when `DEBUG_AUTH_LOG=true`
+
+### Custom Logger
+
+You can inject a custom logger into `AuthBroker`:
+
+```typescript
+import { AuthBroker, Logger } from '@mcp-abap-adt/auth-broker';
+
+class MyLogger implements Logger {
+  info(message: string): void {
+    // Custom info logging
+  }
+  debug(message: string): void {
+    // Custom debug logging
+  }
+  error(message: string): void {
+    // Custom error logging
+  }
+  // ... other methods
+}
+
+const logger = new MyLogger();
+const broker = new AuthBroker(undefined, undefined, logger);
+```
+
 ## Best Practices
 
 1. **Error Handling**: Always wrap token requests in try/catch blocks
@@ -402,6 +475,7 @@ Expected field: url, abap.url, or sap_url
 4. **Security**: Never commit `.env` or `.json` files to version control
 5. **File Permissions**: Set appropriate file permissions for sensitive files
 6. **Multiple Destinations**: Use separate broker instances or clear cache between destinations
+7. **Logging**: Use `DEBUG_AUTH_LOG=true` only when debugging - production should use default (minimal logging)
 
 ## Performance Considerations
 

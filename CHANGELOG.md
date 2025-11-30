@@ -48,17 +48,38 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
   - Full TypeScript definitions
   - Type-safe API
   - Exported types: `EnvConfig`, `ServiceKey`
+- **Configurable logging system**
+  - Injectable logger interface for custom logging implementations
+  - Environment variable `DEBUG_AUTH_LOG` to control debug output
+  - Minimal logging by default (only errors and manual URLs)
+  - Detailed debug logging when `DEBUG_AUTH_LOG=true`
+  - Custom logger support via constructor injection
 - **Testing infrastructure**
   - Unit tests for all components
   - Integration tests for authentication flows
   - Sequential test execution for reliable results
   - Test scenarios covering error cases, browser auth, and token refresh
+  - Silent test output (no verbose logging during test execution)
+  - Clean test output focusing on failures
 - **Documentation**
   - Complete API documentation
   - Architecture documentation
   - Installation guide
   - Usage guide with examples
   - Testing methodology guide
+  - Logging configuration guide
+
+### Changed
+- **Logging behavior**
+  - Default logger now shows minimal output (only errors and manual URLs)
+  - Debug messages only visible when `DEBUG_AUTH_LOG=true`
+  - Browser opening notifications moved to debug level
+  - Token refresh operations logged at debug level
+- **Test output**
+  - Removed verbose logging from test files
+  - Tests now produce clean, focused output
+  - Only test results and errors are displayed
+  - Improved readability and CI/CD integration
 
 ### Technical Details
 - **Dependencies**
@@ -69,4 +90,5 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 - **Node.js version**: >= 18.0.0
 - **Module system**: CommonJS
 - **Build output**: TypeScript compiled to JavaScript with type definitions
+- **Logging**: Injectable logger interface with environment variable control
 

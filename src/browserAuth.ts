@@ -8,6 +8,7 @@ import * as child_process from 'child_process';
 import express from 'express';
 import axios from 'axios';
 import { ServiceKey } from './types';
+import { Logger, defaultLogger } from './logger';
 
 const BROWSER_MAP: Record<string, string | undefined> = {
   chrome: 'chrome',
@@ -71,12 +72,15 @@ async function exchangeCodeForToken(serviceKey: ServiceKey, code: string): Promi
  * Start browser authentication flow
  * @param serviceKey Service key with UAA configuration
  * @param browser Browser name (chrome, edge, firefox, system, none)
+ * @param logger Optional logger instance. If not provided, uses default logger.
  * @returns Promise that resolves to tokens
  */
 export async function startBrowserAuth(
   serviceKey: ServiceKey,
-  browser: string = 'system'
+  browser: string = 'system',
+  logger?: Logger
 ): Promise<{ accessToken: string; refreshToken?: string }> {
+  const log = logger || defaultLogger;
   return new Promise((originalResolve, originalReject) => {
     let timeoutId: NodeJS.Timeout | null = null;
     
@@ -199,9 +203,9 @@ export async function startBrowserAuth(
     serverInstance = server.listen(PORT, async () => {
       const browserApp = BROWSER_MAP[browser];
       if (!browser || browser === 'none' || browserApp === null) {
-        console.log(`🔗 Please open this URL in your browser: ${authorizationUrl}`);
+        log.browserUrl(authorizationUrl);
       } else {
-        console.log(`🌐 Opening browser for authentication...`);
+        log.browserOpening();
         try {
           // Try dynamic import first (for ES modules)
           let open: typeof import('open').default;
@@ -244,7 +248,7 @@ export async function startBrowserAuth(
             // Use child_process as fallback (non-blocking)
             child_process.exec(`${command} "${authorizationUrl}"`, (error) => {
               if (error) {
-                console.error(`❌ Failed to open browser: ${error.message}. Please open manually: ${authorizationUrl}`);
+                log.error(`❌ Failed to open browser: ${error.message}. Please open manually: ${authorizationUrl}`);
               }
             });
             return; // Exit early since we're using child_process (non-blocking)
@@ -257,7 +261,7 @@ export async function startBrowserAuth(
             await open(authorizationUrl);
           }
         } catch (error: any) {
-          console.error(`❌ Failed to open browser: ${error.message}. Please open manually: ${authorizationUrl}`);
+          log.error(`❌ Failed to open browser: ${error.message}. Please open manually: ${authorizationUrl}`);
         }
       }
     });

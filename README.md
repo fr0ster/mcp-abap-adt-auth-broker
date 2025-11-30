@@ -33,9 +33,10 @@ const newToken = await broker.refreshToken('TRIAL');
 
 ## Configuration
 
-### Environment Variable
+### Environment Variables
 
-- `MCP_AUTH_BROKER_BASE_PATH` - Base directory for searching `.env` and `.json` files (default: current working directory)
+- `AUTH_BROKER_PATH` - Colon/semicolon-separated paths for searching `.env` and `.json` files (default: current working directory)
+- `DEBUG_AUTH_LOG` - Set to `true` to enable debug logging (default: `false`)
 
 ### File Structure
 
@@ -148,7 +149,8 @@ Tests will automatically skip if required files are missing or present when they
 Complete documentation is available in the [`docs/`](docs/) directory:
 
 - **[Architecture](docs/architecture/ARCHITECTURE.md)** - System architecture and design decisions
-- **[Development](docs/development/TESTING.md)** - Testing methodology and development guide
+- **[Development](docs/development/)** - Testing methodology and development roadmap
+- **[Development Roadmap](docs/development/DEVELOPMENT_ROADMAP.md)** - Development roadmap and future plans
 - **[Installation](docs/installing/INSTALLATION.md)** - Installation and setup guide
 - **[Usage](docs/using/USAGE.md)** - API reference and usage examples
 

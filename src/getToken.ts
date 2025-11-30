@@ -7,15 +7,17 @@ import { loadServiceKey } from './serviceKeyLoader';
 import { validateToken } from './tokenValidator';
 import { refreshToken } from './refreshToken';
 import { getCachedToken, setCachedToken } from './cache';
+import { Logger, defaultLogger } from './logger';
 
 /**
  * Get authentication token for destination
  * @param destination Destination name
  * @param searchPaths Array of paths to search for files
+ * @param logger Optional logger instance. If not provided, uses default logger.
  * @returns JWT token string
  * @throws Error if neither .env file nor service key found
  */
-export async function getToken(destination: string, searchPaths: string[]): Promise<string> {
+export async function getToken(destination: string, searchPaths: string[], logger?: Logger): Promise<string> {
   // Check cache first
   const cachedToken = getCachedToken(destination);
   if (cachedToken) {
@@ -45,14 +47,20 @@ export async function getToken(destination: string, searchPaths: string[]): Prom
   const serviceKey = await loadServiceKey(destination, searchPaths);
   if (!serviceKey) {
     // No service key and no valid token - throw error
+    const searchedPaths = searchPaths.map(p => `  - ${p}`).join('\n');
     throw new Error(
       `No authentication found for destination "${destination}". ` +
-      `Neither ${destination}.env file nor ${destination}.json service key found in search paths: ${searchPaths.join(', ')}`
+      `Neither ${destination}.env file nor ${destination}.json service key found.\n` +
+      `Please create one of:\n` +
+      `  - ${destination}.env (with SAP_JWT_TOKEN)\n` +
+      `  - ${destination}.json (service key)\n` +
+      `Searched in:\n${searchedPaths}`
     );
   }
 
   // Try to refresh (will use browser auth if no refresh token)
-  const newToken = await refreshToken(destination, searchPaths);
+  const log = logger || defaultLogger;
+  const newToken = await refreshToken(destination, searchPaths, log);
   setCachedToken(destination, newToken);
   return newToken;
 }
