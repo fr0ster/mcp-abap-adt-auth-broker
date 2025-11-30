@@ -67,6 +67,28 @@ export class AuthBroker {
   }
 
   /**
+   * Get SAP URL for destination.
+   * Tries to load from .env file first, then from service key.
+   * @param destination Destination name (e.g., "TRIAL")
+   * @returns Promise that resolves to SAP URL string, or undefined if not found
+   */
+  async getSapUrl(destination: string): Promise<string | undefined> {
+    // Try to load from .env file first
+    const envConfig = await loadEnvFile(destination, this.searchPaths);
+    if (envConfig?.sapUrl) {
+      return envConfig.sapUrl;
+    }
+
+    // Try service key
+    const serviceKey = await loadServiceKey(destination, this.searchPaths);
+    if (serviceKey) {
+      return serviceKey.url || serviceKey.abap?.url || serviceKey.sap_url;
+    }
+
+    return undefined;
+  }
+
+  /**
    * Save token to {destination}.env file
    * Creates .env file similar to sap-abap-auth utility format
    * @private

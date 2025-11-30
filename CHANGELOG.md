@@ -9,12 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
-## [0.1.0] - 2025-01-XX
+## [0.1.1] - 2025-11-30
+
+### Added
+- **AuthBroker.getSapUrl()** - New method to get SAP URL for destination
+  - Loads URL from `.env` file first, then from service key
+  - Returns `undefined` if URL not found
+  - Useful for destination-based authentication where URL comes from destination, not headers
+
+## [0.1.0] - 2025-11-30
 
 ### Added
 - **AuthBroker class** - Main class for managing JWT authentication tokens
   - `getToken(destination)` - Get token for destination (loads, validates, refreshes if needed)
   - `refreshToken(destination)` - Force refresh token using service key or browser authentication
+  - `getSapUrl(destination)` - Get SAP URL for destination (loads from .env or service key)
   - `clearCache(destination)` - Clear cached token for specific destination
   - `clearAllCache()` - Clear all cached tokens
 - **Multi-path file search** - Configurable search paths for `.env` and `.json` files
