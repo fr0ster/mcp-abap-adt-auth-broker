@@ -17,20 +17,12 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
   - `SessionStore` interface - for reading/writing session data (tokens, configuration)
   - `FileServiceKeyStore` - default file-based implementation for service keys
   - `FileSessionStore` - default file-based implementation for sessions
-- **AuthBroker.getSapUrl()** - New method to get SAP URL for destination
-  - Loads URL from session store first, then from service key store
-  - Returns `undefined` if URL not found
-  - Useful for destination-based authentication where URL comes from destination, not headers
 - **Dependency Injection Support** - AuthBroker now accepts custom stores via constructor
   - Can provide custom `ServiceKeyStore` and `SessionStore` implementations
   - Default to file-based stores if not provided (backward compatible)
   - Enables custom storage backends (database, cloud, etc.) without creating new packages
-
-### Changed
-- **AuthBroker Constructor** - Now accepts stores as first parameter (optional)
+  - New API: constructor accepts object with `serviceKeyStore` and `sessionStore` properties
   - Backward compatible: still accepts `searchPaths` as first parameter (string/array)
-  - New API: accepts object with `serviceKeyStore` and `sessionStore` properties
-  - Default behavior unchanged: creates file-based stores with provided search paths
 
 ### Technical Details
 - Storage abstraction allows consumers to provide custom implementations
