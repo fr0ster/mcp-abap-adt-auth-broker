@@ -47,7 +47,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@mcp-abap-adt/connection": "^0.1.12",
+    "@mcp-abap-adt/connection": "^0.1.13",
     "axios": "^1.11.0",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
+## [0.1.4] - 2025-12-01
+
+### Dependencies
+- Updated `@mcp-abap-adt/connection` to `^0.1.13`:
+  - **CSRF Token Endpoint Optimization**: Connection layer now uses `/sap/bc/adt/core/discovery` endpoint instead of `/sap/bc/adt/discovery`
+    - Lighter response payload (smaller XML response)
+    - Available on all SAP systems (on-premise and cloud)
+    - Standard ADT discovery endpoint ensures better compatibility
+  - **CSRF Configuration Export**: `CSRF_CONFIG` and `CSRF_ERROR_MESSAGES` constants are now exported from connection package
+    - Enables consistent CSRF token handling across different connection implementations
+    - Provides centralized configuration for retry logic, delays, and error messages
+    - See [PR Proposal](https://github.com/fr0ster/mcp-abap-adt/blob/main/packages/connection/PR_PROPOSAL_CSRF_CONFIG.md) for details
+  - **Impact**: Authentication broker benefits from optimized CSRF token fetching
+    - Faster connection initialization when managing JWT tokens
+    - Reduced network traffic during authentication flows
+    - Better compatibility across different SAP system versions
+
 ## [0.1.3] - 2025-12-01
 
 ### Added
