@@ -261,7 +261,11 @@ export async function startBrowserAuth(
             await open(authorizationUrl);
           }
         } catch (error: any) {
-          log.error(`❌ Failed to open browser: ${error.message}. Please open manually: ${authorizationUrl}`);
+          // If browser cannot be opened, show URL and throw error for consumer to catch
+          log.error(`❌ Failed to open browser: ${error?.message || String(error)}. Please open manually: ${authorizationUrl}`);
+          log.browserUrl(authorizationUrl);
+          // Throw error so consumer can distinguish this from "service key missing" error
+          reject(new Error(`Browser opening failed for destination authentication. Please open manually: ${authorizationUrl}`));
         }
       }
     });

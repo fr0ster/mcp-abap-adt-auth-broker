@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
+## [0.1.3] - 2025-12-01
+
+### Added
+- **Configurable Log Levels** - Added log level control via environment variable `AUTH_LOG_LEVEL`
+  - `error` - only errors
+  - `warn` - errors and warnings
+  - `info` - errors, warnings, and info (default)
+  - `debug` - all messages
+  - Backward compatible: `DEBUG_AUTH_LOG=true` still works (sets level to debug)
+  - New `warn()` method in Logger interface for warning messages
+
+### Fixed
+- **Error Handling for Consumer** - Improved error handling to ensure consumer can distinguish different error types
+  - Service key missing error: throws `Error` with message containing "No authentication found" or "Service key file not found"
+  - Browser opening failed error: throws `Error` with message containing "Browser opening failed"
+  - Both errors are now properly thrown and can be caught by consumer in `catch` blocks
+  - Errors are distinct and can be programmatically handled differently
+
+### Changed
+- **Logger Implementation** - Enhanced logger with log level filtering
+  - All log methods now respect the configured log level
+  - `info()`, `debug()`, `error()`, and new `warn()` methods filter output based on `AUTH_LOG_LEVEL`
+  - Default log level is `info` (shows errors, warnings, and info messages)
+
 ## [0.1.2] - 2025-11-30
 
 ### Added

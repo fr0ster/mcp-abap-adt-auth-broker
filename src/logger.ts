@@ -3,12 +3,23 @@
  */
 
 /**
+ * Log levels
+ */
+export enum LogLevel {
+  ERROR = 0,
+  WARN = 1,
+  INFO = 2,
+  DEBUG = 3,
+}
+
+/**
  * Logger interface - defines logging methods
  */
 export interface Logger {
   info(message: string): void;
   debug(message: string): void;
   error(message: string): void;
+  warn(message: string): void;
   browserAuth(message: string): void;
   refresh(message: string): void;
   success(message: string): void;
@@ -18,30 +29,59 @@ export interface Logger {
 }
 
 /**
+ * Get log level from environment variable
+ * AUTH_LOG_LEVEL can be: error, warn, info, debug
+ * DEBUG_AUTH_LOG=true is also supported for backward compatibility (sets level to debug)
+ */
+function getLogLevel(): LogLevel {
+  const level = process.env.AUTH_LOG_LEVEL?.toLowerCase();
+  if (level === 'error') return LogLevel.ERROR;
+  if (level === 'warn') return LogLevel.WARN;
+  if (level === 'info') return LogLevel.INFO;
+  if (level === 'debug') return LogLevel.DEBUG;
+  // Backward compatibility
+  if (process.env.DEBUG_AUTH_LOG === 'true') return LogLevel.DEBUG;
+  // Default: info level
+  return LogLevel.INFO;
+}
+
+/**
  * Default logger implementation
- * Controls output based on DEBUG_AUTH_LOG environment variable:
- * - If DEBUG_AUTH_LOG=true: shows debug messages
- * - Otherwise: only shows info messages (concise, one line)
+ * Controls output based on AUTH_LOG_LEVEL environment variable:
+ * - error: only errors
+ * - warn: errors and warnings
+ * - info: errors, warnings, and info (default)
+ * - debug: all messages
  */
 class DefaultLogger implements Logger {
-  private readonly debugEnabled: boolean;
+  private readonly logLevel: LogLevel;
 
-  constructor(debugEnabled: boolean = process.env.DEBUG_AUTH_LOG === 'true') {
-    this.debugEnabled = debugEnabled;
+  constructor(logLevel?: LogLevel) {
+    this.logLevel = logLevel ?? getLogLevel();
   }
 
   info(message: string): void {
-    console.info(message);
+    if (this.logLevel >= LogLevel.INFO) {
+      console.info(message);
+    }
   }
 
   debug(message: string): void {
-    if (this.debugEnabled) {
+    if (this.logLevel >= LogLevel.DEBUG) {
       console.debug(`[DEBUG] ${message}`);
     }
   }
 
   error(message: string): void {
-    console.error(message);
+    if (this.logLevel >= LogLevel.ERROR) {
+      console.error(message);
+    }
+  }
+
+  warn(message: string): void {
+    if (this.logLevel >= LogLevel.WARN) {
+      console.warn(`[WARN] ${message}`);
+    }
   }
 
   browserAuth(message: string): void {
@@ -73,27 +113,37 @@ class DefaultLogger implements Logger {
 
 /**
  * Test logger implementation
- * Always shows info messages, debug only if DEBUG_AUTH_LOG=true
+ * Uses same log levels as DefaultLogger
  */
 class TestLogger implements Logger {
-  private readonly debugEnabled: boolean;
+  private readonly logLevel: LogLevel;
 
-  constructor(debugEnabled: boolean = process.env.DEBUG_AUTH_LOG === 'true') {
-    this.debugEnabled = debugEnabled;
+  constructor(logLevel?: LogLevel) {
+    this.logLevel = logLevel ?? getLogLevel();
   }
 
   info(message: string): void {
-    console.info(message);
+    if (this.logLevel >= LogLevel.INFO) {
+      console.info(message);
+    }
   }
 
   debug(message: string): void {
-    if (this.debugEnabled) {
+    if (this.logLevel >= LogLevel.DEBUG) {
       console.info(`[DEBUG] ${message}`);
     }
   }
 
   error(message: string): void {
-    console.error(message);
+    if (this.logLevel >= LogLevel.ERROR) {
+      console.error(message);
+    }
+  }
+
+  warn(message: string): void {
+    if (this.logLevel >= LogLevel.WARN) {
+      console.warn(`[WARN] ${message}`);
+    }
   }
 
   browserAuth(message: string): void {
@@ -164,4 +214,8 @@ export function browserOpening(): void {
 
 export function testSkip(message: string): void {
   defaultLogger.testSkip(message);
+}
+
+export function warn(message: string): void {
+  defaultLogger.warn(message);
 }
