@@ -255,7 +255,7 @@ export async function startBrowserAuth(
           }
           
           // Use open module if import succeeded
-          if (browserApp) {
+          if (browserApp) { 
             await open(authorizationUrl, { app: { name: browserApp } });
           } else {
             await open(authorizationUrl);
