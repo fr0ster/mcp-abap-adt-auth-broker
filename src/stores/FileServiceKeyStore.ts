@@ -4,7 +4,7 @@
  * Reads service keys from {destination}.json files in search paths.
  */
 
-import { ServiceKeyStore } from './interfaces';
+import { IServiceKeyStore } from './interfaces';
 import { ServiceKey } from '../types';
 import { loadServiceKey } from '../serviceKeyLoader';
 import { resolveSearchPaths } from '../pathResolver';
@@ -18,7 +18,7 @@ import { resolveSearchPaths } from '../pathResolver';
  * 2. AUTH_BROKER_PATH environment variable
  * 3. Current working directory (lowest)
  */
-export class FileServiceKeyStore implements ServiceKeyStore {
+export class FileServiceKeyStore implements IServiceKeyStore {
   private searchPaths: string[];
 
   /**

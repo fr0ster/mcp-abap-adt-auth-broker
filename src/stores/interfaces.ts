@@ -13,7 +13,7 @@ import { ServiceKey, EnvConfig } from '../types';
  * Service keys contain UAA credentials and SAP URL for a destination.
  * Default implementation: FileServiceKeyStore (reads from {destination}.json files)
  */
-export interface ServiceKeyStore {
+export interface IServiceKeyStore {
   /**
    * Get service key for destination
    * @param destination Destination name (e.g., "TRIAL")
@@ -28,7 +28,7 @@ export interface ServiceKeyStore {
  * Session data contains JWT tokens, refresh tokens, UAA config, and SAP URL.
  * Default implementation: FileSessionStore (reads/writes {destination}.env files)
  */
-export interface SessionStore {
+export interface ISessionStore {
   /**
    * Load session configuration for destination
    * @param destination Destination name (e.g., "TRIAL")
@@ -49,4 +49,11 @@ export interface SessionStore {
    */
   deleteSession?(destination: string): Promise<void>;
 }
+
+// Backward compatibility aliases
+/** @deprecated Use IServiceKeyStore instead */
+export type ServiceKeyStore = IServiceKeyStore;
+
+/** @deprecated Use ISessionStore instead */
+export type SessionStore = ISessionStore;
 

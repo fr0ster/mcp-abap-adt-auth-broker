@@ -13,20 +13,40 @@ import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 ### Create AuthBroker Instance
 
 ```typescript
-// Use default search paths (current working directory) and default browser
+import { AuthBroker, FileServiceKeyStore, FileSessionStore, SafeSessionStore } from '@mcp-abap-adt/auth-broker';
+
+// Use default file-based stores (current working directory) and default browser
 const broker = new AuthBroker();
 
-// Use custom search paths
-const broker = new AuthBroker(['/path/to/destinations']);
+// Use custom file-based stores with specific paths
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new FileSessionStore(['/path/to/destinations']),
+});
 
 // Use multiple search paths
-const broker = new AuthBroker(['/path1', '/path2', '/path3']);
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(['/path1', '/path2', '/path3']),
+  sessionStore: new FileSessionStore(['/path1', '/path2', '/path3']),
+});
 
 // Specify browser for authentication (chrome, edge, firefox, system, none)
-const broker = new AuthBroker(['/path/to/destinations'], 'chrome');
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new FileSessionStore(['/path/to/destinations']),
+}, 'chrome');
+
+// Use safe in-memory session store (data lost after restart, secure)
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new SafeSessionStore(), // In-memory, no disk persistence
+});
 
 // Use 'none' to print URL instead of opening browser
-const broker = new AuthBroker(['/path/to/destinations'], 'none');
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new FileSessionStore(['/path/to/destinations']),
+}, 'none');
 ```
 
 ## API Reference
@@ -36,31 +56,59 @@ const broker = new AuthBroker(['/path/to/destinations'], 'none');
 #### Constructor
 
 ```typescript
-constructor(searchPaths?: string | string[], browser?: string)
+constructor(
+  stores?: { serviceKeyStore?: IServiceKeyStore; sessionStore?: ISessionStore },
+  browser?: string,
+  logger?: Logger
+)
 ```
 
 **Parameters**:
-- `searchPaths` (optional): Single path string or array of paths for searching `.env` and `.json` files
+- `stores` (optional): Object with custom storage implementations:
+  - `serviceKeyStore` - Store for service keys (default: `FileServiceKeyStore()`)
+  - `sessionStore` - Store for session data (default: `FileSessionStore()`)
+  - Available implementations:
+    - `FileServiceKeyStore(searchPaths?)` - File-based service key store
+    - `FileSessionStore(searchPaths?)` - File-based session store (persists to disk)
+    - `SafeSessionStore()` - In-memory session store (secure, data lost after restart)
 - `browser` (optional): Browser name for authentication. Options:
   - `'chrome'` - Open in Google Chrome
   - `'edge'` - Open in Microsoft Edge
   - `'firefox'` - Open in Mozilla Firefox
   - `'system'` - Use system default browser (default)
   - `'none'` - Don't open browser, print URL to console for manual copy
+- `logger` (optional): Custom logger instance. If not provided, uses default logger
 
 **Example**:
 ```typescript
-// Default (current working directory, system browser)
+import { AuthBroker, FileServiceKeyStore, FileSessionStore, SafeSessionStore } from '@mcp-abap-adt/auth-broker';
+
+// Default (current working directory, system browser, file-based stores)
 const broker = new AuthBroker();
 
-// Single path with default browser
-const broker = new AuthBroker('/custom/path');
+// Custom paths with file-based stores
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(['/custom/path']),
+  sessionStore: new FileSessionStore(['/custom/path']),
+});
 
 // Multiple paths with Chrome browser
-const broker = new AuthBroker(['/path1', '/path2'], 'chrome');
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(['/path1', '/path2']),
+  sessionStore: new FileSessionStore(['/path1', '/path2']),
+}, 'chrome');
+
+// Safe in-memory session store (secure, no disk persistence)
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(['/path1']),
+  sessionStore: new SafeSessionStore(), // Data lost after restart
+});
 
 // Print URL instead of opening browser
-const broker = new AuthBroker(['/path1'], 'none');
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(['/path1']),
+  sessionStore: new FileSessionStore(['/path1']),
+}, 'none');
 ```
 
 #### getToken()
@@ -181,14 +229,21 @@ getToken();
 ### Example 2: Custom Search Paths
 
 ```typescript
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { AuthBroker, FileServiceKeyStore, FileSessionStore } from '@mcp-abap-adt/auth-broker';
 
 // Search in multiple directories
-const broker = new AuthBroker([
-  '/home/user/.sap/destinations',
-  '/etc/sap/destinations',
-  process.cwd()
-]);
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore([
+    '/home/user/.sap/destinations',
+    '/etc/sap/destinations',
+    process.cwd()
+  ]),
+  sessionStore: new FileSessionStore([
+    '/home/user/.sap/destinations',
+    '/etc/sap/destinations',
+    process.cwd()
+  ]),
+});
 
 const token = await broker.getToken('PRODUCTION');
 ```
@@ -266,9 +321,12 @@ broker.clearAllCache();
 ### Example: Integration with MCP Server
 
 ```typescript
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { AuthBroker, FileServiceKeyStore, FileSessionStore } from '@mcp-abap-adt/auth-broker';
 
-const broker = new AuthBroker();
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(),
+  sessionStore: new FileSessionStore(),
+});
 
 // In MCP handler
 async function handleRequest(headers: Record<string, string>) {
@@ -290,9 +348,12 @@ async function handleRequest(headers: Record<string, string>) {
 ### Example: Multiple Destinations
 
 ```typescript
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { AuthBroker, FileServiceKeyStore, FileSessionStore } from '@mcp-abap-adt/auth-broker';
 
-const broker = new AuthBroker();
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(),
+  sessionStore: new FileSessionStore(),
+});
 
 async function getTokensForDestinations() {
   const destinations = ['TRIAL', 'PRODUCTION', 'DEVELOPMENT'];
@@ -330,9 +391,14 @@ set AUTH_BROKER_PATH=C:\path1;C:\path2;C:\path3
 
 **Usage**:
 ```typescript
-// If AUTH_BROKER_PATH is set, it will be used
-// (unless constructor parameter is provided)
-const broker = new AuthBroker();
+import { AuthBroker, FileServiceKeyStore, FileSessionStore } from '@mcp-abap-adt/auth-broker';
+
+// If AUTH_BROKER_PATH is set, it will be used by FileServiceKeyStore and FileSessionStore
+// when no paths are provided to their constructors
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(), // Uses AUTH_BROKER_PATH if set
+  sessionStore: new FileSessionStore(), // Uses AUTH_BROKER_PATH if set
+});
 ```
 
 #### DEBUG_AUTH_LOG
@@ -361,16 +427,24 @@ export DEBUG_AUTH_LOG=false
 
 **Example**:
 ```typescript
+import { AuthBroker, FileServiceKeyStore, FileSessionStore } from '@mcp-abap-adt/auth-broker';
+
 // With debug logging enabled
 process.env.DEBUG_AUTH_LOG = 'true';
-const broker = new AuthBroker();
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(),
+  sessionStore: new FileSessionStore(),
+});
 await broker.getToken('TRIAL');
 // Output: [DEBUG] No refresh token found for destination "TRIAL". Starting browser authentication...
 //         [DEBUG] 🌐 Opening browser for authentication...
 
 // Without debug logging (default)
 process.env.DEBUG_AUTH_LOG = 'false';
-const broker = new AuthBroker();
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(),
+  sessionStore: new FileSessionStore(),
+});
 await broker.getToken('TRIAL');
 // Output: (only errors and manual URL if browser cannot be opened)
 ```
@@ -448,7 +522,7 @@ The package uses a configurable logger that respects the `DEBUG_AUTH_LOG` enviro
 You can inject a custom logger into `AuthBroker`:
 
 ```typescript
-import { AuthBroker, Logger } from '@mcp-abap-adt/auth-broker';
+import { AuthBroker, Logger, FileServiceKeyStore, FileSessionStore } from '@mcp-abap-adt/auth-broker';
 
 class MyLogger implements Logger {
   info(message: string): void {
@@ -464,18 +538,24 @@ class MyLogger implements Logger {
 }
 
 const logger = new MyLogger();
-const broker = new AuthBroker(undefined, undefined, logger);
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(),
+  sessionStore: new FileSessionStore(),
+}, undefined, logger);
 ```
 
 ## Best Practices
 
 1. **Error Handling**: Always wrap token requests in try/catch blocks
 2. **Cache Management**: Clear cache when tokens are manually updated
-3. **Path Configuration**: Use constructor parameters for explicit control
+3. **Storage Selection**: Choose appropriate storage based on security requirements:
+   - Use `FileSessionStore` if you need persistence across restarts
+   - Use `SafeSessionStore` if you want secure in-memory storage (data lost after restart)
 4. **Security**: Never commit `.env` or `.json` files to version control
 5. **File Permissions**: Set appropriate file permissions for sensitive files
 6. **Multiple Destinations**: Use separate broker instances or clear cache between destinations
 7. **Logging**: Use `DEBUG_AUTH_LOG=true` only when debugging - production should use default (minimal logging)
+8. **Explicit Stores**: Always explicitly create stores - don't rely on defaults if you need specific behavior
 
 ## Performance Considerations
 

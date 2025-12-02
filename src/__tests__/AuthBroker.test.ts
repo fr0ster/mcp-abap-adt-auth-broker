@@ -14,7 +14,11 @@ describe('AuthBroker', () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-broker-test-'));
     // Use default browser (system) - no browser parameter passed
-    broker = new AuthBroker([tempDir]);
+    const { FileServiceKeyStore, FileSessionStore } = require('../stores');
+    broker = new AuthBroker({
+      serviceKeyStore: new FileServiceKeyStore([tempDir]),
+      sessionStore: new FileSessionStore([tempDir]),
+    });
   });
 
   afterEach(() => {
@@ -25,34 +29,27 @@ describe('AuthBroker', () => {
   });
 
   describe('constructor', () => {
-    it('should use constructor paths', () => {
-      const customBroker = new AuthBroker(['/custom/path1', '/custom/path2']);
-      expect(customBroker).toBeInstanceOf(AuthBroker);
-    });
-
-    it('should use single string path', () => {
-      const customBroker = new AuthBroker('/single/path');
-      expect(customBroker).toBeInstanceOf(AuthBroker);
-    });
-
-    it('should use AUTH_BROKER_PATH environment variable', () => {
-      const originalEnv = process.env.AUTH_BROKER_PATH;
-      process.env.AUTH_BROKER_PATH = '/env/path1:/env/path2';
-      
-      const envBroker = new AuthBroker();
-      expect(envBroker).toBeInstanceOf(AuthBroker);
-      
-      process.env.AUTH_BROKER_PATH = originalEnv;
-    });
-
-    it('should use current working directory as fallback', () => {
-      const originalEnv = process.env.AUTH_BROKER_PATH;
-      delete process.env.AUTH_BROKER_PATH;
-      
+    it('should create broker with default stores', () => {
       const defaultBroker = new AuthBroker();
       expect(defaultBroker).toBeInstanceOf(AuthBroker);
-      
-      process.env.AUTH_BROKER_PATH = originalEnv;
+    });
+
+    it('should create broker with custom stores', () => {
+      const { FileServiceKeyStore, FileSessionStore } = require('../stores');
+      const customBroker = new AuthBroker({
+        serviceKeyStore: new FileServiceKeyStore(['/custom/path1', '/custom/path2']),
+        sessionStore: new FileSessionStore(['/custom/path1', '/custom/path2']),
+      });
+      expect(customBroker).toBeInstanceOf(AuthBroker);
+    });
+
+    it('should create broker with SafeSessionStore', () => {
+      const { FileServiceKeyStore, SafeSessionStore } = require('../stores');
+      const safeBroker = new AuthBroker({
+        serviceKeyStore: new FileServiceKeyStore(),
+        sessionStore: new SafeSessionStore(),
+      });
+      expect(safeBroker).toBeInstanceOf(AuthBroker);
     });
   });
 

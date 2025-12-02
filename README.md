@@ -20,9 +20,22 @@ npm install @mcp-abap-adt/auth-broker
 ## Usage
 
 ```typescript
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { AuthBroker, FileServiceKeyStore, FileSessionStore, SafeSessionStore } from '@mcp-abap-adt/auth-broker';
 
-const broker = new AuthBroker('/path/to/destinations', 'chrome');
+// Use default file-based stores (current working directory)
+const broker = new AuthBroker();
+
+// Use custom file-based stores with specific paths
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new FileSessionStore(['/path/to/destinations']),
+}, 'chrome');
+
+// Use safe in-memory session store (data lost after restart)
+const broker = new AuthBroker({
+  serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new SafeSessionStore(), // In-memory, secure
+});
 
 // Get token for destination (loads from .env, validates, refreshes if needed)
 const token = await broker.getToken('TRIAL');
@@ -72,11 +85,18 @@ SAP_UAA_CLIENT_SECRET=client_secret
 #### Constructor
 
 ```typescript
-new AuthBroker(searchPaths?: string | string[], browser?: string)
+new AuthBroker(stores?: { serviceKeyStore?: IServiceKeyStore; sessionStore?: ISessionStore }, browser?: string, logger?: Logger)
 ```
 
-- `searchPaths` - Optional base directory or array of directories for searching `.env` and `.json` files
+- `stores` - Optional object with custom storage implementations:
+  - `serviceKeyStore` - Store for service keys (default: `FileServiceKeyStore()`)
+  - `sessionStore` - Store for session data (default: `FileSessionStore()`)
+  - Available implementations:
+    - `FileServiceKeyStore(searchPaths?)` - File-based service key store
+    - `FileSessionStore(searchPaths?)` - File-based session store (persists to disk)
+    - `SafeSessionStore()` - In-memory session store (secure, data lost after restart)
 - `browser` - Optional browser name for authentication (`chrome`, `edge`, `firefox`, `system`, `none`). Default: `system`
+- `logger` - Optional logger instance. If not provided, uses default logger
 
 #### Methods
 

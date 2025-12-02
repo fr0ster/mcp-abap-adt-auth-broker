@@ -4,7 +4,7 @@
  * Reads/writes session data from/to {destination}.env files in search paths.
  */
 
-import { SessionStore } from './interfaces';
+import { ISessionStore } from './interfaces';
 import { EnvConfig } from '../types';
 import { loadEnvFile } from '../envLoader';
 import { saveTokenToEnv } from '../tokenStorage';
@@ -20,7 +20,7 @@ import { resolveSearchPaths } from '../pathResolver';
  * 2. AUTH_BROKER_PATH environment variable
  * 3. Current working directory (lowest)
  */
-export class FileSessionStore implements SessionStore {
+export class FileSessionStore implements ISessionStore {
   private searchPaths: string[];
 
   /**

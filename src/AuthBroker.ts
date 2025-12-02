@@ -6,55 +6,37 @@ import { validateToken } from './tokenValidator';
 import { refreshJwtToken } from './tokenRefresher';
 import { startBrowserAuth } from './browserAuth';
 import { getCachedToken, setCachedToken, clearCache, clearAllCache } from './cache';
-import { resolveSearchPaths } from './pathResolver';
 import { EnvConfig, ServiceKey } from './types';
 import { Logger, defaultLogger } from './logger';
-import { ServiceKeyStore, SessionStore } from './stores/interfaces';
+import { IServiceKeyStore, ISessionStore } from './stores/interfaces';
 import { FileServiceKeyStore, FileSessionStore } from './stores';
 
 /**
  * AuthBroker manages JWT authentication tokens for destinations
  */
 export class AuthBroker {
-  private searchPaths: string[];
   private browser: string | undefined;
   private logger: Logger;
-  private serviceKeyStore: ServiceKeyStore;
-  private sessionStore: SessionStore;
+  private serviceKeyStore: IServiceKeyStore;
+  private sessionStore: ISessionStore;
 
   /**
    * Create a new AuthBroker instance
-   * @param searchPathsOrStores Optional search paths for .env and .json files (backward compatibility),
-   *                            OR object with custom stores.
-   *                            If string/array: creates default file-based stores with these paths.
-   *                            If object: uses provided stores (searchPaths ignored).
-   *                            Priority for searchPaths:
-   *                            1. Constructor parameter (highest)
-   *                            2. AUTH_BROKER_PATH environment variable (colon/semicolon-separated)
-   *                            3. Current working directory (lowest)
+   * @param stores Object with custom stores. If not provided, creates default file-based stores.
+   *               - serviceKeyStore: Store for service keys (default: FileServiceKeyStore)
+   *               - sessionStore: Store for session data (default: FileSessionStore)
    * @param browser Optional browser name for authentication (chrome, edge, firefox, system, none).
    *                Default: 'system' (system default browser).
    *                Use 'none' to print URL instead of opening browser.
    * @param logger Optional logger instance. If not provided, uses default logger.
    */
   constructor(
-    searchPathsOrStores?: string | string[] | { serviceKeyStore?: ServiceKeyStore; sessionStore?: SessionStore },
+    stores?: { serviceKeyStore?: IServiceKeyStore; sessionStore?: ISessionStore },
     browser?: string,
     logger?: Logger
   ) {
-    // Handle backward compatibility: if first param is string/array, treat as searchPaths
-    if (typeof searchPathsOrStores === 'string' || Array.isArray(searchPathsOrStores) || searchPathsOrStores === undefined) {
-      this.searchPaths = resolveSearchPaths(searchPathsOrStores);
-      // Create default file-based stores
-      this.serviceKeyStore = new FileServiceKeyStore(this.searchPaths);
-      this.sessionStore = new FileSessionStore(this.searchPaths);
-    } else {
-      // New API: stores provided
-      this.searchPaths = resolveSearchPaths(undefined); // Still resolve for backward compatibility in internal functions
-      this.serviceKeyStore = searchPathsOrStores.serviceKeyStore || new FileServiceKeyStore();
-      this.sessionStore = searchPathsOrStores.sessionStore || new FileSessionStore();
-    }
-    
+    this.serviceKeyStore = stores?.serviceKeyStore || new FileServiceKeyStore();
+    this.sessionStore = stores?.sessionStore || new FileSessionStore();
     this.browser = browser || 'system';
     this.logger = logger || defaultLogger;
   }
@@ -97,14 +79,15 @@ export class AuthBroker {
     if (!serviceKey) {
       // No service key and no valid token - throw error with helpful message
       const searchPaths = this.getSearchPathsForError();
-      const searchedPaths = searchPaths.map(p => `  - ${p}`).join('\n');
+      const searchedPaths = searchPaths.length > 0 
+        ? `\nSearched in:\n${searchPaths.map(p => `  - ${p}`).join('\n')}`
+        : '';
       throw new Error(
         `No authentication found for destination "${destination}". ` +
         `Neither ${destination}.env file nor ${destination}.json service key found.\n` +
         `Please create one of:\n` +
         `  - ${destination}.env (with SAP_JWT_TOKEN)\n` +
-        `  - ${destination}.json (service key)\n` +
-        `Searched in:\n${searchedPaths}`
+        `  - ${destination}.json (service key)${searchedPaths}`
       );
     }
 
@@ -125,11 +108,12 @@ export class AuthBroker {
     const serviceKey = await this.serviceKeyStore.getServiceKey(destination);
     if (!serviceKey) {
       const searchPaths = this.getSearchPathsForError();
-      const searchedPaths = searchPaths.map(p => `  - ${p}`).join('\n');
+      const searchedPaths = searchPaths.length > 0
+        ? `\nSearched in:\n${searchPaths.map(p => `  - ${p}`).join('\n')}`
+        : '';
       throw new Error(
         `Service key file not found for destination "${destination}".\n` +
-        `Please create file: ${destination}.json\n` +
-        `Searched in:\n${searchedPaths}`
+        `Please create file: ${destination}.json${searchedPaths}`
       );
     }
 
@@ -248,7 +232,7 @@ export class AuthBroker {
     if (this.sessionStore instanceof FileSessionStore) {
       return this.sessionStore.getSearchPaths();
     }
-    // Fallback to stored searchPaths (for backward compatibility)
-    return this.searchPaths;
+    // No file stores, return empty array
+    return [];
   }
 }

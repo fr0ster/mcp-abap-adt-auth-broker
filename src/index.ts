@@ -8,6 +8,6 @@ export type { EnvConfig, ServiceKey } from './types';
 export { resolveSearchPaths, findFileInPaths } from './pathResolver';
 
 // Export storage interfaces and implementations
-export { ServiceKeyStore, SessionStore } from './stores/interfaces';
-export { FileServiceKeyStore, FileSessionStore } from './stores';
+export { IServiceKeyStore, ISessionStore, ServiceKeyStore, SessionStore } from './stores/interfaces';
+export { FileServiceKeyStore, FileSessionStore, SafeSessionStore } from './stores';
 

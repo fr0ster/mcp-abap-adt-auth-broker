@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
+## [0.1.5] - 2025-12-02
+
+### Added
+- **SafeSessionStore** - New in-memory session store implementation
+  - Stores session data in memory (Map) - data is lost after application restart
+  - Secure by default - doesn't persist sensitive data to disk
+  - Use when you want to ensure tokens are not saved to files
+  - Perfect for applications that require re-authentication after restart
+
+### Changed
+- **Interface Naming** - Renamed interfaces for better readability
+  - `ServiceKeyStore` → `IServiceKeyStore` (new interface name)
+  - `SessionStore` → `ISessionStore` (new interface name)
+  - Old names still available as type aliases for backward compatibility
+  - All implementations updated to use new interface names
+- **AuthBroker Constructor** - Simplified API
+  - Removed `searchPathsOrStores` parameter (string/array/object)
+  - Now accepts only `stores` object with `serviceKeyStore` and `sessionStore` properties
+  - Consumers must explicitly provide stores - no automatic path resolution
+  - Default stores: `FileServiceKeyStore()` and `FileSessionStore()` if not provided
+  - This change gives consumers full control over storage implementation
+
+### Breaking Changes
+- **AuthBroker Constructor** - API change
+  - Old API: `new AuthBroker(searchPaths?: string | string[], browser?: string, logger?: Logger)`
+  - New API: `new AuthBroker(stores?: { serviceKeyStore?: IServiceKeyStore; sessionStore?: ISessionStore }, browser?: string, logger?: Logger)`
+  - Migration: Instead of passing paths, create stores explicitly:
+    ```typescript
+    // Old way (no longer works)
+    const broker = new AuthBroker(['/path/to/destinations']);
+    
+    // New way
+    const { FileServiceKeyStore, FileSessionStore } = require('@mcp-abap-adt/auth-broker');
+    const broker = new AuthBroker({
+      serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
+      sessionStore: new FileSessionStore(['/path/to/destinations']),
+    });
+    ```
+
+### Technical Details
+- Consumers now have full control over storage implementation
+- Can choose between `FileSessionStore` (persists to disk) and `SafeSessionStore` (in-memory)
+- No automatic path resolution - consumers decide where to store files
+- Better separation of concerns - storage logic is explicit
+
 ## [0.1.4] - 2025-12-01
 
 ### Dependencies
