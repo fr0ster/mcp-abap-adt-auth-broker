@@ -17,6 +17,12 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
   - Secure by default - doesn't persist sensitive data to disk
   - Use when you want to ensure tokens are not saved to files
   - Perfect for applications that require re-authentication after restart
+- **SafeSessionStore Tests** - Comprehensive test coverage for SafeSessionStore
+  - Tests for `loadSession()` - loading non-existent, existing, and deleted sessions
+  - Tests for `saveSession()` - saving, overwriting, and multiple destinations
+  - Tests for `deleteSession()` - deleting existing and non-existent sessions
+  - Tests for in-memory behavior - data isolation between instances
+  - 11 test cases covering all functionality
 
 ### Changed
 - **Interface Naming** - Renamed interfaces for better readability
@@ -48,11 +54,18 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
     });
     ```
 
+### Fixed
+- **Test Helpers** - Updated test helpers to use new AuthBroker API
+  - `testHelpers.ts` now uses `FileServiceKeyStore` and `FileSessionStore` with explicit paths
+  - All existing tests updated to work with new constructor signature
+  - Test coverage maintained at 100% for all components
+
 ### Technical Details
 - Consumers now have full control over storage implementation
 - Can choose between `FileSessionStore` (persists to disk) and `SafeSessionStore` (in-memory)
 - No automatic path resolution - consumers decide where to store files
 - Better separation of concerns - storage logic is explicit
+- All tests updated and passing (60 tests across 8 test suites)
 
 ## [0.1.4] - 2025-12-01
 

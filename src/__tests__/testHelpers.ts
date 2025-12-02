@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { AuthBroker } from '../AuthBroker';
 import { testLogger } from '../logger';
+import { FileServiceKeyStore, FileSessionStore } from '../stores';
 
 // Fixed test destinations path - user can place service keys here
 export const TEST_DESTINATIONS_PATH = process.env.TEST_DESTINATIONS_PATH || path.join(process.cwd(), 'test-destinations');
@@ -22,8 +23,14 @@ export interface TestBrokers {
  */
 export function setupTestBrokers(testName: string): TestBrokers {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `auth-broker-${testName}-test-`));
-  const broker = new AuthBroker([tempDir], undefined, testLogger);
-  const testDestinationsBroker = new AuthBroker([TEST_DESTINATIONS_PATH], undefined, testLogger);
+  const broker = new AuthBroker({
+    serviceKeyStore: new FileServiceKeyStore([tempDir]),
+    sessionStore: new FileSessionStore([tempDir]),
+  }, undefined, testLogger);
+  const testDestinationsBroker = new AuthBroker({
+    serviceKeyStore: new FileServiceKeyStore([TEST_DESTINATIONS_PATH]),
+    sessionStore: new FileSessionStore([TEST_DESTINATIONS_PATH]),
+  }, undefined, testLogger);
   
   return { tempDir, broker, testDestinationsBroker };
 }
