@@ -1,8 +1,8 @@
 /**
- * Token providers - convert IAuthorizationConfig to IConnectionConfig
+ * Token provider interface
+ * 
+ * Provider implementations are in separate packages:
+ * - @mcp-abap-adt/auth-providers - XSUAA and BTP providers
  */
 
-export { ITokenProvider, TokenProviderOptions, TokenProviderResult } from './ITokenProvider';
-export { XsuaaTokenProvider } from './XsuaaTokenProvider';
-export { BtpTokenProvider } from './BtpTokenProvider';
-
+export type { ITokenProvider, TokenProviderOptions, TokenProviderResult } from './ITokenProvider';

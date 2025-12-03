@@ -16,7 +16,9 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { AuthBroker } from '../src/AuthBroker';
-import { AbapServiceKeyStore, AbapSessionStore, XsuaaServiceKeyStore, XsuaaSessionStore } from '../src/stores';
+import { AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-stores-btp';
+import { XsuaaServiceKeyStore, XsuaaSessionStore } from '@mcp-abap-adt/auth-stores-xsuaa';
+import { BtpTokenProvider, XsuaaTokenProvider } from '@mcp-abap-adt/auth-providers';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -64,12 +66,18 @@ async function main() {
       ? new XsuaaSessionStore([sessionDir])
       : new AbapSessionStore([sessionDir]);
 
+    // Create token provider
+    const tokenProvider = isXsuaa
+      ? new XsuaaTokenProvider()
+      : new BtpTokenProvider();
+
     // Create AuthBroker
     // For ABAP, use 'system' browser (will open browser for auth)
     // For XSUAA, browser doesn't matter (uses client_credentials)
     const broker = new AuthBroker({
       serviceKeyStore,
       sessionStore,
+      tokenProvider,
     }, isXsuaa ? 'none' : 'system');
 
     console.log(`🔐 Getting token for destination "${destination}"...`);
@@ -88,20 +96,17 @@ async function main() {
     if (fs.existsSync(resolvedSessionPath)) {
       console.log(`✅ Session file created: ${resolvedSessionPath}`);
       
-      // Show MCP URL if available (optional for XSUAA)
-      if (isXsuaa) {
-        const mcpUrl = await broker.getSapUrl(destination);
-        if (mcpUrl) {
-          console.log(`📁 MCP URL: ${mcpUrl}`);
+      // Show service URL if available
+      const connConfig = await broker.getConnectionConfig(destination);
+      if (connConfig?.serviceUrl) {
+        if (isXsuaa) {
+          console.log(`📁 MCP URL: ${connConfig.serviceUrl}`);
         } else {
-          console.log(`💡 Note: MCP URL not set in session (optional for XSUAA).`);
-          console.log(`   Provide MCP URL via YAML config, parameter, or request header when making requests.`);
+          console.log(`📁 SAP URL: ${connConfig.serviceUrl}`);
         }
-      } else {
-        const sapUrl = await broker.getSapUrl(destination);
-        if (sapUrl) {
-          console.log(`📁 SAP URL: ${sapUrl}`);
-        }
+      } else if (isXsuaa) {
+        console.log(`💡 Note: MCP URL not set in session (optional for XSUAA).`);
+        console.log(`   Provide MCP URL via YAML config, parameter, or request header when making requests.`);
       }
     } else {
       console.log(`⚠️  Session file was not created. Token is cached in memory.`);

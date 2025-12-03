@@ -9,7 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
-## [0.1.6] - 2025-12-03
+## [0.1.6] - 2025-01-XX
+
+### Changed
+- **Package Split** - Extracted store and provider implementations into separate packages
+  - `@mcp-abap-adt/auth-stores-btp` - BTP and ABAP stores
+  - `@mcp-abap-adt/auth-stores-xsuaa` - XSUAA stores
+  - `@mcp-abap-adt/auth-providers` - XSUAA and BTP token providers
+  - `auth-broker` now only contains interfaces and core broker logic
+- **ITokenProvider Interface** - Added optional `validateToken` method to token provider interface
+  - Token validation is now handled by providers, not by auth-broker
+  - Providers can implement custom validation logic
+- **Dependencies** - Removed unused dependencies (axios, express, open, dotenv)
+  - These are now in provider/store packages
+  - `auth-broker` only depends on `@mcp-abap-adt/connection`
+
+### Removed
+- Store implementations (moved to `@mcp-abap-adt/auth-stores-btp` and `@mcp-abap-adt/auth-stores-xsuaa`)
+- Provider implementations (moved to `@mcp-abap-adt/auth-providers`)
+- Token validator utility (moved to providers)
+- Authentication functions (moved to providers)
+
+## [0.1.5] - 2025-12-03
 
 ### Changed
 - **Interface Naming** - All interfaces now start with `I` prefix

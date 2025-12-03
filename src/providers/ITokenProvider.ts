@@ -35,6 +35,14 @@ export interface ITokenProvider {
     authConfig: IAuthorizationConfig,
     options?: TokenProviderOptions
   ): Promise<TokenProviderResult>;
+
+  /**
+   * Validate JWT token by testing connection to service
+   * @param token JWT token to validate
+   * @param serviceUrl Service URL (optional, for services that require URL validation)
+   * @returns Promise that resolves to true if token is valid, false otherwise
+   */
+  validateToken?(token: string, serviceUrl?: string): Promise<boolean>;
 }
 
 /**
@@ -44,6 +52,6 @@ export interface TokenProviderOptions {
   /** Browser type for browser-based authentication (chrome, edge, firefox, system, none) */
   browser?: string;
   /** Logger instance for logging */
-  logger?: import('../utils/logger').Logger;
+  logger?: import('@mcp-abap-adt/logger').Logger;
 }
 

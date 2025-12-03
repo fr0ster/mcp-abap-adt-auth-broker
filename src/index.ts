@@ -8,17 +8,13 @@ export { AuthBroker } from './AuthBroker';
 // These are the ONLY types consumers should use
 export type { IAuthorizationConfig, IConnectionConfig, IServiceKeyStore, ISessionStore } from './stores/interfaces';
 export type { IConfig } from './types';
-// Token providers - convert IAuthorizationConfig to IConnectionConfig
-export { ITokenProvider, XsuaaTokenProvider, BtpTokenProvider } from './providers';
-export type { TokenProviderOptions, TokenProviderResult } from './providers';
-export { resolveSearchPaths, findFileInPaths } from './utils/pathResolver';
-export { AbapServiceKeyStore, AbapSessionStore, XsuaaServiceKeyStore, XsuaaSessionStore, BtpSessionStore, SafeAbapSessionStore, SafeXsuaaSessionStore, SafeBtpSessionStore } from './stores';
+// Token provider interface
+export type { ITokenProvider, TokenProviderOptions, TokenProviderResult } from './providers';
+// Logger (re-exported from @mcp-abap-adt/logger for convenience)
+export type { Logger } from '@mcp-abap-adt/logger';
 
-// Service key parsers are internal implementation details - not exported
-// Parsers are used internally by stores for parsing service key files
-export { loadServiceKey } from './loaders/abap/serviceKeyLoader';
-
-// Constants are internal implementation details - not exported
-// All file operations are handled by stores through interfaces
-// Consumers should use IServiceKeyStore and ISessionStore interfaces
+// Store and provider implementations are in separate packages:
+// - @mcp-abap-adt/auth-stores-btp - BTP and ABAP stores
+// - @mcp-abap-adt/auth-stores-xsuaa - XSUAA stores
+// - @mcp-abap-adt/auth-providers - XSUAA and BTP token providers
 
