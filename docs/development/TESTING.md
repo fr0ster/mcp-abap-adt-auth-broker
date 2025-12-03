@@ -31,8 +31,12 @@ Tests use Jest with the following configuration (`jest.config.js`):
 
 Tests require:
 - Node.js >= 18.0.0
-- Service key file: `./test-destinations/TRIAL.json`
-- Optional: `TEST_DESTINATIONS_PATH` environment variable to specify custom path
+- YAML configuration file: `tests/test-config.yaml` (see `tests/test-config.yaml.template`)
+  - `auth_broker.paths.service_keys_dir` - Directory for service key files
+  - `auth_broker.paths.sessions_dir` - Directory for session files
+  - `auth_broker.abap.destination` - ABAP destination name (e.g., "trial")
+  - `auth_broker.xsuaa.btp_destination` - XSUAA destination name (e.g., "btp")
+  - `auth_broker.xsuaa.mcp_url` - MCP server URL (optional, for XSUAA tests)
 
 ## Test Scenarios
 
@@ -166,10 +170,10 @@ This guarantees:
 
 ### Test File Management
 
-- **Before Test 1**: `NO_EXISTS.json` should NOT exist
-- **Before Test 2**: `TRIAL.env` is automatically removed if exists
-- **After Test 2**: `TRIAL.env` is created (not deleted)
-- **Before Test 3**: `TRIAL.env` must exist (created by Test 2 or manually)
+- **Before Test 1**: `NO_EXISTS.json` should NOT exist in configured `service_keys_dir`
+- **Before Test 2**: `{destination}.env` is automatically removed if exists in configured `sessions_dir`
+- **After Test 2**: `{destination}.env` is created (not deleted) in configured `sessions_dir`
+- **Before Test 3**: `{destination}.env` must exist (created by Test 2 or manually) in configured `sessions_dir`
 
 ## Test Methodology
 
@@ -271,9 +275,11 @@ If tests fail or skip unexpectedly:
 
 2. **Check Test Output**: Look for skip messages in console
 
-3. **Verify Service Key**: Ensure `TRIAL.json` is valid JSON with required fields
+3. **Verify YAML Configuration**: Ensure `tests/test-config.yaml` exists and has correct paths
 
-4. **Check .env File**: If Test 3 fails, verify `TRIAL.env` exists and has valid tokens
+4. **Verify Service Key**: Ensure `{destination}.json` exists in configured `service_keys_dir` and is valid JSON with required fields
+
+5. **Check .env File**: If Test 3 fails, verify `{destination}.env` exists in configured `sessions_dir` and has valid tokens
 
 ### Common Issues
 

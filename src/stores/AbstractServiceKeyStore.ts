@@ -5,10 +5,9 @@
  * Subclasses implement format-specific parsing logic.
  */
 
-import { IServiceKeyStore } from './interfaces';
-import { ServiceKey } from '../types';
-import { findFileInPaths } from '../pathResolver';
-import { resolveSearchPaths } from '../pathResolver';
+import { IServiceKeyStore, IAuthorizationConfig, IConnectionConfig } from './interfaces';
+import { IConfig } from '../types';
+import { findFileInPaths, resolveSearchPaths } from '../utils/pathResolver';
 import * as fs from 'fs';
 
 /**
@@ -58,20 +57,19 @@ export abstract class AbstractServiceKeyStore implements IServiceKeyStore {
   }
 
   /**
-   * Parse raw JSON data into ServiceKey format
+   * Parse raw JSON data into service key format
    * Must be implemented by subclasses
    * @param rawData Raw JSON data from service key file
-   * @returns Parsed ServiceKey object
+   * @returns Parsed service key object (implementation-specific)
    * @throws Error if data cannot be parsed or is invalid
    */
-  protected abstract parse(rawData: any): ServiceKey;
+  protected abstract parse(rawData: unknown): unknown;
 
   /**
-   * Get service key for destination
-   * @param destination Destination name (e.g., "TRIAL" or "mcp")
-   * @returns ServiceKey object or null if not found
+   * Get raw parsed service key (internal representation)
+   * Used internally by getAuthorizationConfig and getConnectionConfig
    */
-  async getServiceKey(destination: string): Promise<ServiceKey | null> {
+  private async getRawServiceKey(destination: string): Promise<unknown | null> {
     const rawData = await this.loadRawData(destination);
     if (!rawData) {
       return null;
@@ -84,6 +82,76 @@ export abstract class AbstractServiceKeyStore implements IServiceKeyStore {
         `Failed to parse service key for destination "${destination}": ${error instanceof Error ? error.message : String(error)}`
       );
     }
+  }
+
+  /**
+   * Get service key for destination
+   * Returns optional composition of IAuthorizationConfig and IConnectionConfig
+   * @param destination Destination name (e.g., "TRIAL" or "mcp")
+   * @returns IConfig with actual values or null if not found
+   */
+  async getServiceKey(destination: string): Promise<IConfig | null> {
+    const authConfig = await this.getAuthorizationConfig(destination);
+    const connConfig = await this.getConnectionConfig(destination);
+    
+    // Return null if both are null, otherwise return composition (even if one is null)
+    if (!authConfig && !connConfig) {
+      return null;
+    }
+    
+    return {
+      ...(authConfig || {}),
+      ...(connConfig || {}),
+    };
+  }
+
+  /**
+   * Get authorization configuration from service key
+   * @param destination Destination name (e.g., "TRIAL")
+   * @returns IAuthorizationConfig with actual values or null if not found
+   */
+  async getAuthorizationConfig(destination: string): Promise<IAuthorizationConfig | null> {
+    const serviceKey = await this.getRawServiceKey(destination);
+    if (!serviceKey || typeof serviceKey !== 'object') {
+      return null;
+    }
+    const key = serviceKey as { uaa?: { url?: string; clientid?: string; clientsecret?: string } };
+    if (!key.uaa || !key.uaa.url || !key.uaa.clientid || !key.uaa.clientsecret) {
+      return null;
+    }
+    return {
+      uaaUrl: key.uaa.url,
+      uaaClientId: key.uaa.clientid,
+      uaaClientSecret: key.uaa.clientsecret,
+    };
+  }
+
+  /**
+   * Get connection configuration from service key
+   * @param destination Destination name (e.g., "TRIAL")
+   * @returns IConnectionConfig with actual values or null if not found
+   */
+  async getConnectionConfig(destination: string): Promise<IConnectionConfig | null> {
+    const serviceKey = await this.getRawServiceKey(destination);
+    if (!serviceKey || typeof serviceKey !== 'object') {
+      return null;
+    }
+    const key = serviceKey as {
+      abap?: { url?: string; client?: string; language?: string };
+      sap_url?: string;
+      url?: string;
+      sap_client?: string;
+      client?: string;
+      language?: string;
+    };
+    // Service key doesn't have tokens - only URLs and client info
+    const serviceUrl = key.abap?.url || key.sap_url || (key.url && !key.url.includes('authentication') ? key.url : undefined);
+    return {
+      serviceUrl,
+      authorizationToken: '', // Service key doesn't contain tokens
+      sapClient: key.abap?.client || key.sap_client || key.client,
+      language: key.abap?.language || key.language,
+    };
   }
 
   /**

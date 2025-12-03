@@ -11,7 +11,6 @@
  * }
  */
 
-import { ServiceKey } from '../types';
 import { IServiceKeyParser } from './IServiceKeyParser';
 
 /**
@@ -45,18 +44,18 @@ export class XsuaaServiceKeyParser implements IServiceKeyParser {
   }
 
   /**
-   * Parse raw service key data into standard ServiceKey format
+   * Parse raw service key data
    * @param rawData Raw JSON data from service key file
-   * @returns Parsed ServiceKey object (normalized to standard format)
+   * @returns Parsed service key object (normalized format)
    * @throws Error if data cannot be parsed or is invalid
    */
-  parse(rawData: any): ServiceKey {
+  parse(rawData: any): unknown {
     if (!this.canParse(rawData)) {
       throw new Error('Service key does not match XSUAA format (missing url, clientid, or clientsecret at root level)');
     }
 
-    // Normalize to standard ServiceKey format
-    const serviceKey: ServiceKey = {
+    // Normalize to standard format
+    return {
       uaa: {
         url: rawData.url, // UAA URL for token endpoint
         clientid: rawData.clientid,
@@ -71,8 +70,6 @@ export class XsuaaServiceKeyParser implements IServiceKeyParser {
       sap_client: rawData.sap_client,
       language: rawData.language,
     };
-
-    return serviceKey;
   }
 }
 

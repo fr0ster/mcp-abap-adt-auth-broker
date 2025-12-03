@@ -11,19 +11,105 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [0.1.6] - 2025-12-03
 
+### Changed
+- **Interface Naming** - All interfaces now start with `I` prefix
+  - `AuthorizationConfig` → `IAuthorizationConfig`
+  - `ConnectionConfig` → `IConnectionConfig`
+  - `ServiceKeyStore` → `IServiceKeyStore`
+  - `SessionStore` → `ISessionStore`
+- **Type System** - Introduced `IConfig` as optional composition of `IAuthorizationConfig` and `IConnectionConfig`
+  - `loadSession()` and `getServiceKey()` now return `IConfig | null`
+  - `IConfig` is `Partial<IAuthorizationConfig> & Partial<IConnectionConfig>`
+- **Token Provider Architecture** - Extracted token acquisition logic into `ITokenProvider` interface
+  - `XsuaaTokenProvider` - Uses client_credentials grant type (no browser)
+  - `BtpTokenProvider` - Uses browser-based OAuth2 or refresh token
+  - `AuthBroker` now accepts `tokenProvider` in constructor
+- **XSUAA Configuration** - Renamed `btp_url` to `mcp_url` in YAML configuration
+  - For XSUAA, MCP URL is provided via `mcp_url` in YAML config (not `btp_url`)
+  - MCP URL is optional and not part of authentication
+- **Constants** - Removed constants from exports (internal implementation details)
+  - All file operations are handled by stores through interfaces
+  - Consumers should use `IServiceKeyStore` and `ISessionStore` methods
+- **File Structure** - Organized source code into logical subfolders
+  - `src/auth/` - Authentication logic (browserAuth, clientCredentialsAuth, tokenRefresher, tokenValidator)
+  - `src/cache/` - Token caching
+  - `src/constants/` - Internal constants
+  - `src/loaders/` - Service key loaders (abap, xsuaa)
+  - `src/logger/` - Logging utilities
+  - `src/methods/` - AuthBroker methods (getToken, refreshToken)
+  - `src/parsers/` - Service key parsers
+  - `src/pathResolver/` - Path resolution utilities
+  - `src/providers/` - Token providers (ITokenProvider, XsuaaTokenProvider, BtpTokenProvider)
+  - `src/storage/` - Environment file loaders and token storage (abap, btp, xsuaa)
+  - `src/stores/` - Store implementations (abap, btp, xsuaa)
+  - `src/types/` - Type definitions
+  - `src/utils/` - Utility functions
+- **Test Structure** - Organized tests into subfolders by implementation
+  - `src/__tests__/broker/` - AuthBroker tests
+  - `src/__tests__/stores/abap/`, `src/__tests__/stores/btp/`, `src/__tests__/stores/xsuaa/` - Store tests
+  - `src/__tests__/loaders/abap/`, `src/__tests__/loaders/xsuaa/` - Loader tests
+  - `src/__tests__/storage/abap/`, `src/__tests__/storage/btp/`, `src/__tests__/storage/xsuaa/` - Storage tests
+  - `src/__tests__/parsers/` - Parser tests
+  - `src/__tests__/utils/` - Utility tests
+  - `src/__tests__/helpers/` - Test helpers (configHelpers, testHelpers, AuthBrokerTestHelper)
+
+### Removed
+- **ServiceKey Type** - Removed `ServiceKey` type (internal implementation detail)
+- **Internal Types** - Removed internal storage types from exports
+  - `EnvConfig`, `XsuaaSessionConfig`, `BtpSessionConfig` are now internal to store implementations
+- **Constants Export** - Removed constants from public API
+  - `ABAP_AUTHORIZATION_VARS`, `ABAP_CONNECTION_VARS`, etc. are internal
+  - `ABAP_HEADERS`, `XSUAA_HEADERS`, `BTP_HEADERS` are internal
+- **Parser Exports** - Removed parser interfaces and implementations from exports
+  - `IServiceKeyParser`, `AbapServiceKeyParser`, `XsuaaServiceKeyParser` are internal
+
+### Fixed
+- **Test Configuration** - Tests now use YAML configuration file (`tests/test-config.yaml`)
+  - Removed hardcoded paths and destinations
+  - Added `AuthBrokerTestHelper` for creating broker instances from YAML
+  - Tests organized into subfolders by implementation (`abap`, `btp`, `xsuaa`)
+- **Browser Authentication** - Fixed hanging tests when `browser: 'none'` is specified
+  - `startBrowserAuth` now immediately throws error with URL when `browser: 'none'`
+  - Added timeout to `clientCredentialsAuth` to prevent hanging
+- **Session Store Validation** - Fixed validation in `Safe*SessionStore` classes
+  - Now accepts `IConfig` format (with `serviceUrl`/`authorizationToken`) and converts to internal format
+  - Validation messages updated to match actual error messages
+- **YAML Configuration** - Fixed path resolution for test configuration
+  - Uses `findProjectRoot()` to reliably locate `test-config.yaml`
+  - Properly expands `~` to home directory in paths
+  - Added diagnostic logging controlled by `TEST_VERBOSE` environment variable
+
 ### Added
-- **BTP/XSUAA Support** - Full support for BTP/XSUAA authentication
+- **BTP Full-Scope Authentication** - Full support for BTP authentication to ABAP systems (with full roles and scopes)
+  - `BtpSessionStore` - Store for BTP sessions (uses `BTP_*` environment variables)
+  - `SafeBtpSessionStore` - In-memory BTP session store
+  - `BtpSessionConfig` - Configuration interface for BTP authentication (includes `abapUrl`)
+  - `loadBtpEnvFile()` - Loads BTP session configuration from `.env` files with `BTP_*` variables
+  - `saveBtpTokenToEnv()` - Saves BTP session configuration to `.env` files with `BTP_*` variables
+- **BTP Environment Variables** - `BTP_ENV_VARS` constants
+  - `BTP_ABAP_URL` - ABAP system URL (required, from service key or YAML)
+  - `BTP_JWT_TOKEN` - JWT token for `Authorization: Bearer` header
+  - `BTP_REFRESH_TOKEN` - Optional refresh token
+  - `BTP_UAA_URL`, `BTP_UAA_CLIENT_ID`, `BTP_UAA_CLIENT_SECRET` - UAA credentials (from service key)
+- **BTP HTTP Headers** - `BTP_HEADERS` constants
+  - `BTP_HEADERS.AUTHORIZATION` - Authorization header
+  - `BTP_HEADERS.ABAP_URL` - ABAP URL header (`x-abap-url`)
+  - `BTP_HEADERS.BTP_DESTINATION` - BTP destination header (`x-btp-destination`)
+  - `BTP_HEADERS.SAP_CLIENT` - SAP client header (`x-sap-client`)
+  - `BTP_HEADERS.LANGUAGE` - Language header (`x-sap-language`)
+- **Helper Functions** - `isBtpEnvVar()` function to check if environment variable is BTP-related
+- **XSUAA Support** - Full support for XSUAA authentication (reduced scope)
   - `XsuaaServiceKeyStore` - Store for XSUAA service keys (direct format from BTP)
-  - `XsuaaSessionStore` - Store for XSUAA sessions (uses `BTP_*` environment variables)
+  - `XsuaaSessionStore` - Store for XSUAA sessions (uses `XSUAA_*` environment variables)
   - `SafeXsuaaSessionStore` - In-memory XSUAA session store
   - `XsuaaServiceKeyParser` - Parser for direct XSUAA service key format
   - Client credentials grant type for XSUAA (no browser required)
 - **Environment Variable Constants** - Exported constants for consumers
   - `ABAP_ENV_VARS` - Environment variable names for ABAP connections (SAP_URL, SAP_JWT_TOKEN, etc.)
-  - `BTP_ENV_VARS` - Environment variable names for BTP/XSUAA connections (BTP_URL, BTP_JWT_TOKEN, etc.)
+  - `XSUAA_ENV_VARS` - Environment variable names for XSUAA connections (XSUAA_MCP_URL, XSUAA_JWT_TOKEN, etc.)
   - `ABAP_HEADERS` - HTTP header names for ABAP requests (x-sap-url, x-sap-jwt-token, etc.)
-  - `BTP_HEADERS` - HTTP header names for BTP requests (Authorization, x-mcp-url, etc.)
-  - Helper functions: `getBtpAuthorizationHeader()`, `isAbapEnvVar()`, `isBtpEnvVar()`
+  - `XSUAA_HEADERS` - HTTP header names for XSUAA requests (Authorization, x-mcp-url, etc.)
+  - Helper functions: `getBtpAuthorizationHeader()`, `isAbapEnvVar()`, `isXsuaaEnvVar()`
 - **Service Key Parsers** - Modular parser architecture
   - `IServiceKeyParser` - Interface for service key parsers
   - `AbapServiceKeyParser` - Parser for standard ABAP service keys
@@ -32,21 +118,67 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
   - Generates `.env` files from service keys
   - Supports both ABAP and XSUAA service key formats
   - Automatically detects service key type and uses appropriate authentication flow
-- **BTP Environment Loader** - `loadBtpEnvFile()` function
-  - Loads BTP session configuration from `.env` files with `BTP_*` variables
-- **BTP Token Storage** - `saveBtpTokenToEnv()` function
-  - Saves BTP session configuration to `.env` files with `BTP_*` variables
+- **XSUAA Environment Loader** - `loadXsuaaEnvFile()` function
+  - Loads XSUAA session configuration from `.env` files with `XSUAA_*` variables
+- **XSUAA Token Storage** - `saveXsuaaTokenToEnv()` function
+  - Saves XSUAA session configuration to `.env` files with `XSUAA_*` variables
   - Automatically removes old `SAP_*` variables when saving XSUAA sessions
 
 ### Changed
-- **XSUAA Session Format** - Uses `BTP_*` environment variables instead of `SAP_*`
-  - `BTP_URL` or `BTP_MCP_URL` - MCP server URL (optional, not part of authentication)
-  - `BTP_JWT_TOKEN` - JWT token for `Authorization: Bearer` header
-  - `BTP_REFRESH_TOKEN` - Optional refresh token
-  - `BTP_UAA_URL`, `BTP_UAA_CLIENT_ID`, `BTP_UAA_CLIENT_SECRET` - UAA credentials
+- **Interface Naming** - All interfaces now start with `I` prefix
+  - `AuthorizationConfig` → `IAuthorizationConfig`
+  - `ConnectionConfig` → `IConnectionConfig`
+  - `ServiceKeyStore` → `IServiceKeyStore`
+  - `SessionStore` → `ISessionStore`
+- **Type System** - Introduced `IConfig` as optional composition of `IAuthorizationConfig` and `IConnectionConfig`
+  - `loadSession()` and `getServiceKey()` now return `IConfig | null`
+  - `IConfig` is `Partial<IAuthorizationConfig> & Partial<IConnectionConfig>`
+- **Token Provider Architecture** - Extracted token acquisition logic into `ITokenProvider` interface
+  - `XsuaaTokenProvider` - Uses client_credentials grant type (no browser)
+  - `BtpTokenProvider` - Uses browser-based OAuth2 or refresh token
+  - `AuthBroker` now accepts `tokenProvider` in constructor
+- **XSUAA Configuration** - Renamed `btp_url` to `mcp_url` in YAML configuration
+  - For XSUAA, MCP URL is provided via `mcp_url` in YAML config (not `btp_url`)
+  - MCP URL is optional and not part of authentication
+- **Constants** - Removed constants from exports (internal implementation details)
+  - All file operations are handled by stores through interfaces
+  - Consumers should use `IServiceKeyStore` and `ISessionStore` methods
+- **File Structure** - Organized source code into logical subfolders
+  - `src/auth/` - Authentication logic (browserAuth, clientCredentialsAuth, tokenRefresher, tokenValidator)
+  - `src/cache/` - Token caching
+  - `src/constants/` - Internal constants
+  - `src/loaders/` - Service key loaders (abap, xsuaa)
+  - `src/logger/` - Logging utilities
+  - `src/methods/` - AuthBroker methods (getToken, refreshToken)
+  - `src/parsers/` - Service key parsers
+  - `src/pathResolver/` - Path resolution utilities
+  - `src/providers/` - Token providers (ITokenProvider, XsuaaTokenProvider, BtpTokenProvider)
+  - `src/storage/` - Environment file loaders and token storage (abap, btp, xsuaa)
+  - `src/stores/` - Store implementations (abap, btp, xsuaa)
+  - `src/types/` - Type definitions
+  - `src/utils/` - Utility functions
+- **Test Structure** - Organized tests into subfolders by implementation
+  - `src/__tests__/broker/` - AuthBroker tests
+  - `src/__tests__/stores/abap/`, `src/__tests__/stores/btp/`, `src/__tests__/stores/xsuaa/` - Store tests
+  - `src/__tests__/loaders/abap/`, `src/__tests__/loaders/xsuaa/` - Loader tests
+  - `src/__tests__/storage/abap/`, `src/__tests__/storage/btp/`, `src/__tests__/storage/xsuaa/` - Storage tests
+  - `src/__tests__/parsers/` - Parser tests
+  - `src/__tests__/utils/` - Utility tests
+  - `src/__tests__/helpers/` - Test helpers (configHelpers, testHelpers, AuthBrokerTestHelper)
+- **Renamed XSUAA Components** - Clarified naming for reduced-scope XSUAA authentication
+  - `BtpSessionConfig` → `XsuaaSessionConfig` (for reduced-scope XSUAA)
+  - `BTP_ENV_VARS` → `XSUAA_ENV_VARS` (for reduced-scope XSUAA)
+  - `BTP_HEADERS` → `XSUAA_HEADERS` (for reduced-scope XSUAA)
+  - `BtpSessionStore` → `XsuaaSessionStore` (for reduced-scope XSUAA)
+  - `SafeBtpSessionStore` → `SafeXsuaaSessionStore` (for reduced-scope XSUAA)
+- **XSUAA Session Format** - Uses `XSUAA_*` environment variables instead of `SAP_*`
+  - `XSUAA_MCP_URL` - MCP server URL (optional, not part of authentication)
+  - `XSUAA_JWT_TOKEN` - JWT token for `Authorization: Bearer` header
+  - `XSUAA_REFRESH_TOKEN` - Optional refresh token
+  - `XSUAA_UAA_URL`, `XSUAA_UAA_CLIENT_ID`, `XSUAA_UAA_CLIENT_SECRET` - UAA credentials
 - **MCP URL Handling** - MCP URL is now optional for XSUAA sessions
   - MCP URL is not part of authentication (only needed for making requests)
-  - Can be provided via YAML config, parameter, or request header
+  - Can be provided via YAML config (`mcp_url`), parameter, or request header
   - Session files can be created without MCP URL (tokens and UAA credentials are sufficient)
 - **Service Key URL Priority** - For XSUAA service keys, `apiurl` is prioritized over `url` for UAA authorization
 - **Store Naming** - Renamed stores for clarity
@@ -55,11 +187,35 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
   - `SafeSessionStore` → `SafeAbapSessionStore` (for in-memory ABAP sessions)
   - Old names still available as type aliases for backward compatibility
 
+### Removed
+- **ServiceKey Type** - Removed `ServiceKey` type (internal implementation detail)
+- **Internal Types** - Removed internal storage types from exports
+  - `EnvConfig`, `XsuaaSessionConfig`, `BtpSessionConfig` are now internal to store implementations
+- **Constants Export** - Removed constants from public API
+  - `ABAP_AUTHORIZATION_VARS`, `ABAP_CONNECTION_VARS`, etc. are internal
+  - `ABAP_HEADERS`, `XSUAA_HEADERS`, `BTP_HEADERS` are internal
+- **Parser Exports** - Removed parser interfaces and implementations from exports
+  - `IServiceKeyParser`, `AbapServiceKeyParser`, `XsuaaServiceKeyParser` are internal
+
 ### Fixed
 - **XSUAA Authentication** - Fixed client_credentials grant type implementation
   - Uses POST request to UAA token endpoint with `grant_type=client_credentials`
   - No browser interaction required for XSUAA
   - Proper error handling for OAuth2 redirect parameters
+- **Test Configuration** - Tests now use YAML configuration file (`tests/test-config.yaml`)
+  - Removed hardcoded paths and destinations
+  - Added `AuthBrokerTestHelper` for creating broker instances from YAML
+  - Tests organized into subfolders by implementation (`abap`, `btp`, `xsuaa`)
+- **Browser Authentication** - Fixed hanging tests when `browser: 'none'` is specified
+  - `startBrowserAuth` now immediately throws error with URL when `browser: 'none'`
+  - Added timeout to `clientCredentialsAuth` to prevent hanging
+- **Session Store Validation** - Fixed validation in `Safe*SessionStore` classes
+  - Now accepts `IConfig` format (with `serviceUrl`/`authorizationToken`) and converts to internal format
+  - Validation messages updated to match actual error messages
+- **YAML Configuration** - Fixed path resolution for test configuration
+  - Uses `findProjectRoot()` to reliably locate `test-config.yaml`
+  - Properly expands `~` to home directory in paths
+  - Added diagnostic logging controlled by `TEST_VERBOSE` environment variable
 
 ## [0.1.5] - 2025-12-02
 

@@ -6,8 +6,6 @@
  * - XsuaaServiceKeyParser: Direct XSUAA service key format from BTP
  */
 
-import { ServiceKey } from '../types';
-
 /**
  * Interface for parsing service keys from raw JSON data
  */
@@ -20,11 +18,11 @@ export interface IServiceKeyParser {
   canParse(rawData: any): boolean;
 
   /**
-   * Parse raw service key data into standard ServiceKey format
+   * Parse raw service key data
    * @param rawData Raw JSON data from service key file
-   * @returns Parsed ServiceKey object
+   * @returns Parsed service key object (implementation-specific)
    * @throws Error if data cannot be parsed or is invalid
    */
-  parse(rawData: any): ServiceKey;
+  parse(rawData: any): unknown;
 }
 

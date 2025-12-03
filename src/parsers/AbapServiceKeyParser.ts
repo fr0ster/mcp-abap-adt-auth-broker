@@ -16,7 +16,6 @@
  * }
  */
 
-import { ServiceKey } from '../types';
 import { IServiceKeyParser } from './IServiceKeyParser';
 
 /**
@@ -33,12 +32,12 @@ export class AbapServiceKeyParser implements IServiceKeyParser {
   }
 
   /**
-   * Parse raw service key data into standard ServiceKey format
+   * Parse raw service key data
    * @param rawData Raw JSON data from service key file
-   * @returns Parsed ServiceKey object
+   * @returns Parsed service key object
    * @throws Error if data cannot be parsed or is invalid
    */
-  parse(rawData: any): ServiceKey {
+  parse(rawData: any): unknown {
     if (!this.canParse(rawData)) {
       throw new Error('Service key does not match ABAP format (missing uaa object)');
     }
@@ -48,8 +47,7 @@ export class AbapServiceKeyParser implements IServiceKeyParser {
       throw new Error('Service key "uaa" object missing required fields: url, clientid, clientsecret');
     }
 
-    // Return as ServiceKey (already in correct format)
-    return rawData as ServiceKey;
+    return rawData;
   }
 }
 

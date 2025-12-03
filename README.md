@@ -20,21 +20,29 @@ npm install @mcp-abap-adt/auth-broker
 ## Usage
 
 ```typescript
-import { AuthBroker, FileServiceKeyStore, FileSessionStore, SafeSessionStore } from '@mcp-abap-adt/auth-broker';
+import { 
+  AuthBroker, 
+  AbapServiceKeyStore, 
+  AbapSessionStore, 
+  SafeAbapSessionStore,
+  BtpTokenProvider
+} from '@mcp-abap-adt/auth-broker';
 
 // Use default file-based stores (current working directory)
 const broker = new AuthBroker();
 
 // Use custom file-based stores with specific paths
 const broker = new AuthBroker({
-  serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new FileSessionStore(['/path/to/destinations']),
+  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new AbapSessionStore(['/path/to/destinations']),
+  tokenProvider: new BtpTokenProvider(),
 }, 'chrome');
 
 // Use safe in-memory session store (data lost after restart)
 const broker = new AuthBroker({
-  serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new SafeSessionStore(), // In-memory, secure
+  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new SafeAbapSessionStore(), // In-memory, secure
+  tokenProvider: new BtpTokenProvider(),
 });
 
 // Get token for destination (loads from .env, validates, refreshes if needed)
@@ -67,20 +75,37 @@ SAP_UAA_CLIENT_ID=client_id
 SAP_UAA_CLIENT_SECRET=client_secret
 ```
 
-#### Environment File for BTP/XSUAA (`{destination}.env`)
+#### Environment File for XSUAA (`{destination}.env`)
 
-For BTP/XSUAA connections, use `BTP_*` environment variables:
+For XSUAA connections (reduced scope), use `XSUAA_*` environment variables:
 
 ```env
-BTP_URL=https://your-mcp-server.cfapps.eu10.hana.ondemand.com
+XSUAA_MCP_URL=https://your-mcp-server.cfapps.eu10.hana.ondemand.com
+XSUAA_JWT_TOKEN=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+XSUAA_REFRESH_TOKEN=refresh_token_string
+XSUAA_UAA_URL=https://your-account.authentication.eu10.hana.ondemand.com
+XSUAA_UAA_CLIENT_ID=client_id
+XSUAA_UAA_CLIENT_SECRET=client_secret
+```
+
+**Note**: `XSUAA_MCP_URL` is optional - it's not part of authentication, only needed for making requests. The token and UAA credentials are sufficient for authentication.
+
+#### Environment File for BTP (`{destination}.env`)
+
+For BTP connections (full scope for ABAP systems), use `BTP_*` environment variables:
+
+```env
+BTP_ABAP_URL=https://your-system.abap.us10.hana.ondemand.com
 BTP_JWT_TOKEN=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
 BTP_REFRESH_TOKEN=refresh_token_string
 BTP_UAA_URL=https://your-account.authentication.eu10.hana.ondemand.com
 BTP_UAA_CLIENT_ID=client_id
 BTP_UAA_CLIENT_SECRET=client_secret
+BTP_SAP_CLIENT=100
+BTP_LANGUAGE=EN
 ```
 
-**Note**: `BTP_URL` is optional - it's not part of authentication, only needed for making requests. The token and UAA credentials are sufficient for authentication.
+**Note**: `BTP_ABAP_URL` is required - it's the ABAP system URL. All parameters (except tokens) come from service key.
 
 #### Service Key File for ABAP (`{destination}.json`)
 
@@ -112,6 +137,26 @@ Direct XSUAA service key format (from BTP):
 
 **Note**: For XSUAA service keys, `apiurl` is prioritized over `url` for UAA authorization if present.
 
+## XSUAA vs BTP Authentication
+
+This package supports two types of BTP authentication:
+
+### XSUAA (Reduced Scope)
+- **Purpose**: Access BTP services with limited scopes
+- **Service Key**: Contains only UAA credentials (no ABAP URL)
+- **Session Store**: `XsuaaSessionStore` (uses `XSUAA_*` environment variables)
+- **Authentication**: Client credentials grant type (no browser required)
+- **MCP URL**: Optional, provided separately (from YAML config `mcp_url`, parameter, or request header)
+- **Use Case**: Accessing BTP services like MCP servers with reduced permissions
+
+### BTP (Full Scope for ABAP)
+- **Purpose**: Access ABAP systems with full roles and scopes
+- **Service Key**: Contains UAA credentials and ABAP URL
+- **Session Store**: `BtpSessionStore` (uses `BTP_*` environment variables)
+- **Authentication**: Browser-based OAuth2 (like ABAP) or refresh token
+- **ABAP URL**: Required, from service key or YAML configuration
+- **Use Case**: Accessing ABAP systems in BTP with full permissions
+
 ## API
 
 ### `AuthBroker`
@@ -119,17 +164,27 @@ Direct XSUAA service key format (from BTP):
 #### Constructor
 
 ```typescript
-new AuthBroker(stores?: { serviceKeyStore?: IServiceKeyStore; sessionStore?: ISessionStore }, browser?: string, logger?: Logger)
+new AuthBroker(
+  stores?: { 
+    serviceKeyStore?: IServiceKeyStore; 
+    sessionStore?: ISessionStore;
+    tokenProvider?: ITokenProvider;
+  }, 
+  browser?: string, 
+  logger?: Logger
+)
 ```
 
 - `stores` - Optional object with custom storage implementations:
   - `serviceKeyStore` - Store for service keys (default: `AbapServiceKeyStore()`)
   - `sessionStore` - Store for session data (default: `AbapSessionStore()`)
+  - `tokenProvider` - Token provider for token acquisition (default: `BtpTokenProvider()`)
   - Available implementations:
-    - **ABAP**: `AbapServiceKeyStore(searchPaths?)`, `AbapSessionStore(searchPaths?)`, `SafeAbapSessionStore()`
-    - **XSUAA**: `XsuaaServiceKeyStore(searchPaths?)`, `XsuaaSessionStore(searchPaths?)`, `SafeXsuaaSessionStore()`
+    - **ABAP**: `AbapServiceKeyStore(searchPaths?)`, `AbapSessionStore(searchPaths?)`, `SafeAbapSessionStore()`, `BtpTokenProvider()`
+    - **XSUAA** (reduced scope): `XsuaaServiceKeyStore(searchPaths?)`, `XsuaaSessionStore(searchPaths?)`, `SafeXsuaaSessionStore()`, `XsuaaTokenProvider()`
+    - **BTP** (full scope for ABAP): `AbapServiceKeyStore(searchPaths?)`, `BtpSessionStore(searchPaths?)`, `SafeBtpSessionStore()`, `BtpTokenProvider()`
 - `browser` - Optional browser name for authentication (`chrome`, `edge`, `firefox`, `system`, `none`). Default: `system`
-  - For XSUAA, browser is not used (client_credentials grant type)
+  - For XSUAA, browser is not used (client_credentials grant type) - use `'none'`
 - `logger` - Optional logger instance. If not provided, uses default logger
 
 #### Methods
@@ -150,36 +205,45 @@ Clear cached token for specific destination.
 
 Clear all cached tokens.
 
-### Constants
+### Token Providers
 
-The package exports constants for environment variable names and HTTP headers:
+The package uses `ITokenProvider` interface for token acquisition. Two implementations are available:
+
+- **`XsuaaTokenProvider`** - For XSUAA authentication (reduced scope)
+  - Uses client_credentials grant type
+  - No browser interaction required
+  - No refresh token provided
+
+- **`BtpTokenProvider`** - For BTP/ABAP authentication (full scope)
+  - Uses browser-based OAuth2 flow (if no refresh token)
+  - Uses refresh token if available
+  - Provides refresh token for future use
+
+**Example Usage:**
 
 ```typescript
 import {
-  ABAP_ENV_VARS,
-  BTP_ENV_VARS,
-  ABAP_HEADERS,
-  BTP_HEADERS,
-  getBtpAuthorizationHeader,
+  AuthBroker,
+  XsuaaServiceKeyStore,
+  XsuaaSessionStore,
+  XsuaaTokenProvider,
+  BtpTokenProvider
 } from '@mcp-abap-adt/auth-broker';
 
-// Environment variable names
-const sapUrl = process.env[ABAP_ENV_VARS.SAP_URL];
-const btpToken = process.env[BTP_ENV_VARS.BTP_JWT_TOKEN];
+// XSUAA authentication (no browser needed)
+const xsuaaBroker = new AuthBroker({
+  serviceKeyStore: new XsuaaServiceKeyStore(['/path/to/keys']),
+  sessionStore: new XsuaaSessionStore(['/path/to/sessions']),
+  tokenProvider: new XsuaaTokenProvider(),
+}, 'none');
 
-// HTTP headers
-headers[ABAP_HEADERS.SAP_URL] = 'https://system.sap.com';
-headers[ABAP_HEADERS.SAP_JWT_TOKEN] = token;
-
-// BTP authorization header
-headers[BTP_HEADERS.AUTHORIZATION] = getBtpAuthorizationHeader(token);
+// BTP authentication (browser or refresh token)
+const btpBroker = new AuthBroker({
+  serviceKeyStore: new AbapServiceKeyStore(['/path/to/keys']),
+  sessionStore: new BtpSessionStore(['/path/to/sessions']),
+  tokenProvider: new BtpTokenProvider(),
+});
 ```
-
-**Available Constants:**
-- `ABAP_ENV_VARS` - Environment variable names for ABAP (SAP_URL, SAP_JWT_TOKEN, etc.)
-- `BTP_ENV_VARS` - Environment variable names for BTP/XSUAA (BTP_URL, BTP_JWT_TOKEN, etc.)
-- `ABAP_HEADERS` - HTTP header names for ABAP (x-sap-url, x-sap-jwt-token, etc.)
-- `BTP_HEADERS` - HTTP header names for BTP (Authorization, x-mcp-url, etc.)
 
 ### Utility Script
 
@@ -249,9 +313,13 @@ Tests are designed to run sequentially (guaranteed by `maxWorkers: 1` and `maxCo
 
 ### Test Setup
 
-Place your service key file in `./test-destinations/TRIAL.json` to run tests 2 and 3.
+1. Copy `tests/test-config.yaml.template` to `tests/test-config.yaml`
+2. Fill in configuration values (paths, destinations, MCP URL for XSUAA)
+3. Place service key files in configured `service_keys_dir`:
+   - `{destination}.json` for ABAP tests (e.g., `trial.json`)
+   - `{btp_destination}.json` for XSUAA tests (e.g., `btp.json`)
 
-Tests will automatically skip if required files are missing or present when they shouldn't be.
+Tests will automatically skip if required files are missing or configuration contains placeholders.
 
 ## Documentation
 

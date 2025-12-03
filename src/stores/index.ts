@@ -2,12 +2,14 @@
  * Storage implementations for AuthBroker
  */
 
-export { IServiceKeyStore, ISessionStore, ServiceKeyStore, SessionStore } from './interfaces';
+export type { IServiceKeyStore, ISessionStore, IAuthorizationConfig, IConnectionConfig } from './interfaces';
 // Abstract classes are internal - use concrete implementations instead
-export { AbapServiceKeyStore } from './AbapServiceKeyStore';
-export { AbapSessionStore } from './AbapSessionStore';
-export { XsuaaServiceKeyStore } from './XsuaaServiceKeyStore';
-export { XsuaaSessionStore } from './XsuaaSessionStore';
-export { SafeAbapSessionStore } from './SafeAbapSessionStore';
-export { SafeXsuaaSessionStore } from './SafeXsuaaSessionStore';
+export { AbapServiceKeyStore } from './abap/AbapServiceKeyStore';
+export { AbapSessionStore } from './abap/AbapSessionStore';
+export { XsuaaServiceKeyStore } from './xsuaa/XsuaaServiceKeyStore';
+export { XsuaaSessionStore } from './xsuaa/XsuaaSessionStore';
+export { BtpSessionStore } from './btp/BtpSessionStore';
+export { SafeAbapSessionStore } from './abap/SafeAbapSessionStore';
+export { SafeXsuaaSessionStore } from './xsuaa/SafeXsuaaSessionStore';
+export { SafeBtpSessionStore } from './btp/SafeBtpSessionStore';
 

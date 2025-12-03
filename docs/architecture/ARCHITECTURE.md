@@ -4,7 +4,10 @@ This document describes the architecture and design decisions of the `@mcp-abap-
 
 ## Overview
 
-The `auth-broker` package provides JWT token management for SAP ABAP ADT systems. It handles token loading, validation, refresh, and browser-based OAuth authentication.
+The `auth-broker` package provides JWT token management for SAP ABAP ADT systems and BTP services. It handles token loading, validation, refresh, and authentication flows for:
+- **ABAP systems** - Traditional ABAP systems with browser-based OAuth2
+- **XSUAA** - BTP services with reduced scope (client_credentials grant type)
+- **BTP** - ABAP systems in BTP with full scope (browser-based OAuth2)
 
 ## Core Components
 
@@ -30,17 +33,31 @@ Resolves search paths for `.env` and `.json` files:
 - Falls back to current working directory
 - Supports multiple paths (colon/semicolon-separated)
 
-#### Environment Loader (`src/envLoader.ts`)
-Loads configuration from `{destination}.env` files:
-- Parses environment variables
-- Extracts JWT token, refresh token, UAA credentials
-- Handles optional fields (client, language)
+#### Environment Loaders
+Load configuration from `{destination}.env` files:
+- **AbapSessionStore** (`src/stores/AbapSessionStore.ts`) - For ABAP sessions
+  - Uses `loadEnvFile()` to parse `SAP_*` environment variables
+  - Extracts JWT token, refresh token, UAA credentials
+  - Handles optional fields (client, language)
+- **XsuaaSessionStore** (`src/stores/XsuaaSessionStore.ts`) - For XSUAA sessions
+  - Uses `loadXsuaaEnvFile()` to parse `XSUAA_*` environment variables
+  - Extracts JWT token, optional refresh token, UAA credentials
+  - MCP URL is optional (not part of authentication)
+- **BtpSessionStore** (`src/stores/BtpSessionStore.ts`) - For BTP sessions
+  - Uses `loadBtpEnvFile()` to parse `BTP_*` environment variables
+  - Extracts JWT token, refresh token, UAA credentials, ABAP URL
+  - All parameters (except tokens) come from service key
 
-#### Service Key Loader (`src/serviceKeyLoader.ts`)
-Loads service key from `{destination}.json` files:
-- Validates JSON structure
-- Extracts UAA configuration
-- Extracts SAP URL (supports multiple formats: `url`, `abap.url`, `sap_url`)
+#### Service Key Loaders
+Load service keys from `{destination}.json` files:
+- **AbapServiceKeyStore** (`src/stores/AbapServiceKeyStore.ts`) - For ABAP service keys
+  - Validates JSON structure with nested `uaa` object
+  - Extracts UAA configuration
+  - Extracts SAP URL (supports multiple formats: `url`, `abap.url`, `sap_url`)
+- **XsuaaServiceKeyStore** (`src/stores/XsuaaServiceKeyStore.ts`) - For XSUAA service keys
+  - Validates direct XSUAA format (UAA credentials at root level)
+  - Uses `XsuaaServiceKeyParser` to parse service keys
+  - Prioritizes `apiurl` over `url` for UAA authorization
 
 #### Token Validator (`src/tokenValidator.ts`)
 Validates JWT tokens by testing connection to SAP system:
@@ -61,6 +78,13 @@ Handles browser-based OAuth2 flow for initial token acquisition:
 - If `browser === 'none'`, prints URL to console for manual copy
 - Waits for user authentication
 - Exchanges authorization code for tokens
+- Handles OAuth2 error parameters (`error`, `error_description`)
+
+#### Client Credentials Auth (`src/clientCredentialsAuth.ts`)
+Handles client_credentials grant type for XSUAA authentication:
+- Uses POST request to UAA token endpoint
+- No browser interaction required
+- Suitable for server-to-server communication
 
 #### Cache (`src/cache.ts`)
 In-memory token caching:
@@ -68,80 +92,88 @@ In-memory token caching:
 - Provides cache management methods
 - Thread-safe (single-threaded Node.js)
 
+#### Service Key Parsers
+Modular parser architecture for different service key formats:
+- **IServiceKeyParser** (`src/parsers/IServiceKeyParser.ts`) - Interface for parsers
+- **AbapServiceKeyParser** (`src/parsers/AbapServiceKeyParser.ts`) - Parses standard ABAP service keys
+- **XsuaaServiceKeyParser** (`src/parsers/XsuaaServiceKeyParser.ts`) - Parses direct XSUAA service keys
+
+#### Session Stores
+Different store implementations for different session types:
+- **AbapSessionStore** - File-based store for ABAP sessions (uses `SAP_*` variables)
+- **XsuaaSessionStore** - File-based store for XSUAA sessions (uses `XSUAA_*` variables)
+- **BtpSessionStore** - File-based store for BTP sessions (uses `BTP_*` variables)
+- **SafeAbapSessionStore** - In-memory store for ABAP sessions
+- **SafeXsuaaSessionStore** - In-memory store for XSUAA sessions
+- **SafeBtpSessionStore** - In-memory store for BTP sessions
+
 ## Authentication Flow
 
 ### 1. getToken() Flow
 
-```
-User calls getToken('TRIAL')
-  ↓
-Check cache for 'TRIAL'
-  ↓ (if cached)
-Validate cached token
-  ↓ (if valid)
-Return cached token
-  ↓ (if invalid/expired)
-Load from .env file
-  ↓ (if exists)
-Validate token from .env
-  ↓ (if valid)
-Cache and return token
-  ↓ (if invalid/expired)
-Load service key
-  ↓ (if exists)
-Call refreshToken() → browser auth or refresh
-  ↓
-Save new token to .env
-  ↓
-Cache and return token
-  ↓ (if no service key)
-Throw error with instructions
+```mermaid
+flowchart TD
+    Start[User calls getToken destination] --> Cache{Check cache}
+    Cache -->|Found| ValidateCache[Validate cached token]
+    ValidateCache -->|Valid| ReturnCache[Return cached token]
+    ValidateCache -->|Invalid| LoadEnv[Load from .env file]
+    Cache -->|Not found| LoadEnv
+    LoadEnv -->|Exists| ValidateEnv[Validate token from .env]
+    ValidateEnv -->|Valid| CacheEnv[Cache and return token]
+    ValidateEnv -->|Invalid/Expired| LoadSK[Load service key]
+    LoadEnv -->|Not exists| LoadSK
+    LoadSK -->|Exists| GetAuth[Get authorization config]
+    GetAuth --> TokenProvider[Call tokenProvider.getConnectionConfig]
+    TokenProvider --> SaveToken[Save new token to .env]
+    SaveToken --> CacheNew[Cache and return token]
+    LoadSK -->|Not found| Error[Throw error with instructions]
 ```
 
 ### 2. refreshToken() Flow
 
-```
-User calls refreshToken('TRIAL')
-  ↓
-Load service key
-  ↓ (if not found)
-Throw error with instructions
-  ↓
-Load .env file
-  ↓
-Check for refresh token
-  ↓ (if refresh token exists)
-Call refreshJwtToken() with refresh token
-  ↓ (if no refresh token)
-Call startBrowserAuth() → OAuth flow
-  ↓
-Save tokens to .env file
-  ↓
-Update cache
-  ↓
-Return new access token
+```mermaid
+flowchart TD
+    Start[User calls refreshToken destination] --> LoadSK[Load service key]
+    LoadSK -->|Not found| Error[Throw error with instructions]
+    LoadSK -->|Found| GetAuth[Get authorization config]
+    GetAuth --> LoadSession[Load existing session]
+    LoadSession --> CheckRefresh{Refresh token exists?}
+    CheckRefresh -->|Yes| Refresh[Call tokenProvider.getConnectionConfig<br/>with refresh token]
+    CheckRefresh -->|No| Browser[Call tokenProvider.getConnectionConfig<br/>starts browser auth]
+    Refresh --> SaveToken[Save tokens to .env]
+    Browser --> SaveToken
+    SaveToken --> UpdateCache[Update cache]
+    UpdateCache --> Return[Return new access token]
 ```
 
-### 3. Browser Authentication Flow
+### 3. Token Provider Flow
 
+```mermaid
+flowchart TD
+    Start[tokenProvider.getConnectionConfig] --> CheckType{Provider type?}
+    CheckType -->|XsuaaTokenProvider| ClientCreds[client_credentials grant type<br/>POST to UAA token endpoint]
+    CheckType -->|BtpTokenProvider| CheckRefresh{Refresh token exists?}
+    CheckRefresh -->|Yes| RefreshToken[Use refresh token<br/>POST to UAA token endpoint]
+    CheckRefresh -->|No| BrowserAuth[Browser OAuth2 flow<br/>startBrowserAuth]
+    ClientCreds --> ReturnToken[Return IConnectionConfig<br/>with authorizationToken]
+    RefreshToken --> ReturnToken
+    BrowserAuth --> ReturnToken
 ```
-startBrowserAuth() called
-  ↓
-Start local HTTP server (port 3001)
-  ↓
-Generate OAuth authorization URL
-  ↓
-Open browser with authorization URL
-  ↓
-User authenticates in browser
-  ↓
-Browser redirects to localhost:3001/callback?code=...
-  ↓
-Exchange authorization code for tokens
-  ↓
-Close HTTP server
-  ↓
-Return { accessToken, refreshToken }
+
+### 4. Browser Authentication Flow
+
+```mermaid
+flowchart TD
+    Start[startBrowserAuth called] --> CheckBrowser{Browser === 'none'?}
+    CheckBrowser -->|Yes| PrintURL[Print URL to console<br/>Throw error]
+    CheckBrowser -->|No| StartServer[Start local HTTP server<br/>port 3001]
+    StartServer --> GenURL[Generate OAuth authorization URL]
+    GenURL --> OpenBrowser[Open browser with URL]
+    OpenBrowser --> Wait[Wait for user authentication]
+    Wait --> Callback[Browser redirects to<br/>localhost:3001/callback?code=...]
+    Callback --> Exchange[Exchange authorization code<br/>for tokens]
+    Exchange --> CloseServer[Close HTTP server]
+    CloseServer --> Return[Return accessToken, refreshToken]
 ```
 
 ## File System Structure
@@ -173,9 +205,11 @@ SAP_UAA_CLIENT_SECRET=client_secret
 # SAP_PASSWORD=your_password
 ```
 
-### Service Key File Format
+### Service Key File Formats
 
-`{destination}.json` file structure:
+#### ABAP Service Key Format
+
+`{destination}.json` file structure for ABAP:
 
 ```json
 {
@@ -192,6 +226,25 @@ SAP_UAA_CLIENT_SECRET=client_secret
   }
 }
 ```
+
+#### XSUAA Service Key Format
+
+`{destination}.json` file structure for XSUAA (direct format from BTP):
+
+```json
+{
+  "url": "https://your-account.authentication.eu10.hana.ondemand.com",
+  "apiurl": "https://api.authentication.eu10.hana.ondemand.com",
+  "clientid": "your_client_id",
+  "clientsecret": "your_client_secret"
+}
+```
+
+**Note**: For XSUAA service keys, `apiurl` is prioritized over `url` for UAA authorization if present.
+
+#### BTP Service Key Format
+
+BTP uses the same service key format as ABAP (contains UAA credentials and ABAP URL).
 
 ## Search Path Resolution
 
@@ -296,4 +349,97 @@ All error messages include:
 3. **HTTPS**: Always use HTTPS for production SAP systems
 4. **Token Expiry**: Tokens are automatically refreshed, but monitor expiry times
 5. **Browser Auth**: OAuth flow uses localhost callback - ensure no malicious local servers
+
+## Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Consumer"
+        Consumer[Application Code]
+    end
+
+    subgraph "AuthBroker"
+        AB[AuthBroker]
+        AB --> |uses| SKStore[IServiceKeyStore]
+        AB --> |uses| SStore[ISessionStore]
+        AB --> |uses| TProvider[ITokenProvider]
+        AB --> |uses| Cache[Token Cache]
+    end
+
+    subgraph "Service Key Stores"
+        SKStore --> |implements| AbapSK[AbapServiceKeyStore]
+        SKStore --> |implements| XsuaaSK[XsuaaServiceKeyStore]
+        AbapSK --> |uses| AbapParser[AbapServiceKeyParser]
+        XsuaaSK --> |uses| XsuaaParser[XsuaaServiceKeyParser]
+    end
+
+    subgraph "Session Stores"
+        SStore --> |implements| AbapS[AbapSessionStore]
+        SStore --> |implements| XsuaaS[XsuaaSessionStore]
+        SStore --> |implements| BtpS[BtpSessionStore]
+        SStore --> |implements| SafeAbapS[SafeAbapSessionStore]
+        SStore --> |implements| SafeXsuaaS[SafeXsuaaSessionStore]
+        SStore --> |implements| SafeBtpS[SafeBtpSessionStore]
+    end
+
+    subgraph "Token Providers"
+        TProvider --> |implements| XsuaaTP[XsuaaTokenProvider]
+        TProvider --> |implements| BtpTP[BtpTokenProvider]
+        XsuaaTP --> |uses| CCAuth[clientCredentialsAuth]
+        BtpTP --> |uses| BrowserAuth[browserAuth]
+        BtpTP --> |uses| TokenRefresher[tokenRefresher]
+    end
+
+    subgraph "Storage"
+        AbapS --> |reads/writes| AbapEnv[ABAP .env files<br/>SAP_* variables]
+        XsuaaS --> |reads/writes| XsuaaEnv[XSUAA .env files<br/>XSUAA_* variables]
+        BtpS --> |reads/writes| BtpEnv[BTP .env files<br/>BTP_* variables]
+        AbapSK --> |reads| AbapJSON[ABAP .json files]
+        XsuaaSK --> |reads| XsuaaJSON[XSUAA .json files]
+    end
+
+    subgraph "Authentication"
+        BrowserAuth --> |OAuth2| OAuth[UAA OAuth Endpoint]
+        CCAuth --> |client_credentials| UAA[UAA Token Endpoint]
+        TokenRefresher --> |refresh_token| UAA
+    end
+
+    subgraph "Interfaces"
+        IAuth[IAuthorizationConfig<br/>uaaUrl, uaaClientId,<br/>uaaClientSecret, refreshToken]
+        IConn[IConnectionConfig<br/>serviceUrl, authorizationToken,<br/>sapClient, language]
+        IConfig[IConfig<br/>Partial composition]
+    end
+
+    Consumer --> |calls| AB
+    SKStore --> |returns| IAuth
+    SKStore --> |returns| IConn
+    SStore --> |returns| IAuth
+    SStore --> |returns| IConn
+    SStore --> |returns| IConfig
+    TProvider --> |returns| IConn
+
+    style AB fill:#e1f5ff
+    style SKStore fill:#fff4e1
+    style SStore fill:#fff4e1
+    style TProvider fill:#fff4e1
+    style IAuth fill:#e8f5e9
+    style IConn fill:#e8f5e9
+    style IConfig fill:#e8f5e9
+```
+
+## Exported Entities
+
+For a complete list of exported entities, their relationships, and usage patterns, see [EXPORTS.md](./EXPORTS.md).
+
+The package exports:
+- **Main Class**: `AuthBroker` - Main orchestrator for authentication
+- **Type Definitions**: `IAuthorizationConfig`, `IConnectionConfig`, `IConfig`
+- **Storage Interfaces**: `IServiceKeyStore`, `ISessionStore`
+- **Storage Implementations**: File-based and in-memory stores for ABAP, XSUAA, and BTP
+- **Token Providers**: `ITokenProvider`, `XsuaaTokenProvider`, `BtpTokenProvider`
+- **Utility Functions**: `loadServiceKey`, `resolveSearchPaths`, `findFileInPaths`
+
+**Note**: Service key parsers, constants, and internal storage types are internal implementation details and are not exported.
+
+See [EXPORTS.md](./EXPORTS.md) for detailed object relationship diagrams and usage patterns.
 

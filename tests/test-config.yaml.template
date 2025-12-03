@@ -21,11 +21,12 @@ auth_broker:
     # Example: "TRIAL" -> looks for TRIAL.json in service-keys directory and TRIAL.env in sessions directory
     destination: <TEST_ABAP_DESTINATION>
 
-  # XSUAA/BTP destination configuration (for BTP Cloud systems)
+  # XSUAA destination configuration (for XSUAA service connections with reduced scope)
   xsuaa:
-    # BTP destination name (used for service key file: <btp_destination>.json)
+    # XSUAA destination name (used for service key file: <btp_destination>.json)
     # Example: "mcp" -> looks for mcp.json in service-keys directory
     btp_destination: <TEST_BTP_DESTINATION>
     
-    # BTP service URL
-    btp_url: <TEST_BTP_URL>
+    # MCP server URL (optional - can be provided via session, parameter, or request header)
+    # For XSUAA, service key only contains UAA credentials, MCP URL is provided separately
+    mcp_url: <TEST_MCP_URL>

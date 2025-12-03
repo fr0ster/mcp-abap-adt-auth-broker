@@ -1,9 +1,0 @@
-# Test Destinations Directory
-# 
-# Place your service key files here for integration tests:
-#   - TRIAL.json
-#   - PROD.json
-#   - etc.
-#
-# Or set TEST_DESTINATIONS_PATH environment variable to use a different path.
-

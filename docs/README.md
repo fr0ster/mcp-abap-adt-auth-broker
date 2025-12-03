@@ -14,7 +14,8 @@ Complete documentation for the `@mcp-abap-adt/auth-broker` package.
 docs/
 ├── README.md                    # This file - documentation index
 ├── architecture/
-│   └── ARCHITECTURE.md         # System architecture and design
+│   ├── ARCHITECTURE.md         # System architecture and design
+│   └── EXPORTS.md              # Exported entities and object diagrams
 ├── development/
 │   ├── TESTING.md              # Testing methodology and guide
 │   └── DEVELOPMENT_ROADMAP.md  # Development roadmap and future plans
@@ -26,13 +27,10 @@ docs/
 
 ## Sections
 
-### [Architecture](architecture/ARCHITECTURE.md)
+### [Architecture](architecture/)
 Technical documentation about the system architecture, design decisions, and internal structure:
-- Component overview
-- Authentication flow
-- Token management
-- File system structure
-- Search path resolution
+- **[ARCHITECTURE.md](architecture/ARCHITECTURE.md)** - System architecture, design decisions, and component overview
+- **[EXPORTS.md](architecture/EXPORTS.md)** - Complete list of exported entities, object relationship diagrams, and usage patterns
 
 ### [Development](development/)
 Documentation for developers:
