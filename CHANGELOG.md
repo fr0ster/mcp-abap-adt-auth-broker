@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
+## [0.1.6] - 2025-12-03
+
+### Added
+- **BTP/XSUAA Support** - Full support for BTP/XSUAA authentication
+  - `XsuaaServiceKeyStore` - Store for XSUAA service keys (direct format from BTP)
+  - `XsuaaSessionStore` - Store for XSUAA sessions (uses `BTP_*` environment variables)
+  - `SafeXsuaaSessionStore` - In-memory XSUAA session store
+  - `XsuaaServiceKeyParser` - Parser for direct XSUAA service key format
+  - Client credentials grant type for XSUAA (no browser required)
+- **Environment Variable Constants** - Exported constants for consumers
+  - `ABAP_ENV_VARS` - Environment variable names for ABAP connections (SAP_URL, SAP_JWT_TOKEN, etc.)
+  - `BTP_ENV_VARS` - Environment variable names for BTP/XSUAA connections (BTP_URL, BTP_JWT_TOKEN, etc.)
+  - `ABAP_HEADERS` - HTTP header names for ABAP requests (x-sap-url, x-sap-jwt-token, etc.)
+  - `BTP_HEADERS` - HTTP header names for BTP requests (Authorization, x-mcp-url, etc.)
+  - Helper functions: `getBtpAuthorizationHeader()`, `isAbapEnvVar()`, `isBtpEnvVar()`
+- **Service Key Parsers** - Modular parser architecture
+  - `IServiceKeyParser` - Interface for service key parsers
+  - `AbapServiceKeyParser` - Parser for standard ABAP service keys
+  - `XsuaaServiceKeyParser` - Parser for direct XSUAA service keys
+- **Utility Script** - `generate-env` command
+  - Generates `.env` files from service keys
+  - Supports both ABAP and XSUAA service key formats
+  - Automatically detects service key type and uses appropriate authentication flow
+- **BTP Environment Loader** - `loadBtpEnvFile()` function
+  - Loads BTP session configuration from `.env` files with `BTP_*` variables
+- **BTP Token Storage** - `saveBtpTokenToEnv()` function
+  - Saves BTP session configuration to `.env` files with `BTP_*` variables
+  - Automatically removes old `SAP_*` variables when saving XSUAA sessions
+
+### Changed
+- **XSUAA Session Format** - Uses `BTP_*` environment variables instead of `SAP_*`
+  - `BTP_URL` or `BTP_MCP_URL` - MCP server URL (optional, not part of authentication)
+  - `BTP_JWT_TOKEN` - JWT token for `Authorization: Bearer` header
+  - `BTP_REFRESH_TOKEN` - Optional refresh token
+  - `BTP_UAA_URL`, `BTP_UAA_CLIENT_ID`, `BTP_UAA_CLIENT_SECRET` - UAA credentials
+- **MCP URL Handling** - MCP URL is now optional for XSUAA sessions
+  - MCP URL is not part of authentication (only needed for making requests)
+  - Can be provided via YAML config, parameter, or request header
+  - Session files can be created without MCP URL (tokens and UAA credentials are sufficient)
+- **Service Key URL Priority** - For XSUAA service keys, `apiurl` is prioritized over `url` for UAA authorization
+- **Store Naming** - Renamed stores for clarity
+  - `FileServiceKeyStore` → `AbapServiceKeyStore` (for ABAP service keys)
+  - `FileSessionStore` → `AbapSessionStore` (for ABAP sessions)
+  - `SafeSessionStore` → `SafeAbapSessionStore` (for in-memory ABAP sessions)
+  - Old names still available as type aliases for backward compatibility
+
+### Fixed
+- **XSUAA Authentication** - Fixed client_credentials grant type implementation
+  - Uses POST request to UAA token endpoint with `grant_type=client_credentials`
+  - No browser interaction required for XSUAA
+  - Proper error handling for OAuth2 redirect parameters
+
 ## [0.1.5] - 2025-12-02
 
 ### Added

@@ -1,21 +1,21 @@
 /**
- * Token storage - saves tokens to .env files
+ * BTP Token storage - saves tokens to .env files with BTP_* variables
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { EnvConfig } from './types';
+import { BtpSessionConfig } from './types';
 
 /**
- * Save token to {destination}.env file
+ * Save BTP token to {destination}.env file using BTP_* variables
  * @param destination Destination name
  * @param savePath Path where to save the file
- * @param config Configuration to save
+ * @param config BTP session configuration to save
  */
-export async function saveTokenToEnv(
+export async function saveBtpTokenToEnv(
   destination: string,
   savePath: string,
-  config: Partial<EnvConfig> & { sapUrl?: string; jwtToken: string }
+  config: BtpSessionConfig
 ): Promise<void> {
   // Ensure directory exists
   if (!fs.existsSync(savePath)) {
@@ -32,6 +32,7 @@ export async function saveTokenToEnv(
   }
 
   // Parse existing content to preserve other values
+  // Remove old SAP_* variables for XSUAA (use BTP_* instead)
   const lines = existingContent.split('\n');
   const existingVars = new Map<string, string>();
 
@@ -44,36 +45,40 @@ export async function saveTokenToEnv(
     const match = trimmed.match(/^([^=]+)=(.*)$/);
     if (match) {
       const key = match[1].trim();
+      // Skip old SAP_* variables for XSUAA (we use BTP_* now)
+      if (key.startsWith('SAP_') && (key === 'SAP_URL' || key === 'SAP_JWT_TOKEN' || key === 'SAP_REFRESH_TOKEN' || 
+          key === 'SAP_UAA_URL' || key === 'SAP_UAA_CLIENT_ID' || key === 'SAP_UAA_CLIENT_SECRET')) {
+        continue; // Don't preserve old SAP_* variables
+      }
       const value = match[2].trim().replace(/^["']|["']$/g, ''); // Remove quotes
       existingVars.set(key, value);
     }
   }
 
-  // Update with new values
-  // sapUrl is optional (for XSUAA, it's not part of authentication)
-  if (config.sapUrl) {
-    existingVars.set('SAP_URL', config.sapUrl);
+  // Update with new values (BTP_* variables)
+  // mcpUrl is optional (for XSUAA, it's not part of authentication)
+  if (config.mcpUrl) {
+    existingVars.set('BTP_URL', config.mcpUrl);
+    // Also support BTP_MCP_URL for clarity
+    existingVars.set('BTP_MCP_URL', config.mcpUrl);
   }
-  existingVars.set('SAP_JWT_TOKEN', config.jwtToken);
 
-  if (config.sapClient) {
-    existingVars.set('SAP_CLIENT', config.sapClient);
-  }
+  existingVars.set('BTP_JWT_TOKEN', config.jwtToken);
 
   if (config.refreshToken) {
-    existingVars.set('SAP_REFRESH_TOKEN', config.refreshToken);
+    existingVars.set('BTP_REFRESH_TOKEN', config.refreshToken);
   }
 
   if (config.uaaUrl) {
-    existingVars.set('SAP_UAA_URL', config.uaaUrl);
+    existingVars.set('BTP_UAA_URL', config.uaaUrl);
   }
 
   if (config.uaaClientId) {
-    existingVars.set('SAP_UAA_CLIENT_ID', config.uaaClientId);
+    existingVars.set('BTP_UAA_CLIENT_ID', config.uaaClientId);
   }
 
   if (config.uaaClientSecret) {
-    existingVars.set('SAP_UAA_CLIENT_SECRET', config.uaaClientSecret);
+    existingVars.set('BTP_UAA_CLIENT_SECRET', config.uaaClientSecret);
   }
 
   // Write to temporary file first (atomic write)

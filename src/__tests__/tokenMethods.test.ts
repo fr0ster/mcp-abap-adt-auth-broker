@@ -8,6 +8,11 @@
  * NOTE: Tests that require service keys will look for files in:
  *   - ./test-destinations/ (relative to project root)
  *   - Or path specified in TEST_DESTINATIONS_PATH environment variable
+ * 
+ * Configuration:
+ *   - Destination name is read from tests/test-config.yaml (auth_broker.abap.destination)
+ *   - If not configured, defaults to "TRIAL"
+ *   - To configure: copy tests/test-config.yaml.template to tests/test-config.yaml and fill in values
  */
 
 import { AuthBroker } from '../AuthBroker';
@@ -18,6 +23,7 @@ import {
   prepareTest2,
   prepareTest3,
   verifyEnvFile,
+  getTestDestination,
   TestBrokers,
 } from './testHelpers';
 import * as path from 'path';
@@ -51,20 +57,21 @@ describe('AuthBroker token methods', () => {
       
       if (method === 'getToken') {
         expect(error.message).toContain('No authentication found for destination "NO_EXISTS"');
-        expect(error.message).toContain('Please create one of:');
         expect(error.message).toContain('NO_EXISTS.env');
+        expect(error.message).toContain('Searched for session files:');
       } else {
         expect(error.message).toContain('Service key file not found for destination "NO_EXISTS"');
-        expect(error.message).toContain('Please create file:');
+        expect(error.message).toContain('Searched for service key files:');
       }
       expect(error.message).toContain('NO_EXISTS.json');
-      expect(error.message).toContain('Searched in:');
       
       if (method === 'getToken') {
         test1Passed = true;
       }
       
-      console.log(`📋 Test 1 passed (${methodName}) - Error: ${error.message.split('\n')[0]}`);
+      if (process.env.TEST_VERBOSE) {
+        console.log(`📋 Test 1 passed (${methodName}) - Error: ${error.message.split('\n')[0]}`);
+      }
     });
   });
 
@@ -72,51 +79,54 @@ describe('AuthBroker token methods', () => {
     it.each([
       ['getToken', 'getToken'],
       ['refreshToken', 'refreshToken'],
-    ])('%s should trigger browser auth when TRIAL.json exists but TRIAL.env does not', async (methodName, method) => {
+    ])('%s should trigger browser auth when service key exists but .env does not', async (methodName, method) => {
       if (!test1Passed && method === 'refreshToken') {
-        console.log(`\n⏭️  Skipping Test 2 (${methodName}): Test 1 must pass first`);
+        if (process.env.TEST_VERBOSE) {
+          console.log(`⏭️  Skipping Test 2 (${methodName}): Test 1 must pass first`);
+        }
         return;
       }
       
-      const { envFile, shouldSkip } = prepareTest2();
+      const { envFile, serviceKeyPath, shouldSkip } = prepareTest2();
       if (shouldSkip) {
         return;
       }
 
-      console.log(`🌐 Test 2 (${methodName}): Starting browser authentication. Browser will open. Please complete authentication.`);
+      if (process.env.TEST_VERBOSE) {
+        console.log(`📁 Test 2 (${methodName}): service key: ${serviceKeyPath}, session: ${envFile}`);
+      }
 
+      const destination = getTestDestination();
       const broker = brokers.testDestinationsBroker as any;
-      const token = await broker[method]('TRIAL');
+      const token = await broker[method](destination);
 
       expect(token).toBeTruthy();
       expect(token.length).toBeGreaterThan(0);
       verifyEnvFile(envFile, true);
-      
-      console.log(`\n✅ Test 2 passed (${methodName}) - Browser auth completed. .env file created at: ${envFile}`);
     }, 300000);
   });
 
   describe('Test 3: .env file exists', () => {
     it('getToken should validate token and only refresh if expired', async () => {
-      const { envFile, sapUrl, shouldSkip } = prepareTest3();
+      const { envFile, serviceKeyPath, sapUrl, shouldSkip } = prepareTest3();
       if (shouldSkip) {
         return;
       }
 
-      console.log(`🔄 Test 3 (getToken): Getting token from existing .env file (URL: ${sapUrl})`);
-      console.log(`   Note: getToken validates token first - if valid, returns without refresh`);
+      if (process.env.TEST_VERBOSE) {
+        console.log(`📁 Test 3 (getToken): service key: ${serviceKeyPath}, session: ${envFile}, URL: ${sapUrl}`);
+      }
 
-      const token = await brokers.testDestinationsBroker.getToken('TRIAL');
+      const destination = getTestDestination();
+      const token = await brokers.testDestinationsBroker.getToken(destination);
 
       expect(token).toBeTruthy();
       expect(token.length).toBeGreaterThan(0);
       verifyEnvFile(envFile);
-      
-      console.log(`\n✅ Test 3 passed (getToken) - Token obtained (validated, may or may not be refreshed)`);
     });
 
     it('refreshToken should ALWAYS force refresh even if token is valid', async () => {
-      const { envFile, sapUrl, shouldSkip } = prepareTest3();
+      const { envFile, serviceKeyPath, sapUrl, shouldSkip } = prepareTest3();
       if (shouldSkip) {
         return;
       }
@@ -125,22 +135,19 @@ describe('AuthBroker token methods', () => {
       const envContent = fs.readFileSync(envFile, 'utf8');
       const refreshTokenMatch = envContent.match(/SAP_REFRESH_TOKEN=(.+)/);
       if (!refreshTokenMatch) {
-        console.log(`\n⚠️  Test 3 (refreshToken) requires SAP_REFRESH_TOKEN in .env file`);
-        console.log(`   Run Test 2 first to create it.`);
         return;
       }
 
-      console.log(`🔄 Test 3 (refreshToken): FORCING token refresh (always refreshes, unlike getToken)`);
-      console.log(`   URL: ${sapUrl}`);
+      if (process.env.TEST_VERBOSE) {
+        console.log(`📁 Test 3 (refreshToken): service key: ${serviceKeyPath}, session: ${envFile}, URL: ${sapUrl}`);
+      }
 
-      const token = await brokers.testDestinationsBroker.refreshToken('TRIAL');
+      const destination = getTestDestination();
+      const token = await brokers.testDestinationsBroker.refreshToken(destination);
 
       expect(token).toBeTruthy();
       expect(token.length).toBeGreaterThan(0);
       verifyEnvFile(envFile);
-      
-      console.log(`\n✅ Test 3 passed (refreshToken) - Token force refreshed`);
-      console.log(`   Key difference: refreshToken always refreshes, getToken only if expired`);
     });
   });
 
@@ -153,10 +160,11 @@ describe('AuthBroker token methods', () => {
         },
       };
 
-      const skFile = path.join(brokers.tempDir, 'TRIAL.json');
+      const destination = getTestDestination();
+      const skFile = path.join(brokers.tempDir, `${destination}.json`);
       fs.writeFileSync(skFile, JSON.stringify(invalidServiceKey));
 
-      await expect(brokers.broker.refreshToken('TRIAL')).rejects.toThrow(
+      await expect(brokers.broker.refreshToken(destination)).rejects.toThrow(
         'Service key "uaa" object missing required fields'
       );
     });
@@ -171,11 +179,12 @@ describe('AuthBroker token methods', () => {
         },
       };
 
-      const skFile = path.join(brokers.tempDir, 'TRIAL.json');
+      const destination = getTestDestination();
+      const skFile = path.join(brokers.tempDir, `${destination}.json`);
       fs.writeFileSync(skFile, JSON.stringify(serviceKey));
 
-      await expect(brokers.broker.refreshToken('TRIAL')).rejects.toThrow(
-        'Service key for destination "TRIAL" does not contain SAP URL'
+      await expect(brokers.broker.refreshToken(destination)).rejects.toThrow(
+        `Service key for destination "${destination}" does not contain SAP URL`
       );
     });
   });

@@ -103,6 +103,79 @@ export async function startBrowserAuth(
     // OAuth2 callback handler
     app.get('/callback', async (req: express.Request, res: express.Response) => {
       try {
+        // Check for OAuth2 error parameters
+        const { error, error_description, error_uri } = req.query;
+        if (error) {
+          const errorMsg = error_description 
+            ? `${error}: ${error_description}`
+            : String(error);
+          const errorHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authentication Error</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 50px 20px;
+            background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
+            color: white;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 40px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            max-width: 500px;
+            width: 100%;
+        }
+        .error-icon {
+            font-size: 4rem;
+            margin-bottom: 20px;
+            color: #fbbf24;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            margin: 0 0 20px 0;
+            font-size: 2rem;
+            font-weight: 300;
+        }
+        p {
+            margin: 0;
+            font-size: 1.1rem;
+            opacity: 0.9;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="error-icon">✗</div>
+        <h1>Authentication Failed</h1>
+        <p>${errorMsg}</p>
+        <p>Please check your service key configuration and try again.</p>
+    </div>
+</body>
+</html>`;
+          res.status(400).send(errorHtml);
+          if (typeof server.closeAllConnections === 'function') {
+            server.closeAllConnections();
+          }
+          server.close(() => {
+            // Server closed on error
+          });
+          return reject(new Error(`OAuth2 authentication failed: ${errorMsg}${error_uri ? ` (${error_uri})` : ''}`));
+        }
+
         const { code } = req.query;
         if (!code || typeof code !== 'string') {
           res.status(400).send('Error: Authorization code missing');

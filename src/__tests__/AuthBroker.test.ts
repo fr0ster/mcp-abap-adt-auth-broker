@@ -14,10 +14,10 @@ describe('AuthBroker', () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-broker-test-'));
     // Use default browser (system) - no browser parameter passed
-    const { FileServiceKeyStore, FileSessionStore } = require('../stores');
+    const { AbapServiceKeyStore, AbapSessionStore } = require('../stores');
     broker = new AuthBroker({
-      serviceKeyStore: new FileServiceKeyStore([tempDir]),
-      sessionStore: new FileSessionStore([tempDir]),
+      serviceKeyStore: new AbapServiceKeyStore([tempDir]),
+      sessionStore: new AbapSessionStore([tempDir]),
     });
   });
 
@@ -35,19 +35,24 @@ describe('AuthBroker', () => {
     });
 
     it('should create broker with custom stores', () => {
-      const { FileServiceKeyStore, FileSessionStore } = require('../stores');
+      const customTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-broker-custom-test-'));
+      const { AbapServiceKeyStore, AbapSessionStore } = require('../stores');
       const customBroker = new AuthBroker({
-        serviceKeyStore: new FileServiceKeyStore(['/custom/path1', '/custom/path2']),
-        sessionStore: new FileSessionStore(['/custom/path1', '/custom/path2']),
+        serviceKeyStore: new AbapServiceKeyStore([customTempDir]),
+        sessionStore: new AbapSessionStore([customTempDir]),
       });
       expect(customBroker).toBeInstanceOf(AuthBroker);
+      // Cleanup
+      if (fs.existsSync(customTempDir)) {
+        fs.rmSync(customTempDir, { recursive: true, force: true });
+      }
     });
 
     it('should create broker with SafeSessionStore', () => {
-      const { FileServiceKeyStore, SafeSessionStore } = require('../stores');
+      const { AbapServiceKeyStore, SafeAbapSessionStore } = require('../stores');
       const safeBroker = new AuthBroker({
-        serviceKeyStore: new FileServiceKeyStore(),
-        sessionStore: new SafeSessionStore(),
+        serviceKeyStore: new AbapServiceKeyStore(),
+        sessionStore: new SafeAbapSessionStore(),
       });
       expect(safeBroker).toBeInstanceOf(AuthBroker);
     });
@@ -55,7 +60,9 @@ describe('AuthBroker', () => {
 
   describe('clearCache', () => {
     it('should clear cache for specific destination', () => {
-      expect(() => broker.clearCache('TRIAL')).not.toThrow();
+      const { getTestDestination } = require('./testHelpers');
+      const destination = getTestDestination();
+      expect(() => broker.clearCache(destination)).not.toThrow();
     });
 
     it('should clear all cache', () => {

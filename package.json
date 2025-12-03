@@ -41,7 +41,11 @@
     "build:fast": "npx tsc -p tsconfig.json",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:check": "npx tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "generate-env": "tsx bin/generate-env-from-service-key.ts"
+  },
+  "bin": {
+    "generate-env-from-service-key": "./bin/generate-env-from-service-key.ts"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -56,9 +60,12 @@
   "devDependencies": {
     "@types/express": "^5.0.5",
     "@types/jest": "^30.0.0",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.2.1",
     "jest": "^30.2.0",
+    "js-yaml": "^4.1.1",
     "ts-jest": "^29.2.5",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.2"
   }
 }

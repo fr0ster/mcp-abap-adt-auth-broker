@@ -5,8 +5,13 @@
  *   - ./test-destinations/ (relative to project root)
  *   - Or path specified in TEST_DESTINATIONS_PATH environment variable
  * 
+ * Configuration:
+ *   - Destination name is read from tests/test-config.yaml (auth_broker.abap.destination)
+ *   - If not configured, defaults to "TRIAL"
+ *   - To configure: copy tests/test-config.yaml.template to tests/test-config.yaml and fill in values
+ * 
  * To run tests that require service keys, place your service key files there:
- *   ./test-destinations/TRIAL.json
+ *   ./test-destinations/<destination>.json (where <destination> is from YAML config)
  */
 
 import { AuthBroker } from '../AuthBroker';
@@ -17,6 +22,7 @@ import {
   prepareTest2,
   prepareTest3,
   verifyEnvFile,
+  getTestDestination,
   TestBrokers,
 } from './testHelpers';
 import * as path from 'path';
@@ -44,26 +50,30 @@ describe('AuthBroker.refreshToken', () => {
       
       expect(error).toBeInstanceOf(Error);
       expect(error.message).toContain('Service key file not found for destination "NO_EXISTS"');
-      expect(error.message).toContain('Please create file:');
       expect(error.message).toContain('NO_EXISTS.json');
-      expect(error.message).toContain('Searched in:');
+      expect(error.message).toContain('Searched for service key files:');
       
       test1Passed = true;
     });
   });
 
   describe('Test 2: Service key exists but no .env file', () => {
-    it('should start browser auth when TRIAL.json exists but TRIAL.env does not', async () => {
+    it(`should start browser auth when service key exists but .env does not (files: ${getTestDestination()}.json, ${getTestDestination()}.env)`, async () => {
       if (!test1Passed) {
         return;
       }
       
-      const { envFile, shouldSkip } = prepareTest2();
+      const { envFile, serviceKeyPath, shouldSkip } = prepareTest2();
       if (shouldSkip) {
         return;
       }
 
-      const token = await brokers.testDestinationsBroker.refreshToken('TRIAL');
+      if (process.env.TEST_VERBOSE) {
+        console.log(`📁 Test 2: service key: ${serviceKeyPath}, session: ${envFile}`);
+      }
+
+      const destination = getTestDestination();
+      const token = await brokers.testDestinationsBroker.refreshToken(destination);
 
       expect(token).toBeTruthy();
       expect(token.length).toBeGreaterThan(0);
@@ -72,8 +82,8 @@ describe('AuthBroker.refreshToken', () => {
   });
 
   describe('Test 3: .env file exists - force refresh', () => {
-    it('should ALWAYS refresh token even if .env token is valid', async () => {
-      const { envFile, sapUrl, shouldSkip } = prepareTest3();
+    it(`should ALWAYS refresh token even if .env token is valid (files: ${getTestDestination()}.json, ${getTestDestination()}.env)`, async () => {
+      const { envFile, serviceKeyPath, sapUrl, shouldSkip } = prepareTest3();
       if (shouldSkip) {
         return;
       }
@@ -85,7 +95,12 @@ describe('AuthBroker.refreshToken', () => {
         return;
       }
 
-      const token = await brokers.testDestinationsBroker.refreshToken('TRIAL');
+      if (process.env.TEST_VERBOSE) {
+        console.log(`📁 Test 3: service key: ${serviceKeyPath}, session: ${envFile}, URL: ${sapUrl}`);
+      }
+
+      const destination = getTestDestination();
+      const token = await brokers.testDestinationsBroker.refreshToken(destination);
 
       expect(token).toBeTruthy();
       expect(token.length).toBeGreaterThan(0);
@@ -102,10 +117,11 @@ describe('AuthBroker.refreshToken', () => {
         },
       };
 
-      const skFile = path.join(brokers.tempDir, 'TRIAL.json');
+      const destination = getTestDestination();
+      const skFile = path.join(brokers.tempDir, `${destination}.json`);
       fs.writeFileSync(skFile, JSON.stringify(invalidServiceKey));
 
-      await expect(brokers.broker.refreshToken('TRIAL')).rejects.toThrow(
+      await expect(brokers.broker.refreshToken(destination)).rejects.toThrow(
         'Service key "uaa" object missing required fields'
       );
     });
@@ -120,11 +136,12 @@ describe('AuthBroker.refreshToken', () => {
         },
       };
 
-      const skFile = path.join(brokers.tempDir, 'TRIAL.json');
+      const destination = getTestDestination();
+      const skFile = path.join(brokers.tempDir, `${destination}.json`);
       fs.writeFileSync(skFile, JSON.stringify(serviceKey));
 
-      await expect(brokers.broker.refreshToken('TRIAL')).rejects.toThrow(
-        'Service key for destination "TRIAL" does not contain SAP URL'
+      await expect(brokers.broker.refreshToken(destination)).rejects.toThrow(
+        `Service key for destination "${destination}" does not contain SAP URL`
       );
     });
   });

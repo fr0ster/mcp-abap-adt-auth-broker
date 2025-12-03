@@ -1,15 +1,15 @@
 /**
- * Tests for SafeSessionStore class
+ * Tests for SafeAbapSessionStore class
  */
 
-import { SafeSessionStore } from '../stores/SafeSessionStore';
+import { SafeAbapSessionStore } from '../stores/SafeAbapSessionStore';
 import { EnvConfig } from '../types';
 
-describe('SafeSessionStore', () => {
-  let store: SafeSessionStore;
+describe('SafeAbapSessionStore', () => {
+  let store: SafeAbapSessionStore;
 
   beforeEach(() => {
-    store = new SafeSessionStore();
+    store = new SafeAbapSessionStore();
   });
 
   describe('loadSession', () => {
@@ -150,8 +150,8 @@ describe('SafeSessionStore', () => {
 
   describe('in-memory behavior', () => {
     it('should not persist data between instances', () => {
-      const store1 = new SafeSessionStore();
-      const store2 = new SafeSessionStore();
+      const store1 = new SafeAbapSessionStore();
+      const store2 = new SafeAbapSessionStore();
 
       const config: EnvConfig = {
         sapUrl: 'https://example.com',

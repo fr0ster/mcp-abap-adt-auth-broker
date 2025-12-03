@@ -13,41 +13,117 @@ import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 ### Create AuthBroker Instance
 
 ```typescript
-import { AuthBroker, FileServiceKeyStore, FileSessionStore, SafeSessionStore } from '@mcp-abap-adt/auth-broker';
+import {
+  AuthBroker,
+  AbapServiceKeyStore,
+  AbapSessionStore,
+  XsuaaServiceKeyStore,
+  XsuaaSessionStore,
+  SafeAbapSessionStore,
+  SafeXsuaaSessionStore,
+} from '@mcp-abap-adt/auth-broker';
 
-// Use default file-based stores (current working directory) and default browser
+// Use default file-based stores for ABAP (current working directory) and default browser
 const broker = new AuthBroker();
 
-// Use custom file-based stores with specific paths
+// Use custom file-based stores for ABAP with specific paths
 const broker = new AuthBroker({
-  serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new FileSessionStore(['/path/to/destinations']),
+  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new AbapSessionStore(['/path/to/destinations']),
 });
 
-// Use multiple search paths
+// Use XSUAA stores for BTP/XSUAA connections
 const broker = new AuthBroker({
-  serviceKeyStore: new FileServiceKeyStore(['/path1', '/path2', '/path3']),
-  sessionStore: new FileSessionStore(['/path1', '/path2', '/path3']),
+  serviceKeyStore: new XsuaaServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new XsuaaSessionStore(['/path/to/destinations']),
+}, 'none'); // Browser not needed for XSUAA (client_credentials)
+
+// Use safe in-memory session stores (data lost after restart, secure)
+const abapBroker = new AuthBroker({
+  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new SafeAbapSessionStore(), // In-memory, no disk persistence
 });
 
-// Specify browser for authentication (chrome, edge, firefox, system, none)
-const broker = new AuthBroker({
-  serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new FileSessionStore(['/path/to/destinations']),
-}, 'chrome');
-
-// Use safe in-memory session store (data lost after restart, secure)
-const broker = new AuthBroker({
-  serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new SafeSessionStore(), // In-memory, no disk persistence
-});
-
-// Use 'none' to print URL instead of opening browser
-const broker = new AuthBroker({
-  serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new FileSessionStore(['/path/to/destinations']),
+const xsuaaBroker = new AuthBroker({
+  serviceKeyStore: new XsuaaServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new SafeXsuaaSessionStore(), // In-memory, no disk persistence
 }, 'none');
 ```
+
+## Constants
+
+The package exports constants for environment variable names and HTTP headers to help consumers work with ABAP and BTP/XSUAA connections:
+
+```typescript
+import {
+  ABAP_ENV_VARS,
+  BTP_ENV_VARS,
+  ABAP_HEADERS,
+  BTP_HEADERS,
+  getBtpAuthorizationHeader,
+  isAbapEnvVar,
+  isBtpEnvVar,
+} from '@mcp-abap-adt/auth-broker';
+
+// Read environment variables
+const sapUrl = process.env[ABAP_ENV_VARS.SAP_URL];
+const btpToken = process.env[BTP_ENV_VARS.BTP_JWT_TOKEN];
+
+// Set HTTP headers for ABAP
+headers[ABAP_HEADERS.SAP_URL] = 'https://system.sap.com';
+headers[ABAP_HEADERS.SAP_JWT_TOKEN] = token;
+
+// Set HTTP headers for BTP
+headers[BTP_HEADERS.AUTHORIZATION] = getBtpAuthorizationHeader(token);
+headers[BTP_HEADERS.MCP_URL] = 'https://mcp-server.cfapps.eu10.hana.ondemand.com';
+
+// Check variable type
+if (isAbapEnvVar('SAP_URL')) {
+  // Handle ABAP variable
+}
+if (isBtpEnvVar('BTP_JWT_TOKEN')) {
+  // Handle BTP variable
+}
+```
+
+### Available Constants
+
+**ABAP Environment Variables** (`ABAP_ENV_VARS`):
+- `SAP_URL` - SAP system URL
+- `SAP_JWT_TOKEN` - JWT token for authorization
+- `SAP_REFRESH_TOKEN` - Refresh token for token renewal
+- `SAP_UAA_URL` - UAA URL for token refresh
+- `SAP_UAA_CLIENT_ID` - UAA client ID
+- `SAP_UAA_CLIENT_SECRET` - UAA client secret
+- `SAP_CLIENT` - SAP client number
+- `SAP_LANGUAGE` - Language
+
+**BTP Environment Variables** (`BTP_ENV_VARS`):
+- `BTP_URL` / `BTP_MCP_URL` - MCP server URL (optional, not part of authentication)
+- `BTP_JWT_TOKEN` - JWT token for `Authorization: Bearer` header
+- `BTP_REFRESH_TOKEN` - Refresh token for token renewal
+- `BTP_UAA_URL` - UAA URL for token refresh
+- `BTP_UAA_CLIENT_ID` - UAA client ID
+- `BTP_UAA_CLIENT_SECRET` - UAA client secret
+
+**ABAP HTTP Headers** (`ABAP_HEADERS`):
+- `x-sap-url` - SAP system URL
+- `x-sap-auth-type` - Authentication type (jwt, xsuaa, basic)
+- `x-sap-jwt-token` - JWT token
+- `x-sap-refresh-token` - Refresh token
+- `x-sap-uaa-url` - UAA URL
+- `x-sap-uaa-client-id` - UAA client ID
+- `x-sap-uaa-client-secret` - UAA client secret
+- `x-sap-client` - SAP client number
+- `x-sap-destination` - Destination name for service key-based authentication
+- `x-mcp-destination` - Destination name for MCP destination-based authentication
+- `x-sap-login` - Login for basic authentication
+- `x-sap-password` - Password for basic authentication
+
+**BTP HTTP Headers** (`BTP_HEADERS`):
+- `Authorization` - Authorization header with Bearer token (for BTP Cloud authentication)
+- `x-mcp-url` - MCP server URL (optional, can be provided separately)
+- `x-btp-destination` - BTP destination name for service key-based authentication
 
 ## API Reference
 
@@ -65,12 +141,16 @@ constructor(
 
 **Parameters**:
 - `stores` (optional): Object with custom storage implementations:
-  - `serviceKeyStore` - Store for service keys (default: `FileServiceKeyStore()`)
-  - `sessionStore` - Store for session data (default: `FileSessionStore()`)
-  - Available implementations:
-    - `FileServiceKeyStore(searchPaths?)` - File-based service key store
-    - `FileSessionStore(searchPaths?)` - File-based session store (persists to disk)
-    - `SafeSessionStore()` - In-memory session store (secure, data lost after restart)
+  - `serviceKeyStore` - Store for service keys (default: `AbapServiceKeyStore()`)
+  - `sessionStore` - Store for session data (default: `AbapSessionStore()`)
+  - Available implementations for ABAP:
+    - `AbapServiceKeyStore(searchPaths?)` - File-based service key store for ABAP
+    - `AbapSessionStore(searchPaths?)` - File-based session store for ABAP (persists to disk)
+    - `SafeAbapSessionStore()` - In-memory session store for ABAP (secure, data lost after restart)
+  - Available implementations for XSUAA:
+    - `XsuaaServiceKeyStore(searchPaths?)` - File-based service key store for XSUAA
+    - `XsuaaSessionStore(searchPaths?)` - File-based session store for XSUAA (uses BTP_* variables)
+    - `SafeXsuaaSessionStore()` - In-memory session store for XSUAA (secure, data lost after restart)
 - `browser` (optional): Browser name for authentication. Options:
   - `'chrome'` - Open in Google Chrome
   - `'edge'` - Open in Microsoft Edge

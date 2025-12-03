@@ -1,14 +1,20 @@
 /**
  * Service key loader - loads service key JSON files by destination name
+ * 
+ * Uses parsers to handle different service key formats:
+ * - AbapServiceKeyParser: Standard ABAP service key format with nested uaa object
+ * - XsuaaServiceKeyParser: Direct XSUAA service key format from BTP
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { ServiceKey } from './types';
 import { findFileInPaths } from './pathResolver';
+import { AbapServiceKeyParser, XsuaaServiceKeyParser, IServiceKeyParser } from './parsers';
 
 /**
  * Load service key from {destination}.json file
+ * Automatically detects format and uses appropriate parser
  * @param destination Destination name
  * @param searchPaths Array of paths to search for the file
  * @returns ServiceKey object or null if file not found
@@ -23,18 +29,25 @@ export async function loadServiceKey(destination: string, searchPaths: string[])
 
   try {
     const fileContent = fs.readFileSync(serviceKeyPath, 'utf8');
-    const serviceKey = JSON.parse(fileContent) as ServiceKey;
+    const rawData = JSON.parse(fileContent);
 
-    // Validate service key structure
-    if (!serviceKey.uaa) {
-      throw new Error('Service key missing "uaa" object');
+    // Try parsers in order: ABAP format first, then XSUAA format
+    const parsers: IServiceKeyParser[] = [
+      new AbapServiceKeyParser(),
+      new XsuaaServiceKeyParser(),
+    ];
+
+    for (const parser of parsers) {
+      if (parser.canParse(rawData)) {
+        return parser.parse(rawData);
+      }
     }
 
-    if (!serviceKey.uaa.url || !serviceKey.uaa.clientid || !serviceKey.uaa.clientsecret) {
-      throw new Error('Service key "uaa" object missing required fields: url, clientid, clientsecret');
-    }
-
-    return serviceKey;
+    // No parser could handle the data
+    throw new Error(
+      'Service key does not match any supported format. ' +
+      'Expected either ABAP format (with nested uaa object) or XSUAA format (with url, clientid, clientsecret at root level)'
+    );
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error(

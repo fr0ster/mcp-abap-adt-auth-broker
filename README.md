@@ -53,7 +53,9 @@ const newToken = await broker.refreshToken('TRIAL');
 
 ### File Structure
 
-#### Environment File (`{destination}.env`)
+#### Environment File for ABAP (`{destination}.env`)
+
+For ABAP connections, use `SAP_*` environment variables:
 
 ```env
 SAP_URL=https://your-system.abap.us10.hana.ondemand.com
@@ -65,7 +67,24 @@ SAP_UAA_CLIENT_ID=client_id
 SAP_UAA_CLIENT_SECRET=client_secret
 ```
 
-#### Service Key File (`{destination}.json`)
+#### Environment File for BTP/XSUAA (`{destination}.env`)
+
+For BTP/XSUAA connections, use `BTP_*` environment variables:
+
+```env
+BTP_URL=https://your-mcp-server.cfapps.eu10.hana.ondemand.com
+BTP_JWT_TOKEN=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+BTP_REFRESH_TOKEN=refresh_token_string
+BTP_UAA_URL=https://your-account.authentication.eu10.hana.ondemand.com
+BTP_UAA_CLIENT_ID=client_id
+BTP_UAA_CLIENT_SECRET=client_secret
+```
+
+**Note**: `BTP_URL` is optional - it's not part of authentication, only needed for making requests. The token and UAA credentials are sufficient for authentication.
+
+#### Service Key File for ABAP (`{destination}.json`)
+
+Standard ABAP service key format:
 
 ```json
 {
@@ -78,6 +97,21 @@ SAP_UAA_CLIENT_SECRET=client_secret
 }
 ```
 
+#### Service Key File for XSUAA (`{destination}.json`)
+
+Direct XSUAA service key format (from BTP):
+
+```json
+{
+  "url": "https://your-account.authentication.eu10.hana.ondemand.com",
+  "apiurl": "https://api.authentication.eu10.hana.ondemand.com",
+  "clientid": "your_client_id",
+  "clientsecret": "your_client_secret"
+}
+```
+
+**Note**: For XSUAA service keys, `apiurl` is prioritized over `url` for UAA authorization if present.
+
 ## API
 
 ### `AuthBroker`
@@ -89,13 +123,13 @@ new AuthBroker(stores?: { serviceKeyStore?: IServiceKeyStore; sessionStore?: ISe
 ```
 
 - `stores` - Optional object with custom storage implementations:
-  - `serviceKeyStore` - Store for service keys (default: `FileServiceKeyStore()`)
-  - `sessionStore` - Store for session data (default: `FileSessionStore()`)
+  - `serviceKeyStore` - Store for service keys (default: `AbapServiceKeyStore()`)
+  - `sessionStore` - Store for session data (default: `AbapSessionStore()`)
   - Available implementations:
-    - `FileServiceKeyStore(searchPaths?)` - File-based service key store
-    - `FileSessionStore(searchPaths?)` - File-based session store (persists to disk)
-    - `SafeSessionStore()` - In-memory session store (secure, data lost after restart)
+    - **ABAP**: `AbapServiceKeyStore(searchPaths?)`, `AbapSessionStore(searchPaths?)`, `SafeAbapSessionStore()`
+    - **XSUAA**: `XsuaaServiceKeyStore(searchPaths?)`, `XsuaaSessionStore(searchPaths?)`, `SafeXsuaaSessionStore()`
 - `browser` - Optional browser name for authentication (`chrome`, `edge`, `firefox`, `system`, `none`). Default: `system`
+  - For XSUAA, browser is not used (client_credentials grant type)
 - `logger` - Optional logger instance. If not provided, uses default logger
 
 #### Methods
@@ -115,6 +149,61 @@ Clear cached token for specific destination.
 ##### `clearAllCache(): void`
 
 Clear all cached tokens.
+
+### Constants
+
+The package exports constants for environment variable names and HTTP headers:
+
+```typescript
+import {
+  ABAP_ENV_VARS,
+  BTP_ENV_VARS,
+  ABAP_HEADERS,
+  BTP_HEADERS,
+  getBtpAuthorizationHeader,
+} from '@mcp-abap-adt/auth-broker';
+
+// Environment variable names
+const sapUrl = process.env[ABAP_ENV_VARS.SAP_URL];
+const btpToken = process.env[BTP_ENV_VARS.BTP_JWT_TOKEN];
+
+// HTTP headers
+headers[ABAP_HEADERS.SAP_URL] = 'https://system.sap.com';
+headers[ABAP_HEADERS.SAP_JWT_TOKEN] = token;
+
+// BTP authorization header
+headers[BTP_HEADERS.AUTHORIZATION] = getBtpAuthorizationHeader(token);
+```
+
+**Available Constants:**
+- `ABAP_ENV_VARS` - Environment variable names for ABAP (SAP_URL, SAP_JWT_TOKEN, etc.)
+- `BTP_ENV_VARS` - Environment variable names for BTP/XSUAA (BTP_URL, BTP_JWT_TOKEN, etc.)
+- `ABAP_HEADERS` - HTTP header names for ABAP (x-sap-url, x-sap-jwt-token, etc.)
+- `BTP_HEADERS` - HTTP header names for BTP (Authorization, x-mcp-url, etc.)
+
+### Utility Script
+
+Generate `.env` files from service keys:
+
+```bash
+npm run generate-env <destination> [service-key-path] [session-path]
+```
+
+**Examples:**
+```bash
+# Generate .env from service key (auto-detect paths)
+npm run generate-env mcp
+
+# Specify paths explicitly
+npm run generate-env mcp ./mcp.json ./mcp.env
+
+# Use absolute paths
+npm run generate-env TRIAL ~/.config/mcp-abap-adt/service-keys/TRIAL.json ~/.config/mcp-abap-adt/sessions/TRIAL.env
+```
+
+The script automatically detects service key type (ABAP or XSUAA) and uses the appropriate authentication flow:
+- **ABAP**: Opens browser for OAuth2 authorization code flow
+- **XSUAA**: Uses client_credentials grant type (no browser required)
 
 ## Testing
 

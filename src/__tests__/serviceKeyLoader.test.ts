@@ -47,15 +47,35 @@ describe('serviceKeyLoader', () => {
     expect(loaded).toBeNull();
   });
 
-  it('should throw error if uaa object missing', async () => {
+  it('should throw error if uaa object missing and not XSUAA format', async () => {
     const serviceKey = {
       url: 'https://test.sap.com',
+      // Missing both uaa object and XSUAA fields (clientid, clientsecret)
     };
 
     const skFile = path.join(tempDir, 'TRIAL.json');
     fs.writeFileSync(skFile, JSON.stringify(serviceKey));
 
-    await expect(loadServiceKey('TRIAL', [tempDir])).rejects.toThrow('Service key missing "uaa" object');
+    await expect(loadServiceKey('TRIAL', [tempDir])).rejects.toThrow('Service key does not match any supported format');
+  });
+
+  it('should parse XSUAA format service key', async () => {
+    const serviceKey = {
+      url: 'https://example.authentication.eu10.hana.ondemand.com',
+      clientid: 'sb-example-12345!t123',
+      clientsecret: 'example-secret-key-12345$example-hash=',
+      tenantmode: 'shared',
+    };
+
+    const skFile = path.join(tempDir, 'mcp.json');
+    fs.writeFileSync(skFile, JSON.stringify(serviceKey));
+
+    const loaded = await loadServiceKey('mcp', [tempDir]);
+
+    expect(loaded).not.toBeNull();
+    expect(loaded?.uaa.url).toBe('https://example.authentication.eu10.hana.ondemand.com');
+    expect(loaded?.uaa.clientid).toBe('sb-example-12345!t123');
+    expect(loaded?.uaa.clientsecret).toBe('example-secret-key-12345$example-hash=');
   });
 
   it('should throw error if uaa fields missing', async () => {

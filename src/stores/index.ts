@@ -3,7 +3,11 @@
  */
 
 export { IServiceKeyStore, ISessionStore, ServiceKeyStore, SessionStore } from './interfaces';
-export { FileServiceKeyStore } from './FileServiceKeyStore';
-export { FileSessionStore } from './FileSessionStore';
-export { SafeSessionStore } from './SafeSessionStore';
+// Abstract classes are internal - use concrete implementations instead
+export { AbapServiceKeyStore } from './AbapServiceKeyStore';
+export { AbapSessionStore } from './AbapSessionStore';
+export { XsuaaServiceKeyStore } from './XsuaaServiceKeyStore';
+export { XsuaaSessionStore } from './XsuaaSessionStore';
+export { SafeAbapSessionStore } from './SafeAbapSessionStore';
+export { SafeXsuaaSessionStore } from './SafeXsuaaSessionStore';
 

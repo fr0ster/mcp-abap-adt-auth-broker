@@ -1,0 +1,31 @@
+# Test configuration template for auth-broker integration tests
+# Copy this file to test-config.yaml and fill in real values
+# test-config.yaml is in .gitignore and should not be committed
+
+auth_broker:
+  # Paths configuration (applies to both ABAP and XSUAA)
+  paths:
+    # Directory where service key JSON files are stored
+    # Service key files: <destination>.json (e.g., TRIAL.json, mcp.json)
+    # If not specified, uses default: ~/.config/mcp-abap-adt/service-keys/ (Unix) or %USERPROFILE%\Documents\mcp-abap-adt\service-keys\ (Windows)
+    service_keys_dir: <SERVICE_KEYS_DIR>
+    
+    # Directory where session ENV files are stored
+    # Session files: <destination>.env (e.g., TRIAL.env, mcp.env)
+    # If not specified, uses default: ~/.config/mcp-abap-adt/sessions/ (Unix) or %USERPROFILE%\Documents\mcp-abap-adt\sessions\ (Windows)
+    sessions_dir: <SESSIONS_DIR>
+
+  # ABAP destination configuration (for on-premise or cloud ABAP systems)
+  abap:
+    # ABAP destination name (used for service key file: <destination>.json and session file: <destination>.env)
+    # Example: "TRIAL" -> looks for TRIAL.json in service-keys directory and TRIAL.env in sessions directory
+    destination: <TEST_ABAP_DESTINATION>
+
+  # XSUAA/BTP destination configuration (for BTP Cloud systems)
+  xsuaa:
+    # BTP destination name (used for service key file: <btp_destination>.json)
+    # Example: "mcp" -> looks for mcp.json in service-keys directory
+    btp_destination: <TEST_BTP_DESTINATION>
+    
+    # BTP service URL
+    btp_url: <TEST_BTP_URL>
