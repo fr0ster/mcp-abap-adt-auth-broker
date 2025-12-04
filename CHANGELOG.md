@@ -9,7 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
-## [0.1.6] - 2025-01-XX
+## [0.1.7] - 2025-12-04
+
+### Changed
+- **getToken() Fallback Chain** - Improved authentication reliability with multi-step fallback chain
+  - **Step 1**: Check if session exists and token is valid (returns immediately if valid)
+  - **Step 2**: Verify service key exists (throws error if missing)
+  - **Step 3**: Try refresh token authentication (via tokenProvider) if refresh token is available
+  - **Step 4**: Try UAA client_credentials authentication (via tokenProvider) if refresh token missing or failed
+  - **Step 5**: Try browser authentication (via tokenProvider) if UAA failed or parameters missing
+  - **Step 6**: Throw comprehensive error if all methods failed
+  - All authentication attempts use `ITokenProvider` interface (no direct implementation imports)
+  - Token validation is performed only when checking existing session (step 1)
+  - Tokens obtained through refresh/UAA/browser authentication are not validated before being saved
+  - Improved error messages with details about which authentication methods failed
+
+## [0.1.6] - 2025-12-04
 
 ### Changed
 - **Package Split** - Extracted store and provider implementations into separate packages

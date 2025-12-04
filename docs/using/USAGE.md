@@ -212,7 +212,7 @@ const broker = new AuthBroker({
 
 #### getToken()
 
-Get authentication token for destination. Tries to load from `.env` file, validates it, and refreshes if needed.
+Get authentication token for destination. Tries to load from session store, validates it, and refreshes if needed using a fallback chain.
 
 ```typescript
 async getToken(destination: string): Promise<string>
@@ -223,7 +223,7 @@ async getToken(destination: string): Promise<string>
 
 **Returns**: Promise that resolves to JWT token string
 
-**Throws**: Error if neither `.env` file nor service key found
+**Throws**: Error if neither session data nor service key found, or if all authentication methods failed
 
 **Example**:
 ```typescript
@@ -235,11 +235,27 @@ try {
 }
 ```
 
-**Flow**:
-1. Check cache for valid token
-2. Load from `.env` file and validate
-3. If expired or not found, refresh using service key
-4. If no service key, throw error with instructions
+**Flow (Fallback Chain)**:
+1. **Check session**: Load token from session store and validate it
+   - If token is valid, return it immediately
+   - If token is invalid or missing, continue to next step
+
+2. **Check service key**: Verify that service key exists
+   - If no service key found, throw error
+
+3. **Try refresh token**: If refresh token is available in session, attempt to refresh using it (via tokenProvider)
+   - If successful, save new token to session and return it
+   - If failed, continue to next step
+
+4. **Try UAA (client_credentials)**: Attempt to get token using UAA credentials (via tokenProvider)
+   - If UAA parameters are available and authentication succeeds, save token to session and return it
+   - If failed or parameters missing, continue to next step
+
+5. **Try browser authentication**: Attempt browser-based OAuth2 flow using service key (via tokenProvider)
+   - If successful, save token and refresh token to session and return it
+   - If failed, continue to next step
+
+6. **Throw error**: If all authentication methods failed, throw comprehensive error with details about what failed
 
 #### refreshToken()
 

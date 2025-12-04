@@ -191,7 +191,15 @@ new AuthBroker(
 
 ##### `getToken(destination: string): Promise<string>`
 
-Gets authentication token for destination. Tries to load from `.env` file, validates it, and refreshes if needed.
+Gets authentication token for destination. Tries to load from session store, validates it, and refreshes if needed using a fallback chain:
+
+1. **Check session**: Load token from session store and validate it
+2. **Try refresh token**: If refresh token is available, attempt to refresh using it (via tokenProvider)
+3. **Try UAA (client_credentials)**: Attempt to get token using UAA credentials (via tokenProvider)
+4. **Try browser authentication**: Attempt browser-based OAuth2 flow using service key (via tokenProvider)
+5. **Throw error**: If all authentication methods failed
+
+**Note**: Token validation is performed only when checking existing session. Tokens obtained through refresh/UAA/browser authentication are not validated before being saved.
 
 ##### `refreshToken(destination: string): Promise<string>`
 
