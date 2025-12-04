@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
+## [Unreleased]
+
+## [0.1.8] - 2024-12-04
+
+### Added
+- **Interfaces Package Integration**: Migrated to use `@mcp-abap-adt/interfaces` package for all interface definitions
+  - All interfaces now imported from shared package
+  - Backward compatibility maintained with type aliases
+  - Dependency on `@mcp-abap-adt/interfaces@^0.1.0` added
+  - Updated `@mcp-abap-adt/connection` dependency to `^0.1.14`
+
+### Changed
+- **Interface Renaming**: Interfaces renamed to follow `I` prefix convention:
+  - `TokenProviderResult` → `ITokenProviderResult` (type alias for backward compatibility)
+  - `TokenProviderOptions` → `ITokenProviderOptions` (type alias for backward compatibility)
+  - Old names still work via type aliases for backward compatibility
+- **AuthType Export**: `AuthType` now exported from `@mcp-abap-adt/interfaces` instead of local definition
+
 ## [0.1.7] - 2025-12-04
 
 ### Changed

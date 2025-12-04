@@ -7,51 +7,21 @@
  * - BTP/ABAP: browser-based OAuth2 or refresh token
  */
 
-import { IAuthorizationConfig, IConnectionConfig } from '../stores/interfaces';
+// Import interfaces from shared package
+import type {
+  IAuthorizationConfig,
+  IConnectionConfig,
+  ITokenProvider,
+  ITokenProviderResult,
+  ITokenProviderOptions
+} from '@mcp-abap-adt/interfaces';
 
-/**
- * Result from token provider
- */
-export interface TokenProviderResult {
-  /** Connection configuration with authorization token */
-  connectionConfig: IConnectionConfig;
-  /** Refresh token (optional, for BTP/ABAP) */
-  refreshToken?: string;
-}
-
-/**
- * Interface for token providers
- * 
- * Takes authorization configuration and returns connection configuration with token.
- */
-export interface ITokenProvider {
-  /**
-   * Get connection configuration with token from authorization configuration
-   * @param authConfig Authorization configuration (UAA credentials, optional refresh token)
-   * @param options Optional provider-specific options (e.g., browser type for BTP)
-   * @returns Promise that resolves to connection configuration with authorization token and optional refresh token
-   */
-  getConnectionConfig(
-    authConfig: IAuthorizationConfig,
-    options?: TokenProviderOptions
-  ): Promise<TokenProviderResult>;
-
-  /**
-   * Validate JWT token by testing connection to service
-   * @param token JWT token to validate
-   * @param serviceUrl Service URL (optional, for services that require URL validation)
-   * @returns Promise that resolves to true if token is valid, false otherwise
-   */
-  validateToken?(token: string, serviceUrl?: string): Promise<boolean>;
-}
-
-/**
- * Options for token providers
- */
-export interface TokenProviderOptions {
-  /** Browser type for browser-based authentication (chrome, edge, firefox, system, none) */
-  browser?: string;
-  /** Logger instance for logging */
-  logger?: import('@mcp-abap-adt/logger').Logger;
-}
+// Re-export for backward compatibility
+export type {
+  ITokenProvider,
+  IAuthorizationConfig,
+  IConnectionConfig,
+};
+export type TokenProviderResult = ITokenProviderResult;
+export type TokenProviderOptions = ITokenProviderOptions;
 

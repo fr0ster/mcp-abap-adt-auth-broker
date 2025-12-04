@@ -12,6 +12,8 @@ export type { IConfig } from './types';
 export type { ITokenProvider, TokenProviderOptions, TokenProviderResult } from './providers';
 // Logger (re-exported from @mcp-abap-adt/logger for convenience)
 export type { Logger } from '@mcp-abap-adt/logger';
+// AuthType (re-exported from @mcp-abap-adt/interfaces for convenience)
+export type { AuthType } from '@mcp-abap-adt/interfaces';
 
 // Store and provider implementations are in separate packages:
 // - @mcp-abap-adt/auth-stores-btp - BTP and ABAP stores

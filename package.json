@@ -51,7 +51,8 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@mcp-abap-adt/connection": "^0.1.13",
+    "@mcp-abap-adt/connection": "^0.1.14",
+    "@mcp-abap-adt/interfaces": "^0.1.0",
     "@mcp-abap-adt/logger": "^0.1.0"
   },
   "devDependencies": {

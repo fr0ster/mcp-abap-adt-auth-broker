@@ -1,21 +1,23 @@
 /**
  * Type definitions for auth-broker package
  * 
- * Type aliases (type) are defined here. Interfaces are in stores/interfaces.ts.
+ * Type aliases (type) are defined here. Interfaces are imported from @mcp-abap-adt/interfaces.
  */
 
-import type { IAuthorizationConfig, IConnectionConfig } from './stores/interfaces';
+// Import interfaces from shared package
+import type {
+  IAuthorizationConfig,
+  IConnectionConfig,
+  IConfig,
+  IServiceKeyStore,
+  ISessionStore
+} from '@mcp-abap-adt/interfaces';
 
-/**
- * Configuration - optional composition of authorization and connection configuration
- * Can contain either authorization config, or connection config, or both
- */
-export type IConfig = Partial<IAuthorizationConfig> & Partial<IConnectionConfig>;
-
-// Re-export interfaces for convenience
+// Re-export for backward compatibility
 export type {
+  IConfig,
   IAuthorizationConfig,
   IConnectionConfig,
   IServiceKeyStore,
   ISessionStore,
-} from './stores/interfaces';
+};
