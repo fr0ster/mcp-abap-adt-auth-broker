@@ -9,6 +9,91 @@ The `auth-broker` package provides JWT token management for SAP ABAP ADT systems
 - **XSUAA** - BTP services with reduced scope (client_credentials grant type)
 - **BTP** - ABAP systems in BTP with full scope (browser-based OAuth2)
 
+## Responsibilities and Boundaries
+
+### Core Development Principle
+
+**Interface-Only Communication**: This package follows a fundamental development principle: **all interactions with external dependencies happen ONLY through interfaces**. The code knows **NOTHING beyond what is defined in the interfaces**.
+
+This means:
+- Does not know about concrete implementation classes (e.g., `AbapSessionStore`, `BtpTokenProvider`)
+- Does not know about internal data structures or methods not defined in interfaces
+- Does not make assumptions about implementation behavior beyond interface contracts
+- Does not access properties or methods not explicitly defined in interfaces
+
+This principle ensures:
+- **Loose coupling**: `AuthBroker` is decoupled from concrete implementations
+- **Flexibility**: New implementations can be added without modifying `AuthBroker`
+- **Testability**: Easy to mock dependencies for testing
+- **Maintainability**: Changes to implementations don't affect `AuthBroker`
+
+### Package Responsibilities
+
+The `@mcp-abap-adt/auth-broker` package defines **interfaces** and provides **orchestration logic** for authentication. It does **not** implement concrete storage or token acquisition mechanisms - these are provided by separate packages (`@mcp-abap-adt/auth-stores`, `@mcp-abap-adt/auth-providers`).
+
+#### What AuthBroker Does
+
+- **Orchestrates authentication flows**: Coordinates token retrieval, validation, and refresh using provided stores and providers
+- **Manages token lifecycle**: Handles token caching, validation, and automatic refresh
+- **Works with interfaces only**: Uses `IServiceKeyStore`, `ISessionStore`, and `ITokenProvider` interfaces without knowing concrete implementations
+- **Delegates to providers**: Calls `tokenProvider.getConnectionConfig()` to obtain tokens and connection configuration
+- **Delegates to stores**: Uses `sessionStore.setConnectionConfig()` to save tokens and connection configuration
+
+#### What AuthBroker Does NOT Do
+
+- **Does NOT know about `serviceUrl`**: `AuthBroker` does not know whether a specific `ISessionStore` implementation requires `serviceUrl` or not. It simply passes the `IConnectionConfig` returned by `tokenProvider` to `sessionStore.setConnectionConfig()`
+- **Does NOT merge configurations**: `AuthBroker` does not merge `serviceUrl` from service keys with connection config from token providers. This is the responsibility of the consumer or the session store implementation
+- **Does NOT implement storage**: File I/O, parsing, and storage logic are handled by concrete store implementations from `@mcp-abap-adt/auth-stores`
+- **Does NOT implement token acquisition**: OAuth2 flows, refresh token logic, and client credentials are handled by concrete provider implementations from `@mcp-abap-adt/auth-providers`
+
+### Consumer Responsibilities
+
+The **consumer** (application using `AuthBroker`) is responsible for:
+
+1. **Selecting appropriate implementations**: Choose the correct `IServiceKeyStore`, `ISessionStore`, and `ITokenProvider` implementations based on the use case
+2. **Ensuring complete configuration**: If a session store requires `serviceUrl` (e.g., `AbapSessionStore` requires `sapUrl`), the consumer must ensure that the session is created with `serviceUrl` before calling `AuthBroker.getToken()`, or the session store implementation handles `serviceUrl` retrieval internally
+3. **Understanding store requirements**: Different session store implementations have different requirements
+
+### Store Responsibilities
+
+Concrete `ISessionStore` implementations are responsible for:
+
+- **Handling their own data format**: Each store knows its internal data format (e.g., `AbapSessionData`, `BtpBaseSessionData`)
+- **Converting between formats**: Converting between `IConfig`/`IConnectionConfig` and internal storage format
+- **Managing required fields**: If a store requires `serviceUrl` (e.g., `AbapSessionStore`), it should retrieve it from `serviceKeyStore` if not provided, use existing value from current session if available, or throw an error if neither is available
+
+### Provider Responsibilities
+
+Concrete `ITokenProvider` implementations are responsible for:
+
+- **Obtaining tokens**: Using OAuth2 flows, refresh tokens, or client credentials to obtain JWT tokens
+- **Returning connection config**: Returning `IConnectionConfig` with `authorizationToken` and optionally `serviceUrl` (if known)
+- **Not returning `serviceUrl` if unknown**: Providers like `BtpTokenProvider` may not return `serviceUrl` because they only handle token acquisition, not connection configuration
+
+### Design Principles
+
+1. **Interface-Only Communication** (Core Principle): All interactions with external dependencies happen **ONLY through interfaces**. The code knows **NOTHING beyond what is defined in the interfaces** (see [Core Development Principle](#core-development-principle) above)
+2. **Dependency Inversion Principle (DIP)**: `AuthBroker` depends on abstractions (`IServiceKeyStore`, `ISessionStore`, `ITokenProvider`), not concrete implementations
+3. **Single Responsibility**: Each component has a single, well-defined responsibility
+4. **Interface Segregation**: Interfaces are focused and minimal, containing only what's necessary for their specific purpose
+5. **Open/Closed Principle**: New store and provider implementations can be added without modifying `AuthBroker`
+
+### Example: Why AuthBroker Doesn't Handle `serviceUrl`
+
+Consider this scenario:
+- `BtpTokenProvider.getConnectionConfig()` returns `IConnectionConfig` with `authorizationToken` but **without** `serviceUrl` (because it only handles token acquisition)
+- `AbapSessionStore.setConnectionConfig()` requires `sapUrl` (which maps to `serviceUrl`)
+
+If `AuthBroker` tried to merge `serviceUrl` from `serviceKeyStore`, it would:
+1. Violate the DIP by knowing about specific store requirements
+2. Break the abstraction - `AuthBroker` shouldn't know that `AbapSessionStore` needs `serviceUrl`
+3. Create coupling between `AuthBroker` and concrete implementations
+
+Instead, the consumer or `AbapSessionStore` itself should handle this:
+- **Option 1**: Consumer retrieves `serviceUrl` from `serviceKeyStore` and ensures it's in the session before calling `AuthBroker.getToken()`
+- **Option 2**: `AbapSessionStore.setConnectionConfig()` retrieves `serviceUrl` from `serviceKeyStore` internally if not provided
+- **Option 3**: `AbapSessionStore.setConnectionConfig()` uses existing `sapUrl` from current session if available
+
 ## Core Components
 
 ### AuthBroker Class
