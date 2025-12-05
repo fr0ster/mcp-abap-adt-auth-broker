@@ -10,8 +10,8 @@ export type { IAuthorizationConfig, IConnectionConfig, IServiceKeyStore, ISessio
 export type { IConfig } from './types';
 // Token provider interface
 export type { ITokenProvider, TokenProviderOptions, TokenProviderResult } from './providers';
-// Logger (re-exported from @mcp-abap-adt/logger for convenience)
-export type { Logger } from '@mcp-abap-adt/logger';
+// Logger interface (re-exported from @mcp-abap-adt/interfaces for convenience)
+export type { ILogger } from '@mcp-abap-adt/interfaces';
 // AuthType (re-exported from @mcp-abap-adt/interfaces for convenience)
 export type { AuthType } from '@mcp-abap-adt/interfaces';
 

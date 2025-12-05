@@ -16,8 +16,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { AuthBroker } from '../src/AuthBroker';
-import { AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-stores-btp';
-import { XsuaaServiceKeyStore, XsuaaSessionStore } from '@mcp-abap-adt/auth-stores-xsuaa';
+import { AbapServiceKeyStore, AbapSessionStore, XsuaaServiceKeyStore, XsuaaSessionStore } from '@mcp-abap-adt/auth-stores';
 import { BtpTokenProvider, XsuaaTokenProvider } from '@mcp-abap-adt/auth-providers';
 
 async function main() {
@@ -59,12 +58,12 @@ async function main() {
 
     // Create appropriate stores
     const serviceKeyStore = isXsuaa
-      ? new XsuaaServiceKeyStore([serviceKeyDir])
-      : new AbapServiceKeyStore([serviceKeyDir]);
+      ? new XsuaaServiceKeyStore(serviceKeyDir)
+      : new AbapServiceKeyStore(serviceKeyDir);
     
     const sessionStore = isXsuaa
-      ? new XsuaaSessionStore([sessionDir])
-      : new AbapSessionStore([sessionDir]);
+      ? new XsuaaSessionStore(sessionDir)
+      : new AbapSessionStore(sessionDir);
 
     // Create token provider
     const tokenProvider = isXsuaa

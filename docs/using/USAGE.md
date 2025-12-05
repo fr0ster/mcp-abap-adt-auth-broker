@@ -146,7 +146,7 @@ Stores use the following environment variables internally (not exported as const
 constructor(
   stores?: { serviceKeyStore?: IServiceKeyStore; sessionStore?: ISessionStore },
   browser?: string,
-  logger?: Logger
+  logger?: ILogger
 )
 ```
 
@@ -637,9 +637,9 @@ The package uses a configurable logger that respects the `DEBUG_AUTH_LOG` enviro
 You can inject a custom logger into `AuthBroker`:
 
 ```typescript
-import { AuthBroker, Logger, AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-broker';
+import { AuthBroker, ILogger, AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-broker';
 
-class MyLogger implements Logger {
+class MyLogger implements ILogger {
   info(message: string): void {
     // Custom info logging
   }

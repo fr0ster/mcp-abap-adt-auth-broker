@@ -11,7 +11,22 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
-## [0.1.8] - 2024-12-04
+## [0.1.9] - 2025-12-05
+
+### Changed
+- **Dependency Injection for Logger**: Migrated from concrete `Logger` implementation to `ILogger` interface
+  - Removed dependency on `@mcp-abap-adt/logger` package
+  - Now uses `ILogger` interface from `@mcp-abap-adt/interfaces`
+  - Logger parameter in constructor is optional - uses no-op logger if not provided
+  - Follows Dependency Inversion Principle - depends on interface, not implementation
+- **Bin Script Fixes**: Fixed `generate-env-from-service-key.ts` script
+  - Corrected imports from non-existent packages (`@mcp-abap-adt/auth-stores-btp`, `@mcp-abap-adt/auth-stores-xsuaa`) to correct package (`@mcp-abap-adt/auth-stores`)
+  - Fixed constructor parameters: changed from array `[directory]` to string `directory` for all store constructors
+
+### Removed
+- **Unused Dependencies**: Removed `@mcp-abap-adt/connection` dependency (not used in production code)
+
+## [0.1.8] - 2025-12-04
 
 ### Added
 - **Interfaces Package Integration**: Migrated to use `@mcp-abap-adt/interfaces` package for all interface definitions
@@ -63,7 +78,7 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 - Token validator utility (moved to providers)
 - Authentication functions (moved to providers)
 
-## [0.1.5] - 2025-12-03
+## [0.1.5] - 2025-12-02
 
 ### Changed
 - **Interface Naming** - All interfaces now start with `I` prefix
@@ -270,64 +285,6 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
   - Uses `findProjectRoot()` to reliably locate `test-config.yaml`
   - Properly expands `~` to home directory in paths
   - Added diagnostic logging controlled by `TEST_VERBOSE` environment variable
-
-## [0.1.5] - 2025-12-02
-
-### Added
-- **SafeSessionStore** - New in-memory session store implementation
-  - Stores session data in memory (Map) - data is lost after application restart
-  - Secure by default - doesn't persist sensitive data to disk
-  - Use when you want to ensure tokens are not saved to files
-  - Perfect for applications that require re-authentication after restart
-- **SafeSessionStore Tests** - Comprehensive test coverage for SafeSessionStore
-  - Tests for `loadSession()` - loading non-existent, existing, and deleted sessions
-  - Tests for `saveSession()` - saving, overwriting, and multiple destinations
-  - Tests for `deleteSession()` - deleting existing and non-existent sessions
-  - Tests for in-memory behavior - data isolation between instances
-  - 11 test cases covering all functionality
-
-### Changed
-- **Interface Naming** - Renamed interfaces for better readability
-  - `ServiceKeyStore` → `IServiceKeyStore` (new interface name)
-  - `SessionStore` → `ISessionStore` (new interface name)
-  - Old names still available as type aliases for backward compatibility
-  - All implementations updated to use new interface names
-- **AuthBroker Constructor** - Simplified API
-  - Removed `searchPathsOrStores` parameter (string/array/object)
-  - Now accepts only `stores` object with `serviceKeyStore` and `sessionStore` properties
-  - Consumers must explicitly provide stores - no automatic path resolution
-  - Default stores: `FileServiceKeyStore()` and `FileSessionStore()` if not provided
-  - This change gives consumers full control over storage implementation
-
-### Breaking Changes
-- **AuthBroker Constructor** - API change
-  - Old API: `new AuthBroker(searchPaths?: string | string[], browser?: string, logger?: Logger)`
-  - New API: `new AuthBroker(stores?: { serviceKeyStore?: IServiceKeyStore; sessionStore?: ISessionStore }, browser?: string, logger?: Logger)`
-  - Migration: Instead of passing paths, create stores explicitly:
-    ```typescript
-    // Old way (no longer works)
-    const broker = new AuthBroker(['/path/to/destinations']);
-    
-    // New way
-    const { FileServiceKeyStore, FileSessionStore } = require('@mcp-abap-adt/auth-broker');
-    const broker = new AuthBroker({
-      serviceKeyStore: new FileServiceKeyStore(['/path/to/destinations']),
-      sessionStore: new FileSessionStore(['/path/to/destinations']),
-    });
-    ```
-
-### Fixed
-- **Test Helpers** - Updated test helpers to use new AuthBroker API
-  - `testHelpers.ts` now uses `FileServiceKeyStore` and `FileSessionStore` with explicit paths
-  - All existing tests updated to work with new constructor signature
-  - Test coverage maintained at 100% for all components
-
-### Technical Details
-- Consumers now have full control over storage implementation
-- Can choose between `FileSessionStore` (persists to disk) and `SafeSessionStore` (in-memory)
-- No automatic path resolution - consumers decide where to store files
-- Better separation of concerns - storage logic is explicit
-- All tests updated and passing (60 tests across 8 test suites)
 
 ## [0.1.4] - 2025-12-01
 

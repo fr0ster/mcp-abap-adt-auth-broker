@@ -273,7 +273,7 @@ new AuthBroker(
     tokenProvider?: ITokenProvider;
   }, 
   browser?: string, 
-  logger?: Logger
+  logger?: ILogger
 )
 ```
 

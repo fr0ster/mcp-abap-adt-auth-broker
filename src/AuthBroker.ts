@@ -2,16 +2,26 @@
  * Main AuthBroker class for managing JWT tokens based on destinations
  */
 
-import { Logger, defaultLogger } from '@mcp-abap-adt/logger';
+import { ILogger } from '@mcp-abap-adt/interfaces';
 import { IServiceKeyStore, ISessionStore, IAuthorizationConfig, IConnectionConfig } from './stores/interfaces';
 import { ITokenProvider } from './providers';
+
+/**
+ * No-op logger implementation for default fallback when logger is not provided
+ */
+const noOpLogger: ILogger = {
+  info: () => {},
+  error: () => {},
+  warn: () => {},
+  debug: () => {},
+};
 
 /**
  * AuthBroker manages JWT authentication tokens for destinations
  */
 export class AuthBroker {
   private browser: string | undefined;
-  private logger: Logger;
+  private logger: ILogger;
   private serviceKeyStore: IServiceKeyStore;
   private sessionStore: ISessionStore;
   private tokenProvider: ITokenProvider;
@@ -25,18 +35,18 @@ export class AuthBroker {
    * @param browser Optional browser name for authentication (chrome, edge, firefox, system, none).
    *                Default: 'system' (system default browser).
    *                Use 'none' to print URL instead of opening browser.
-   * @param logger Optional logger instance. If not provided, uses default logger.
+   * @param logger Optional logger instance implementing ILogger interface. If not provided, uses no-op logger.
    */
   constructor(
     stores: { serviceKeyStore: IServiceKeyStore; sessionStore: ISessionStore; tokenProvider: ITokenProvider },
     browser?: string,
-    logger?: Logger
+    logger?: ILogger
   ) {
     this.serviceKeyStore = stores.serviceKeyStore;
     this.sessionStore = stores.sessionStore;
     this.tokenProvider = stores.tokenProvider;
     this.browser = browser || 'system';
-    this.logger = logger || defaultLogger;
+    this.logger = logger || noOpLogger;
   }
 
   /**
