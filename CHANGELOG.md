@@ -11,6 +11,17 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.1.10] - 2025-12-07
+
+### Added
+- **Constructor Validation**: Added validation checks in `AuthBroker` constructor to ensure all required dependencies are provided
+  - Validates that `stores` parameter is not null/undefined
+  - Validates that `serviceKeyStore` is provided
+  - Validates that `sessionStore` is provided
+  - Validates that `tokenProvider` is provided
+  - Throws descriptive error messages if any required dependency is missing
+  - Helps catch configuration errors early during development
+
 ## [0.1.9] - 2025-12-05
 
 ### Changed
