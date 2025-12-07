@@ -42,6 +42,20 @@ export class AuthBroker {
     browser?: string,
     logger?: ILogger
   ) {
+    // Validate that stores and provider are provided and not null/undefined
+    if (!stores) {
+      throw new Error('AuthBroker: stores parameter is required');
+    }
+    if (!stores.serviceKeyStore) {
+      throw new Error('AuthBroker: serviceKeyStore is required');
+    }
+    if (!stores.sessionStore) {
+      throw new Error('AuthBroker: sessionStore is required');
+    }
+    if (!stores.tokenProvider) {
+      throw new Error('AuthBroker: tokenProvider is required');
+    }
+
     this.serviceKeyStore = stores.serviceKeyStore;
     this.sessionStore = stores.sessionStore;
     this.tokenProvider = stores.tokenProvider;
