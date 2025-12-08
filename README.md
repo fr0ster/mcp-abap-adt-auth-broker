@@ -45,6 +45,13 @@ const broker = new AuthBroker({
   tokenProvider: new BtpTokenProvider(),
 });
 
+// Use BtpTokenProvider with custom browser auth port (to avoid port conflicts)
+const brokerWithCustomPort = new AuthBroker({
+  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new AbapSessionStore(['/path/to/destinations']),
+  tokenProvider: new BtpTokenProvider(4001), // Custom port for OAuth callback server
+});
+
 // Get token for destination (loads from .env, validates, refreshes if needed)
 const token = await broker.getToken('TRIAL');
 
@@ -325,6 +332,8 @@ The package uses `ITokenProvider` interface for token acquisition. Two implement
   - No refresh token provided
 
 - **`BtpTokenProvider`** - For BTP/ABAP authentication (full scope)
+  - Constructor accepts optional `browserAuthPort?: number` parameter (default: 3001)
+  - Use custom port to avoid conflicts when running alongside other services (e.g., proxy server)
   - Uses browser-based OAuth2 flow (if no refresh token)
   - Uses refresh token if available
   - Provides refresh token for future use

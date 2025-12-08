@@ -11,6 +11,17 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.1.11] - 2025-12-07
+
+### Changed
+- **Dependency Updates**: Updated dependencies to latest versions
+  - `@mcp-abap-adt/interfaces`: `^0.1.1` → `^0.1.3` (includes new header constants and session ID header constants)
+  - `@mcp-abap-adt/auth-providers`: `^0.1.2` → `^0.1.3` (includes configurable browser auth port and implementation isolation)
+  - `@mcp-abap-adt/auth-stores`: `^0.1.4` → `^0.1.5` (updated to use latest interfaces package)
+- **Documentation Updates**: Updated README with examples for `BtpTokenProvider` with custom browser auth port
+  - Added example showing how to use `BtpTokenProvider(4001)` to avoid port conflicts
+  - Added note about `browserAuthPort` parameter in token provider section
+
 ## [0.1.10] - 2025-12-07
 
 ### Added
