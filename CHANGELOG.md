@@ -11,6 +11,29 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.1.12] - 2025-12-09
+
+### Added
+- **Debugging Environment Variables**: Added comprehensive debugging support via environment variables
+  - `DEBUG_AUTH_BROKER` - Enable/disable logging for auth-broker package (default: `false`)
+  - `LOG_LEVEL` - Control log verbosity: `debug`, `info`, `warn`, `error` (default: `info`)
+  - `DEBUG` - Alternative way to enable debugging (set to `true` or string containing `auth-broker`)
+  - Logging is disabled by default to avoid misleading output in tests
+  - Tests that expect errors use no-op logger to prevent error message output
+
+### Changed
+- **Test Logger Behavior**: Modified `createTestLogger` to require explicit enable via environment variables
+  - No longer enabled by default in test environment (`NODE_ENV === 'test'`)
+  - Requires `DEBUG_AUTH_BROKER=true` or `DEBUG=true` to enable logging
+  - Prevents misleading error output in tests that expect errors
+  - Tests that expect errors now use `noOpLogger` to avoid false error messages
+
+### Fixed
+- **Service URL Handling**: Fixed `serviceUrl` propagation for ABAP sessions
+  - `AuthBroker` now retrieves `serviceUrl` from `serviceKeyStore` if not provided by `tokenProvider`
+  - Ensures ABAP session stores receive required `serviceUrl` even when token provider doesn't return it
+  - Applied to all authentication flows (refresh token, UAA, browser auth)
+
 ## [0.1.11] - 2025-12-07
 
 ### Changed

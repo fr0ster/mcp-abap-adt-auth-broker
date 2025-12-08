@@ -149,11 +149,28 @@ export function getXsuaaDestinations(config?: TestConfig): {
 }
 
 /**
+ * Expand tilde (~) to home directory
+ */
+function expandTilde(filePath: string): string {
+  if (filePath.startsWith('~')) {
+    const os = require('os');
+    return path.join(os.homedir(), filePath.slice(1));
+  }
+  return filePath;
+}
+
+/**
  * Get service keys directory from config
  */
 export function getServiceKeysDir(config?: TestConfig): string | null {
   const cfg = config || loadTestConfig();
-  return cfg.auth_broker?.paths?.service_keys_dir || null;
+  const dir = cfg.auth_broker?.paths?.service_keys_dir;
+  if (!dir) {
+    return null;
+  }
+  // Expand ~ and normalize path
+  const expanded = expandTilde(dir);
+  return path.resolve(expanded);
 }
 
 /**
@@ -161,6 +178,12 @@ export function getServiceKeysDir(config?: TestConfig): string | null {
  */
 export function getSessionsDir(config?: TestConfig): string | null {
   const cfg = config || loadTestConfig();
-  return cfg.auth_broker?.paths?.sessions_dir || null;
+  const dir = cfg.auth_broker?.paths?.sessions_dir;
+  if (!dir) {
+    return null;
+  }
+  // Expand ~ and normalize path
+  const expanded = expandTilde(dir);
+  return path.resolve(expanded);
 }
 

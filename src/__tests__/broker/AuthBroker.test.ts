@@ -8,14 +8,28 @@ import { AuthBroker } from '../../AuthBroker';
 import type { IServiceKeyStore, ISessionStore, IAuthorizationConfig, IConnectionConfig } from '../../stores/interfaces';
 import type { ITokenProvider, TokenProviderResult } from '../../providers';
 import type { IConfig } from '../../types';
+import type { ILogger } from '@mcp-abap-adt/interfaces';
+import { createTestLogger } from '../helpers/testLogger';
+
+// No-op logger for tests that expect errors (to avoid misleading error output)
+const noOpLogger: ILogger = {
+  info: () => {},
+  error: () => {},
+  warn: () => {},
+  debug: () => {},
+};
 
 describe('AuthBroker', () => {
   let mockServiceKeyStore: jest.Mocked<IServiceKeyStore>;
   let mockSessionStore: jest.Mocked<ISessionStore>;
   let mockTokenProvider: jest.Mocked<ITokenProvider>;
   let broker: AuthBroker;
+  let logger: ReturnType<typeof createTestLogger>;
 
   beforeEach(() => {
+    // Create test logger (only enabled if DEBUG_AUTH_BROKER is set)
+    logger = createTestLogger('AUTH-BROKER');
+
     // Create mocks for interfaces
     mockServiceKeyStore = {
       getServiceKey: jest.fn(),
@@ -36,11 +50,13 @@ describe('AuthBroker', () => {
       validateToken: jest.fn(),
     } as any;
 
+    // Use logger (enabled only if DEBUG_AUTH_BROKER is set)
+    // Tests that expect errors should use noOpLogger explicitly
     broker = new AuthBroker({
       serviceKeyStore: mockServiceKeyStore,
       sessionStore: mockSessionStore,
       tokenProvider: mockTokenProvider,
-    });
+    }, undefined, logger);
   });
 
   afterEach(() => {
@@ -50,6 +66,54 @@ describe('AuthBroker', () => {
   describe('constructor', () => {
     it('should create broker with mocked stores and provider', () => {
       expect(broker).toBeInstanceOf(AuthBroker);
+    });
+
+    it('should throw error if serviceKeyStore is missing getServiceKey method', () => {
+      const invalidServiceKeyStore = {
+        getAuthorizationConfig: jest.fn(),
+        getConnectionConfig: jest.fn(),
+        // Missing getServiceKey
+      } as any;
+
+      expect(() => {
+        new AuthBroker({
+          serviceKeyStore: invalidServiceKeyStore,
+          sessionStore: mockSessionStore,
+          tokenProvider: mockTokenProvider,
+        });
+      }).toThrow('serviceKeyStore.getServiceKey must be a function');
+    });
+
+    it('should throw error if sessionStore is missing setConnectionConfig method', () => {
+      const invalidSessionStore = {
+        getAuthorizationConfig: jest.fn(),
+        getConnectionConfig: jest.fn(),
+        setAuthorizationConfig: jest.fn(),
+        // Missing setConnectionConfig
+      } as any;
+
+      expect(() => {
+        new AuthBroker({
+          serviceKeyStore: mockServiceKeyStore,
+          sessionStore: invalidSessionStore,
+          tokenProvider: mockTokenProvider,
+        });
+      }).toThrow('sessionStore.setConnectionConfig must be a function');
+    });
+
+    it('should throw error if tokenProvider is missing getConnectionConfig method', () => {
+      const invalidTokenProvider = {
+        validateToken: jest.fn(),
+        // Missing getConnectionConfig
+      } as any;
+
+      expect(() => {
+        new AuthBroker({
+          serviceKeyStore: mockServiceKeyStore,
+          sessionStore: mockSessionStore,
+          tokenProvider: invalidTokenProvider,
+        });
+      }).toThrow('tokenProvider.getConnectionConfig must be a function');
     });
   });
 
@@ -164,7 +228,14 @@ describe('AuthBroker', () => {
       mockSessionStore.getConnectionConfig.mockResolvedValue(null);
       mockServiceKeyStore.getServiceKey.mockResolvedValue(null);
 
-      await expect(broker.getToken('TEST')).rejects.toThrow('No authentication found');
+      // Use no-op logger to avoid misleading error output in tests that expect errors
+      const errorBroker = new AuthBroker({
+        serviceKeyStore: mockServiceKeyStore,
+        sessionStore: mockSessionStore,
+        tokenProvider: mockTokenProvider,
+      }, undefined, noOpLogger);
+
+      await expect(errorBroker.getToken('TEST')).rejects.toThrow('No authentication found');
     });
   });
 
@@ -243,14 +314,28 @@ describe('AuthBroker', () => {
     it('should throw error if service key not found', async () => {
       mockServiceKeyStore.getServiceKey.mockResolvedValue(null);
 
-      await expect(broker.refreshToken('TEST')).rejects.toThrow('Service key not found');
+      // Use no-op logger to avoid misleading error output in tests that expect errors
+      const errorBroker = new AuthBroker({
+        serviceKeyStore: mockServiceKeyStore,
+        sessionStore: mockSessionStore,
+        tokenProvider: mockTokenProvider,
+      }, undefined, noOpLogger);
+
+      await expect(errorBroker.refreshToken('TEST')).rejects.toThrow('Service key not found');
     });
 
     it('should throw error if service key has no UAA credentials', async () => {
       mockServiceKeyStore.getServiceKey.mockResolvedValue({} as IConfig);
       mockServiceKeyStore.getAuthorizationConfig.mockResolvedValue(null);
 
-      await expect(broker.refreshToken('TEST')).rejects.toThrow('does not contain UAA credentials');
+      // Use no-op logger to avoid misleading error output in tests that expect errors
+      const errorBroker = new AuthBroker({
+        serviceKeyStore: mockServiceKeyStore,
+        sessionStore: mockSessionStore,
+        tokenProvider: mockTokenProvider,
+      }, undefined, noOpLogger);
+
+      await expect(errorBroker.refreshToken('TEST')).rejects.toThrow('does not contain UAA credentials');
     });
   });
 

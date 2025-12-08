@@ -63,8 +63,36 @@ const newToken = await broker.refreshToken('TRIAL');
 
 ### Environment Variables
 
+#### Configuration Variables
+
 - `AUTH_BROKER_PATH` - Colon/semicolon-separated paths for searching `.env` and `.json` files (default: current working directory)
-- `DEBUG_AUTH_LOG` - Set to `true` to enable debug logging (default: `false`)
+
+#### Debugging Variables
+
+- `DEBUG_AUTH_BROKER` - Enable debug logging for `auth-broker` package
+  - Set to `true` to enable logging (default: `false`)
+  - When enabled, logs authentication steps, token operations, and error details
+  - Can be explicitly disabled by setting to `false`
+  - Example: `DEBUG_AUTH_BROKER=true npm test`
+  
+- `LOG_LEVEL` - Control log verbosity level
+  - Values: `debug`, `info`, `warn`, `error` (default: `info`)
+  - `debug` - All messages including detailed debug information
+  - `info` - Informational messages, warnings, and errors
+  - `warn` - Warnings and errors only
+  - `error` - Errors only
+  - Example: `LOG_LEVEL=debug DEBUG_AUTH_BROKER=true npm test`
+
+- `DEBUG` - Alternative way to enable debugging
+  - Set to `true` to enable all debug logging
+  - Or set to a string containing `auth-broker` to enable only this package
+  - Example: `DEBUG=true npm test` or `DEBUG=auth-broker npm test`
+
+**Note**: For debugging related packages:
+- `DEBUG_AUTH_STORES` - Enable logging for `@mcp-abap-adt/auth-stores` package
+- `DEBUG_AUTH_PROVIDERS` - Enable logging for `@mcp-abap-adt/auth-providers` package
+
+**Legacy Support**: `DEBUG_AUTH_LOG` is still supported for backward compatibility (equivalent to `DEBUG_AUTH_BROKER=true LOG_LEVEL=debug`)
 
 ### File Structure
 
