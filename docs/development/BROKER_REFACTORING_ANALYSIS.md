@@ -38,34 +38,49 @@
 ### Token Refresh Flow
 
 **Step 0: Initialize Session with Token (if needed)**
-- [ ] **Prerequisite**: SessionStore must contain initial session (with `serviceUrl` at minimum)
-- [ ] Check if session has `authorizationToken` AND UAA credentials (`uaaUrl`, `uaaClientId`, `uaaClientSecret`)
-- [ ] **If authorizationToken is empty AND UAA fields are empty**:
-  - [ ] Try to get initial values from service key via provider authentication:
-    - [ ] If `serviceKeyStore` and `tokenProvider` are available:
-      - [ ] Get UAA credentials from `serviceKeyStore.getAuthorizationConfig(destination)`
-      - [ ] Authenticate via `tokenProvider.getConnectionConfig(authConfig, options)`
-      - [ ] Save obtained token and UAA credentials to session
-      - [ ] Return new authorization token
-    - [ ] If `serviceKeyStore` is missing OR `tokenProvider` is missing:
-      - [ ] Throw error: "Cannot initialize session: authorizationToken is empty, UAA credentials are empty, and serviceKeyStore/tokenProvider is not available"
-- [ ] **If session has authorizationToken OR UAA credentials** → proceed to Step 1
+- [x] **Prerequisite**: SessionStore must contain initial session (with `serviceUrl` at minimum)
+- [x] Check if session has `authorizationToken` AND UAA credentials (`uaaUrl`, `uaaClientId`, `uaaClientSecret`)
+- [x] **If authorizationToken is empty AND UAA fields are empty**:
+  - [x] Try to get initial values from service key:
+    - [x] If `serviceKeyStore` is available:
+      - [x] Get UAA credentials from `serviceKeyStore.getAuthorizationConfig(destination)`
+      - [x] **Try direct UAA HTTP request first** (if UAA credentials available in service key):
+        - [x] Use `getTokenWithClientCredentials()` for direct UAA `client_credentials` grant
+        - [x] If successful → save token and UAA credentials to session, return token
+      - [x] **If direct UAA fails and `tokenProvider` is available**:
+        - [x] Fallback to `tokenProvider.getConnectionConfig(authConfig, options)`
+        - [x] Save obtained token and UAA credentials to session
+        - [x] Return new authorization token
+      - [x] If `serviceKeyStore` is missing:
+        - [x] Throw error: "Cannot initialize session: authorizationToken is empty, UAA credentials are empty, and serviceKeyStore is not available"
+- [x] **If session has authorizationToken**:
+  - [x] Validate token if `tokenProvider.validateToken()` is available
+  - [x] If valid → return token
+  - [x] If invalid or no validation → proceed to Step 1
+- [x] **If session has UAA credentials (but no token)** → proceed to Step 1
 
 **Step 1: Refresh Token Flow**
-- [ ] Check if refresh token exists in sessionStore
-- [ ] If refresh token exists and refresh succeeds:
-  - [ ] Update session in store
-  - [ ] Return new authorization token
-- [ ] Otherwise → proceed to Step 2
+- [x] Check if refresh token exists in sessionStore
+- [x] If refresh token exists:
+  - [x] Get UAA credentials from session or service key
+  - [x] **Try direct UAA HTTP request first** (if UAA credentials available):
+    - [x] Use `refreshTokenDirect()` for direct UAA `refresh_token` grant
+    - [x] If successful → update session with new token, return token
+  - [x] **If direct UAA fails and `tokenProvider` is available**:
+    - [x] Fallback to `tokenProvider.getConnectionConfig(authConfigWithRefresh, options)`
+    - [x] If successful → update session with new token, return token
+  - [x] If both fail → proceed to Step 2
+- [x] Otherwise → proceed to Step 2
 
 **Step 2: UAA Credentials Flow**
-- [ ] Check if UAA credentials exist (uaaUrl, uaaClientId, uaaClientSecret)
-- [ ] Try to obtain authorization token and refresh token using UAA
-- [ ] If successful:
-  - [ ] Update session in store
-  - [ ] Return new authorization token
-- [ ] If failed → try to update session using service key from serviceKeyStore
-- [ ] If that also fails → return authorization error
+- [x] Check if UAA credentials exist in session or service key (uaaUrl, uaaClientId, uaaClientSecret)
+- [x] **Try direct UAA HTTP request first** (if UAA credentials available):
+  - [x] Use `getTokenWithClientCredentials()` for direct UAA `client_credentials` grant
+  - [x] If successful → update session with new token, return token
+- [x] **If direct UAA fails and `tokenProvider` is available**:
+  - [x] Fallback to `tokenProvider.getConnectionConfig(authConfig, options)`
+  - [x] If successful → update session with new token, return token
+- [x] If all methods failed → throw authorization error with details about which steps failed
 
 ## Analysis: Pros and Cons
 
