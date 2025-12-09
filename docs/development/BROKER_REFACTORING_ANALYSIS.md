@@ -115,8 +115,8 @@
 
 #### 1. **Breaking Changes**
 - **Migration Required**: Existing code using AuthBroker must be updated
-- **Constructor Signature**: All three parameters currently required, change to optional requires careful migration
-- **Backward Compatibility**: Need to maintain compatibility or provide clear migration path
+- **Constructor Signature**: All three parameters currently required, change to optional requires migration
+- **No Backward Compatibility**: Breaking change - old constructor signature is not supported. Migration guide provided.
 
 #### 2. **Error Handling Complexity**
 - **Multiple Failure Points**: Need to handle cases where:
@@ -270,10 +270,10 @@
 - Define required vs. optional session fields
 - Define error conditions and messages
 
-### 3. **Backward Compatibility**
-- [ ] Provide migration guide
-- [ ] Support both old and new constructor signatures (with deprecation warnings)
-- [ ] Maintain existing behavior when all three parameters are provided
+### 3. **Migration Support**
+- [x] Provide migration guide ✅ **COMPLETED** - See `MIGRATION_GUIDE_v0.2.0.md`
+- [x] Clear breaking change documentation ✅ **COMPLETED** - See CHANGELOG.md
+- [x] Examples for new constructor signature ✅ **COMPLETED** - See README.md and Migration Guide
 
 ### 4. **Comprehensive Testing**
 - [ ] Test all combinations:
@@ -328,7 +328,7 @@ const broker = new AuthBroker({
 });
 ```
 
-**Pros**: Clean, flexible, backward compatible
+**Pros**: Clean, flexible, clear API
 **Cons**: Still need to handle optional parameters in logic
 
 ## Conclusion
@@ -336,7 +336,7 @@ const broker = new AuthBroker({
 The proposed changes have **strong benefits** for flexibility and manual session support, but require **careful implementation** to handle:
 1. Optional dependencies (serviceKeyStore, tokenProvider)
 2. Complex error handling
-3. Backward compatibility
+3. Migration from old API (breaking change - no backward compatibility until 1.0.0)
 4. Clear documentation
 
 **Recommendation**: Proceed with implementation using **Alternative 3 (Configuration Object)** with:
