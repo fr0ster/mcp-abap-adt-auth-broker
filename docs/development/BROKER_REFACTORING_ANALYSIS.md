@@ -276,13 +276,20 @@
 - [x] Examples for new constructor signature ✅ **COMPLETED** - See README.md and Migration Guide
 
 ### 4. **Comprehensive Testing**
-- [ ] Test all combinations:
-  - [ ] SessionStore only
-  - [ ] SessionStore + ServiceKeyStore
-  - [ ] SessionStore + TokenProvider
-  - [ ] SessionStore + ServiceKeyStore + TokenProvider
-- [ ] Test all error scenarios
-- [ ] Test manual session creation
+- [x] Test all combinations:
+  - [x] SessionStore only (tested via direct UAA requests when UAA credentials in session) ✅
+  - [x] SessionStore + ServiceKeyStore (tested in Step 0 initialization) ✅
+  - [x] SessionStore + TokenProvider (tested via provider fallback scenarios) ✅
+  - [x] SessionStore + ServiceKeyStore + TokenProvider (tested in default beforeEach setup) ✅
+- [x] Test all error scenarios ✅
+  - [x] Missing serviceUrl error
+  - [x] Missing serviceKeyStore when initialization needed
+  - [x] Missing tokenProvider when needed
+  - [x] Direct UAA failures with provider fallback
+- [x] Test manual session creation ✅
+  - [x] Session with token only
+  - [x] Session with UAA credentials only
+  - [x] Session with refresh token
 
 ### 5. **Documentation**
 - [ ] Clear examples for each use case
