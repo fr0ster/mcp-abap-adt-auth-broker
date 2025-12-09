@@ -11,6 +11,26 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-12-08
+
+### Changed
+- **Package Responsibility Clarification**: This package is now the **exclusive** handler for token refresh and session state persistence
+  - `@mcp-abap-adt/connection` package (v0.2.0) removed token refresh functionality - all token refresh is now handled by this broker
+  - `@mcp-abap-adt/connection` package (v0.2.0) removed session storage functionality - session state persistence is now handled by this broker
+  - This package's `sessionStore` (via `ISessionStore` interface) is responsible for managing session state (authorization config, connection config)
+  - Token refresh operations are exclusively managed by this broker's `tokenProvider` and `serviceKeyStore`
+
+### Migration Notes
+- **For users of `@mcp-abap-adt/connection` v0.1.x**: 
+  - If you were using `connection.refreshToken()` or `connection.canRefreshToken()`, you must now use `authBroker.refreshToken(destination)` instead
+  - If you were using `FileSessionStorage` or custom session storage with connection package, you must now use `authBroker` with appropriate `sessionStore` implementation
+  - Connection package now focuses solely on HTTP communication and session headers (cookies, CSRF tokens)
+  - All token lifecycle management and session state persistence must go through this broker
+
+### Dependencies
+- Updated to work with `@mcp-abap-adt/connection` v0.2.0+ (which removed token refresh and session storage)
+- Updated to work with `@mcp-abap-adt/interfaces` v0.1.4+ (which removed session state methods from `IAbapConnection`)
+
 ## [0.1.12] - 2025-12-09
 
 ### Added
