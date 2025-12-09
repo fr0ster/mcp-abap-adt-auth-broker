@@ -3,7 +3,7 @@
  * JWT authentication broker for MCP ABAP ADT server
  */
 
-export { AuthBroker } from './AuthBroker';
+export { AuthBroker, type AuthBrokerConfig } from './AuthBroker';
 // Main interfaces for consumers - stores return values through these
 // These are the ONLY types consumers should use
 export type { IAuthorizationConfig, IConnectionConfig, IServiceKeyStore, ISessionStore } from './stores/interfaces';

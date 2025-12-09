@@ -17,60 +17,62 @@ const noOpLogger: ILogger = {
 };
 
 /**
+ * Configuration object for AuthBroker constructor
+ */
+export interface AuthBrokerConfig {
+  /** Session store (required) - stores and retrieves session data */
+  sessionStore: ISessionStore;
+  /** Service key store (optional) - stores and retrieves service keys */
+  serviceKeyStore?: IServiceKeyStore;
+  /** Token provider (required) - handles token refresh and authentication flows */
+  tokenProvider: ITokenProvider;
+}
+
+/**
  * AuthBroker manages JWT authentication tokens for destinations
  */
 export class AuthBroker {
   private browser: string | undefined;
   private logger: ILogger;
-  private serviceKeyStore: IServiceKeyStore;
+  private serviceKeyStore: IServiceKeyStore | undefined;
   private sessionStore: ISessionStore;
   private tokenProvider: ITokenProvider;
 
   /**
    * Create a new AuthBroker instance
-   * @param stores Object with stores and token provider
-   *               - serviceKeyStore: Store for service keys
-   *               - sessionStore: Store for session data
-   *               - tokenProvider: Token provider implementing ITokenProvider interface
+   * @param config Configuration object with stores and token provider
+   *               - sessionStore: Store for session data (required)
+   *               - serviceKeyStore: Store for service keys (optional)
+   *               - tokenProvider: Token provider implementing ITokenProvider interface (required)
    * @param browser Optional browser name for authentication (chrome, edge, firefox, system, none).
    *                Default: 'system' (system default browser).
    *                Use 'none' to print URL instead of opening browser.
    * @param logger Optional logger instance implementing ILogger interface. If not provided, uses no-op logger.
    */
   constructor(
-    stores: { serviceKeyStore: IServiceKeyStore; sessionStore: ISessionStore; tokenProvider: ITokenProvider },
+    config: AuthBrokerConfig,
     browser?: string,
     logger?: ILogger
   ) {
-    // Validate that stores and provider are provided and not null/undefined
-    if (!stores) {
-      throw new Error('AuthBroker: stores parameter is required');
+    // Validate that config is provided
+    if (!config) {
+      throw new Error('AuthBroker: config parameter is required');
     }
-    if (!stores.serviceKeyStore) {
-      throw new Error('AuthBroker: serviceKeyStore is required');
-    }
-    if (!stores.sessionStore) {
+
+    // Validate required sessionStore
+    if (!config.sessionStore) {
       throw new Error('AuthBroker: sessionStore is required');
     }
-    if (!stores.tokenProvider) {
+
+    // Validate required tokenProvider
+    if (!config.tokenProvider) {
       throw new Error('AuthBroker: tokenProvider is required');
     }
 
     // Validate that stores and provider are correctly instantiated (have required methods)
-    const serviceKeyStore = stores.serviceKeyStore;
-    const sessionStore = stores.sessionStore;
-    const tokenProvider = stores.tokenProvider;
-
-    // Check serviceKeyStore methods
-    if (typeof serviceKeyStore.getServiceKey !== 'function') {
-      throw new Error('AuthBroker: serviceKeyStore.getServiceKey must be a function');
-    }
-    if (typeof serviceKeyStore.getAuthorizationConfig !== 'function') {
-      throw new Error('AuthBroker: serviceKeyStore.getAuthorizationConfig must be a function');
-    }
-    if (typeof serviceKeyStore.getConnectionConfig !== 'function') {
-      throw new Error('AuthBroker: serviceKeyStore.getConnectionConfig must be a function');
-    }
+    const sessionStore = config.sessionStore;
+    const tokenProvider = config.tokenProvider;
+    const serviceKeyStore = config.serviceKeyStore;
 
     // Check sessionStore methods
     if (typeof sessionStore.getAuthorizationConfig !== 'function') {
@@ -92,6 +94,19 @@ export class AuthBroker {
     }
     // validateToken is optional, so we don't check it
 
+    // Check serviceKeyStore methods (if provided)
+    if (serviceKeyStore) {
+      if (typeof serviceKeyStore.getServiceKey !== 'function') {
+        throw new Error('AuthBroker: serviceKeyStore.getServiceKey must be a function');
+      }
+      if (typeof serviceKeyStore.getAuthorizationConfig !== 'function') {
+        throw new Error('AuthBroker: serviceKeyStore.getAuthorizationConfig must be a function');
+      }
+      if (typeof serviceKeyStore.getConnectionConfig !== 'function') {
+        throw new Error('AuthBroker: serviceKeyStore.getConnectionConfig must be a function');
+      }
+    }
+
     this.serviceKeyStore = serviceKeyStore;
     this.sessionStore = sessionStore;
     this.tokenProvider = tokenProvider;
@@ -99,242 +114,267 @@ export class AuthBroker {
     this.logger = logger || noOpLogger;
 
     // Log successful initialization
-    this.logger?.debug('AuthBroker initialized: serviceKeyStore(ok), sessionStore(ok), tokenProvider(ok)');
+    const hasServiceKeyStore = !!this.serviceKeyStore;
+    this.logger?.debug(`AuthBroker initialized: sessionStore(ok), serviceKeyStore(${hasServiceKeyStore ? 'ok' : 'none'}), tokenProvider(ok)`);
   }
 
   /**
    * Get authentication token for destination.
-   * Tries to load from session store, validates it, and refreshes if needed using a fallback chain.
+   * Implements a three-step flow: Step 0 (initialize), Step 1 (refresh), Step 2 (UAA).
    * 
-   * **Fallback Chain:**
-   * 1. **Check session**: Load token from session store and validate it
-   *    - If token is valid, return it immediately
-   *    - If token is invalid or missing, continue to next step
+   * **Flow:**
+   * **Step 0: Initialize Session with Token (if needed)**
+   * - Check if session has `authorizationToken` AND UAA credentials
+   * - If both are empty AND serviceKeyStore and tokenProvider are available:
+   *   - Initialize token/UAA from service key via provider
+   * - If session has token OR UAA credentials → proceed to Step 1
    * 
-   * 2. **Check service key**: Verify that service key exists
-   *    - If no service key found, throw error
+   * **Step 1: Refresh Token Flow**
+   * - Check if refresh token exists in session
+   * - If refresh token exists and refresh succeeds → return new token
+   * - Otherwise → proceed to Step 2
    * 
-   * 3. **Try refresh token**: If refresh token is available in session, attempt to refresh using it (via tokenProvider)
-   *    - If successful, save new token to session and return it
-   *    - If failed, continue to next step
-   * 
-   * 4. **Try UAA (client_credentials)**: Attempt to get token using UAA credentials (via tokenProvider)
-   *    - If UAA parameters are available and authentication succeeds, save token to session and return it
-   *    - If failed or parameters missing, continue to next step
-   * 
-   * 5. **Try browser authentication**: Attempt browser-based OAuth2 flow using service key (via tokenProvider)
-   *    - If successful, save token and refresh token to session and return it
-   *    - If failed, continue to next step
-   * 
-   * 6. **Throw error**: If all authentication methods failed, throw comprehensive error with details
-   * 
-   * **Note**: Token validation is performed only when checking existing session (step 1).
-   * Tokens obtained through refresh/UAA/browser authentication are not validated before being saved.
+   * **Step 2: UAA Credentials Flow**
+   * - Check if UAA credentials exist in session
+   * - Try to obtain token using UAA
+   * - If successful → return new token
+   * - If failed → try service key (if available) → return error if all failed
    * 
    * @param destination Destination name (e.g., "TRIAL")
    * @returns Promise that resolves to JWT token string
-   * @throws Error if neither session data nor service key found, or if all authentication methods failed
+   * @throws Error if session initialization fails or all authentication methods failed
    */
   async getToken(destination: string): Promise<string> {
     this.logger?.debug(`Getting token for destination: ${destination}`);
     
-    // Step 1: Check if session exists and token is valid
+    // Step 0: Initialize Session with Token (if needed)
     const connConfig = await this.sessionStore.getConnectionConfig(destination);
-    if (connConfig?.authorizationToken) {
-      this.logger?.debug(`Session found: token(${connConfig.authorizationToken.length} chars), serviceUrl(${connConfig.serviceUrl ? 'yes' : 'no'})`);
-      
-      // Validate token if provider supports validation and we have service URL
-      if (this.tokenProvider.validateToken && connConfig.serviceUrl) {
-        this.logger?.debug(`Validating token for ${destination}`);
-        const isValid = await this.tokenProvider.validateToken(connConfig.authorizationToken, connConfig.serviceUrl);
-        if (isValid) {
-          this.logger?.info(`Token valid for ${destination}: token(${connConfig.authorizationToken.length} chars)`);
-          return connConfig.authorizationToken;
-        }
-        this.logger?.debug(`Token invalid for ${destination}, continuing to refresh`);
-      } else {
-        // No service URL or provider doesn't support validation - just return token
-        this.logger?.info(`Token found for ${destination} (no validation): token(${connConfig.authorizationToken.length} chars)`);
-        return connConfig.authorizationToken;
-      }
-    } else {
-      this.logger?.debug(`No session found for ${destination}`);
-    }
-
-    // Step 2: No valid session, check if we have service key
-    this.logger?.debug(`Checking service key for ${destination}`);
-    const serviceKey = await this.serviceKeyStore.getServiceKey(destination);
-    if (!serviceKey) {
-      this.logger?.error(`No service key found for ${destination}`);
+    const authConfig = await this.sessionStore.getAuthorizationConfig(destination);
+    
+    // Check if session has serviceUrl (required)
+    if (!connConfig?.serviceUrl) {
+      this.logger?.error(`Session for destination "${destination}" is missing required field 'serviceUrl'. SessionStore must contain initial session with serviceUrl.`);
       throw new Error(
-        `No authentication found for destination "${destination}". ` +
-        `No session data and no service key found.`
+        `Session for destination "${destination}" is missing required field 'serviceUrl'. ` +
+        `SessionStore must contain initial session with serviceUrl.`
       );
     }
 
-    // Get authorization config from service key
-    const authConfig = await this.serviceKeyStore.getAuthorizationConfig(destination);
-    if (!authConfig) {
-      this.logger?.error(`Service key for ${destination} missing UAA credentials`);
-      throw new Error(`Service key for destination "${destination}" does not contain UAA credentials`);
-    }
+    // Check if we have token or UAA credentials
+    const hasToken = !!connConfig?.authorizationToken;
+    const hasUaaCredentials = !!(authConfig?.uaaUrl && authConfig?.uaaClientId && authConfig?.uaaClientSecret);
+    
+    this.logger?.debug(`Step 0: Session check for ${destination}: hasToken(${hasToken}), hasUaaCredentials(${hasUaaCredentials}), serviceUrl(${connConfig.serviceUrl ? 'yes' : 'no'})`);
 
-    this.logger?.debug(`Service key loaded for ${destination}: uaaUrl(${authConfig.uaaUrl.substring(0, 40)}...)`);
+    // If token is empty AND UAA fields are empty, try to initialize from service key
+    if (!hasToken && !hasUaaCredentials) {
+      this.logger?.debug(`Step 0: Token and UAA credentials are empty for ${destination}, attempting initialization from service key`);
+      
+      if (!this.serviceKeyStore) {
+        this.logger?.error(`Step 0: Cannot initialize session for ${destination}: authorizationToken is empty, UAA credentials are empty, and serviceKeyStore is not available`);
+        throw new Error(
+          `Cannot initialize session for destination "${destination}": authorizationToken is empty, UAA credentials are empty, and serviceKeyStore is not available. ` +
+          `Provide serviceKeyStore and tokenProvider to initialize from service key.`
+        );
+      }
 
-    // Get refresh token from session (if exists)
-    const sessionAuthConfig = await this.sessionStore.getAuthorizationConfig(destination);
-    const refreshToken = sessionAuthConfig?.refreshToken || authConfig.refreshToken;
-    this.logger?.debug(`Refresh token check for ${destination}: hasRefreshToken(${!!refreshToken})`);
-
-    let tokenResult: { connectionConfig: IConnectionConfig; refreshToken?: string };
-    let lastError: Error | null = null;
-
-    // Step 3: Try to refresh using refresh token (if available) via tokenProvider
-    if (refreshToken) {
       try {
-        this.logger?.debug(`Trying refresh token flow for ${destination}`);
-        const authConfigWithRefresh = { ...authConfig, refreshToken };
-        tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithRefresh, {
+        // Get UAA credentials from service key
+        const serviceKeyAuthConfig = await this.serviceKeyStore.getAuthorizationConfig(destination);
+        if (!serviceKeyAuthConfig) {
+          this.logger?.error(`Step 0: Service key for ${destination} missing UAA credentials`);
+          throw new Error(`Service key for destination "${destination}" does not contain UAA credentials`);
+        }
+
+        this.logger?.debug(`Step 0: Authenticating via provider for ${destination} using service key UAA credentials`);
+        
+        // Authenticate via provider
+        const tokenResult = await this.tokenProvider.getConnectionConfig(serviceKeyAuthConfig, {
           browser: this.browser,
           logger: this.logger,
         });
-        
-      const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
-      this.logger?.info(`Token refreshed for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);
+
+        const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
+        this.logger?.info(`Step 0: Token initialized for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);
+
+        // Get serviceUrl from service key store if not in connectionConfig
+        const serviceKeyConnConfig = await this.serviceKeyStore.getConnectionConfig(destination);
+        const connectionConfigWithServiceUrl: IConnectionConfig = {
+          ...tokenResult.connectionConfig,
+          serviceUrl: tokenResult.connectionConfig.serviceUrl || serviceKeyConnConfig?.serviceUrl || connConfig.serviceUrl,
+        };
+
+        // Save token and UAA credentials to session
+        await this.sessionStore.setConnectionConfig(destination, connectionConfigWithServiceUrl);
+        await this.sessionStore.setAuthorizationConfig(destination, {
+          ...serviceKeyAuthConfig,
+          refreshToken: tokenResult.refreshToken || serviceKeyAuthConfig.refreshToken,
+        });
+
+        return tokenResult.connectionConfig.authorizationToken!;
+      } catch (error: any) {
+        this.logger?.error(`Step 0: Failed to initialize session for ${destination}: ${error.message}`);
+        throw new Error(
+          `Cannot initialize session for destination "${destination}": ${error.message}. ` +
+          `Ensure serviceKeyStore contains valid service key with UAA credentials.`
+        );
+      }
+    }
+
+    // If we have a token, validate it first
+    if (hasToken && connConfig.authorizationToken) {
+      this.logger?.debug(`Step 0: Token found for ${destination}, validating`);
       
-      // Get serviceUrl from service key store if not in connectionConfig (required for ABAP stores)
-      // For XSUAA service keys, serviceUrl may not exist, which is fine for BTP/XSUAA stores
-      const serviceKeyConnConfig = await this.serviceKeyStore.getConnectionConfig(destination);
-      const connectionConfigWithServiceUrl: IConnectionConfig = {
-        ...tokenResult.connectionConfig,
-        serviceUrl: tokenResult.connectionConfig.serviceUrl || serviceKeyConnConfig?.serviceUrl,
-      };
+      // Validate token if provider supports validation and we have service URL
+      if (this.tokenProvider.validateToken && connConfig.serviceUrl) {
+        const isValid = await this.tokenProvider.validateToken(connConfig.authorizationToken, connConfig.serviceUrl);
+        if (isValid) {
+          this.logger?.info(`Step 0: Token valid for ${destination}: token(${connConfig.authorizationToken.length} chars)`);
+          return connConfig.authorizationToken;
+        }
+        this.logger?.debug(`Step 0: Token invalid for ${destination}, continuing to refresh`);
+      } else {
+        // No service URL or provider doesn't support validation - just return token
+        this.logger?.info(`Step 0: Token found for ${destination} (no validation): token(${connConfig.authorizationToken.length} chars)`);
+        return connConfig.authorizationToken;
+      }
+    }
+
+    // Step 1: Refresh Token Flow
+    this.logger?.debug(`Step 1: Checking refresh token for ${destination}`);
+    const refreshToken = authConfig?.refreshToken;
+    
+    if (refreshToken) {
+      try {
+        this.logger?.debug(`Step 1: Trying refresh token flow for ${destination}`);
         
-      // Update or create session with new token (stores handle creation if session doesn't exist)
-      await this.sessionStore.setConnectionConfig(destination, connectionConfigWithServiceUrl);
+        // Get UAA credentials from session or service key
+        const uaaCredentials = authConfig || (this.serviceKeyStore ? await this.serviceKeyStore.getAuthorizationConfig(destination) : null);
+        if (!uaaCredentials) {
+          throw new Error('UAA credentials not found in session and serviceKeyStore not available');
+        }
+
+        const authConfigWithRefresh = { ...uaaCredentials, refreshToken };
+        const tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithRefresh, {
+          browser: this.browser,
+          logger: this.logger,
+        });
+
+        const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
+        this.logger?.info(`Step 1: Token refreshed for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);
+
+        // Get serviceUrl from session or service key
+        const serviceUrl = connConfig.serviceUrl || 
+          (this.serviceKeyStore ? (await this.serviceKeyStore.getConnectionConfig(destination))?.serviceUrl : null) ||
+          connConfig.serviceUrl;
+
+        const connectionConfigWithServiceUrl: IConnectionConfig = {
+          ...tokenResult.connectionConfig,
+          serviceUrl: tokenResult.connectionConfig.serviceUrl || serviceUrl,
+        };
+
+        // Update session with new token
+        await this.sessionStore.setConnectionConfig(destination, connectionConfigWithServiceUrl);
         if (tokenResult.refreshToken) {
           await this.sessionStore.setAuthorizationConfig(destination, {
-            ...authConfig,
+            ...uaaCredentials,
             refreshToken: tokenResult.refreshToken,
           });
         }
-        
-        return tokenResult.connectionConfig.authorizationToken;
+
+        return tokenResult.connectionConfig.authorizationToken!;
       } catch (error: any) {
-        lastError = error;
-        this.logger?.debug(`Refresh token flow failed for ${destination}: ${error.message}, trying UAA`);
-        // Continue to next step
+        this.logger?.debug(`Step 1: Refresh token flow failed for ${destination}: ${error.message}, trying Step 2`);
+        // Continue to Step 2
       }
+    } else {
+      this.logger?.debug(`Step 1: No refresh token found for ${destination}, proceeding to Step 2`);
     }
 
-    // Step 4: Try UAA (client_credentials) via tokenProvider (without refresh token)
-    // TokenProvider should try client_credentials if refresh token is not provided
+    // Step 2: UAA Credentials Flow
+    this.logger?.debug(`Step 2: Checking UAA credentials for ${destination}`);
+    
+    // Get UAA credentials from session or service key
+    const uaaCredentials = authConfig || (this.serviceKeyStore ? await this.serviceKeyStore.getAuthorizationConfig(destination) : null);
+    
+    if (!uaaCredentials || !uaaCredentials.uaaUrl || !uaaCredentials.uaaClientId || !uaaCredentials.uaaClientSecret) {
+      const errorMessage = `Step 2: UAA credentials not found for ${destination}. ` +
+        `Session has no UAA credentials${this.serviceKeyStore ? ' and serviceKeyStore has no UAA credentials' : ' and serviceKeyStore is not available'}.`;
+      
+      this.logger?.error(errorMessage);
+      throw new Error(errorMessage);
+    }
+
     try {
-      this.logger?.debug(`Trying UAA (client_credentials) flow for ${destination}`);
-      const authConfigWithoutRefresh = { ...authConfig, refreshToken: undefined };
-      tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithoutRefresh, {
+      this.logger?.debug(`Step 2: Trying UAA (client_credentials) flow for ${destination}`);
+      
+      const authConfigWithoutRefresh = { ...uaaCredentials, refreshToken: undefined };
+      const tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithoutRefresh, {
         browser: this.browser,
         logger: this.logger,
       });
-      
-      const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
-      this.logger?.info(`Token obtained via UAA for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);
-      
-      // Get serviceUrl from service key store if not in connectionConfig (required for ABAP stores)
-      // For XSUAA service keys, serviceUrl may not exist, which is fine for BTP/XSUAA stores
-      const serviceKeyConnConfig = await this.serviceKeyStore.getConnectionConfig(destination);
-      const connectionConfigWithServiceUrl: IConnectionConfig = {
-        ...tokenResult.connectionConfig,
-        serviceUrl: tokenResult.connectionConfig.serviceUrl || serviceKeyConnConfig?.serviceUrl,
-      };
-      
-      // Update or create session with new token (stores handle creation if session doesn't exist)
-      await this.sessionStore.setConnectionConfig(destination, connectionConfigWithServiceUrl);
-      if (tokenResult.refreshToken) {
-        await this.sessionStore.setAuthorizationConfig(destination, {
-          ...authConfig,
-          refreshToken: tokenResult.refreshToken,
-        });
-      }
-      
-      return tokenResult.connectionConfig.authorizationToken;
-    } catch (error: any) {
-      lastError = error;
-      this.logger?.debug(`UAA flow failed for ${destination}: ${error.message}, trying browser`);
-      // Continue to next step
-    }
 
-    // Step 5: Try browser authentication via tokenProvider (should be last resort)
-    // TokenProvider should use browser auth if refresh token and client_credentials don't work
-    try {
-      this.logger?.debug(`Trying browser authentication flow for ${destination}`);
-      const authConfigForBrowser = { ...authConfig, refreshToken: undefined };
-      tokenResult = await this.tokenProvider.getConnectionConfig(authConfigForBrowser, {
-        browser: this.browser,
-        logger: this.logger,
-      });
-      
       const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
-      this.logger?.info(`Token obtained via browser for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);
-      
-      // Get serviceUrl from service key store if not in connectionConfig (required for ABAP stores)
-      // For XSUAA service keys, serviceUrl may not exist, which is fine for BTP/XSUAA stores
-      const serviceKeyConnConfig = await this.serviceKeyStore.getConnectionConfig(destination);
+      this.logger?.info(`Step 2: Token obtained via UAA for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);
+
+      // Get serviceUrl from session or service key
+      const serviceUrl = connConfig.serviceUrl || 
+        (this.serviceKeyStore ? (await this.serviceKeyStore.getConnectionConfig(destination))?.serviceUrl : null) ||
+        connConfig.serviceUrl;
+
       const connectionConfigWithServiceUrl: IConnectionConfig = {
         ...tokenResult.connectionConfig,
-        serviceUrl: tokenResult.connectionConfig.serviceUrl || serviceKeyConnConfig?.serviceUrl,
+        serviceUrl: tokenResult.connectionConfig.serviceUrl || serviceUrl,
       };
-      
-      // Update or create session with new token (stores handle creation if session doesn't exist)
+
+      // Update session with new token
       await this.sessionStore.setConnectionConfig(destination, connectionConfigWithServiceUrl);
       if (tokenResult.refreshToken) {
         await this.sessionStore.setAuthorizationConfig(destination, {
-          ...authConfig,
+          ...uaaCredentials,
           refreshToken: tokenResult.refreshToken,
         });
       }
-      
-      return tokenResult.connectionConfig.authorizationToken;
+
+      return tokenResult.connectionConfig.authorizationToken!;
     } catch (error: any) {
-      lastError = error;
-      // Step 6: All methods failed - throw error
+      this.logger?.error(`Step 2: UAA flow failed for ${destination}: ${error.message}`);
+      
+      // If we have serviceKeyStore, we already tried it, so throw error
       const errorMessage = `All authentication methods failed for destination "${destination}". ` +
-        `Refresh token: ${refreshToken ? 'failed' : 'not available'}. ` +
-        `UAA: ${authConfig.uaaUrl && authConfig.uaaClientId && authConfig.uaaClientSecret ? 'failed' : 'parameters missing'}. ` +
-        `Browser authentication: failed (${error.message})`;
+        `Step 1 (refresh token): ${refreshToken ? 'failed' : 'not available'}. ` +
+        `Step 2 (UAA credentials): failed (${error.message}).`;
       
-      this.logger?.error(`All auth methods failed for ${destination}: refreshToken(${refreshToken ? 'failed' : 'none'}), UAA(${authConfig.uaaUrl && authConfig.uaaClientId && authConfig.uaaClientSecret ? 'failed' : 'missing'}), browser(failed: ${error.message})`);
+      this.logger?.error(errorMessage);
       throw new Error(errorMessage);
     }
   }
 
   /**
-   * Force refresh token for destination using service key.
-   * If no refresh token exists, starts browser authentication flow.
+   * Force refresh token for destination.
+   * Uses refresh token from session if available, otherwise uses UAA credentials from session or service key.
    * @param destination Destination name (e.g., "TRIAL")
    * @returns Promise that resolves to new JWT token string
    */
   async refreshToken(destination: string): Promise<string> {
     this.logger?.debug(`Force refreshing token for destination: ${destination}`);
     
-    // Load service key
-    const serviceKey = await this.serviceKeyStore.getServiceKey(destination);
-    if (!serviceKey) {
-      this.logger?.error(`Service key not found for ${destination}`);
+    // Get authorization config from session or service key
+    const sessionAuthConfig = await this.sessionStore.getAuthorizationConfig(destination);
+    const serviceKeyAuthConfig = this.serviceKeyStore 
+      ? await this.serviceKeyStore.getAuthorizationConfig(destination) 
+      : null;
+    
+    const authConfig = sessionAuthConfig || serviceKeyAuthConfig;
+    if (!authConfig) {
+      this.logger?.error(`Authorization config not found for ${destination}`);
       throw new Error(
-        `Service key not found for destination "${destination}".`
+        `Authorization config not found for destination "${destination}". ` +
+        `Session has no UAA credentials${this.serviceKeyStore ? ' and serviceKeyStore has no UAA credentials' : ' and serviceKeyStore is not available'}.`
       );
     }
 
-    // Get authorization config from service key
-    const authConfig = await this.serviceKeyStore.getAuthorizationConfig(destination);
-    if (!authConfig) {
-      this.logger?.error(`Service key for ${destination} missing UAA credentials`);
-      throw new Error(`Service key for destination "${destination}" does not contain UAA credentials`);
-    }
-
-    // Get refresh token from session
-    const sessionAuthConfig = await this.sessionStore.getAuthorizationConfig(destination);
+    // Get refresh token from session or service key
     const refreshToken = sessionAuthConfig?.refreshToken || authConfig.refreshToken;
     this.logger?.debug(`Refresh token check for ${destination}: hasRefreshToken(${!!refreshToken})`);
     
@@ -349,12 +389,17 @@ export class AuthBroker {
     const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
     this.logger?.info(`Token refreshed for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);
 
-    // Get serviceUrl from service key store if not in connectionConfig (required for ABAP stores)
-    // For XSUAA service keys, serviceUrl may not exist, which is fine for BTP/XSUAA stores
-    const serviceKeyConnConfig = await this.serviceKeyStore.getConnectionConfig(destination);
+    // Get serviceUrl from session or service key
+    const connConfig = await this.sessionStore.getConnectionConfig(destination);
+    const serviceKeyConnConfig = this.serviceKeyStore 
+      ? await this.serviceKeyStore.getConnectionConfig(destination) 
+      : null;
+    
     const connectionConfigWithServiceUrl: IConnectionConfig = {
       ...tokenResult.connectionConfig,
-      serviceUrl: tokenResult.connectionConfig.serviceUrl || serviceKeyConnConfig?.serviceUrl,
+      serviceUrl: tokenResult.connectionConfig.serviceUrl || 
+        connConfig?.serviceUrl || 
+        serviceKeyConnConfig?.serviceUrl,
     };
     
     // Update or create session with new token (stores handle creation if session doesn't exist)
@@ -366,7 +411,7 @@ export class AuthBroker {
       });
     }
 
-    return tokenResult.connectionConfig.authorizationToken;
+    return tokenResult.connectionConfig.authorizationToken!;
   }
 
   /**
@@ -385,15 +430,20 @@ export class AuthBroker {
       return sessionAuthConfig;
     }
     
-    // Fall back to service key store (has UAA credentials)
-    this.logger?.debug(`Checking service key store for authorization config: ${destination}`);
-    const serviceKeyAuthConfig = await this.serviceKeyStore.getAuthorizationConfig(destination);
-    if (serviceKeyAuthConfig) {
-      this.logger?.debug(`Authorization config from service key for ${destination}: hasUaaUrl(${!!serviceKeyAuthConfig.uaaUrl})`);
+    // Fall back to service key store (has UAA credentials) if available
+    if (this.serviceKeyStore) {
+      this.logger?.debug(`Checking service key store for authorization config: ${destination}`);
+      const serviceKeyAuthConfig = await this.serviceKeyStore.getAuthorizationConfig(destination);
+      if (serviceKeyAuthConfig) {
+        this.logger?.debug(`Authorization config from service key for ${destination}: hasUaaUrl(${!!serviceKeyAuthConfig.uaaUrl})`);
+        return serviceKeyAuthConfig;
+      }
     } else {
-      this.logger?.debug(`No authorization config found for ${destination}`);
+      this.logger?.debug(`Service key store not available for ${destination}`);
     }
-    return serviceKeyAuthConfig;
+    
+    this.logger?.debug(`No authorization config found for ${destination}`);
+    return null;
   }
 
   /**
@@ -411,14 +461,19 @@ export class AuthBroker {
       return sessionConnConfig;
     }
     
-    // Fall back to service key store (has URLs but no tokens)
-    const serviceKeyConnConfig = await this.serviceKeyStore.getConnectionConfig(destination);
-    if (serviceKeyConnConfig) {
-      this.logger?.debug(`Connection config from service key for ${destination}: serviceUrl(${serviceKeyConnConfig.serviceUrl ? 'yes' : 'no'}), token(none)`);
+    // Fall back to service key store (has URLs but no tokens) if available
+    if (this.serviceKeyStore) {
+      const serviceKeyConnConfig = await this.serviceKeyStore.getConnectionConfig(destination);
+      if (serviceKeyConnConfig) {
+        this.logger?.debug(`Connection config from service key for ${destination}: serviceUrl(${serviceKeyConnConfig.serviceUrl ? 'yes' : 'no'}), token(none)`);
+        return serviceKeyConnConfig;
+      }
     } else {
-      this.logger?.debug(`No connection config found for ${destination}`);
+      this.logger?.debug(`Service key store not available for ${destination}`);
     }
-    return serviceKeyConnConfig;
+    
+    this.logger?.debug(`No connection config found for ${destination}`);
+    return null;
   }
 
 }
