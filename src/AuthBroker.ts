@@ -5,6 +5,7 @@
 import { ILogger, IConfig } from '@mcp-abap-adt/interfaces';
 import { IServiceKeyStore, ISessionStore, IAuthorizationConfig, IConnectionConfig } from './stores/interfaces';
 import { ITokenProvider } from './providers';
+import axios from 'axios';
 
 /**
  * No-op logger implementation for default fallback when logger is not provided
@@ -24,26 +25,35 @@ export interface AuthBrokerConfig {
   sessionStore: ISessionStore;
   /** Service key store (optional) - stores and retrieves service keys */
   serviceKeyStore?: IServiceKeyStore;
-  /** Token provider (required) - handles token refresh and authentication flows */
-  tokenProvider: ITokenProvider;
+  /** Token provider (optional) - handles token refresh and authentication flows. If not provided, direct UAA HTTP requests will be used when UAA credentials are available */
+  tokenProvider?: ITokenProvider;
 }
 
 /**
  * AuthBroker manages JWT authentication tokens for destinations
  */
+/**
+ * Result of direct UAA token request
+ */
+interface UaaTokenResult {
+  accessToken: string;
+  refreshToken?: string;
+  expiresIn?: number;
+}
+
 export class AuthBroker {
   private browser: string | undefined;
   private logger: ILogger;
   private serviceKeyStore: IServiceKeyStore | undefined;
   private sessionStore: ISessionStore;
-  private tokenProvider: ITokenProvider;
+  private tokenProvider: ITokenProvider | undefined;
 
   /**
    * Create a new AuthBroker instance
    * @param config Configuration object with stores and token provider
    *               - sessionStore: Store for session data (required)
    *               - serviceKeyStore: Store for service keys (optional)
-   *               - tokenProvider: Token provider implementing ITokenProvider interface (required)
+   *               - tokenProvider: Token provider implementing ITokenProvider interface (optional). If not provided, direct UAA HTTP requests will be used when UAA credentials are available
    * @param browser Optional browser name for authentication (chrome, edge, firefox, system, none).
    *                Default: 'system' (system default browser).
    *                Use 'none' to print URL instead of opening browser.
@@ -62,11 +72,6 @@ export class AuthBroker {
     // Validate required sessionStore
     if (!config.sessionStore) {
       throw new Error('AuthBroker: sessionStore is required');
-    }
-
-    // Validate required tokenProvider
-    if (!config.tokenProvider) {
-      throw new Error('AuthBroker: tokenProvider is required');
     }
 
     // Validate that stores and provider are correctly instantiated (have required methods)
@@ -88,11 +93,13 @@ export class AuthBroker {
       throw new Error('AuthBroker: sessionStore.setConnectionConfig must be a function');
     }
 
-    // Check tokenProvider methods
-    if (typeof tokenProvider.getConnectionConfig !== 'function') {
-      throw new Error('AuthBroker: tokenProvider.getConnectionConfig must be a function');
+    // Check tokenProvider methods (if provided)
+    if (tokenProvider) {
+      if (typeof tokenProvider.getConnectionConfig !== 'function') {
+        throw new Error('AuthBroker: tokenProvider.getConnectionConfig must be a function');
+      }
+      // validateToken is optional, so we don't check it
     }
-    // validateToken is optional, so we don't check it
 
     // Check serviceKeyStore methods (if provided)
     if (serviceKeyStore) {
@@ -115,7 +122,105 @@ export class AuthBroker {
 
     // Log successful initialization
     const hasServiceKeyStore = !!this.serviceKeyStore;
-    this.logger?.debug(`AuthBroker initialized: sessionStore(ok), serviceKeyStore(${hasServiceKeyStore ? 'ok' : 'none'}), tokenProvider(ok)`);
+    const hasTokenProvider = !!this.tokenProvider;
+    this.logger?.debug(`AuthBroker initialized: sessionStore(ok), serviceKeyStore(${hasServiceKeyStore ? 'ok' : 'none'}), tokenProvider(${hasTokenProvider ? 'ok' : 'none'})`);
+  }
+
+  /**
+   * Refresh token using refresh_token grant type (direct UAA HTTP request)
+   * @param refreshToken Refresh token
+   * @param authConfig UAA authorization configuration
+   * @returns Promise that resolves to new tokens
+   */
+  private async refreshTokenDirect(refreshToken: string, authConfig: IAuthorizationConfig): Promise<UaaTokenResult> {
+    if (!authConfig.uaaUrl || !authConfig.uaaClientId || !authConfig.uaaClientSecret) {
+      throw new Error('UAA credentials incomplete: uaaUrl, uaaClientId, and uaaClientSecret are required');
+    }
+
+    const tokenUrl = `${authConfig.uaaUrl}/oauth/token`;
+    const params = new URLSearchParams();
+    params.append('grant_type', 'refresh_token');
+    params.append('refresh_token', refreshToken);
+
+    const authString = Buffer.from(`${authConfig.uaaClientId}:${authConfig.uaaClientSecret}`).toString('base64');
+
+    try {
+      const response = await axios({
+        method: 'post',
+        url: tokenUrl,
+        headers: {
+          Authorization: `Basic ${authString}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        data: params.toString(),
+        timeout: 30000,
+      });
+
+      if (response.data && response.data.access_token) {
+        return {
+          accessToken: response.data.access_token,
+          refreshToken: response.data.refresh_token || refreshToken,
+          expiresIn: response.data.expires_in,
+        };
+      } else {
+        throw new Error('Response does not contain access_token');
+      }
+    } catch (error: any) {
+      if (error.response) {
+        throw new Error(
+          `Token refresh failed (${error.response.status}): ${JSON.stringify(error.response.data)}`
+        );
+      } else {
+        throw new Error(`Token refresh failed: ${error.message}`);
+      }
+    }
+  }
+
+  /**
+   * Get token using client_credentials grant type (direct UAA HTTP request)
+   * @param authConfig UAA authorization configuration
+   * @returns Promise that resolves to access token
+   */
+  private async getTokenWithClientCredentials(authConfig: IAuthorizationConfig): Promise<UaaTokenResult> {
+    if (!authConfig.uaaUrl || !authConfig.uaaClientId || !authConfig.uaaClientSecret) {
+      throw new Error('UAA credentials incomplete: uaaUrl, uaaClientId, and uaaClientSecret are required');
+    }
+
+    const tokenUrl = `${authConfig.uaaUrl}/oauth/token`;
+    const params = new URLSearchParams();
+    params.append('grant_type', 'client_credentials');
+    params.append('client_id', authConfig.uaaClientId);
+    params.append('client_secret', authConfig.uaaClientSecret);
+
+    try {
+      const response = await axios({
+        method: 'post',
+        url: tokenUrl,
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        data: params.toString(),
+        timeout: 30000,
+      });
+
+      if (response.data && response.data.access_token) {
+        return {
+          accessToken: response.data.access_token,
+          refreshToken: response.data.refresh_token,
+          expiresIn: response.data.expires_in,
+        };
+      } else {
+        throw new Error('Response does not contain access_token');
+      }
+    } catch (error: any) {
+      if (error.response) {
+        throw new Error(
+          `Client credentials authentication failed (${error.response.status}): ${JSON.stringify(error.response.data)}`
+        );
+      } else {
+        throw new Error(`Client credentials authentication failed: ${error.message}`);
+      }
+    }
   }
 
   /**
@@ -186,13 +291,26 @@ export class AuthBroker {
           throw new Error(`Service key for destination "${destination}" does not contain UAA credentials`);
         }
 
-        this.logger?.debug(`Step 0: Authenticating via provider for ${destination} using service key UAA credentials`);
+        // Try direct UAA request first if UAA credentials are available, otherwise use provider
+        let tokenResult: { connectionConfig: IConnectionConfig; refreshToken?: string };
         
-        // Authenticate via provider
-        const tokenResult = await this.tokenProvider.getConnectionConfig(serviceKeyAuthConfig, {
-          browser: this.browser,
-          logger: this.logger,
-        });
+        if (this.tokenProvider) {
+          this.logger?.debug(`Step 0: Authenticating via provider for ${destination} using service key UAA credentials`);
+          tokenResult = await this.tokenProvider.getConnectionConfig(serviceKeyAuthConfig, {
+            browser: this.browser,
+            logger: this.logger,
+          });
+        } else {
+          // Use direct UAA HTTP request
+          this.logger?.debug(`Step 0: Authenticating via direct UAA request for ${destination} using service key UAA credentials`);
+          const uaaResult = await this.getTokenWithClientCredentials(serviceKeyAuthConfig);
+          tokenResult = {
+            connectionConfig: {
+              authorizationToken: uaaResult.accessToken,
+            },
+            refreshToken: uaaResult.refreshToken,
+          };
+        }
 
         const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
         this.logger?.info(`Step 0: Token initialized for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);
@@ -226,7 +344,7 @@ export class AuthBroker {
       this.logger?.debug(`Step 0: Token found for ${destination}, validating`);
       
       // Validate token if provider supports validation and we have service URL
-      if (this.tokenProvider.validateToken && connConfig.serviceUrl) {
+      if (this.tokenProvider?.validateToken && connConfig.serviceUrl) {
         const isValid = await this.tokenProvider.validateToken(connConfig.authorizationToken, connConfig.serviceUrl);
         if (isValid) {
           this.logger?.info(`Step 0: Token valid for ${destination}: token(${connConfig.authorizationToken.length} chars)`);
@@ -250,15 +368,47 @@ export class AuthBroker {
         
         // Get UAA credentials from session or service key
         const uaaCredentials = authConfig || (this.serviceKeyStore ? await this.serviceKeyStore.getAuthorizationConfig(destination) : null);
-        if (!uaaCredentials) {
+        if (!uaaCredentials || !uaaCredentials.uaaUrl || !uaaCredentials.uaaClientId || !uaaCredentials.uaaClientSecret) {
           throw new Error('UAA credentials not found in session and serviceKeyStore not available');
         }
 
-        const authConfigWithRefresh = { ...uaaCredentials, refreshToken };
-        const tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithRefresh, {
-          browser: this.browser,
-          logger: this.logger,
-        });
+        let tokenResult: { connectionConfig: IConnectionConfig; refreshToken?: string };
+        
+        // Try direct UAA request if UAA credentials are available
+        if (uaaCredentials.uaaUrl && uaaCredentials.uaaClientId && uaaCredentials.uaaClientSecret) {
+          try {
+            this.logger?.debug(`Step 1: Trying direct UAA refresh for ${destination}`);
+            const uaaResult = await this.refreshTokenDirect(refreshToken, uaaCredentials);
+            tokenResult = {
+              connectionConfig: {
+                authorizationToken: uaaResult.accessToken,
+              },
+              refreshToken: uaaResult.refreshToken,
+            };
+            this.logger?.debug(`Step 1: Direct UAA refresh succeeded for ${destination}`);
+          } catch (directError: any) {
+            this.logger?.debug(`Step 1: Direct UAA refresh failed for ${destination}: ${directError.message}, trying provider`);
+            // If direct UAA failed and we have provider, try provider
+            if (this.tokenProvider) {
+              const authConfigWithRefresh = { ...uaaCredentials, refreshToken };
+              tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithRefresh, {
+                browser: this.browser,
+                logger: this.logger,
+              });
+            } else {
+              throw directError; // No provider, re-throw direct error
+            }
+          }
+        } else if (this.tokenProvider) {
+          // No UAA credentials but have provider
+          const authConfigWithRefresh = { ...uaaCredentials, refreshToken };
+          tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithRefresh, {
+            browser: this.browser,
+            logger: this.logger,
+          });
+        } else {
+          throw new Error('UAA credentials incomplete and tokenProvider not available');
+        }
 
         const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
         this.logger?.info(`Step 1: Token refreshed for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);
@@ -308,11 +458,43 @@ export class AuthBroker {
     try {
       this.logger?.debug(`Step 2: Trying UAA (client_credentials) flow for ${destination}`);
       
-      const authConfigWithoutRefresh = { ...uaaCredentials, refreshToken: undefined };
-      const tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithoutRefresh, {
-        browser: this.browser,
-        logger: this.logger,
-      });
+      let tokenResult: { connectionConfig: IConnectionConfig; refreshToken?: string };
+      
+      // Try direct UAA request first if UAA credentials are available
+      if (uaaCredentials.uaaUrl && uaaCredentials.uaaClientId && uaaCredentials.uaaClientSecret) {
+        try {
+          this.logger?.debug(`Step 2: Trying direct UAA client_credentials for ${destination}`);
+          const uaaResult = await this.getTokenWithClientCredentials(uaaCredentials);
+          tokenResult = {
+            connectionConfig: {
+              authorizationToken: uaaResult.accessToken,
+            },
+            refreshToken: uaaResult.refreshToken,
+          };
+          this.logger?.debug(`Step 2: Direct UAA client_credentials succeeded for ${destination}`);
+        } catch (directError: any) {
+          this.logger?.debug(`Step 2: Direct UAA client_credentials failed for ${destination}: ${directError.message}, trying provider`);
+          // If direct UAA failed and we have provider, try provider
+          if (this.tokenProvider) {
+            const authConfigWithoutRefresh = { ...uaaCredentials, refreshToken: undefined };
+            tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithoutRefresh, {
+              browser: this.browser,
+              logger: this.logger,
+            });
+          } else {
+            throw directError; // No provider, re-throw direct error
+          }
+        }
+      } else if (this.tokenProvider) {
+        // No UAA credentials but have provider
+        const authConfigWithoutRefresh = { ...uaaCredentials, refreshToken: undefined };
+        tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithoutRefresh, {
+          browser: this.browser,
+          logger: this.logger,
+        });
+      } else {
+        throw new Error('UAA credentials incomplete and tokenProvider not available');
+      }
 
       const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
       this.logger?.info(`Step 2: Token obtained via UAA for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);
@@ -378,13 +560,42 @@ export class AuthBroker {
     const refreshToken = sessionAuthConfig?.refreshToken || authConfig.refreshToken;
     this.logger?.debug(`Refresh token check for ${destination}: hasRefreshToken(${!!refreshToken})`);
     
-    const authConfigWithRefresh = { ...authConfig, refreshToken };
-
-    // Get connection config with token from provider
-    const tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithRefresh, {
-      browser: this.browser,
-      logger: this.logger,
-    });
+    let tokenResult: { connectionConfig: IConnectionConfig; refreshToken?: string };
+    
+    // Try direct UAA request if UAA credentials are available
+    if (authConfig.uaaUrl && authConfig.uaaClientId && authConfig.uaaClientSecret && refreshToken) {
+      try {
+        this.logger?.debug(`Trying direct UAA refresh for ${destination}`);
+        const uaaResult = await this.refreshTokenDirect(refreshToken, authConfig);
+        tokenResult = {
+          connectionConfig: {
+            authorizationToken: uaaResult.accessToken,
+          },
+          refreshToken: uaaResult.refreshToken,
+        };
+      } catch (directError: any) {
+        this.logger?.debug(`Direct UAA refresh failed for ${destination}: ${directError.message}, trying provider`);
+        // If direct UAA failed and we have provider, try provider
+        if (this.tokenProvider) {
+          const authConfigWithRefresh = { ...authConfig, refreshToken };
+          tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithRefresh, {
+            browser: this.browser,
+            logger: this.logger,
+          });
+        } else {
+          throw directError; // No provider, re-throw direct error
+        }
+      }
+    } else if (this.tokenProvider) {
+      // No UAA credentials or refresh token, but have provider
+      const authConfigWithRefresh = { ...authConfig, refreshToken };
+      tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithRefresh, {
+        browser: this.browser,
+        logger: this.logger,
+      });
+    } else {
+      throw new Error('UAA credentials incomplete and tokenProvider not available');
+    }
 
     const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
     this.logger?.info(`Token refreshed for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);

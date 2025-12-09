@@ -10,6 +10,10 @@ import type { ITokenProvider, TokenProviderResult } from '../../providers';
 import type { IConfig } from '../../types';
 import type { ILogger } from '@mcp-abap-adt/interfaces';
 import { createTestLogger } from '../helpers/testLogger';
+import axios from 'axios';
+
+jest.mock('axios');
+const mockedAxios = axios as jest.MockedFunction<typeof axios>;
 
 // No-op logger for tests that expect errors (to avoid misleading error output)
 const noOpLogger: ILogger = {
@@ -61,6 +65,8 @@ describe('AuthBroker', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+    // Reset axios mock
+    mockedAxios.mockReset();
   });
 
   describe('constructor', () => {
@@ -118,13 +124,11 @@ describe('AuthBroker', () => {
       }).toThrow('sessionStore.setConnectionConfig must be a function');
     });
 
-    it('should throw error if tokenProvider is missing', () => {
-      expect(() => {
-        new AuthBroker({
-          sessionStore: mockSessionStore,
-          // Missing tokenProvider
-        } as any);
-      }).toThrow('tokenProvider is required');
+    it('should create broker without tokenProvider', () => {
+      const brokerWithoutProvider = new AuthBroker({
+        sessionStore: mockSessionStore,
+      });
+      expect(brokerWithoutProvider).toBeInstanceOf(AuthBroker);
     });
 
     it('should throw error if tokenProvider is missing getConnectionConfig method', () => {
@@ -283,6 +287,50 @@ describe('AuthBroker', () => {
       await expect(brokerWithoutServiceKey.getToken('TEST')).rejects.toThrow('serviceKeyStore is not available');
     });
 
+    it('should get token via Step 2 (direct UAA) if no refresh token but UAA credentials in session and no provider', async () => {
+      const newToken = 'new-token-123';
+      const connConfig: IConnectionConfig = {
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: '', // Empty token
+      };
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://uaa.test.com',
+        uaaClientId: 'client123',
+        uaaClientSecret: 'secret123',
+        // No refreshToken
+      };
+
+      mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
+      mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
+      
+      // Mock axios for direct UAA request
+      mockedAxios.mockResolvedValue({
+        data: {
+          access_token: newToken,
+          refresh_token: 'refresh-token-123',
+          expires_in: 3600,
+        },
+      } as any);
+
+      mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
+      mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
+
+      const brokerWithoutProvider = new AuthBroker({
+        sessionStore: mockSessionStore,
+      }, undefined, logger);
+
+      const token = await brokerWithoutProvider.getToken('TEST');
+
+      expect(token).toBe(newToken);
+      expect(mockedAxios).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'post',
+          url: 'https://uaa.test.com/oauth/token',
+        })
+      );
+      expect(mockSessionStore.setConnectionConfig).toHaveBeenCalled();
+    });
+
     it('should get token via Step 2 (UAA) if no refresh token but UAA credentials in session', async () => {
       const newToken = 'new-token-123';
       const connConfig: IConnectionConfig = {
@@ -302,6 +350,9 @@ describe('AuthBroker', () => {
         },
         refreshToken: 'refresh-token-123',
       };
+
+      // Mock axios to fail so it falls back to provider
+      mockedAxios.mockRejectedValue(new Error('Direct UAA failed'));
 
       mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
@@ -379,6 +430,9 @@ describe('AuthBroker', () => {
         refreshToken: 'new-refresh-token-123',
       };
 
+      // Mock axios to fail so it falls back to provider
+      mockedAxios.mockRejectedValue(new Error('Direct UAA failed'));
+
       mockServiceKeyStore.getServiceKey.mockResolvedValue({} as IConfig);
       mockServiceKeyStore.getAuthorizationConfig.mockResolvedValue(authConfig);
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(sessionAuthConfig);
@@ -397,6 +451,45 @@ describe('AuthBroker', () => {
       );
     });
 
+    it('should use direct UAA refresh if UAA credentials in session and no provider', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://uaa.test.com',
+        uaaClientId: 'client123',
+        uaaClientSecret: 'secret123',
+        refreshToken: 'refresh-token-123',
+      };
+      const newToken = 'new-token-123';
+
+      // Mock axios for direct UAA refresh
+      mockedAxios.mockResolvedValue({
+        data: {
+          access_token: newToken,
+          refresh_token: 'new-refresh-token-123',
+          expires_in: 3600,
+        },
+      } as any);
+
+      mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
+      mockSessionStore.getConnectionConfig.mockResolvedValue({ serviceUrl: 'https://test.sap.com', authorizationToken: '' });
+      mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
+      mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
+
+      const brokerWithoutProvider = new AuthBroker({
+        sessionStore: mockSessionStore,
+      }, undefined, logger);
+
+      const token = await brokerWithoutProvider.refreshToken('TEST');
+
+      expect(token).toBe(newToken);
+      expect(mockedAxios).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'post',
+          url: 'https://uaa.test.com/oauth/token',
+        })
+      );
+      expect(mockSessionStore.setConnectionConfig).toHaveBeenCalled();
+    });
+
     it('should use UAA credentials from session if serviceKeyStore not available', async () => {
       const authConfig: IAuthorizationConfig = {
         uaaUrl: 'https://uaa.test.com',
@@ -411,6 +504,9 @@ describe('AuthBroker', () => {
         },
         refreshToken: 'new-refresh-token-123',
       };
+
+      // Mock axios to fail so it falls back to provider
+      mockedAxios.mockRejectedValue(new Error('Direct UAA failed'));
 
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
       mockSessionStore.getConnectionConfig.mockResolvedValue({ serviceUrl: 'https://test.sap.com', authorizationToken: '' });
