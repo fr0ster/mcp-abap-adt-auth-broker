@@ -2,11 +2,13 @@
 
 This guide helps you migrate from `@mcp-abap-adt/auth-broker` v0.1.x to v0.2.0.
 
+**⚠️ IMPORTANT: This is a breaking change with NO backward compatibility. The old constructor signature is NOT supported. You must update your code.**
+
 ## Overview of Changes
 
 ### Breaking Changes
 
-1. **Constructor Signature**: `serviceKeyStore` and `tokenProvider` are now optional
+1. **Constructor Signature**: `serviceKeyStore` and `tokenProvider` are now optional. **Old constructor signature is NOT supported - migration is required.**
 2. **New Authentication Flow**: Three-step flow (Step 0, Step 1, Step 2) instead of six-step fallback chain
 3. **Direct UAA HTTP Requests**: Broker now uses direct HTTP requests to UAA when UAA credentials are available
 4. **Session Requirements**: SessionStore must contain initial session with `serviceUrl` before calling `getToken()`

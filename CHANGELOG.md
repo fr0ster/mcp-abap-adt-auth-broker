@@ -15,8 +15,11 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ### Breaking Changes
 
+**⚠️ IMPORTANT: This is a breaking change with NO backward compatibility. Migration is required. See Migration Guide below.**
+
 #### Constructor Signature Changed
 - **Constructor now accepts configuration object**: The constructor signature has changed from requiring all three dependencies to making `serviceKeyStore` and `tokenProvider` optional
+- **No backward compatibility**: Old constructor signature is NOT supported. You must update your code to use the new signature. Migration guide provided below.
   - **Before (v0.1.x)**:
     ```typescript
     new AuthBroker({
