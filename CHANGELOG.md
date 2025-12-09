@@ -13,23 +13,126 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [0.2.0] - 2025-12-08
 
-### Changed
-- **Package Responsibility Clarification**: This package is now the **exclusive** handler for token refresh and session state persistence
-  - `@mcp-abap-adt/connection` package (v0.2.0) removed token refresh functionality - all token refresh is now handled by this broker
-  - `@mcp-abap-adt/connection` package (v0.2.0) removed session storage functionality - session state persistence is now handled by this broker
-  - This package's `sessionStore` (via `ISessionStore` interface) is responsible for managing session state (authorization config, connection config)
-  - Token refresh operations are exclusively managed by this broker's `tokenProvider` and `serviceKeyStore`
+### Breaking Changes
 
-### Migration Notes
-- **For users of `@mcp-abap-adt/connection` v0.1.x**: 
-  - If you were using `connection.refreshToken()` or `connection.canRefreshToken()`, you must now use `authBroker.refreshToken(destination)` instead
-  - If you were using `FileSessionStorage` or custom session storage with connection package, you must now use `authBroker` with appropriate `sessionStore` implementation
-  - Connection package now focuses solely on HTTP communication and session headers (cookies, CSRF tokens)
-  - All token lifecycle management and session state persistence must go through this broker
+#### Constructor Signature Changed
+- **Constructor now accepts configuration object**: The constructor signature has changed from requiring all three dependencies to making `serviceKeyStore` and `tokenProvider` optional
+  - **Before (v0.1.x)**:
+    ```typescript
+    new AuthBroker({
+      serviceKeyStore: serviceKeyStore,  // required
+      sessionStore: sessionStore,         // required
+      tokenProvider: tokenProvider,      // required
+    }, browser?, logger?)
+    ```
+  - **After (v0.2.0)**:
+    ```typescript
+    new AuthBroker({
+      sessionStore: sessionStore,         // required
+      serviceKeyStore?: serviceKeyStore,  // optional
+      tokenProvider?: tokenProvider,      // optional
+    }, browser?, logger?)
+    ```
+
+#### New Authentication Flow
+- **Three-step authentication flow**: `getToken()` now implements a new three-step flow (Step 0, Step 1, Step 2) instead of the previous six-step fallback chain
+- **Direct UAA HTTP requests**: When UAA credentials are available in session, broker uses direct HTTP requests to UAA without requiring `tokenProvider`
+- **Session initialization requirements**: SessionStore must contain initial session with `serviceUrl` before calling `getToken()`
+
+### Added
+
+#### Direct UAA HTTP Requests
+- **Direct UAA refresh_token grant**: When UAA credentials are available in session, broker can refresh tokens directly via HTTP without `tokenProvider`
+- **Direct UAA client_credentials grant**: When UAA credentials are available, broker can obtain tokens directly via HTTP without `tokenProvider`
+- **Automatic fallback to provider**: If direct UAA requests fail and `tokenProvider` is available, broker automatically falls back to provider
+
+#### Flexible Configuration
+- **Optional serviceKeyStore**: `serviceKeyStore` is now optional - only needed for initializing sessions from service keys
+- **Optional tokenProvider**: `tokenProvider` is now optional - only needed for browser authentication or when direct UAA requests fail
+- **Session-only mode**: Can work with only `sessionStore` if session contains valid UAA credentials (no `serviceKeyStore` or `tokenProvider` needed)
+
+#### Enhanced Error Messages
+- **Step-based error messages**: Error messages now indicate which step failed (Step 0, Step 1, or Step 2)
+- **Context-aware errors**: Error messages include information about what was tried and what's available
+- **Actionable errors**: Error messages suggest what to do next (e.g., "Provide serviceKeyStore to initialize from service key")
+
+### Changed
+
+#### Authentication Flow (getToken)
+- **Step 0: Session Initialization**: 
+  - Checks if session has `authorizationToken` and UAA credentials
+  - If both empty and `serviceKeyStore` available: tries direct UAA request from service key, falls back to provider if failed
+  - If session has token OR UAA credentials → proceeds to Step 1
+- **Step 1: Refresh Token Flow**:
+  - If refresh token exists: tries direct UAA refresh, falls back to provider if failed
+  - If successful → returns new token
+  - Otherwise → proceeds to Step 2
+- **Step 2: UAA Credentials Flow**:
+  - Tries direct UAA client_credentials request, falls back to provider if failed
+  - If successful → returns new token
+  - If all failed → throws error
+
+#### Token Refresh (refreshToken)
+- **Direct UAA support**: Uses direct UAA HTTP requests when UAA credentials are available
+- **Provider fallback**: Falls back to provider if direct UAA fails and provider is available
+
+#### Dependencies
+- **Added axios**: Added `axios@^1.13.2` as dependency for direct UAA HTTP requests
+- **Updated interfaces**: Works with `@mcp-abap-adt/interfaces@^0.1.4+`
+
+### Migration Guide
+
+#### Updating Constructor Calls
+
+**Before (v0.1.x)**:
+```typescript
+const broker = new AuthBroker({
+  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new AbapSessionStore(['/path/to/destinations']),
+  tokenProvider: new BtpTokenProvider(),
+}, 'chrome', logger);
+```
+
+**After (v0.2.0) - All dependencies**:
+```typescript
+const broker = new AuthBroker({
+  sessionStore: new AbapSessionStore(['/path/to/destinations']),
+  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']), // optional
+  tokenProvider: new BtpTokenProvider(), // optional
+}, 'chrome', logger);
+```
+
+**After (v0.2.0) - Session only (if session has UAA credentials)**:
+```typescript
+const broker = new AuthBroker({
+  sessionStore: new AbapSessionStore(['/path/to/destinations']),
+  // serviceKeyStore and tokenProvider not needed if session has UAA credentials
+});
+```
+
+**After (v0.2.0) - Session + Service Key (for initialization)**:
+```typescript
+const broker = new AuthBroker({
+  sessionStore: new AbapSessionStore(['/path/to/destinations']),
+  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
+  // tokenProvider optional - direct UAA requests will be used
+});
+```
+
+#### Session Requirements
+
+**Important**: SessionStore must contain initial session with `serviceUrl` before calling `getToken()`. If session is empty, provide `serviceKeyStore` to initialize from service key.
+
+#### When to Provide tokenProvider
+
+- **Required**: When initializing session from service key via browser authentication (Step 0)
+- **Optional but recommended**: As fallback when direct UAA requests fail
+- **Not needed**: When session contains valid UAA credentials (direct UAA requests will be used)
 
 ### Dependencies
 - Updated to work with `@mcp-abap-adt/connection` v0.2.0+ (which removed token refresh and session storage)
 - Updated to work with `@mcp-abap-adt/interfaces` v0.1.4+ (which removed session state methods from `IAbapConnection`)
+- Added `axios@^1.13.2` for direct UAA HTTP requests
 
 ## [0.1.12] - 2025-12-09
 

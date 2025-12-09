@@ -19,43 +19,84 @@ npm install @mcp-abap-adt/auth-broker
 
 ## Usage
 
+### Basic Usage (Session Only)
+
+If your sessionStore contains valid UAA credentials, you only need to provide `sessionStore`:
+
+```typescript
+import { AuthBroker, AbapSessionStore } from '@mcp-abap-adt/auth-broker';
+
+// Session-only mode - works if session has UAA credentials
+const broker = new AuthBroker({
+  sessionStore: new AbapSessionStore('/path/to/destinations'),
+});
+
+// Get token - uses direct UAA HTTP requests automatically
+const token = await broker.getToken('TRIAL');
+```
+
+### Full Configuration (All Dependencies)
+
+For maximum flexibility, provide all three dependencies:
+
 ```typescript
 import { 
   AuthBroker, 
   AbapServiceKeyStore, 
   AbapSessionStore, 
-  SafeAbapSessionStore,
   BtpTokenProvider
 } from '@mcp-abap-adt/auth-broker';
 
-// Use default file-based stores (current working directory)
-const broker = new AuthBroker();
-
-// Use custom file-based stores with specific paths
 const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new AbapSessionStore(['/path/to/destinations']),
-  tokenProvider: new BtpTokenProvider(),
-}, 'chrome');
+  sessionStore: new AbapSessionStore('/path/to/destinations'),
+  serviceKeyStore: new AbapServiceKeyStore('/path/to/destinations'), // optional
+  tokenProvider: new BtpTokenProvider(), // optional
+}, 'chrome', logger);
+```
 
-// Use safe in-memory session store (data lost after restart)
+### Session + Service Key (For Initialization)
+
+If you need to initialize sessions from service keys:
+
+```typescript
 const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new SafeAbapSessionStore(), // In-memory, secure
-  tokenProvider: new BtpTokenProvider(),
+  sessionStore: new AbapSessionStore('/path/to/destinations'),
+  serviceKeyStore: new AbapServiceKeyStore('/path/to/destinations'),
+  // tokenProvider optional - direct UAA requests will be used from service key
 });
+```
 
-// Use BtpTokenProvider with custom browser auth port (to avoid port conflicts)
-const brokerWithCustomPort = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new AbapSessionStore(['/path/to/destinations']),
+### In-Memory Session Store
+
+For testing or temporary sessions:
+
+```typescript
+import { AuthBroker, SafeAbapSessionStore } from '@mcp-abap-adt/auth-broker';
+
+const broker = new AuthBroker({
+  sessionStore: new SafeAbapSessionStore(), // In-memory, data lost after restart
+});
+```
+
+### Custom Browser Auth Port
+
+To avoid port conflicts with browser authentication:
+
+```typescript
+const broker = new AuthBroker({
+  sessionStore: new AbapSessionStore('/path/to/destinations'),
+  serviceKeyStore: new AbapServiceKeyStore('/path/to/destinations'),
   tokenProvider: new BtpTokenProvider(4001), // Custom port for OAuth callback server
-});
+}, 'chrome');
+```
 
-// Get token for destination (loads from .env, validates, refreshes if needed)
+### Getting Tokens
+
+```typescript
+// Get token - automatically uses direct UAA requests if UAA credentials available
 const token = await broker.getToken('TRIAL');
 
-// Force refresh token using service key
+// Force refresh token
 const newToken = await broker.refreshToken('TRIAL');
 ```
 
@@ -302,45 +343,83 @@ Instead, the consumer or `AbapSessionStore` itself should handle this:
 
 ```typescript
 new AuthBroker(
-  stores?: { 
-    serviceKeyStore?: IServiceKeyStore; 
-    sessionStore?: ISessionStore;
-    tokenProvider?: ITokenProvider;
+  config: {
+    sessionStore: ISessionStore;        // required
+    serviceKeyStore?: IServiceKeyStore; // optional
+    tokenProvider?: ITokenProvider;      // optional
   }, 
   browser?: string, 
   logger?: ILogger
 )
 ```
 
-- `stores` - Optional object with custom storage implementations:
-  - `serviceKeyStore` - Store for service keys (default: `AbapServiceKeyStore()`)
-  - `sessionStore` - Store for session data (default: `AbapSessionStore()`)
-  - `tokenProvider` - Token provider for token acquisition (default: `BtpTokenProvider()`)
-  - Available implementations:
-    - **ABAP**: `AbapServiceKeyStore(searchPaths?)`, `AbapSessionStore(searchPaths?)`, `SafeAbapSessionStore()`, `BtpTokenProvider()`
-    - **XSUAA** (reduced scope): `XsuaaServiceKeyStore(searchPaths?)`, `XsuaaSessionStore(searchPaths?)`, `SafeXsuaaSessionStore()`, `XsuaaTokenProvider()`
-    - **BTP** (full scope for ABAP): `AbapServiceKeyStore(searchPaths?)`, `BtpSessionStore(searchPaths?)`, `SafeBtpSessionStore()`, `BtpTokenProvider()`
+**Parameters:**
+- `config` - Configuration object:
+  - `sessionStore` - **Required** - Store for session data. Must contain initial session with `serviceUrl`
+  - `serviceKeyStore` - **Optional** - Store for service keys. Only needed for initializing sessions from service keys
+  - `tokenProvider` - **Optional** - Token provider for token acquisition. Only needed for browser authentication or when direct UAA requests fail
 - `browser` - Optional browser name for authentication (`chrome`, `edge`, `firefox`, `system`, `none`). Default: `system`
   - For XSUAA, browser is not used (client_credentials grant type) - use `'none'`
-- `logger` - Optional logger instance. If not provided, uses default logger
+- `logger` - Optional logger instance. If not provided, uses no-op logger
+
+**When to Provide Each Dependency:**
+
+- **`sessionStore` (required)**: Always required. Must contain initial session with `serviceUrl`
+- **`serviceKeyStore` (optional)**: 
+  - Required if you need to initialize sessions from service keys (Step 0)
+  - Not needed if session already contains UAA credentials
+- **`tokenProvider` (optional)**:
+  - Required for browser authentication when initializing from service key (Step 0)
+  - Optional but recommended as fallback when direct UAA requests fail
+  - Not needed if session contains valid UAA credentials (direct UAA HTTP requests will be used)
+
+**Available Implementations:**
+- **ABAP**: `AbapServiceKeyStore(directory, defaultServiceUrl?, logger?)`, `AbapSessionStore(directory, defaultServiceUrl?, logger?)`, `SafeAbapSessionStore(defaultServiceUrl?, logger?)`, `BtpTokenProvider(browserAuthPort?)`
+- **XSUAA** (reduced scope): `XsuaaServiceKeyStore(directory, logger?)`, `XsuaaSessionStore(directory, defaultServiceUrl, logger?)`, `SafeXsuaaSessionStore(defaultServiceUrl, logger?)`, `XsuaaTokenProvider()`
+- **BTP** (full scope for ABAP): `AbapServiceKeyStore(directory, defaultServiceUrl?, logger?)`, `BtpSessionStore(directory, defaultServiceUrl, logger?)`, `SafeBtpSessionStore(defaultServiceUrl, logger?)`, `BtpTokenProvider(browserAuthPort?)`
 
 #### Methods
 
 ##### `getToken(destination: string): Promise<string>`
 
-Gets authentication token for destination. Tries to load from session store, validates it, and refreshes if needed using a fallback chain:
+Gets authentication token for destination. Implements a three-step flow:
 
-1. **Check session**: Load token from session store and validate it
-2. **Try refresh token**: If refresh token is available, attempt to refresh using it (via tokenProvider)
-3. **Try UAA (client_credentials)**: Attempt to get token using UAA credentials (via tokenProvider)
-4. **Try browser authentication**: Attempt browser-based OAuth2 flow using service key (via tokenProvider)
-5. **Throw error**: If all authentication methods failed
+**Step 0: Initialize Session with Token (if needed)**
+- Checks if session has `authorizationToken` and UAA credentials
+- If both are empty and `serviceKeyStore` is available:
+  - Tries direct UAA request from service key (if UAA credentials available)
+  - If failed and `tokenProvider` available → uses provider for authentication
+- If session has token OR UAA credentials → proceeds to Step 1
 
-**Note**: Token validation is performed only when checking existing session. Tokens obtained through refresh/UAA/browser authentication are not validated before being saved.
+**Step 1: Refresh Token Flow**
+- Checks if refresh token exists in session
+- If refresh token exists:
+  - Tries direct UAA refresh (if UAA credentials in session)
+  - If failed and `tokenProvider` available → uses provider
+  - If successful → returns new token
+- Otherwise → proceeds to Step 2
+
+**Step 2: UAA Credentials Flow**
+- Checks if UAA credentials exist in session or service key
+- Tries direct UAA client_credentials request (if UAA credentials available)
+- If failed and `tokenProvider` available → uses provider
+- If successful → returns new token
+- If all failed → throws error
+
+**Important Notes:**
+- If `sessionStore` contains valid UAA credentials, neither `serviceKeyStore` nor `tokenProvider` are required. Direct UAA HTTP requests will be used automatically.
+- `tokenProvider` is only needed for browser authentication or when direct UAA requests fail.
+- Token validation is performed only when checking existing session. Tokens obtained through refresh/UAA/browser authentication are not validated before being saved.
 
 ##### `refreshToken(destination: string): Promise<string>`
 
-Force refresh token for destination using service key from `{destination}.json` file.
+Force refresh token for destination. Uses refresh token from session if available, otherwise uses UAA credentials from session or service key.
+
+**Flow:**
+- If refresh token exists and UAA credentials available → tries direct UAA refresh
+- If direct UAA fails and `tokenProvider` available → uses provider
+- If no refresh token but UAA credentials available → tries direct UAA client_credentials
+- If all failed → throws error
 
 ##### `clearCache(destination: string): void`
 
@@ -374,23 +453,53 @@ import {
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
   XsuaaTokenProvider,
-  BtpTokenProvider
+  BtpTokenProvider,
+  AbapServiceKeyStore,
+  BtpSessionStore
 } from '@mcp-abap-adt/auth-broker';
 
-// XSUAA authentication (no browser needed)
+// XSUAA authentication - session only (direct UAA requests)
 const xsuaaBroker = new AuthBroker({
-  serviceKeyStore: new XsuaaServiceKeyStore(['/path/to/keys']),
-  sessionStore: new XsuaaSessionStore(['/path/to/sessions']),
-  tokenProvider: new XsuaaTokenProvider(),
+  sessionStore: new XsuaaSessionStore('/path/to/sessions', 'https://mcp.example.com'),
+  // serviceKeyStore and tokenProvider not needed if session has UAA credentials
+});
+
+// XSUAA authentication - with service key initialization
+const xsuaaBrokerWithServiceKey = new AuthBroker({
+  sessionStore: new XsuaaSessionStore('/path/to/sessions', 'https://mcp.example.com'),
+  serviceKeyStore: new XsuaaServiceKeyStore('/path/to/keys'),
+  // tokenProvider optional - direct UAA requests will be used
 }, 'none');
 
-// BTP authentication (browser or refresh token)
+// BTP authentication - session only (direct UAA requests)
 const btpBroker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path/to/keys']),
-  sessionStore: new BtpSessionStore(['/path/to/sessions']),
-  tokenProvider: new BtpTokenProvider(),
+  sessionStore: new BtpSessionStore('/path/to/sessions', 'https://abap.example.com'),
+  // serviceKeyStore and tokenProvider not needed if session has UAA credentials
+});
+
+// BTP authentication - with service key and provider (for browser auth)
+const btpBrokerFull = new AuthBroker({
+  sessionStore: new BtpSessionStore('/path/to/sessions', 'https://abap.example.com'),
+  serviceKeyStore: new AbapServiceKeyStore('/path/to/keys'),
+  tokenProvider: new BtpTokenProvider(), // needed for browser authentication
 });
 ```
+
+### Direct UAA HTTP Requests
+
+When UAA credentials are available in session, `AuthBroker` automatically uses direct HTTP requests to UAA without requiring `tokenProvider`:
+
+- **Refresh Token Grant**: Direct HTTP POST to `{uaaUrl}/oauth/token` with `grant_type=refresh_token`
+- **Client Credentials Grant**: Direct HTTP POST to `{uaaUrl}/oauth/token` with `grant_type=client_credentials`
+
+**Benefits:**
+- No dependency on `tokenProvider` when session has UAA credentials
+- Faster token refresh (no provider overhead)
+- Simpler configuration (only `sessionStore` needed)
+
+**Fallback to Provider:**
+- If direct UAA request fails and `tokenProvider` is available, broker automatically falls back to provider
+- Provider is useful for browser authentication or alternative authentication flows
 
 ### Utility Script
 

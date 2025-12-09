@@ -230,20 +230,32 @@ export class AuthBroker {
    * **Flow:**
    * **Step 0: Initialize Session with Token (if needed)**
    * - Check if session has `authorizationToken` AND UAA credentials
-   * - If both are empty AND serviceKeyStore and tokenProvider are available:
-   *   - Initialize token/UAA from service key via provider
+   * - If both are empty AND serviceKeyStore is available:
+   *   - Try direct UAA request from service key (if UAA credentials available)
+   *   - If failed and tokenProvider available → use provider
    * - If session has token OR UAA credentials → proceed to Step 1
    * 
    * **Step 1: Refresh Token Flow**
    * - Check if refresh token exists in session
-   * - If refresh token exists and refresh succeeds → return new token
+   * - If refresh token exists:
+   *   - Try direct UAA refresh (if UAA credentials in session)
+   *   - If failed and tokenProvider available → use provider
+   *   - If successful → return new token
    * - Otherwise → proceed to Step 2
    * 
    * **Step 2: UAA Credentials Flow**
-   * - Check if UAA credentials exist in session
-   * - Try to obtain token using UAA
+   * - Check if UAA credentials exist in session or service key
+   * - Try direct UAA client_credentials request (if UAA credentials available)
+   * - If failed and tokenProvider available → use provider
    * - If successful → return new token
-   * - If failed → try service key (if available) → return error if all failed
+   * - If all failed → return error
+   * 
+   * **Important Notes:**
+   * - If sessionStore contains valid UAA credentials, neither serviceKeyStore nor tokenProvider are required.
+   *   Direct UAA HTTP requests will be used automatically.
+   * - tokenProvider is only needed when:
+   *   - Initializing session from service key via browser authentication (Step 0)
+   *   - Direct UAA requests fail and fallback to provider is needed
    * 
    * @param destination Destination name (e.g., "TRIAL")
    * @returns Promise that resolves to JWT token string
@@ -279,29 +291,23 @@ export class AuthBroker {
         this.logger?.error(`Step 0: Cannot initialize session for ${destination}: authorizationToken is empty, UAA credentials are empty, and serviceKeyStore is not available`);
         throw new Error(
           `Cannot initialize session for destination "${destination}": authorizationToken is empty, UAA credentials are empty, and serviceKeyStore is not available. ` +
-          `Provide serviceKeyStore and tokenProvider to initialize from service key.`
+          `Provide serviceKeyStore to initialize from service key.`
         );
       }
 
       try {
         // Get UAA credentials from service key
         const serviceKeyAuthConfig = await this.serviceKeyStore.getAuthorizationConfig(destination);
-        if (!serviceKeyAuthConfig) {
+        if (!serviceKeyAuthConfig || !serviceKeyAuthConfig.uaaUrl || !serviceKeyAuthConfig.uaaClientId || !serviceKeyAuthConfig.uaaClientSecret) {
           this.logger?.error(`Step 0: Service key for ${destination} missing UAA credentials`);
           throw new Error(`Service key for destination "${destination}" does not contain UAA credentials`);
         }
 
-        // Try direct UAA request first if UAA credentials are available, otherwise use provider
+        // Try direct UAA request first if UAA credentials are available in service key
         let tokenResult: { connectionConfig: IConnectionConfig; refreshToken?: string };
         
-        if (this.tokenProvider) {
-          this.logger?.debug(`Step 0: Authenticating via provider for ${destination} using service key UAA credentials`);
-          tokenResult = await this.tokenProvider.getConnectionConfig(serviceKeyAuthConfig, {
-            browser: this.browser,
-            logger: this.logger,
-          });
-        } else {
-          // Use direct UAA HTTP request
+        try {
+          // Use direct UAA HTTP request (preferred when UAA credentials are available)
           this.logger?.debug(`Step 0: Authenticating via direct UAA request for ${destination} using service key UAA credentials`);
           const uaaResult = await this.getTokenWithClientCredentials(serviceKeyAuthConfig);
           tokenResult = {
@@ -310,6 +316,18 @@ export class AuthBroker {
             },
             refreshToken: uaaResult.refreshToken,
           };
+        } catch (directError: any) {
+          this.logger?.debug(`Step 0: Direct UAA request failed for ${destination}: ${directError.message}, trying provider`);
+          // If direct UAA failed and we have provider, try provider
+          if (this.tokenProvider) {
+            this.logger?.debug(`Step 0: Authenticating via provider for ${destination} using service key UAA credentials`);
+            tokenResult = await this.tokenProvider.getConnectionConfig(serviceKeyAuthConfig, {
+              browser: this.browser,
+              logger: this.logger,
+            });
+          } else {
+            throw directError; // No provider, re-throw direct error
+          }
         }
 
         const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
@@ -332,10 +350,9 @@ export class AuthBroker {
         return tokenResult.connectionConfig.authorizationToken!;
       } catch (error: any) {
         this.logger?.error(`Step 0: Failed to initialize session for ${destination}: ${error.message}`);
-        throw new Error(
-          `Cannot initialize session for destination "${destination}": ${error.message}. ` +
-          `Ensure serviceKeyStore contains valid service key with UAA credentials.`
-        );
+        const errorMessage = `Cannot initialize session for destination "${destination}": ${error.message}. ` +
+          `Ensure serviceKeyStore contains valid service key with UAA credentials${this.tokenProvider ? ' or provide tokenProvider for alternative authentication' : ''}.`;
+        throw new Error(errorMessage);
       }
     }
 
