@@ -11,6 +11,15 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.1] - 2025-12-12
+
+### Fixed
+- **ServiceUrl fallback from serviceKeyStore**: Fixed `getToken()` method to retrieve `serviceUrl` from `serviceKeyStore` when it's missing in session
+  - Previously, `getToken()` would throw an error immediately if `serviceUrl` was not found in session, even when it was available in `serviceKeyStore`
+  - Now, the method first checks session for `serviceUrl`, and if not found, attempts to retrieve it from `serviceKeyStore` before throwing an error
+  - This allows integration tests and real-world scenarios to work correctly when session is empty but service key contains `serviceUrl`
+  - Error messages now indicate that `serviceUrl` can come from either session or `serviceKeyStore`
+
 ## [0.2.0] - 2025-12-08
 
 ### Breaking Changes
