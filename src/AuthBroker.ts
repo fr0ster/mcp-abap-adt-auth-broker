@@ -269,11 +269,21 @@ export class AuthBroker {
     const authConfig = await this.sessionStore.getAuthorizationConfig(destination);
     
     // Check if session has serviceUrl (required)
-    if (!connConfig?.serviceUrl) {
-      this.logger?.error(`Session for destination "${destination}" is missing required field 'serviceUrl'. SessionStore must contain initial session with serviceUrl.`);
+    // If not in session, try to get it from serviceKeyStore
+    let serviceUrl = connConfig?.serviceUrl;
+    if (!serviceUrl && this.serviceKeyStore) {
+      const serviceKeyConnConfig = await this.serviceKeyStore.getConnectionConfig(destination);
+      serviceUrl = serviceKeyConnConfig?.serviceUrl;
+      if (serviceUrl) {
+        this.logger?.debug(`serviceUrl not in session for ${destination}, found in serviceKeyStore`);
+      }
+    }
+    
+    if (!serviceUrl) {
+      this.logger?.error(`Session for destination "${destination}" is missing required field 'serviceUrl'. SessionStore must contain initial session with serviceUrl${this.serviceKeyStore ? ' or serviceKeyStore must contain serviceUrl' : ''}.`);
       throw new Error(
         `Session for destination "${destination}" is missing required field 'serviceUrl'. ` +
-        `SessionStore must contain initial session with serviceUrl.`
+        `SessionStore must contain initial session with serviceUrl${this.serviceKeyStore ? ' or serviceKeyStore must contain serviceUrl' : ''}.`
       );
     }
 
@@ -281,7 +291,7 @@ export class AuthBroker {
     const hasToken = !!connConfig?.authorizationToken;
     const hasUaaCredentials = !!(authConfig?.uaaUrl && authConfig?.uaaClientId && authConfig?.uaaClientSecret);
     
-    this.logger?.debug(`Step 0: Session check for ${destination}: hasToken(${hasToken}), hasUaaCredentials(${hasUaaCredentials}), serviceUrl(${connConfig.serviceUrl ? 'yes' : 'no'})`);
+    this.logger?.debug(`Step 0: Session check for ${destination}: hasToken(${hasToken}), hasUaaCredentials(${hasUaaCredentials}), serviceUrl(${serviceUrl ? 'yes' : 'no'})`);
 
     // If token is empty AND UAA fields are empty, try to initialize from service key
     if (!hasToken && !hasUaaCredentials) {
@@ -337,7 +347,7 @@ export class AuthBroker {
         const serviceKeyConnConfig = await this.serviceKeyStore.getConnectionConfig(destination);
         const connectionConfigWithServiceUrl: IConnectionConfig = {
           ...tokenResult.connectionConfig,
-          serviceUrl: tokenResult.connectionConfig.serviceUrl || serviceKeyConnConfig?.serviceUrl || connConfig.serviceUrl,
+          serviceUrl: tokenResult.connectionConfig.serviceUrl || serviceKeyConnConfig?.serviceUrl || serviceUrl,
         };
 
         // Save token and UAA credentials to session
@@ -361,8 +371,8 @@ export class AuthBroker {
       this.logger?.debug(`Step 0: Token found for ${destination}, validating`);
       
       // Validate token if provider supports validation and we have service URL
-      if (this.tokenProvider?.validateToken && connConfig.serviceUrl) {
-        const isValid = await this.tokenProvider.validateToken(connConfig.authorizationToken, connConfig.serviceUrl);
+      if (this.tokenProvider?.validateToken && serviceUrl) {
+        const isValid = await this.tokenProvider.validateToken(connConfig.authorizationToken, serviceUrl);
         if (isValid) {
           this.logger?.info(`Step 0: Token valid for ${destination}: token(${connConfig.authorizationToken.length} chars)`);
           return connConfig.authorizationToken;
@@ -430,14 +440,14 @@ export class AuthBroker {
         const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
         this.logger?.info(`Step 1: Token refreshed for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);
 
-        // Get serviceUrl from session or service key
-        const serviceUrl = connConfig.serviceUrl || 
-          (this.serviceKeyStore ? (await this.serviceKeyStore.getConnectionConfig(destination))?.serviceUrl : null) ||
-          connConfig.serviceUrl;
+        // Get serviceUrl from session or service key (use the one we already have from the beginning of the method)
+        const finalServiceUrl = tokenResult.connectionConfig.serviceUrl || 
+          serviceUrl ||
+          (this.serviceKeyStore ? (await this.serviceKeyStore.getConnectionConfig(destination))?.serviceUrl : undefined);
 
         const connectionConfigWithServiceUrl: IConnectionConfig = {
           ...tokenResult.connectionConfig,
-          serviceUrl: tokenResult.connectionConfig.serviceUrl || serviceUrl,
+          serviceUrl: finalServiceUrl,
         };
 
         // Update session with new token
@@ -516,14 +526,14 @@ export class AuthBroker {
       const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;
       this.logger?.info(`Step 2: Token obtained via UAA for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`);
 
-      // Get serviceUrl from session or service key
-      const serviceUrl = connConfig.serviceUrl || 
-        (this.serviceKeyStore ? (await this.serviceKeyStore.getConnectionConfig(destination))?.serviceUrl : null) ||
-        connConfig.serviceUrl;
+      // Get serviceUrl from session or service key (use the one we already have from the beginning of the method)
+      const finalServiceUrl = tokenResult.connectionConfig.serviceUrl || 
+        serviceUrl ||
+        (this.serviceKeyStore ? (await this.serviceKeyStore.getConnectionConfig(destination))?.serviceUrl : undefined);
 
       const connectionConfigWithServiceUrl: IConnectionConfig = {
         ...tokenResult.connectionConfig,
-        serviceUrl: tokenResult.connectionConfig.serviceUrl || serviceUrl,
+        serviceUrl: finalServiceUrl,
       };
 
       // Update session with new token
