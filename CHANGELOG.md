@@ -11,6 +11,11 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.2] - 2025-12-13
+
+### Changed
+- Dependency bump: `@mcp-abap-adt/interfaces` to `^0.1.16` to align with latest interfaces release
+
 ## [0.2.1] - 2025-12-12
 
 ### Fixed
@@ -618,4 +623,3 @@ const broker = new AuthBroker({
 - **Module system**: CommonJS
 - **Build output**: TypeScript compiled to JavaScript with type definitions
 - **Logging**: Injectable logger interface with environment variable control
-
