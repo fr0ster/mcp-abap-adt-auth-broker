@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
 ## [Unreleased]
+## [0.2.3] - 2025-12-18
+
+### Added
+- `allowClientCredentials` config flag (default: true). Set to `false` to skip UAA client_credentials flow and force provider/browser-based login (useful for ABAP ADT backends that reject service tokens).
 
 ## [0.2.2] - 2025-12-13
 

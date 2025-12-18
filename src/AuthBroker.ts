@@ -27,6 +27,8 @@ export interface AuthBrokerConfig {
   serviceKeyStore?: IServiceKeyStore;
   /** Token provider (optional) - handles token refresh and authentication flows. If not provided, direct UAA HTTP requests will be used when UAA credentials are available */
   tokenProvider?: ITokenProvider;
+  /** Allow direct UAA client_credentials flow (default: true). Set false to force provider/interactive login (e.g., ABAP ADT). */
+  allowClientCredentials?: boolean;
 }
 
 /**
@@ -47,6 +49,7 @@ export class AuthBroker {
   private serviceKeyStore: IServiceKeyStore | undefined;
   private sessionStore: ISessionStore;
   private tokenProvider: ITokenProvider | undefined;
+  private allowClientCredentials: boolean;
 
   /**
    * Create a new AuthBroker instance
@@ -119,11 +122,14 @@ export class AuthBroker {
     this.tokenProvider = tokenProvider;
     this.browser = browser || 'system';
     this.logger = logger || noOpLogger;
+    this.allowClientCredentials = config.allowClientCredentials !== false;
 
     // Log successful initialization
     const hasServiceKeyStore = !!this.serviceKeyStore;
     const hasTokenProvider = !!this.tokenProvider;
-    this.logger?.debug(`AuthBroker initialized: sessionStore(ok), serviceKeyStore(${hasServiceKeyStore ? 'ok' : 'none'}), tokenProvider(${hasTokenProvider ? 'ok' : 'none'})`);
+    this.logger?.debug(
+      `AuthBroker initialized: sessionStore(ok), serviceKeyStore(${hasServiceKeyStore ? 'ok' : 'none'}), tokenProvider(${hasTokenProvider ? 'ok' : 'none'}), allowClientCredentials(${this.allowClientCredentials})`
+    );
   }
 
   /**
@@ -483,12 +489,12 @@ export class AuthBroker {
     }
 
     try {
-      this.logger?.debug(`Step 2: Trying UAA (client_credentials) flow for ${destination}`);
+      this.logger?.debug(`Step 2: Trying UAA (client_credentials/provider) flow for ${destination}`);
       
       let tokenResult: { connectionConfig: IConnectionConfig; refreshToken?: string };
       
-      // Try direct UAA request first if UAA credentials are available
-      if (uaaCredentials.uaaUrl && uaaCredentials.uaaClientId && uaaCredentials.uaaClientSecret) {
+      // Try direct UAA request first if allowed and UAA credentials are available
+      if (this.allowClientCredentials && uaaCredentials.uaaUrl && uaaCredentials.uaaClientId && uaaCredentials.uaaClientSecret) {
         try {
           this.logger?.debug(`Step 2: Trying direct UAA client_credentials for ${destination}`);
           const uaaResult = await this.getTokenWithClientCredentials(uaaCredentials);
@@ -513,14 +519,18 @@ export class AuthBroker {
           }
         }
       } else if (this.tokenProvider) {
-        // No UAA credentials but have provider
+        // No client_credentials (disabled) or missing UAA creds -> use provider
         const authConfigWithoutRefresh = { ...uaaCredentials, refreshToken: undefined };
         tokenResult = await this.tokenProvider.getConnectionConfig(authConfigWithoutRefresh, {
           browser: this.browser,
           logger: this.logger,
         });
       } else {
-        throw new Error('UAA credentials incomplete and tokenProvider not available');
+        throw new Error(
+          this.allowClientCredentials
+            ? 'UAA credentials incomplete and tokenProvider not available'
+            : 'Client credentials flow disabled and no tokenProvider available for interactive login'
+        );
       }
 
       const tokenLength = tokenResult.connectionConfig.authorizationToken?.length || 0;

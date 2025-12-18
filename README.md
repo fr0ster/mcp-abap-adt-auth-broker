@@ -52,6 +52,14 @@ const broker = new AuthBroker({
   serviceKeyStore: new AbapServiceKeyStore('/path/to/destinations'), // optional
   tokenProvider: new BtpTokenProvider(), // optional
 }, 'chrome', logger);
+
+// Disable direct client_credentials (force provider/browser flow, e.g., for ABAP ADT)
+const brokerNoClientCreds = new AuthBroker({
+  sessionStore: new AbapSessionStore('/path/to/destinations'),
+  serviceKeyStore: new AbapServiceKeyStore('/path/to/destinations'),
+  tokenProvider: new BtpTokenProvider(),
+  allowClientCredentials: false,
+}, 'chrome', logger);
 ```
 
 ### Session + Service Key (For Initialization)
@@ -596,4 +604,3 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 ## License
 
 MIT
-

@@ -331,6 +331,42 @@ describe('AuthBroker', () => {
       expect(mockSessionStore.setConnectionConfig).toHaveBeenCalled();
     });
 
+    it('should use provider when client_credentials is disabled', async () => {
+      const newToken = 'provider-token';
+      const connConfig: IConnectionConfig = {
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: '', // trigger Step2
+      };
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://uaa.test.com',
+        uaaClientId: 'client123',
+        uaaClientSecret: 'secret123',
+      };
+      const tokenResult: TokenProviderResult = {
+        connectionConfig: {
+          serviceUrl: 'https://test.sap.com',
+          authorizationToken: newToken,
+        },
+      };
+
+      mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
+      mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
+      mockTokenProvider.getConnectionConfig.mockResolvedValue(tokenResult);
+
+      const brokerNoClientCreds = new AuthBroker({
+        sessionStore: mockSessionStore,
+        serviceKeyStore: mockServiceKeyStore,
+        tokenProvider: mockTokenProvider,
+        allowClientCredentials: false,
+      }, undefined, noOpLogger);
+
+      const token = await brokerNoClientCreds.getToken('TEST');
+
+      expect(token).toBe(newToken);
+      expect(mockedAxios).not.toHaveBeenCalled(); // client_credentials skipped
+      expect(mockTokenProvider.getConnectionConfig).toHaveBeenCalled();
+    });
+
     it('should get token via Step 2 (UAA) if no refresh token but UAA credentials in session', async () => {
       const newToken = 'new-token-123';
       const connConfig: IConnectionConfig = {
