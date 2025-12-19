@@ -10,6 +10,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
 ## [Unreleased]
+
+## [0.2.4] - 2025-12-19
+
+### Changed
+- **Comprehensive Error Handling**: Added robust error handling for all external operations
+  - **SessionStore errors**: Handle FILE_NOT_FOUND, PARSE_ERROR from session files (graceful degradation)
+  - **ServiceKeyStore errors**: Handle FILE_NOT_FOUND, PARSE_ERROR, INVALID_CONFIG from service key files (log and fallback)
+  - **TokenProvider errors**: Handle network errors (ECONNREFUSED, ETIMEDOUT, ENOTFOUND), validation errors, browser auth failures
+  - **Write operation errors**: Handle failures when saving tokens/config to session files
+  - All errors logged with detailed context (file paths, error codes, missing fields)
+  - Broker continues with fallback mechanisms when possible instead of crashing
+- **Token Refresh Architecture**: Removed direct UAA HTTP requests from AuthBroker
+  - `getToken()` now uses provider's `refreshTokenFromSession()` (Step 2a) and `refreshTokenFromServiceKey()` (Step 2b) methods
+  - All authentication logic delegated to providers (XsuaaTokenProvider, BtpTokenProvider)
+  - Providers handle browser-based authentication and client_credentials flow internally
+  - Better error handling with typed errors from `@mcp-abap-adt/auth-providers@0.2.0`
+- **Error Handling**: Improved error handling in token requests
+  - Network errors (connection issues) are now handled separately from HTTP errors (401, 403)
+  - Better error messages with UAA URL context when network errors occur
+  - No retry attempts for network errors (retries cannot fix infrastructure issues)
+
+### Fixed
+- **Defensive Programming**: Treat all injected dependencies as untrusted
+  - File operations (session/service key stores) may fail - files missing, corrupted, permission issues
+  - Network operations (token provider) may fail - timeouts, connection refused, invalid responses
+  - All external operations wrapped in try-catch with specific error handling per operation type
+  - Prevents broker crashes when consumers misconfigure files or network issues occur
+- **Network Error Detection**: Add proper network error detection in token requests
+  - Detect network errors: `ECONNREFUSED`, `ETIMEDOUT`, `ENOTFOUND`, `ECONNRESET`, `ENETUNREACH`, `EHOSTUNREACH`
+  - Throw network errors immediately with clear error message indicating connectivity issues
+  - Prevents confusing error messages when VPN is down or server is unreachable
+  - Network errors now clearly indicate infrastructure issues vs authentication failures
+- **Simplified Refresh**: `refreshToken()` now simply delegates to `getToken()` for full refresh flow
+  - Ensures consistent refresh behavior across all token operations
+  - No code duplication between getToken and refreshToken methods
+
+### Removed
+- **Direct UAA Code**: Removed direct UAA request methods and old credential flow
+  - Removed `getTokenWithClientCredentials()` private method (logic moved to providers)
+  - Removed `refreshTokenDirect()` private method (logic moved to providers)
+  - Removed `allowClientCredentials` constructor parameter (handled by providers)
+  - Removed old "Step 2: UAA Credentials Flow" (replaced with provider-based Step 2a/2b)
+
+### Dependencies
+- Updated `@mcp-abap-adt/interfaces` to `^0.2.3` for STORE_ERROR_CODES and TOKEN_PROVIDER_ERROR_CODES
+- Updated `@mcp-abap-adt/auth-stores` to `^0.2.5` for typed errors (ParseError, FileNotFoundError, etc.)
+- Updated `@mcp-abap-adt/auth-providers` to `^0.2.0` for new refresh methods and typed errors
+
 ## [0.2.3] - 2025-12-18
 
 ### Added

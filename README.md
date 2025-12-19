@@ -418,6 +418,54 @@ Gets authentication token for destination. Implements a three-step flow:
 - If `sessionStore` contains valid UAA credentials, neither `serviceKeyStore` nor `tokenProvider` are required. Direct UAA HTTP requests will be used automatically.
 - `tokenProvider` is only needed for browser authentication or when direct UAA requests fail.
 - Token validation is performed only when checking existing session. Tokens obtained through refresh/UAA/browser authentication are not validated before being saved.
+- **Store errors are handled gracefully**: If service key files are missing or malformed, the broker logs the error and continues with fallback mechanisms (session store data or provider-based auth)
+
+##### Error Handling
+
+The broker implements comprehensive error handling for all external operations, treating all injected dependencies as untrusted:
+
+```typescript
+import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces';
+
+try {
+  const token = await broker.getToken('TRIAL');
+} catch (error: any) {
+  // Broker handles errors internally where possible, but critical errors propagate
+  console.error('Failed to get token:', error.message);
+}
+```
+
+**Error Categories** (handled by broker with graceful degradation):
+
+**1. SessionStore Errors** (reading session files):
+- `STORE_ERROR_CODES.FILE_NOT_FOUND` - Session file missing (logged, tries serviceKeyStore fallback)
+- `STORE_ERROR_CODES.PARSE_ERROR` - Corrupted session file (logged with file path, tries fallback)
+- Write failures when saving tokens (logged and thrown - critical)
+
+**2. ServiceKeyStore Errors** (reading service key files):
+- `STORE_ERROR_CODES.FILE_NOT_FOUND` - Service key file missing (logged, continues with session data)
+- `STORE_ERROR_CODES.PARSE_ERROR` - Invalid JSON in service key (logged with file path and cause)
+- `STORE_ERROR_CODES.INVALID_CONFIG` - Missing required fields (logged with missing field names)
+- `STORE_ERROR_CODES.STORAGE_ERROR` - Permission/write errors (logged)
+
+**3. TokenProvider Errors** (network operations):
+- Network errors: `ECONNREFUSED`, `ETIMEDOUT`, `ENOTFOUND` (logged, throws with descriptive message)
+- `VALIDATION_ERROR` - Missing required auth fields (logged with field names, throws)
+- `BROWSER_AUTH_ERROR` - Browser authentication failed or cancelled (logged, throws)
+- `REFRESH_ERROR` - Token refresh failed at UAA server (logged, throws)
+
+**Defensive Design Principles:**
+- **All external operations wrapped in try-catch**: Files may be missing/corrupted, network may fail
+- **Graceful degradation**: Store errors trigger fallback mechanisms (serviceKey → session → provider)
+- **Detailed error context**: Logs include file paths, error codes, missing fields for debugging
+- **Fail-fast for critical errors**: Write failures and provider errors throw immediately (cannot recover)
+- **No assumptions about injected dependencies**: All stores/providers treated as potentially unreliable
+
+Example error scenarios handled:
+- Session file deleted mid-operation → uses service key
+- Service key has invalid JSON → logs parse error, uses session data
+- Network timeout during token refresh → logs timeout, throws descriptive error
+- File permission denied → logs error with file path, throws
 
 ##### `refreshToken(destination: string): Promise<string>`
 
