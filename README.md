@@ -98,6 +98,8 @@ const broker = new AuthBroker({
 }, 'chrome');
 ```
 
+**Note**: The `BtpTokenProvider` automatically finds an available port if the requested port is in use. This prevents `EADDRINUSE` errors when multiple stdio servers run simultaneously. The server properly closes all connections and frees the port after authentication completes, ensuring no lingering port occupation.
+
 ### Getting Tokens
 
 ```typescript
@@ -496,6 +498,8 @@ The package uses `ITokenProvider` interface for token acquisition. Two implement
 
 - **`BtpTokenProvider`** - For BTP/ABAP authentication (full scope)
   - Constructor accepts optional `browserAuthPort?: number` parameter (default: 3001)
+  - Automatically finds an available port if the requested port is in use (prevents `EADDRINUSE` errors)
+  - Server properly closes all connections and frees the port after authentication completes
   - Use custom port to avoid conflicts when running alongside other services (e.g., proxy server)
   - Uses browser-based OAuth2 flow (if no refresh token)
   - Uses refresh token if available

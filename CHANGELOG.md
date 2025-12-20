@@ -11,6 +11,15 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.5] - 2025-01-XX
+
+### Dependencies
+- Updated `@mcp-abap-adt/auth-providers` to `^0.2.1` for automatic port selection and improved server shutdown
+  - Browser auth server now automatically finds an available port if the requested port is in use
+  - Improved server shutdown ensures ports are properly freed after authentication completes
+  - Prevents `EADDRINUSE` errors when multiple stdio servers run simultaneously
+  - Ports are properly released after server shutdown, preventing lingering port occupation
+
 ## [0.2.4] - 2025-12-19
 
 ### Changed
