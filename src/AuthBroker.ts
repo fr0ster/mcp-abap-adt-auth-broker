@@ -27,6 +27,12 @@ export interface AuthBrokerConfig {
   serviceKeyStore?: IServiceKeyStore;
   /** Token provider (required) - handles token refresh and authentication flows through browser-based authorization (e.g., XSUAA provider) */
   tokenProvider: ITokenProvider;
+  /**
+   * Allow browser-based authentication (optional, default: true)
+   * When false, getToken() will throw BROWSER_AUTH_REQUIRED error instead of blocking on browser auth.
+   * Use this for headless/non-interactive environments (e.g., MCP stdio transport).
+   */
+  allowBrowserAuth?: boolean;
 }
 
 /**
@@ -38,6 +44,7 @@ export class AuthBroker {
   private serviceKeyStore: IServiceKeyStore | undefined;
   private sessionStore: ISessionStore;
   private tokenProvider: ITokenProvider;
+  private allowBrowserAuth: boolean;
 
   /**
    * Create a new AuthBroker instance
@@ -113,6 +120,7 @@ export class AuthBroker {
     this.tokenProvider = tokenProvider;
     this.browser = browser || 'system';
     this.logger = logger || noOpLogger;
+    this.allowBrowserAuth = config.allowBrowserAuth ?? true;
 
     // Log successful initialization
     const hasServiceKeyStore = !!this.serviceKeyStore;
@@ -252,6 +260,18 @@ export class AuthBroker {
           throw new Error(`Service key for destination "${destination}" does not contain UAA credentials`);
         }
 
+        // Check if browser auth is allowed
+        if (!this.allowBrowserAuth) {
+          const error = new Error(
+            `Browser authentication required for destination "${destination}" but allowBrowserAuth is disabled. ` +
+            `Either enable browser auth or provide a valid session with token.`
+          );
+          (error as any).code = 'BROWSER_AUTH_REQUIRED';
+          (error as any).destination = destination;
+          this.logger?.error(`Step 0: Browser auth required but disabled for ${destination}`);
+          throw error;
+        }
+
         // Use tokenProvider for browser-based authentication
         this.logger?.debug(`Step 0: Authenticating via provider (browser) for ${destination} using service key UAA credentials`);
         let tokenResult;
@@ -306,6 +326,11 @@ export class AuthBroker {
 
         return tokenResult.connectionConfig.authorizationToken!;
       } catch (error: any) {
+        // Re-throw BROWSER_AUTH_REQUIRED error without wrapping
+        if (error.code === 'BROWSER_AUTH_REQUIRED') {
+          throw error;
+        }
+
         // Handle typed store errors
         if (error.code === STORE_ERROR_CODES.FILE_NOT_FOUND) {
           this.logger?.error(`Step 0: Service key file not found for ${destination}: ${error.filePath || 'unknown path'}`);
@@ -317,7 +342,7 @@ export class AuthBroker {
           this.logger?.error(`Step 0: Invalid service key config for ${destination}: missing fields ${error.missingFields?.join(', ') || 'unknown'}`);
           throw new Error(`Cannot initialize session for destination "${destination}": invalid service key - missing ${error.missingFields?.join(', ') || 'required fields'}`);
         }
-        
+
         this.logger?.error(`Step 0: Failed to initialize session for ${destination}: ${error.message}`);
         throw new Error(`Cannot initialize session for destination "${destination}": ${error.message}`);
       }
@@ -449,9 +474,22 @@ export class AuthBroker {
     }
 
     // Try refresh from service key (browser authentication)
+    // Check if browser auth is allowed
+    if (!this.allowBrowserAuth) {
+      const error = new Error(
+        `Browser authentication required for destination "${destination}" but allowBrowserAuth is disabled. ` +
+        `Token refresh via session failed and browser auth is not allowed. ` +
+        `Either enable browser auth or ensure a valid refresh token exists in session.`
+      );
+      (error as any).code = 'BROWSER_AUTH_REQUIRED';
+      (error as any).destination = destination;
+      this.logger?.error(`Step 2b: Browser auth required but disabled for ${destination}`);
+      throw error;
+    }
+
     try {
       this.logger?.debug(`Step 2b: Trying refreshTokenFromServiceKey for ${destination}`);
-      
+
       const tokenResult = await this.tokenProvider.refreshTokenFromServiceKey(uaaCredentials, {
         browser: this.browser,
         logger: this.logger,

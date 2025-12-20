@@ -152,6 +152,183 @@ describe('AuthBroker', () => {
 
   describe('getToken', () => {
 
+    describe('allowBrowserAuth option', () => {
+      it('should throw BROWSER_AUTH_REQUIRED in Step 0 when allowBrowserAuth=false and no token/UAA in session', async () => {
+        const connConfig: IConnectionConfig = {
+          serviceUrl: 'https://test.sap.com',
+          authorizationToken: '', // Empty token
+        };
+        const serviceKeyAuthConfig: IAuthorizationConfig = {
+          uaaUrl: 'https://uaa.test.com',
+          uaaClientId: 'client123',
+          uaaClientSecret: 'secret123',
+        };
+
+        mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
+        mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
+        mockServiceKeyStore.getAuthorizationConfig!.mockResolvedValue(serviceKeyAuthConfig);
+        mockServiceKeyStore.getConnectionConfig!.mockResolvedValue({ serviceUrl: 'https://test.sap.com' });
+
+        const brokerNoBrowser = new AuthBroker({
+          serviceKeyStore: mockServiceKeyStore,
+          sessionStore: mockSessionStore,
+          tokenProvider: mockTokenProvider,
+          allowBrowserAuth: false,
+        }, undefined, noOpLogger);
+
+        let caughtError: any;
+        try {
+          await brokerNoBrowser.getToken('TEST');
+        } catch (error: any) {
+          caughtError = error;
+        }
+
+        expect(caughtError).toBeDefined();
+        expect(caughtError.message).toContain('Browser authentication required');
+        expect(caughtError.code).toBe('BROWSER_AUTH_REQUIRED');
+        expect(caughtError.destination).toBe('TEST');
+
+        // Should not call tokenProvider since browser auth is disabled
+        expect(mockTokenProvider.getConnectionConfig).not.toHaveBeenCalled();
+      });
+
+      it('should throw BROWSER_AUTH_REQUIRED in Step 2b when allowBrowserAuth=false and refresh token fails', async () => {
+        const connConfig: IConnectionConfig = {
+          serviceUrl: 'https://test.sap.com',
+          authorizationToken: '', // Empty token - triggers Step 2
+        };
+        const authConfig: IAuthorizationConfig = {
+          uaaUrl: 'https://uaa.test.com',
+          uaaClientId: 'client123',
+          uaaClientSecret: 'secret123',
+          refreshToken: 'expired-refresh-token',
+        };
+
+        mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
+        mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
+
+        // Step 2a (refreshTokenFromSession) fails
+        mockTokenProvider.refreshTokenFromSession.mockRejectedValue(new Error('Refresh token expired'));
+
+        const brokerNoBrowser = new AuthBroker({
+          sessionStore: mockSessionStore,
+          tokenProvider: mockTokenProvider,
+          allowBrowserAuth: false,
+        }, undefined, noOpLogger);
+
+        let caughtError: any;
+        try {
+          await brokerNoBrowser.getToken('TEST');
+        } catch (error: any) {
+          caughtError = error;
+        }
+
+        expect(caughtError).toBeDefined();
+        expect(caughtError.message).toContain('Browser authentication required');
+        expect(caughtError.code).toBe('BROWSER_AUTH_REQUIRED');
+
+        // Should have tried Step 2a but not Step 2b (browser auth)
+        expect(mockTokenProvider.refreshTokenFromSession).toHaveBeenCalled();
+        expect(mockTokenProvider.refreshTokenFromServiceKey).not.toHaveBeenCalled();
+      });
+
+      it('should work normally when allowBrowserAuth=true (default)', async () => {
+        const newToken = 'new-token-123';
+        const connConfig: IConnectionConfig = {
+          serviceUrl: 'https://test.sap.com',
+          authorizationToken: '', // Empty token
+        };
+        const serviceKeyAuthConfig: IAuthorizationConfig = {
+          uaaUrl: 'https://uaa.test.com',
+          uaaClientId: 'client123',
+          uaaClientSecret: 'secret123',
+        };
+        const tokenResult: TokenProviderResult = {
+          connectionConfig: {
+            serviceUrl: 'https://test.sap.com',
+            authorizationToken: newToken,
+          },
+          refreshToken: 'refresh-token-123',
+        };
+
+        mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
+        mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
+        mockServiceKeyStore.getAuthorizationConfig!.mockResolvedValue(serviceKeyAuthConfig);
+        mockServiceKeyStore.getConnectionConfig!.mockResolvedValue({ serviceUrl: 'https://test.sap.com' });
+        mockTokenProvider.getConnectionConfig.mockResolvedValue(tokenResult);
+        mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
+        mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
+
+        // Default broker (allowBrowserAuth=true)
+        const token = await broker.getToken('TEST');
+
+        expect(token).toBe(newToken);
+        expect(mockTokenProvider.getConnectionConfig).toHaveBeenCalled();
+      });
+
+      it('should succeed with allowBrowserAuth=false if valid token exists in session', async () => {
+        const sessionToken = 'valid-session-token';
+        const connConfig: IConnectionConfig = {
+          serviceUrl: 'https://test.sap.com',
+          authorizationToken: sessionToken,
+        };
+
+        mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
+        mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
+        mockTokenProvider.validateToken = jest.fn().mockResolvedValue(true);
+
+        const brokerNoBrowser = new AuthBroker({
+          sessionStore: mockSessionStore,
+          tokenProvider: mockTokenProvider,
+          allowBrowserAuth: false,
+        }, undefined, logger);
+
+        const token = await brokerNoBrowser.getToken('TEST');
+
+        expect(token).toBe(sessionToken);
+        // No browser auth calls needed
+        expect(mockTokenProvider.getConnectionConfig).not.toHaveBeenCalled();
+        expect(mockTokenProvider.refreshTokenFromServiceKey).not.toHaveBeenCalled();
+      });
+
+      it('should succeed with allowBrowserAuth=false if refresh token works', async () => {
+        const newToken = 'refreshed-token';
+        const connConfig: IConnectionConfig = {
+          serviceUrl: 'https://test.sap.com',
+          authorizationToken: 'invalid-token',
+        };
+        const authConfig: IAuthorizationConfig = {
+          uaaUrl: 'https://uaa.test.com',
+          uaaClientId: 'client123',
+          uaaClientSecret: 'secret123',
+          refreshToken: 'valid-refresh-token',
+        };
+
+        mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
+        mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
+        mockTokenProvider.validateToken = jest.fn().mockResolvedValue(false);
+        mockTokenProvider.refreshTokenFromSession.mockResolvedValue({
+          connectionConfig: { serviceUrl: 'https://test.sap.com', authorizationToken: newToken },
+          refreshToken: 'new-refresh-token',
+        });
+        mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
+        mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
+
+        const brokerNoBrowser = new AuthBroker({
+          sessionStore: mockSessionStore,
+          tokenProvider: mockTokenProvider,
+          allowBrowserAuth: false,
+        }, undefined, logger);
+
+        const token = await brokerNoBrowser.getToken('TEST');
+
+        expect(token).toBe(newToken);
+        // Refresh token worked, no browser auth needed
+        expect(mockTokenProvider.refreshTokenFromSession).toHaveBeenCalled();
+        expect(mockTokenProvider.refreshTokenFromServiceKey).not.toHaveBeenCalled();
+      });
+    });
+
     it('should return token from session store if valid', async () => {
       const sessionToken = 'session-token-123';
       const connConfig: IConnectionConfig = {

@@ -11,10 +11,17 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
-## [0.2.5] - 2025-01-XX
+## [0.2.5] - 2025-12-20
+
+### Added
+- **`allowBrowserAuth` Option**: New configuration option to control browser-based authentication
+  - When `allowBrowserAuth: false`, broker throws `BROWSER_AUTH_REQUIRED` error instead of blocking on browser auth
+  - Useful for headless/non-interactive environments (e.g., MCP stdio transport with Cline)
+  - Error includes `code: 'BROWSER_AUTH_REQUIRED'` and `destination` property for programmatic handling
+  - Broker still works with valid session tokens or refresh tokens when browser auth is disabled
 
 ### Dependencies
-- Updated `@mcp-abap-adt/auth-providers` to `^0.2.1` for automatic port selection and improved server shutdown
+- Updated `@mcp-abap-adt/auth-providers` to `^0.2.2` for automatic port selection, improved server shutdown, and process termination cleanup
   - Browser auth server now automatically finds an available port if the requested port is in use
   - Improved server shutdown ensures ports are properly freed after authentication completes
   - Prevents `EADDRINUSE` errors when multiple stdio servers run simultaneously

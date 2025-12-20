@@ -53,12 +53,12 @@ const broker = new AuthBroker({
   tokenProvider: new BtpTokenProvider(), // optional
 }, 'chrome', logger);
 
-// Disable direct client_credentials (force provider/browser flow, e.g., for ABAP ADT)
-const brokerNoClientCreds = new AuthBroker({
+// Disable browser authentication for headless/stdio environments (e.g., MCP with Cline)
+const brokerNoBrowser = new AuthBroker({
   sessionStore: new AbapSessionStore('/path/to/destinations'),
   serviceKeyStore: new AbapServiceKeyStore('/path/to/destinations'),
   tokenProvider: new BtpTokenProvider(),
-  allowClientCredentials: false,
+  allowBrowserAuth: false, // Throws BROWSER_AUTH_REQUIRED if browser auth needed
 }, 'chrome', logger);
 ```
 
