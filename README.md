@@ -456,6 +456,13 @@ try {
 - `BROWSER_AUTH_ERROR` - Browser authentication failed or cancelled (logged, throws)
 - `REFRESH_ERROR` - Token refresh failed at UAA server (logged, throws)
 
+**4. Browser Auth Disabled Errors** (when `allowBrowserAuth: false`):
+- `BROWSER_AUTH_REQUIRED` - Browser authentication is required but disabled. Thrown when:
+  - **Step 0**: No token and no UAA credentials in session, service key exists but browser auth needed
+  - **Step 2b**: Refresh token expired/invalid and browser auth needed for new token
+  - Error includes `destination` property for context
+  - Use case: Non-interactive environments (MCP stdio, Cline) where browser cannot open
+
 **Defensive Design Principles:**
 - **All external operations wrapped in try-catch**: Files may be missing/corrupted, network may fail
 - **Graceful degradation**: Store errors trigger fallback mechanisms (serviceKey → session → provider)
