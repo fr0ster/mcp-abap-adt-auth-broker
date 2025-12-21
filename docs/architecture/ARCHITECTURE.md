@@ -159,8 +159,9 @@ Refreshes JWT tokens using OAuth2 refresh token flow:
 #### Browser Auth (`src/browserAuth.ts`)
 Handles browser-based OAuth2 flow for initial token acquisition:
 - Starts local HTTP server for OAuth callback
-- Opens browser with authorization URL (configurable: chrome, edge, firefox, system, none)
-- If `browser === 'none'`, prints URL to console for manual copy
+- Opens browser with authorization URL (configurable: chrome, edge, firefox, system, headless, none)
+- If `browser === 'headless'`, prints URL to console and waits for manual callback (SSH/remote)
+- If `browser === 'none'`, prints URL to console and rejects immediately (automated tests)
 - Waits for user authentication
 - Exchanges authorization code for tokens
 - Handles OAuth2 error parameters (`error`, `error_description`)

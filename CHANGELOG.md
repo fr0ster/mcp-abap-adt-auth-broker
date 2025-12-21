@@ -11,6 +11,21 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.7] - 2025-12-21
+
+### Added
+- **Headless Browser Mode**: Added `browser: 'headless'` option for SSH and remote sessions
+  - Logs authentication URL and waits for manual callback
+  - Ideal for environments without display (SSH, Docker, CI/CD)
+  - Differs from `'none'` which rejects immediately (for automated tests)
+
+### Changed
+- **Documentation Update**: Updated browser option documentation to clarify `headless` vs `none` modes
+
+### Dependencies
+- Updated `@mcp-abap-adt/interfaces` to `^0.2.4` for headless browser mode support
+- Updated `@mcp-abap-adt/auth-providers` to `^0.2.3` (devDependency, tests only) for headless mode implementation
+
 ## [0.2.5] - 2025-12-20
 
 ### Added

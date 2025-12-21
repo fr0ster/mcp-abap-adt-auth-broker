@@ -175,7 +175,8 @@ constructor(
   - `'edge'` - Open in Microsoft Edge
   - `'firefox'` - Open in Mozilla Firefox
   - `'system'` - Use system default browser (default)
-  - `'none'` - Don't open browser, print URL to console for manual copy
+  - `'headless'` - Don't open browser, print URL and wait for manual callback (SSH/remote)
+  - `'none'` - Don't open browser, print URL and reject immediately (automated tests)
 - `logger` (optional): Custom logger instance. If not provided, uses default logger
 
 **Example**:

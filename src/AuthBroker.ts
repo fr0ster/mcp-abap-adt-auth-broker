@@ -52,9 +52,10 @@ export class AuthBroker {
    *               - sessionStore: Store for session data (required)
    *               - serviceKeyStore: Store for service keys (optional)
    *               - tokenProvider: Token provider implementing ITokenProvider interface (required) - handles browser-based authorization
-   * @param browser Optional browser name for authentication (chrome, edge, firefox, system, none).
+   * @param browser Optional browser name for authentication (chrome, edge, firefox, system, headless, none).
    *                Default: 'system' (system default browser).
-   *                Use 'none' to print URL instead of opening browser.
+   *                Use 'headless' for SSH/remote sessions - logs URL and waits for manual callback.
+   *                Use 'none' for automated tests - logs URL and rejects immediately.
    * @param logger Optional logger instance implementing ILogger interface. If not provided, uses no-op logger.
    */
   constructor(

@@ -368,7 +368,9 @@ new AuthBroker(
   - `sessionStore` - **Required** - Store for session data. Must contain initial session with `serviceUrl`
   - `serviceKeyStore` - **Optional** - Store for service keys. Only needed for initializing sessions from service keys
   - `tokenProvider` - **Optional** - Token provider for token acquisition. Only needed for browser authentication or when direct UAA requests fail
-- `browser` - Optional browser name for authentication (`chrome`, `edge`, `firefox`, `system`, `none`). Default: `system`
+- `browser` - Optional browser name for authentication (`chrome`, `edge`, `firefox`, `system`, `headless`, `none`). Default: `system`
+  - Use `'headless'` for SSH/remote sessions - logs URL and waits for manual callback
+  - Use `'none'` for automated tests - logs URL and rejects immediately
   - For XSUAA, browser is not used (client_credentials grant type) - use `'none'`
 - `logger` - Optional logger instance. If not provided, uses no-op logger
 
