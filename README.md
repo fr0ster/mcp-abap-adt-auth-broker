@@ -110,6 +110,38 @@ const token = await broker.getToken('TRIAL');
 const newToken = await broker.refreshToken('TRIAL');
 ```
 
+### Creating Token Refresher for DI
+
+The `createTokenRefresher()` method creates an `ITokenRefresher` implementation that can be injected into connections. This enables connections to handle token refresh transparently without knowing about authentication internals.
+
+```typescript
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { JwtAbapConnection } from '@mcp-abap-adt/connection';
+
+// Create broker
+const broker = new AuthBroker({
+  sessionStore: mySessionStore,
+  serviceKeyStore: myServiceKeyStore,
+  tokenProvider: myTokenProvider,
+});
+
+// Create token refresher for specific destination
+const tokenRefresher = broker.createTokenRefresher('TRIAL');
+
+// Inject into connection (connection can handle 401/403 automatically)
+const connection = new JwtAbapConnection(config, tokenRefresher);
+
+// Token refresher methods:
+// - getToken(): Returns cached token if valid, otherwise refreshes
+// - refreshToken(): Forces token refresh and saves to session store
+```
+
+**Benefits of Token Refresher:**
+- 🔄 **Transparent Refresh**: Connection handles 401/403 errors automatically
+- 🧩 **Dependency Injection**: Clean separation of concerns
+- 💾 **Automatic Persistence**: Tokens saved to session store after refresh
+- 🎯 **Destination-Scoped**: Each refresher is bound to specific destination
+
 ## Configuration
 
 ### Environment Variables

@@ -938,4 +938,88 @@ describe('AuthBroker', () => {
     });
   });
 
+  describe('createTokenRefresher', () => {
+    it('should return ITokenRefresher with getToken and refreshToken methods', () => {
+      const tokenRefresher = broker.createTokenRefresher('TEST');
+
+      expect(tokenRefresher).toBeDefined();
+      expect(typeof tokenRefresher.getToken).toBe('function');
+      expect(typeof tokenRefresher.refreshToken).toBe('function');
+    });
+
+    it('should call broker.getToken when tokenRefresher.getToken is called', async () => {
+      const connConfig: IConnectionConfig = {
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: 'valid-token-123',
+      };
+      mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
+      mockTokenProvider.validateToken = jest.fn().mockResolvedValue(true);
+
+      const tokenRefresher = broker.createTokenRefresher('TEST');
+      const token = await tokenRefresher.getToken();
+
+      expect(token).toBe('valid-token-123');
+      expect(mockSessionStore.getConnectionConfig).toHaveBeenCalledWith('TEST');
+    });
+
+    it('should call broker.refreshToken when tokenRefresher.refreshToken is called', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://uaa.test.com',
+        uaaClientId: 'client-id',
+        uaaClientSecret: 'client-secret',
+        refreshToken: 'refresh-token-123',
+      };
+      const newConnConfig: IConnectionConfig = {
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: 'new-refreshed-token-456',
+      };
+      const tokenResult: TokenProviderResult = {
+        connectionConfig: newConnConfig,
+        refreshToken: 'new-refresh-token',
+      };
+
+      mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
+      mockSessionStore.getConnectionConfig.mockResolvedValue({ serviceUrl: 'https://test.sap.com' });
+      mockServiceKeyStore.getAuthorizationConfig!.mockResolvedValue(authConfig);
+      mockServiceKeyStore.getConnectionConfig!.mockResolvedValue({ serviceUrl: 'https://test.sap.com' });
+      mockTokenProvider.refreshTokenFromSession!.mockResolvedValue(tokenResult);
+      mockSessionStore.setConnectionConfig.mockResolvedValue();
+      mockSessionStore.setAuthorizationConfig.mockResolvedValue();
+
+      const tokenRefresher = broker.createTokenRefresher('TEST');
+      const token = await tokenRefresher.refreshToken();
+
+      expect(token).toBe('new-refreshed-token-456');
+      expect(mockTokenProvider.refreshTokenFromSession).toHaveBeenCalled();
+    });
+
+    it('should create independent refreshers for different destinations', async () => {
+      const connConfig1: IConnectionConfig = {
+        serviceUrl: 'https://dest1.sap.com',
+        authorizationToken: 'token-dest1',
+      };
+      const connConfig2: IConnectionConfig = {
+        serviceUrl: 'https://dest2.sap.com',
+        authorizationToken: 'token-dest2',
+      };
+
+      mockSessionStore.getConnectionConfig
+        .mockImplementation(async (dest: string) => {
+          if (dest === 'DEST1') return connConfig1;
+          if (dest === 'DEST2') return connConfig2;
+          return null;
+        });
+      mockTokenProvider.validateToken = jest.fn().mockResolvedValue(true);
+
+      const refresher1 = broker.createTokenRefresher('DEST1');
+      const refresher2 = broker.createTokenRefresher('DEST2');
+
+      const token1 = await refresher1.getToken();
+      const token2 = await refresher2.getToken();
+
+      expect(token1).toBe('token-dest1');
+      expect(token2).toBe('token-dest2');
+    });
+  });
+
 });

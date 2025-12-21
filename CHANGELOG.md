@@ -11,6 +11,24 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.9] - 2025-12-21
+
+### Added
+- **`createTokenRefresher()` Method**: New factory method to create `ITokenRefresher` for dependency injection
+  - Returns `ITokenRefresher` implementation for a specific destination
+  - `getToken()` - returns cached token if valid, otherwise refreshes
+  - `refreshToken()` - forces token refresh and saves to session store
+  - Designed to be injected into `JwtAbapConnection` via DI
+  - Enables connections to handle 401/403 transparently without knowing auth internals
+
+### Changed
+- **Dependencies**: Updated `@mcp-abap-adt/interfaces` to `^0.2.5`
+  - New `ITokenRefresher` interface for token management DI
+  - Simplified `IAbapConnection` interface (consumer-facing methods only)
+
+### Exports
+- Re-export `ITokenRefresher` type from `@mcp-abap-adt/interfaces` for convenience
+
 ## [0.2.8] - 2025-12-21
 
 ### Changed

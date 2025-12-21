@@ -2,7 +2,7 @@
  * Main AuthBroker class for managing JWT tokens based on destinations
  */
 
-import { ILogger, IConfig, isNetworkError, STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces';
+import { ILogger, IConfig, isNetworkError, STORE_ERROR_CODES, ITokenRefresher } from '@mcp-abap-adt/interfaces';
 import { IServiceKeyStore, ISessionStore, IAuthorizationConfig, IConnectionConfig } from './stores/interfaces';
 import { ITokenProvider } from './providers';
 import axios from 'axios';
@@ -663,6 +663,45 @@ export class AuthBroker {
     
     this.logger?.debug(`No connection config found for ${destination}`);
     return null;
+  }
+
+  /**
+   * Create a token refresher for a specific destination.
+   * 
+   * The token refresher is designed to be injected into JwtAbapConnection via DI,
+   * allowing the connection to handle token refresh transparently without knowing
+   * about authentication internals.
+   * 
+   * **Usage:**
+   * ```typescript
+   * const broker = new AuthBroker(config);
+   * const tokenRefresher = broker.createTokenRefresher('TRIAL');
+   * const connection = new JwtAbapConnection(config, tokenRefresher);
+   * ```
+   * 
+   * @param destination Destination name (e.g., "TRIAL")
+   * @returns ITokenRefresher implementation for the given destination
+   */
+  createTokenRefresher(destination: string): ITokenRefresher {
+    const broker = this;
+    
+    return {
+      /**
+       * Get current valid token.
+       * Returns cached token if valid, otherwise refreshes and returns new token.
+       */
+      async getToken(): Promise<string> {
+        return broker.getToken(destination);
+      },
+      
+      /**
+       * Force refresh token and save to session store.
+       * Always performs refresh, ignoring cached token validity.
+       */
+      async refreshToken(): Promise<string> {
+        return broker.refreshToken(destination);
+      }
+    };
   }
 
 }
