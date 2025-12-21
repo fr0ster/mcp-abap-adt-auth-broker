@@ -56,7 +56,7 @@
   },
   "devDependencies": {
     "@mcp-abap-adt/auth-providers": "^0.2.3",
-    "@mcp-abap-adt/auth-stores": "^0.2.5",
+    "@mcp-abap-adt/auth-stores": "^0.2.8",
     "@types/express": "^5.0.5",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",

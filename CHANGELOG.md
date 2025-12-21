@@ -11,6 +11,13 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.8] - 2025-12-21
+
+### Changed
+- **Dependencies**: Updated `@mcp-abap-adt/auth-stores` to `^0.2.8`
+  - EnvFileSessionStore now persists JWT tokens back to .env file after token refresh
+  - Removed duplicate BTP stores (now aliases to XSUAA equivalents)
+
 ## [0.2.7] - 2025-12-21
 
 ### Added
