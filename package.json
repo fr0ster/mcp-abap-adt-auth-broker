@@ -36,6 +36,7 @@
     "access": "public"
   },
   "scripts": {
+    "chrono": "./tools/version-stats.sh",
     "clean": "rm -rf dist tsconfig.tsbuildinfo",
     "build": "npm run clean --silent && npx tsc -p tsconfig.json",
     "build:fast": "npx tsc -p tsconfig.json",
