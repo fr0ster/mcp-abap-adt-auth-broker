@@ -1,16 +1,21 @@
 /**
  * Tests for AuthBroker class
- * 
+ *
  * Tests use mocked implementations of interfaces, not real store/provider classes.
  */
 
-import { AuthBroker } from '../../AuthBroker';
-import type { IServiceKeyStore, ISessionStore, IAuthorizationConfig, IConnectionConfig } from '../../stores/interfaces';
-import type { ITokenProvider, TokenProviderResult } from '../../providers';
-import type { IConfig } from '../../types';
 import type { ILogger } from '@mcp-abap-adt/interfaces';
-import { createTestLogger } from '../helpers/testLogger';
 import axios from 'axios';
+import { AuthBroker } from '../../AuthBroker';
+import type { ITokenProvider, TokenProviderResult } from '../../providers';
+import type {
+  IAuthorizationConfig,
+  IConnectionConfig,
+  IServiceKeyStore,
+  ISessionStore,
+} from '../../stores/interfaces';
+import type { IConfig } from '../../types';
+import { createTestLogger } from '../helpers/testLogger';
 
 jest.mock('axios');
 const mockedAxios = axios as jest.MockedFunction<typeof axios>;
@@ -58,11 +63,15 @@ describe('AuthBroker', () => {
 
     // Use logger (enabled only if DEBUG_AUTH_BROKER is set)
     // Tests that expect errors should use noOpLogger explicitly
-    broker = new AuthBroker({
-      serviceKeyStore: mockServiceKeyStore,
-      sessionStore: mockSessionStore,
-      tokenProvider: mockTokenProvider,
-    }, undefined, logger);
+    broker = new AuthBroker(
+      {
+        serviceKeyStore: mockServiceKeyStore,
+        sessionStore: mockSessionStore,
+        tokenProvider: mockTokenProvider,
+      },
+      undefined,
+      logger,
+    );
   });
 
   afterEach(() => {
@@ -151,7 +160,6 @@ describe('AuthBroker', () => {
   });
 
   describe('getToken', () => {
-
     describe('allowBrowserAuth option', () => {
       it('should throw BROWSER_AUTH_REQUIRED in Step 0 when allowBrowserAuth=false and no token/UAA in session', async () => {
         const connConfig: IConnectionConfig = {
@@ -166,15 +174,23 @@ describe('AuthBroker', () => {
 
         mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
         mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
-        mockServiceKeyStore.getAuthorizationConfig!.mockResolvedValue(serviceKeyAuthConfig);
-        mockServiceKeyStore.getConnectionConfig!.mockResolvedValue({ serviceUrl: 'https://test.sap.com' });
+        mockServiceKeyStore.getAuthorizationConfig?.mockResolvedValue(
+          serviceKeyAuthConfig,
+        );
+        mockServiceKeyStore.getConnectionConfig?.mockResolvedValue({
+          serviceUrl: 'https://test.sap.com',
+        });
 
-        const brokerNoBrowser = new AuthBroker({
-          serviceKeyStore: mockServiceKeyStore,
-          sessionStore: mockSessionStore,
-          tokenProvider: mockTokenProvider,
-          allowBrowserAuth: false,
-        }, undefined, noOpLogger);
+        const brokerNoBrowser = new AuthBroker(
+          {
+            serviceKeyStore: mockServiceKeyStore,
+            sessionStore: mockSessionStore,
+            tokenProvider: mockTokenProvider,
+            allowBrowserAuth: false,
+          },
+          undefined,
+          noOpLogger,
+        );
 
         let caughtError: any;
         try {
@@ -184,7 +200,9 @@ describe('AuthBroker', () => {
         }
 
         expect(caughtError).toBeDefined();
-        expect(caughtError.message).toContain('Browser authentication required');
+        expect(caughtError.message).toContain(
+          'Browser authentication required',
+        );
         expect(caughtError.code).toBe('BROWSER_AUTH_REQUIRED');
         expect(caughtError.destination).toBe('TEST');
 
@@ -208,13 +226,19 @@ describe('AuthBroker', () => {
         mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
 
         // Step 2a (refreshTokenFromSession) fails
-        mockTokenProvider.refreshTokenFromSession.mockRejectedValue(new Error('Refresh token expired'));
+        mockTokenProvider.refreshTokenFromSession.mockRejectedValue(
+          new Error('Refresh token expired'),
+        );
 
-        const brokerNoBrowser = new AuthBroker({
-          sessionStore: mockSessionStore,
-          tokenProvider: mockTokenProvider,
-          allowBrowserAuth: false,
-        }, undefined, noOpLogger);
+        const brokerNoBrowser = new AuthBroker(
+          {
+            sessionStore: mockSessionStore,
+            tokenProvider: mockTokenProvider,
+            allowBrowserAuth: false,
+          },
+          undefined,
+          noOpLogger,
+        );
 
         let caughtError: any;
         try {
@@ -224,12 +248,16 @@ describe('AuthBroker', () => {
         }
 
         expect(caughtError).toBeDefined();
-        expect(caughtError.message).toContain('Browser authentication required');
+        expect(caughtError.message).toContain(
+          'Browser authentication required',
+        );
         expect(caughtError.code).toBe('BROWSER_AUTH_REQUIRED');
 
         // Should have tried Step 2a but not Step 2b (browser auth)
         expect(mockTokenProvider.refreshTokenFromSession).toHaveBeenCalled();
-        expect(mockTokenProvider.refreshTokenFromServiceKey).not.toHaveBeenCalled();
+        expect(
+          mockTokenProvider.refreshTokenFromServiceKey,
+        ).not.toHaveBeenCalled();
       });
 
       it('should work normally when allowBrowserAuth=true (default)', async () => {
@@ -253,8 +281,12 @@ describe('AuthBroker', () => {
 
         mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
         mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
-        mockServiceKeyStore.getAuthorizationConfig!.mockResolvedValue(serviceKeyAuthConfig);
-        mockServiceKeyStore.getConnectionConfig!.mockResolvedValue({ serviceUrl: 'https://test.sap.com' });
+        mockServiceKeyStore.getAuthorizationConfig?.mockResolvedValue(
+          serviceKeyAuthConfig,
+        );
+        mockServiceKeyStore.getConnectionConfig?.mockResolvedValue({
+          serviceUrl: 'https://test.sap.com',
+        });
         mockTokenProvider.getConnectionConfig.mockResolvedValue(tokenResult);
         mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
         mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
@@ -277,18 +309,24 @@ describe('AuthBroker', () => {
         mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
         mockTokenProvider.validateToken = jest.fn().mockResolvedValue(true);
 
-        const brokerNoBrowser = new AuthBroker({
-          sessionStore: mockSessionStore,
-          tokenProvider: mockTokenProvider,
-          allowBrowserAuth: false,
-        }, undefined, logger);
+        const brokerNoBrowser = new AuthBroker(
+          {
+            sessionStore: mockSessionStore,
+            tokenProvider: mockTokenProvider,
+            allowBrowserAuth: false,
+          },
+          undefined,
+          logger,
+        );
 
         const token = await brokerNoBrowser.getToken('TEST');
 
         expect(token).toBe(sessionToken);
         // No browser auth calls needed
         expect(mockTokenProvider.getConnectionConfig).not.toHaveBeenCalled();
-        expect(mockTokenProvider.refreshTokenFromServiceKey).not.toHaveBeenCalled();
+        expect(
+          mockTokenProvider.refreshTokenFromServiceKey,
+        ).not.toHaveBeenCalled();
       });
 
       it('should succeed with allowBrowserAuth=false if refresh token works', async () => {
@@ -308,24 +346,33 @@ describe('AuthBroker', () => {
         mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
         mockTokenProvider.validateToken = jest.fn().mockResolvedValue(false);
         mockTokenProvider.refreshTokenFromSession.mockResolvedValue({
-          connectionConfig: { serviceUrl: 'https://test.sap.com', authorizationToken: newToken },
+          connectionConfig: {
+            serviceUrl: 'https://test.sap.com',
+            authorizationToken: newToken,
+          },
           refreshToken: 'new-refresh-token',
         });
         mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
         mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
 
-        const brokerNoBrowser = new AuthBroker({
-          sessionStore: mockSessionStore,
-          tokenProvider: mockTokenProvider,
-          allowBrowserAuth: false,
-        }, undefined, logger);
+        const brokerNoBrowser = new AuthBroker(
+          {
+            sessionStore: mockSessionStore,
+            tokenProvider: mockTokenProvider,
+            allowBrowserAuth: false,
+          },
+          undefined,
+          logger,
+        );
 
         const token = await brokerNoBrowser.getToken('TEST');
 
         expect(token).toBe(newToken);
         // Refresh token worked, no browser auth needed
         expect(mockTokenProvider.refreshTokenFromSession).toHaveBeenCalled();
-        expect(mockTokenProvider.refreshTokenFromServiceKey).not.toHaveBeenCalled();
+        expect(
+          mockTokenProvider.refreshTokenFromServiceKey,
+        ).not.toHaveBeenCalled();
       });
     });
 
@@ -344,8 +391,13 @@ describe('AuthBroker', () => {
 
       expect(token).toBe(sessionToken);
       expect(mockSessionStore.getConnectionConfig).toHaveBeenCalledWith('TEST');
-      expect(mockSessionStore.getAuthorizationConfig).toHaveBeenCalledWith('TEST');
-      expect(mockTokenProvider.validateToken).toHaveBeenCalledWith(sessionToken, connConfig.serviceUrl);
+      expect(mockSessionStore.getAuthorizationConfig).toHaveBeenCalledWith(
+        'TEST',
+      );
+      expect(mockTokenProvider.validateToken).toHaveBeenCalledWith(
+        sessionToken,
+        connConfig.serviceUrl,
+      );
     });
 
     it('should throw error if session missing serviceUrl', async () => {
@@ -357,12 +409,18 @@ describe('AuthBroker', () => {
       mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
 
-      const errorBroker = new AuthBroker({
-        sessionStore: mockSessionStore,
-        tokenProvider: mockTokenProvider,
-      }, undefined, noOpLogger);
+      const errorBroker = new AuthBroker(
+        {
+          sessionStore: mockSessionStore,
+          tokenProvider: mockTokenProvider,
+        },
+        undefined,
+        noOpLogger,
+      );
 
-      await expect(errorBroker.getToken('TEST')).rejects.toThrow('missing required field \'serviceUrl\'');
+      await expect(errorBroker.getToken('TEST')).rejects.toThrow(
+        "missing required field 'serviceUrl'",
+      );
     });
 
     it('should get new token via Step 1 (refresh) if session token is invalid', async () => {
@@ -394,7 +452,10 @@ describe('AuthBroker', () => {
       const token = await broker.getToken('TEST');
 
       expect(token).toBe(newToken);
-      expect(mockTokenProvider.validateToken).toHaveBeenCalledWith(invalidToken, connConfig.serviceUrl);
+      expect(mockTokenProvider.validateToken).toHaveBeenCalledWith(
+        invalidToken,
+        connConfig.serviceUrl,
+      );
       expect(mockTokenProvider.refreshTokenFromSession).toHaveBeenCalledWith(
         expect.objectContaining({
           uaaUrl: authConfig.uaaUrl,
@@ -402,7 +463,7 @@ describe('AuthBroker', () => {
           uaaClientSecret: authConfig.uaaClientSecret,
           refreshToken: 'refresh-token-123',
         }),
-        expect.any(Object)
+        expect.any(Object),
       );
       expect(mockSessionStore.setConnectionConfig).toHaveBeenCalled();
     });
@@ -428,8 +489,13 @@ describe('AuthBroker', () => {
 
       mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
-      mockServiceKeyStore.getAuthorizationConfig!.mockResolvedValue(serviceKeyAuthConfig);
-      mockServiceKeyStore.getConnectionConfig!.mockResolvedValue({ serviceUrl: 'https://test.sap.com', authorizationToken: '' });
+      mockServiceKeyStore.getAuthorizationConfig?.mockResolvedValue(
+        serviceKeyAuthConfig,
+      );
+      mockServiceKeyStore.getConnectionConfig?.mockResolvedValue({
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: '',
+      });
       mockTokenProvider.getConnectionConfig.mockResolvedValue(tokenResult);
       mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
       mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
@@ -437,17 +503,22 @@ describe('AuthBroker', () => {
       const token = await broker.getToken('TEST');
 
       expect(token).toBe(newToken);
-      expect(mockServiceKeyStore.getAuthorizationConfig).toHaveBeenCalledWith('TEST');
+      expect(mockServiceKeyStore.getAuthorizationConfig).toHaveBeenCalledWith(
+        'TEST',
+      );
       expect(mockTokenProvider.getConnectionConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           uaaUrl: serviceKeyAuthConfig.uaaUrl,
           uaaClientId: serviceKeyAuthConfig.uaaClientId,
           uaaClientSecret: serviceKeyAuthConfig.uaaClientSecret,
         }),
-        expect.any(Object)
+        expect.any(Object),
       );
       expect(mockSessionStore.setConnectionConfig).toHaveBeenCalled();
-      expect(mockSessionStore.setAuthorizationConfig).toHaveBeenCalledWith('TEST', expect.objectContaining({ refreshToken: 'refresh-token-123' }));
+      expect(mockSessionStore.setAuthorizationConfig).toHaveBeenCalledWith(
+        'TEST',
+        expect.objectContaining({ refreshToken: 'refresh-token-123' }),
+      );
     });
 
     it('should throw error if no token, no UAA, and no serviceKeyStore', async () => {
@@ -459,12 +530,18 @@ describe('AuthBroker', () => {
       mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
 
-      const brokerWithoutServiceKey = new AuthBroker({
-        sessionStore: mockSessionStore,
-        tokenProvider: mockTokenProvider,
-      }, undefined, noOpLogger);
+      const brokerWithoutServiceKey = new AuthBroker(
+        {
+          sessionStore: mockSessionStore,
+          tokenProvider: mockTokenProvider,
+        },
+        undefined,
+        noOpLogger,
+      );
 
-      await expect(brokerWithoutServiceKey.getToken('TEST')).rejects.toThrow('serviceKeyStore is not available');
+      await expect(brokerWithoutServiceKey.getToken('TEST')).rejects.toThrow(
+        'serviceKeyStore is not available',
+      );
     });
 
     it('should get token via Step 2b (refreshTokenFromServiceKey) if no refresh token', async () => {
@@ -485,13 +562,20 @@ describe('AuthBroker', () => {
       mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
       mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
 
-      const broker = new AuthBroker({
-        sessionStore: mockSessionStore,
-        tokenProvider: mockTokenProvider,
-      }, undefined, logger);
+      const broker = new AuthBroker(
+        {
+          sessionStore: mockSessionStore,
+          tokenProvider: mockTokenProvider,
+        },
+        undefined,
+        logger,
+      );
 
       mockTokenProvider.refreshTokenFromServiceKey.mockResolvedValue({
-        connectionConfig: { serviceUrl: 'https://test.sap.com', authorizationToken: newToken },
+        connectionConfig: {
+          serviceUrl: 'https://test.sap.com',
+          authorizationToken: newToken,
+        },
         refreshToken: 'new-refresh-token',
       });
 
@@ -504,7 +588,7 @@ describe('AuthBroker', () => {
           uaaClientId: authConfig.uaaClientId,
           uaaClientSecret: authConfig.uaaClientSecret,
         }),
-        expect.any(Object)
+        expect.any(Object),
       );
       expect(mockSessionStore.setConnectionConfig).toHaveBeenCalled();
     });
@@ -530,13 +614,19 @@ describe('AuthBroker', () => {
 
       mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
-      mockTokenProvider.refreshTokenFromServiceKey.mockResolvedValue(tokenResult);
+      mockTokenProvider.refreshTokenFromServiceKey.mockResolvedValue(
+        tokenResult,
+      );
 
-      const brokerNoClientCreds = new AuthBroker({
-        sessionStore: mockSessionStore,
-        serviceKeyStore: mockServiceKeyStore,
-        tokenProvider: mockTokenProvider,
-      }, undefined, noOpLogger);
+      const brokerNoClientCreds = new AuthBroker(
+        {
+          sessionStore: mockSessionStore,
+          serviceKeyStore: mockServiceKeyStore,
+          tokenProvider: mockTokenProvider,
+        },
+        undefined,
+        noOpLogger,
+      );
 
       const token = await brokerNoClientCreds.getToken('TEST');
 
@@ -569,7 +659,9 @@ describe('AuthBroker', () => {
 
       mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
-      mockTokenProvider.refreshTokenFromServiceKey.mockResolvedValue(tokenResult);
+      mockTokenProvider.refreshTokenFromServiceKey.mockResolvedValue(
+        tokenResult,
+      );
       mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
       mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
 
@@ -582,7 +674,7 @@ describe('AuthBroker', () => {
           uaaClientId: authConfig.uaaClientId,
           uaaClientSecret: authConfig.uaaClientSecret,
         }),
-        expect.any(Object)
+        expect.any(Object),
       );
       expect(mockSessionStore.setConnectionConfig).toHaveBeenCalled();
     });
@@ -605,7 +697,10 @@ describe('AuthBroker', () => {
 
       mockServiceKeyStore.getServiceKey.mockResolvedValue({} as IConfig);
       mockServiceKeyStore.getAuthorizationConfig.mockResolvedValue(authConfig);
-      mockServiceKeyStore.getConnectionConfig.mockResolvedValue({ serviceUrl: 'https://test.sap.com', authorizationToken: '' });
+      mockServiceKeyStore.getConnectionConfig.mockResolvedValue({
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: '',
+      });
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
       mockSessionStore.getConnectionConfig.mockResolvedValue(null); // Trigger Step 0
       mockTokenProvider.getConnectionConfig.mockResolvedValue(tokenResult);
@@ -621,10 +716,16 @@ describe('AuthBroker', () => {
           uaaClientId: authConfig.uaaClientId,
           uaaClientSecret: authConfig.uaaClientSecret,
         }),
-        expect.any(Object)
+        expect.any(Object),
       );
-      expect(mockSessionStore.setConnectionConfig).toHaveBeenCalledWith('TEST', expect.objectContaining({ authorizationToken: 'new-token-123' }));
-      expect(mockSessionStore.setAuthorizationConfig).toHaveBeenCalledWith('TEST', expect.objectContaining({ refreshToken: 'new-refresh-token-123' }));
+      expect(mockSessionStore.setConnectionConfig).toHaveBeenCalledWith(
+        'TEST',
+        expect.objectContaining({ authorizationToken: 'new-token-123' }),
+      );
+      expect(mockSessionStore.setAuthorizationConfig).toHaveBeenCalledWith(
+        'TEST',
+        expect.objectContaining({ refreshToken: 'new-refresh-token-123' }),
+      );
     });
 
     it('should use refresh token from session if available', async () => {
@@ -649,8 +750,13 @@ describe('AuthBroker', () => {
 
       mockServiceKeyStore.getServiceKey.mockResolvedValue({} as IConfig);
       mockServiceKeyStore.getAuthorizationConfig.mockResolvedValue(authConfig);
-      mockSessionStore.getAuthorizationConfig.mockResolvedValue(sessionAuthConfig);
-      mockSessionStore.getConnectionConfig.mockResolvedValue({ serviceUrl: 'https://test.sap.com', authorizationToken: '' });
+      mockSessionStore.getAuthorizationConfig.mockResolvedValue(
+        sessionAuthConfig,
+      );
+      mockSessionStore.getConnectionConfig.mockResolvedValue({
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: '',
+      });
       mockTokenProvider.refreshTokenFromSession.mockResolvedValue(tokenResult);
       mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
       mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
@@ -662,7 +768,7 @@ describe('AuthBroker', () => {
         expect.objectContaining({
           refreshToken: 'existing-refresh-token',
         }),
-        expect.any(Object)
+        expect.any(Object),
       );
     });
 
@@ -676,17 +782,27 @@ describe('AuthBroker', () => {
       const newToken = 'new-token-123';
 
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
-      mockSessionStore.getConnectionConfig.mockResolvedValue({ serviceUrl: 'https://test.sap.com', authorizationToken: '' });
+      mockSessionStore.getConnectionConfig.mockResolvedValue({
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: '',
+      });
       mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
       mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
 
-      const broker = new AuthBroker({
-        sessionStore: mockSessionStore,
-        tokenProvider: mockTokenProvider,
-      }, undefined, logger);
+      const broker = new AuthBroker(
+        {
+          sessionStore: mockSessionStore,
+          tokenProvider: mockTokenProvider,
+        },
+        undefined,
+        logger,
+      );
 
       mockTokenProvider.refreshTokenFromSession.mockResolvedValue({
-        connectionConfig: { serviceUrl: 'https://test.sap.com', authorizationToken: newToken },
+        connectionConfig: {
+          serviceUrl: 'https://test.sap.com',
+          authorizationToken: newToken,
+        },
         refreshToken: 'new-refresh-token',
       });
 
@@ -697,7 +813,7 @@ describe('AuthBroker', () => {
         expect.objectContaining({
           refreshToken: 'refresh-token-123',
         }),
-        expect.any(Object)
+        expect.any(Object),
       );
       expect(mockSessionStore.setConnectionConfig).toHaveBeenCalled();
     });
@@ -721,15 +837,22 @@ describe('AuthBroker', () => {
       mockedAxios.mockRejectedValue(new Error('Direct UAA failed'));
 
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
-      mockSessionStore.getConnectionConfig.mockResolvedValue({ serviceUrl: 'https://test.sap.com', authorizationToken: '' });
+      mockSessionStore.getConnectionConfig.mockResolvedValue({
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: '',
+      });
       mockTokenProvider.refreshTokenFromSession.mockResolvedValue(tokenResult);
       mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
       mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
 
-      const brokerWithoutServiceKey = new AuthBroker({
-        sessionStore: mockSessionStore,
-        tokenProvider: mockTokenProvider,
-      }, undefined, logger);
+      const brokerWithoutServiceKey = new AuthBroker(
+        {
+          sessionStore: mockSessionStore,
+          tokenProvider: mockTokenProvider,
+        },
+        undefined,
+        logger,
+      );
 
       const token = await brokerWithoutServiceKey.refreshToken('TEST');
 
@@ -738,7 +861,7 @@ describe('AuthBroker', () => {
         expect.objectContaining({
           refreshToken: 'refresh-token-123',
         }),
-        expect.any(Object)
+        expect.any(Object),
       );
     });
 
@@ -746,12 +869,18 @@ describe('AuthBroker', () => {
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
       mockSessionStore.getConnectionConfig.mockResolvedValue(null);
 
-      const brokerWithoutServiceKey = new AuthBroker({
-        sessionStore: mockSessionStore,
-        tokenProvider: mockTokenProvider,
-      }, undefined, noOpLogger);
+      const brokerWithoutServiceKey = new AuthBroker(
+        {
+          sessionStore: mockSessionStore,
+          tokenProvider: mockTokenProvider,
+        },
+        undefined,
+        noOpLogger,
+      );
 
-      await expect(brokerWithoutServiceKey.refreshToken('TEST')).rejects.toThrow('serviceUrl');
+      await expect(
+        brokerWithoutServiceKey.refreshToken('TEST'),
+      ).rejects.toThrow('serviceUrl');
     });
 
     it('should fallback to Step 2b (refreshTokenFromServiceKey) when Step 2a (refreshTokenFromSession) fails', async () => {
@@ -770,16 +899,21 @@ describe('AuthBroker', () => {
         refreshToken: 'new-refresh-token',
       };
 
-      mockSessionStore.getConnectionConfig.mockResolvedValue({ serviceUrl: 'https://test.sap.com', authorizationToken: '' });
+      mockSessionStore.getConnectionConfig.mockResolvedValue({
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: '',
+      });
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
-      
+
       // Step 2a fails with RefreshError
       const refreshError = new Error('Refresh token expired');
       (refreshError as any).code = 'REFRESH_ERROR';
       mockTokenProvider.refreshTokenFromSession.mockRejectedValue(refreshError);
-      
+
       // Step 2b succeeds
-      mockTokenProvider.refreshTokenFromServiceKey.mockResolvedValue(tokenResult);
+      mockTokenProvider.refreshTokenFromServiceKey.mockResolvedValue(
+        tokenResult,
+      );
       mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
       mockSessionStore.setAuthorizationConfig.mockResolvedValue(undefined);
 
@@ -799,19 +933,26 @@ describe('AuthBroker', () => {
         refreshToken: 'refresh-token-123',
       };
 
-      mockSessionStore.getConnectionConfig.mockResolvedValue({ serviceUrl: 'https://test.sap.com', authorizationToken: '' });
+      mockSessionStore.getConnectionConfig.mockResolvedValue({
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: '',
+      });
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
-      
+
       // Both steps fail
       const refreshError = new Error('Refresh token expired');
       (refreshError as any).code = 'REFRESH_ERROR';
       mockTokenProvider.refreshTokenFromSession.mockRejectedValue(refreshError);
-      
+
       const browserError = new Error('Browser auth failed');
       (browserError as any).code = 'BROWSER_AUTH_ERROR';
-      mockTokenProvider.refreshTokenFromServiceKey.mockRejectedValue(browserError);
+      mockTokenProvider.refreshTokenFromServiceKey.mockRejectedValue(
+        browserError,
+      );
 
-      await expect(broker.refreshToken('TEST')).rejects.toThrow('Token refresh failed');
+      await expect(broker.refreshToken('TEST')).rejects.toThrow(
+        'Token refresh failed',
+      );
       expect(mockTokenProvider.refreshTokenFromSession).toHaveBeenCalled();
       expect(mockTokenProvider.refreshTokenFromServiceKey).toHaveBeenCalled();
     });
@@ -824,22 +965,40 @@ describe('AuthBroker', () => {
         refreshToken: 'refresh-token-123', // Has refresh token to trigger Step 2a
       };
 
-      mockSessionStore.getConnectionConfig.mockResolvedValue({ serviceUrl: 'https://test.sap.com', authorizationToken: '' });
+      mockSessionStore.getConnectionConfig.mockResolvedValue({
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: '',
+      });
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
-      
-      const validationError = new Error('Missing required fields: uaaClientId, uaaClientSecret');
+
+      const validationError = new Error(
+        'Missing required fields: uaaClientId, uaaClientSecret',
+      );
       (validationError as any).code = 'VALIDATION_ERROR';
-      (validationError as any).missingFields = ['uaaClientId', 'uaaClientSecret'];
-      mockTokenProvider.refreshTokenFromSession.mockRejectedValue(validationError);
-      mockTokenProvider.refreshTokenFromServiceKey.mockRejectedValue(validationError);
+      (validationError as any).missingFields = [
+        'uaaClientId',
+        'uaaClientSecret',
+      ];
+      mockTokenProvider.refreshTokenFromSession.mockRejectedValue(
+        validationError,
+      );
+      mockTokenProvider.refreshTokenFromServiceKey.mockRejectedValue(
+        validationError,
+      );
 
       // Use broker without serviceKeyStore to avoid Step 0
-      const brokerNoServiceKey = new AuthBroker({
-        sessionStore: mockSessionStore,
-        tokenProvider: mockTokenProvider,
-      }, undefined, noOpLogger);
+      const brokerNoServiceKey = new AuthBroker(
+        {
+          sessionStore: mockSessionStore,
+          tokenProvider: mockTokenProvider,
+        },
+        undefined,
+        noOpLogger,
+      );
 
-      await expect(brokerNoServiceKey.refreshToken('TEST')).rejects.toThrow('Missing required fields');
+      await expect(brokerNoServiceKey.refreshToken('TEST')).rejects.toThrow(
+        'Missing required fields',
+      );
       expect(mockTokenProvider.refreshTokenFromSession).toHaveBeenCalled();
     });
   });
@@ -857,7 +1016,9 @@ describe('AuthBroker', () => {
       const result = await broker.getAuthorizationConfig('TEST');
 
       expect(result).toEqual(authConfig);
-      expect(mockSessionStore.getAuthorizationConfig).toHaveBeenCalledWith('TEST');
+      expect(mockSessionStore.getAuthorizationConfig).toHaveBeenCalledWith(
+        'TEST',
+      );
       expect(mockServiceKeyStore.getAuthorizationConfig).not.toHaveBeenCalled();
     });
 
@@ -869,12 +1030,14 @@ describe('AuthBroker', () => {
       };
 
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
-      mockServiceKeyStore.getAuthorizationConfig!.mockResolvedValue(authConfig);
+      mockServiceKeyStore.getAuthorizationConfig?.mockResolvedValue(authConfig);
 
       const result = await broker.getAuthorizationConfig('TEST');
 
       expect(result).toEqual(authConfig);
-      expect(mockServiceKeyStore.getAuthorizationConfig).toHaveBeenCalledWith('TEST');
+      expect(mockServiceKeyStore.getAuthorizationConfig).toHaveBeenCalledWith(
+        'TEST',
+      );
     });
 
     it('should return null if session store returns null and serviceKeyStore not available', async () => {
@@ -885,7 +1048,8 @@ describe('AuthBroker', () => {
         tokenProvider: mockTokenProvider,
       });
 
-      const result = await brokerWithoutServiceKey.getAuthorizationConfig('TEST');
+      const result =
+        await brokerWithoutServiceKey.getAuthorizationConfig('TEST');
 
       expect(result).toBeNull();
     });
@@ -916,12 +1080,14 @@ describe('AuthBroker', () => {
       };
 
       mockSessionStore.getConnectionConfig.mockResolvedValue(null);
-      mockServiceKeyStore.getConnectionConfig!.mockResolvedValue(connConfig);
+      mockServiceKeyStore.getConnectionConfig?.mockResolvedValue(connConfig);
 
       const result = await broker.getConnectionConfig('TEST');
 
       expect(result).toEqual(connConfig);
-      expect(mockServiceKeyStore.getConnectionConfig).toHaveBeenCalledWith('TEST');
+      expect(mockServiceKeyStore.getConnectionConfig).toHaveBeenCalledWith(
+        'TEST',
+      );
     });
 
     it('should return null if session store returns null and serviceKeyStore not available', async () => {
@@ -979,10 +1145,14 @@ describe('AuthBroker', () => {
       };
 
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
-      mockSessionStore.getConnectionConfig.mockResolvedValue({ serviceUrl: 'https://test.sap.com' });
-      mockServiceKeyStore.getAuthorizationConfig!.mockResolvedValue(authConfig);
-      mockServiceKeyStore.getConnectionConfig!.mockResolvedValue({ serviceUrl: 'https://test.sap.com' });
-      mockTokenProvider.refreshTokenFromSession!.mockResolvedValue(tokenResult);
+      mockSessionStore.getConnectionConfig.mockResolvedValue({
+        serviceUrl: 'https://test.sap.com',
+      });
+      mockServiceKeyStore.getAuthorizationConfig?.mockResolvedValue(authConfig);
+      mockServiceKeyStore.getConnectionConfig?.mockResolvedValue({
+        serviceUrl: 'https://test.sap.com',
+      });
+      mockTokenProvider.refreshTokenFromSession?.mockResolvedValue(tokenResult);
       mockSessionStore.setConnectionConfig.mockResolvedValue();
       mockSessionStore.setAuthorizationConfig.mockResolvedValue();
 
@@ -1003,12 +1173,13 @@ describe('AuthBroker', () => {
         authorizationToken: 'token-dest2',
       };
 
-      mockSessionStore.getConnectionConfig
-        .mockImplementation(async (dest: string) => {
+      mockSessionStore.getConnectionConfig.mockImplementation(
+        async (dest: string) => {
           if (dest === 'DEST1') return connConfig1;
           if (dest === 'DEST2') return connConfig2;
           return null;
-        });
+        },
+      );
       mockTokenProvider.validateToken = jest.fn().mockResolvedValue(true);
 
       const refresher1 = broker.createTokenRefresher('DEST1');
@@ -1021,5 +1192,4 @@ describe('AuthBroker', () => {
       expect(token2).toBe('token-dest2');
     });
   });
-
 });

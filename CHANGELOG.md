@@ -11,6 +11,30 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.10] - 2025-12-22
+
+### Changed
+- **Biome Migration**: Migrated from ESLint/Prettier to Biome for linting and formatting
+  - Added `@biomejs/biome` as dev dependency
+  - Added `lint`, `lint:check`, and `format` scripts to package.json
+  - Integrated Biome check into build process (`npx biome check src --diagnostic-level=error`)
+  - Replaced `unknown` with `any` in catch blocks (Biome requirement)
+  - Added `ErrorWithCode` type for better error type safety
+  - Refactored `getToken()` method into smaller private methods for better maintainability:
+    - `loadSessionData()` - loads session connection and authorization configs
+    - `getServiceUrl()` - gets serviceUrl from session or service key store
+    - `getUaaCredentials()` - gets UAA credentials from session or service key
+    - `saveTokenToSession()` - saves token and config to session
+    - `initializeSessionFromServiceKey()` - Step 0: initializes session from service key
+    - `validateExistingToken()` - Step 1: validates existing token
+    - `refreshTokenFromSession()` - Step 2a: refreshes token from session
+    - `refreshTokenFromServiceKey()` - Step 2b: refreshes token from service key
+
+### Fixed
+- Fixed type safety issues by replacing `unknown` with `any` in error handling
+- Removed unnecessary type assertions by using `ErrorWithCode` type
+- Improved code organization and readability through method extraction
+
 ## [0.2.9] - 2025-12-21
 
 ### Added

@@ -38,7 +38,10 @@
   "scripts": {
     "chrono": "./tools/version-stats.sh",
     "clean": "rm -rf dist tsconfig.tsbuildinfo",
-    "build": "npm run clean --silent && npx tsc -p tsconfig.json",
+    "lint": "npx biome check --write src",
+    "lint:check": "npx biome check src",
+    "format": "npx biome format --write src",
+    "build": "npm run --silent clean && npx biome check src --diagnostic-level=error && npx tsc -p tsconfig.json",
     "build:fast": "npx tsc -p tsconfig.json",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:check": "npx tsc --noEmit && npx tsc --noEmit -p tsconfig.test.json",
@@ -56,6 +59,7 @@
     "axios": "^1.13.2"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.3.10",
     "@mcp-abap-adt/auth-providers": "^0.2.4",
     "@mcp-abap-adt/auth-stores": "^0.2.8",
     "@types/express": "^5.0.5",

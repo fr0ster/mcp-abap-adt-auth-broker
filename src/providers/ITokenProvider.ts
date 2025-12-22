@@ -1,6 +1,6 @@
 /**
  * Token Provider interface
- * 
+ *
  * Converts IAuthorizationConfig to IConnectionConfig by obtaining tokens.
  * Different implementations handle different authentication flows:
  * - XSUAA: client_credentials grant type (no browser)
@@ -12,16 +12,11 @@ import type {
   IAuthorizationConfig,
   IConnectionConfig,
   ITokenProvider,
+  ITokenProviderOptions,
   ITokenProviderResult,
-  ITokenProviderOptions
 } from '@mcp-abap-adt/interfaces';
 
 // Re-export for backward compatibility
-export type {
-  ITokenProvider,
-  IAuthorizationConfig,
-  IConnectionConfig,
-};
+export type { ITokenProvider, IAuthorizationConfig, IConnectionConfig };
 export type TokenProviderResult = ITokenProviderResult;
 export type TokenProviderOptions = ITokenProviderOptions;
-

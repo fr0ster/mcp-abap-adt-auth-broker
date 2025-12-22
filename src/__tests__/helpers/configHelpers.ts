@@ -3,8 +3,8 @@
  * Loads test configuration from test-config.yaml
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 
 let cachedConfig: any = null;
@@ -54,7 +54,11 @@ export function loadTestConfig(): TestConfig {
   // Find project root and load from tests/test-config.yaml
   const projectRoot = findProjectRoot();
   const configPath = path.resolve(projectRoot, 'tests', 'test-config.yaml');
-  const templatePath = path.resolve(projectRoot, 'tests', 'test-config.yaml.template');
+  const templatePath = path.resolve(
+    projectRoot,
+    'tests',
+    'test-config.yaml.template',
+  );
 
   if (process.env.TEST_VERBOSE) {
     console.log(`[configHelpers] Project root: ${projectRoot}`);
@@ -65,9 +69,12 @@ export function loadTestConfig(): TestConfig {
   if (fs.existsSync(configPath)) {
     try {
       const configContent = fs.readFileSync(configPath, 'utf8');
-      cachedConfig = yaml.load(configContent) as TestConfig || {};
+      cachedConfig = (yaml.load(configContent) as TestConfig) || {};
       if (process.env.TEST_VERBOSE) {
-        console.log(`[configHelpers] Loaded config:`, JSON.stringify(cachedConfig, null, 2));
+        console.log(
+          `[configHelpers] Loaded config:`,
+          JSON.stringify(cachedConfig, null, 2),
+        );
       }
       return cachedConfig;
     } catch (error) {
@@ -77,13 +84,18 @@ export function loadTestConfig(): TestConfig {
   }
 
   if (fs.existsSync(templatePath)) {
-    console.warn('⚠️  tests/test-config.yaml not found. Using template (all integration tests will be disabled).');
+    console.warn(
+      '⚠️  tests/test-config.yaml not found. Using template (all integration tests will be disabled).',
+    );
     try {
       const templateContent = fs.readFileSync(templatePath, 'utf8');
-      cachedConfig = yaml.load(templateContent) as TestConfig || {};
+      cachedConfig = (yaml.load(templateContent) as TestConfig) || {};
       return cachedConfig;
     } catch (error) {
-      console.warn(`Failed to load test config template from ${templatePath}:`, error);
+      console.warn(
+        `Failed to load test config template from ${templatePath}:`,
+        error,
+      );
       return {};
     }
   }
@@ -96,7 +108,10 @@ export function loadTestConfig(): TestConfig {
 /**
  * Check if test config has real values (not placeholders)
  */
-export function hasRealConfig(config: TestConfig, section: 'abap' | 'xsuaa'): boolean {
+export function hasRealConfig(
+  config: TestConfig,
+  section: 'abap' | 'xsuaa',
+): boolean {
   if (!config.auth_broker) {
     return false;
   }
@@ -116,10 +131,7 @@ export function hasRealConfig(config: TestConfig, section: 'abap' | 'xsuaa'): bo
       return false;
     }
     // Check if values are not placeholders
-    return (
-      !xsuaa.btp_destination.includes('<') &&
-      !xsuaa.mcp_url.includes('<')
-    );
+    return !xsuaa.btp_destination.includes('<') && !xsuaa.mcp_url.includes('<');
   }
 
   return false;
@@ -153,7 +165,7 @@ export function getXsuaaDestinations(config?: TestConfig): {
  */
 function expandTilde(filePath: string): string {
   if (filePath.startsWith('~')) {
-    const os = require('os');
+    const os = require('node:os');
     return path.join(os.homedir(), filePath.slice(1));
   }
   return filePath;
@@ -186,4 +198,3 @@ export function getSessionsDir(config?: TestConfig): string | null {
   const expanded = expandTilde(dir);
   return path.resolve(expanded);
 }
-

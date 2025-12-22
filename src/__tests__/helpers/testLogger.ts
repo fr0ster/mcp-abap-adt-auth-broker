@@ -26,9 +26,11 @@ export function createTestLogger(prefix: string = 'TEST'): ILogger {
       return false;
     }
     // Explicitly enabled
-    if (process.env.DEBUG_AUTH_BROKER === 'true' || 
-        process.env.DEBUG === 'true' ||
-        process.env.DEBUG?.includes('auth-broker') === true) {
+    if (
+      process.env.DEBUG_AUTH_BROKER === 'true' ||
+      process.env.DEBUG === 'true' ||
+      process.env.DEBUG?.includes('auth-broker') === true
+    ) {
       return true;
     }
     // Do not enable by default - require explicit enable
