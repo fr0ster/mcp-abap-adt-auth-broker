@@ -136,6 +136,32 @@ Stores use the following environment variables internally (not exported as const
 
 **Note**: Constants are internal implementation details and are not exported. Consumers should use store methods (`getAuthorizationConfig()`, `getConnectionConfig()`) to access configuration values.
 
+## CLI: mcp-auth
+
+Use `mcp-auth` to generate or refresh `.env`/JSON output using AuthBroker + stores.
+
+```bash
+mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--browser system|chrome|edge|firefox|none] [--format json|env]
+```
+
+**Behavior:**
+- If `--env` is provided and exists, refresh token is attempted first.
+- If refresh fails (or env is missing), service key auth is used.
+- If `--browser` is omitted → client_credentials (no browser).
+- If `--browser` is provided → authorization_code (browser OAuth2).
+
+**Examples:**
+```bash
+# XSUAA: try refresh from env, fallback to service key
+mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsuaa
+
+# ABAP: browser auth (system browser)
+mcp-auth --service-key ./abap.json --output ./abap.env --type abap --browser system
+
+# XSUAA: client_credentials (no browser)
+mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa
+```
+
 ## API Reference
 
 ### AuthBroker Class
@@ -685,4 +711,3 @@ const broker = new AuthBroker({
 - See [Installation Guide](../installing/INSTALLATION.md) for setup instructions
 - See [Architecture](../architecture/ARCHITECTURE.md) for technical details
 - See [Testing](../development/TESTING.md) for development guide
-

@@ -6,6 +6,7 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
+    "bin",
     "README.md",
     "CHANGELOG.md",
     "CONTRIBUTORS.md",
@@ -49,19 +50,20 @@
     "generate-env": "tsx bin/generate-env-from-service-key.ts"
   },
   "bin": {
-    "generate-env-from-service-key": "./bin/generate-env-from-service-key.ts"
+    "mcp-auth": "./bin/mcp-auth.js"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@mcp-abap-adt/interfaces": "^0.2.5",
-    "axios": "^1.13.2"
+    "@mcp-abap-adt/auth-providers": "^0.2.6",
+    "@mcp-abap-adt/auth-stores": "^0.2.8",
+    "@mcp-abap-adt/interfaces": "^0.2.9",
+    "axios": "^1.13.2",
+    "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.10",
-    "@mcp-abap-adt/auth-providers": "^0.2.4",
-    "@mcp-abap-adt/auth-stores": "^0.2.8",
     "@types/express": "^5.0.5",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
@@ -70,7 +72,6 @@
     "jest-util": "^30.2.0",
     "js-yaml": "^4.1.1",
     "ts-jest": "^29.2.5",
-    "tsx": "^4.21.0",
     "typescript": "^5.9.2"
   }
 }

@@ -439,15 +439,18 @@ export class AuthBroker {
       `Step 0: Authenticating via provider (browser) for ${destination} using service key UAA credentials`,
     );
 
-    let tokenResult: Awaited<ReturnType<ITokenProvider['getConnectionConfig']>>;
-    try {
-      tokenResult = await this.tokenProvider.getConnectionConfig(
-        serviceKeyAuthConfig,
-        {
-          browser: this.browser,
-          logger: this.logger,
-        },
+    const getConnectionConfig = this.tokenProvider.getConnectionConfig;
+    if (!getConnectionConfig) {
+      throw new Error(
+        'AuthBroker: tokenProvider.getConnectionConfig is required',
       );
+    }
+    let tokenResult: Awaited<ReturnType<typeof getConnectionConfig>>;
+    try {
+      tokenResult = await getConnectionConfig(serviceKeyAuthConfig, {
+        browser: this.browser,
+        logger: this.logger,
+      });
     } catch (error: any) {
       if (hasErrorCode(error)) {
         if (error.code === 'VALIDATION_ERROR') {
@@ -552,18 +555,19 @@ export class AuthBroker {
     );
 
     const authConfigWithRefresh = { ...uaaCredentials, refreshToken };
-    let tokenResult: Awaited<
-      ReturnType<ITokenProvider['refreshTokenFromSession']>
-    >;
+    const refreshTokenFromSession = this.tokenProvider.refreshTokenFromSession;
+    if (!refreshTokenFromSession) {
+      throw new Error(
+        'AuthBroker: tokenProvider.refreshTokenFromSession is required',
+      );
+    }
+    let tokenResult: Awaited<ReturnType<typeof refreshTokenFromSession>>;
 
     try {
-      tokenResult = await this.tokenProvider.refreshTokenFromSession(
-        authConfigWithRefresh,
-        {
-          browser: this.browser,
-          logger: this.logger,
-        },
-      );
+      tokenResult = await refreshTokenFromSession(authConfigWithRefresh, {
+        browser: this.browser,
+        logger: this.logger,
+      });
     } catch (error: any) {
       if (hasErrorCode(error)) {
         if (
@@ -653,17 +657,19 @@ export class AuthBroker {
       `Step 2b: Trying refreshTokenFromServiceKey for ${destination}`,
     );
 
-    let tokenResult: Awaited<
-      ReturnType<ITokenProvider['refreshTokenFromServiceKey']>
-    >;
-    try {
-      tokenResult = await this.tokenProvider.refreshTokenFromServiceKey(
-        uaaCredentials,
-        {
-          browser: this.browser,
-          logger: this.logger,
-        },
+    const refreshTokenFromServiceKey =
+      this.tokenProvider.refreshTokenFromServiceKey;
+    if (!refreshTokenFromServiceKey) {
+      throw new Error(
+        'AuthBroker: tokenProvider.refreshTokenFromServiceKey is required',
       );
+    }
+    let tokenResult: Awaited<ReturnType<typeof refreshTokenFromServiceKey>>;
+    try {
+      tokenResult = await refreshTokenFromServiceKey(uaaCredentials, {
+        browser: this.browser,
+        logger: this.logger,
+      });
     } catch (error: any) {
       if (hasErrorCode(error)) {
         if (error.code === 'VALIDATION_ERROR') {

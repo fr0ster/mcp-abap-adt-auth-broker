@@ -11,6 +11,16 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.11] - 2025-12-23
+
+### Changed
+- **mcp-auth CLI**: Reworked to use AuthBroker + stores with env-first refresh fallback to service key.
+- **Token provider wiring**: AuthBroker now guards optional token provider methods before invoking them.
+- **Docs**: Added CLI usage details for mcp-auth in README and usage guide.
+
+### Updated
+- **Dependencies**: Bumped `@mcp-abap-adt/interfaces` to ^0.2.9 and `@mcp-abap-adt/auth-providers` to latest.
+
 ## [0.2.10] - 2025-12-22
 
 ### Changed

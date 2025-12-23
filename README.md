@@ -602,6 +602,32 @@ When UAA credentials are available in session, `AuthBroker` automatically uses d
 - If direct UAA request fails and `tokenProvider` is available, broker automatically falls back to provider
 - Provider is useful for browser authentication or alternative authentication flows
 
+### CLI: mcp-auth
+
+Generate or refresh `.env`/JSON output using AuthBroker + stores:
+
+```bash
+mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--browser system|chrome|edge|firefox|none] [--format json|env]
+```
+
+**Behavior:**
+- If `--env` is provided and exists, refresh token is attempted first.
+- If refresh fails (or env is missing), service key auth is used.
+- If `--browser` is omitted → client_credentials (no browser).
+- If `--browser` is provided → authorization_code (browser OAuth2).
+
+**Examples:**
+```bash
+# XSUAA: try refresh from env, fallback to service key
+mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsuaa
+
+# ABAP: browser auth (system browser)
+mcp-auth --service-key ./abap.json --output ./abap.env --type abap --browser system
+
+# XSUAA: client_credentials (no browser)
+mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa
+```
+
 ### Utility Script
 
 Generate `.env` files from service keys:
@@ -609,22 +635,6 @@ Generate `.env` files from service keys:
 ```bash
 npm run generate-env <destination> [service-key-path] [session-path]
 ```
-
-**Examples:**
-```bash
-# Generate .env from service key (auto-detect paths)
-npm run generate-env mcp
-
-# Specify paths explicitly
-npm run generate-env mcp ./mcp.json ./mcp.env
-
-# Use absolute paths
-npm run generate-env TRIAL ~/.config/mcp-abap-adt/service-keys/TRIAL.json ~/.config/mcp-abap-adt/sessions/TRIAL.env
-```
-
-The script automatically detects service key type (ABAP or XSUAA) and uses the appropriate authentication flow:
-- **ABAP**: Opens browser for OAuth2 authorization code flow
-- **XSUAA**: Uses client_credentials grant type (no browser required)
 
 ## Testing
 

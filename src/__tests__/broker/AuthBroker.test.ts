@@ -20,6 +20,13 @@ import { createTestLogger } from '../helpers/testLogger';
 jest.mock('axios');
 const mockedAxios = axios as jest.MockedFunction<typeof axios>;
 
+type MockTokenProvider = jest.Mocked<ITokenProvider> & {
+  getConnectionConfig: jest.Mock;
+  refreshTokenFromSession: jest.Mock;
+  refreshTokenFromServiceKey: jest.Mock;
+  validateToken: jest.Mock;
+};
+
 // No-op logger for tests that expect errors (to avoid misleading error output)
 const noOpLogger: ILogger = {
   info: () => {},
@@ -31,7 +38,7 @@ const noOpLogger: ILogger = {
 describe('AuthBroker', () => {
   let mockServiceKeyStore: jest.Mocked<IServiceKeyStore>;
   let mockSessionStore: jest.Mocked<ISessionStore>;
-  let mockTokenProvider: jest.Mocked<ITokenProvider>;
+  let mockTokenProvider: MockTokenProvider;
   let broker: AuthBroker;
   let logger: ReturnType<typeof createTestLogger>;
 
@@ -59,7 +66,7 @@ describe('AuthBroker', () => {
       validateToken: jest.fn(),
       refreshTokenFromSession: jest.fn(),
       refreshTokenFromServiceKey: jest.fn(),
-    } as any;
+    } as MockTokenProvider;
 
     // Use logger (enabled only if DEBUG_AUTH_BROKER is set)
     // Tests that expect errors should use noOpLogger explicitly
