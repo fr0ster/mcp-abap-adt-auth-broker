@@ -32,12 +32,6 @@ import {
   AuthorizationCodeProvider,
   ClientCredentialsProvider,
 } from '@mcp-abap-adt/auth-providers';
-import type {
-  IAuthorizationConfig,
-  ITokenProvider,
-  ITokenProviderOptions,
-  ITokenProviderResult,
-} from '@mcp-abap-adt/interfaces';
 import {
   ABAP_CONNECTION_VARS,
   ABAP_AUTHORIZATION_VARS,
@@ -239,86 +233,6 @@ function parseArgs(): McpAuthOptions | null {
     serviceUrl,
     redirectPort,
   };
-}
-
-type ProviderMode = 'authorization_code' | 'client_credentials';
-
-class BrokerTokenProvider implements ITokenProvider {
-  private mode: ProviderMode;
-  private browser?: string;
-  private redirectPort?: number;
-
-  constructor(mode: ProviderMode, browser?: string, redirectPort?: number) {
-    this.mode = mode;
-    this.browser = browser;
-    this.redirectPort = redirectPort;
-  }
-
-  async getConnectionConfig(
-    authConfig: IAuthorizationConfig,
-    options?: ITokenProviderOptions,
-  ): Promise<ITokenProviderResult> {
-    return this.getTokenResult(authConfig, options);
-  }
-
-  async refreshTokenFromSession(
-    authConfig: IAuthorizationConfig,
-    options?: ITokenProviderOptions,
-  ): Promise<ITokenProviderResult> {
-    return this.getTokenResult(authConfig, options);
-  }
-
-  async refreshTokenFromServiceKey(
-    authConfig: IAuthorizationConfig,
-    options?: ITokenProviderOptions,
-  ): Promise<ITokenProviderResult> {
-    return this.getTokenResult(authConfig, options);
-  }
-
-  private async getTokenResult(
-    authConfig: IAuthorizationConfig,
-    options?: ITokenProviderOptions,
-  ): Promise<ITokenProviderResult> {
-    const uaaUrl = authConfig.uaaUrl;
-    const uaaClientId = authConfig.uaaClientId;
-    const uaaClientSecret = authConfig.uaaClientSecret;
-
-    if (!uaaUrl || !uaaClientId || !uaaClientSecret) {
-      throw new Error('Auth config missing required UAA credentials');
-    }
-
-    if (this.mode === 'client_credentials') {
-      const provider = new ClientCredentialsProvider({
-        uaaUrl,
-        clientId: uaaClientId,
-        clientSecret: uaaClientSecret,
-      });
-      const result = await provider.getTokens();
-      return {
-        connectionConfig: {
-          authorizationToken: result.authorizationToken,
-        },
-        refreshToken: result.refreshToken,
-      };
-    }
-
-    const browserValue = options?.browser ?? this.browser ?? 'system';
-    const provider = new AuthorizationCodeProvider({
-      uaaUrl,
-      clientId: uaaClientId,
-      clientSecret: uaaClientSecret,
-      refreshToken: authConfig.refreshToken,
-      browser: browserValue,
-      redirectPort: this.redirectPort,
-    });
-    const result = await provider.getTokens();
-    return {
-      connectionConfig: {
-        authorizationToken: result.authorizationToken,
-      },
-      refreshToken: result.refreshToken,
-    };
-  }
 }
 
 function writeEnvFile(
@@ -531,15 +445,32 @@ async function main() {
         ? new XsuaaSessionStore(tempSessionDir, brokerServiceUrl)
         : new AbapSessionStore(tempSessionDir);
 
+    const sessionAuthConfig =
+      await sessionStore.getAuthorizationConfig(destination);
+    const serviceKeyAuthConfig =
+      serviceKeyStore?.getAuthorizationConfig
+        ? await serviceKeyStore.getAuthorizationConfig(destination)
+        : null;
+    const authConfig = sessionAuthConfig || serviceKeyAuthConfig;
+    if (!authConfig) {
+      throw new Error(`Authorization config not found for ${destination}`);
+    }
+
     const useBrowserAuth = options.browser !== undefined;
-    const providerMode: ProviderMode = useBrowserAuth
-      ? 'authorization_code'
-      : 'client_credentials';
-    const tokenProvider = new BrokerTokenProvider(
-      providerMode,
-      options.browser,
-      options.redirectPort,
-    );
+    const tokenProvider = useBrowserAuth
+      ? new AuthorizationCodeProvider({
+          uaaUrl: authConfig.uaaUrl,
+          clientId: authConfig.uaaClientId,
+          clientSecret: authConfig.uaaClientSecret,
+          refreshToken: authConfig.refreshToken,
+          browser: options.browser,
+          redirectPort: options.redirectPort,
+        })
+      : new ClientCredentialsProvider({
+          uaaUrl: authConfig.uaaUrl,
+          clientId: authConfig.uaaClientId,
+          clientSecret: authConfig.uaaClientSecret,
+        });
 
     const broker = new AuthBroker(
       {

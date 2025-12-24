@@ -24,44 +24,77 @@ import {
   SafeXsuaaSessionStore,
   SafeBtpSessionStore,
 } from '@mcp-abap-adt/auth-broker';
+import {
+  AuthorizationCodeProvider,
+  ClientCredentialsProvider,
+} from '@mcp-abap-adt/auth-providers';
 
-// Use default file-based stores for ABAP (current working directory) and default browser
-const broker = new AuthBroker();
-
-// Use custom file-based stores for ABAP with specific paths
-const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new AbapSessionStore(['/path/to/destinations']),
-});
-
-// Use XSUAA stores for XSUAA connections (reduced scope)
-const broker = new AuthBroker({
-  serviceKeyStore: new XsuaaServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new XsuaaSessionStore(['/path/to/destinations']),
-  tokenProvider: new XsuaaTokenProvider(),
-}, 'none'); // Browser not needed for XSUAA (client_credentials)
-
-// Use BTP stores for BTP connections (full scope for ABAP)
-const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']), // BTP uses same service key format as ABAP
-  sessionStore: new BtpSessionStore(['/path/to/destinations']),
-  tokenProvider: new BtpTokenProvider(),
-});
-
-// Use safe in-memory session stores (data lost after restart, secure)
+// ABAP authentication (authorization_code)
 const abapBroker = new AuthBroker({
   serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new SafeAbapSessionStore(), // In-memory, no disk persistence
+  sessionStore: new AbapSessionStore(['/path/to/destinations']),
+  tokenProvider: new AuthorizationCodeProvider({
+    uaaUrl: 'https://auth.example.com',
+    clientId: '...',
+    clientSecret: '...',
+    browser: 'system',
+  }),
 });
 
+// XSUAA authentication (client_credentials)
 const xsuaaBroker = new AuthBroker({
   serviceKeyStore: new XsuaaServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new SafeXsuaaSessionStore(), // In-memory, no disk persistence
+  sessionStore: new XsuaaSessionStore(['/path/to/destinations']),
+  tokenProvider: new ClientCredentialsProvider({
+    uaaUrl: 'https://auth.example.com',
+    clientId: '...',
+    clientSecret: '...',
+  }),
 }, 'none');
 
+// BTP authentication (authorization_code)
 const btpBroker = new AuthBroker({
+  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']), // BTP uses same service key format as ABAP
+  sessionStore: new BtpSessionStore(['/path/to/destinations']),
+  tokenProvider: new AuthorizationCodeProvider({
+    uaaUrl: 'https://auth.example.com',
+    clientId: '...',
+    clientSecret: '...',
+    browser: 'system',
+  }),
+});
+
+// Safe in-memory session stores (data lost after restart, secure)
+const abapMemoryBroker = new AuthBroker({
+  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new SafeAbapSessionStore(), // In-memory, no disk persistence
+  tokenProvider: new AuthorizationCodeProvider({
+    uaaUrl: 'https://auth.example.com',
+    clientId: '...',
+    clientSecret: '...',
+    browser: 'system',
+  }),
+});
+
+const xsuaaMemoryBroker = new AuthBroker({
+  serviceKeyStore: new XsuaaServiceKeyStore(['/path/to/destinations']),
+  sessionStore: new SafeXsuaaSessionStore(), // In-memory, no disk persistence
+  tokenProvider: new ClientCredentialsProvider({
+    uaaUrl: 'https://auth.example.com',
+    clientId: '...',
+    clientSecret: '...',
+  }),
+}, 'none');
+
+const btpMemoryBroker = new AuthBroker({
   serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
   sessionStore: new SafeBtpSessionStore(), // In-memory, no disk persistence
+  tokenProvider: new AuthorizationCodeProvider({
+    uaaUrl: 'https://auth.example.com',
+    clientId: '...',
+    clientSecret: '...',
+    browser: 'system',
+  }),
 });
 ```
 
@@ -170,32 +203,30 @@ mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa
 
 ```typescript
 constructor(
-  stores?: { serviceKeyStore?: IServiceKeyStore; sessionStore?: ISessionStore },
+  config: {
+    sessionStore: ISessionStore;
+    serviceKeyStore?: IServiceKeyStore;
+    tokenProvider: ITokenProvider;
+    allowBrowserAuth?: boolean;
+  },
   browser?: string,
   logger?: ILogger
 )
 ```
 
 **Parameters**:
-- `stores` (optional): Object with custom storage implementations:
-  - `serviceKeyStore` - Store for service keys (default: `AbapServiceKeyStore()`)
-  - `sessionStore` - Store for session data (default: `AbapSessionStore()`)
-  - `tokenProvider` - Token provider for token acquisition (default: `BtpTokenProvider()`)
-  - Available implementations for ABAP:
-    - `AbapServiceKeyStore(searchPaths?)` - File-based service key store for ABAP
-    - `AbapSessionStore(searchPaths?)` - File-based session store for ABAP (persists to disk)
-    - `SafeAbapSessionStore()` - In-memory session store for ABAP (secure, data lost after restart)
-    - `BtpTokenProvider()` - Token provider for ABAP (browser OAuth2 or refresh token)
-  - Available implementations for XSUAA (reduced scope):
-    - `XsuaaServiceKeyStore(searchPaths?)` - File-based service key store for XSUAA
-    - `XsuaaSessionStore(searchPaths?)` - File-based session store for XSUAA (uses XSUAA_* variables)
-    - `SafeXsuaaSessionStore()` - In-memory session store for XSUAA (secure, data lost after restart)
-    - `XsuaaTokenProvider()` - Token provider for XSUAA (client_credentials, no browser)
-  - Available implementations for BTP (full scope for ABAP):
-    - `AbapServiceKeyStore(searchPaths?)` - File-based service key store (BTP uses same format as ABAP)
-    - `BtpSessionStore(searchPaths?)` - File-based session store for BTP (uses BTP_* variables)
-    - `SafeBtpSessionStore()` - In-memory session store for BTP (secure, data lost after restart)
-    - `BtpTokenProvider()` - Token provider for BTP (browser OAuth2 or refresh token)
+- `config`: Object with required stores and provider:
+  - `sessionStore` - Store for session data
+  - `serviceKeyStore` - Optional store for service keys
+  - `tokenProvider` - Token provider for token acquisition and refresh
+  - `allowBrowserAuth` - When `false`, throws `BROWSER_AUTH_REQUIRED` instead of launching browser auth
+  - Available store implementations:
+    - `AbapServiceKeyStore(searchPaths?)`, `AbapSessionStore(searchPaths?)`, `SafeAbapSessionStore()`
+    - `XsuaaServiceKeyStore(searchPaths?)`, `XsuaaSessionStore(searchPaths?)`, `SafeXsuaaSessionStore()`
+    - `BtpSessionStore(searchPaths?)`, `SafeBtpSessionStore()`
+  - Provider implementations (from `@mcp-abap-adt/auth-providers`):
+    - `AuthorizationCodeProvider(...)` - browser-based OAuth2 (ABAP/BTP)
+    - `ClientCredentialsProvider(...)` - client_credentials (XSUAA)
 - `browser` (optional): Browser name for authentication. Options:
   - `'chrome'` - Open in Google Chrome
   - `'edge'` - Open in Microsoft Edge
@@ -208,32 +239,30 @@ constructor(
 **Example**:
 ```typescript
 import { AuthBroker, AbapServiceKeyStore, AbapSessionStore, SafeAbapSessionStore } from '@mcp-abap-adt/auth-broker';
+import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
 
-// Default (current working directory, system browser, file-based stores for ABAP)
-const broker = new AuthBroker();
-
-// Custom paths with file-based stores for ABAP
+// ABAP with browser-based authorization_code
 const broker = new AuthBroker({
   serviceKeyStore: new AbapServiceKeyStore(['/custom/path']),
   sessionStore: new AbapSessionStore(['/custom/path']),
+  tokenProvider: new AuthorizationCodeProvider({
+    uaaUrl: 'https://auth.example.com',
+    clientId: '...',
+    clientSecret: '...',
+    browser: 'system',
+  }),
 });
-
-// Multiple paths with Chrome browser
-const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path1', '/path2']),
-  sessionStore: new AbapSessionStore(['/path1', '/path2']),
-}, 'chrome');
 
 // Safe in-memory session store for ABAP (secure, no disk persistence)
-const broker = new AuthBroker({
+const memoryBroker = new AuthBroker({
   serviceKeyStore: new AbapServiceKeyStore(['/path1']),
   sessionStore: new SafeAbapSessionStore(), // Data lost after restart
-});
-
-// Print URL instead of opening browser
-const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path1']),
-  sessionStore: new AbapSessionStore(['/path1']),
+  tokenProvider: new AuthorizationCodeProvider({
+    uaaUrl: 'https://auth.example.com',
+    clientId: '...',
+    clientSecret: '...',
+    browser: 'none',
+  }),
 }, 'none');
 ```
 
@@ -262,31 +291,15 @@ try {
 }
 ```
 
-**Flow (Fallback Chain)**:
-1. **Check session**: Load token from session store and validate it
-   - If token is valid, return it immediately
-   - If token is invalid or missing, continue to next step
-
-2. **Check service key**: Verify that service key exists
-   - If no service key found, throw error
-
-3. **Try refresh token**: If refresh token is available in session, attempt to refresh using it (via tokenProvider)
-   - If successful, save new token to session and return it
-   - If failed, continue to next step
-
-4. **Try UAA (client_credentials)**: Attempt to get token using UAA credentials (via tokenProvider)
-   - If UAA parameters are available and authentication succeeds, save token to session and return it
-   - If failed or parameters missing, continue to next step
-
-5. **Try browser authentication**: Attempt browser-based OAuth2 flow using service key (via tokenProvider)
-   - If successful, save token and refresh token to session and return it
-   - If failed, continue to next step
-
-6. **Throw error**: If all authentication methods failed, throw comprehensive error with details about what failed
+**Flow**:
+1. **Step 0 - Initialize**: If session has no token and no auth config, load auth config from service key and call `tokenProvider.getTokens()`
+2. **Step 1 - Validate**: If session token exists and provider supports validation, validate it (return if valid)
+3. **Step 2 - Refresh/Re-auth**: If session auth config exists, call `tokenProvider.getTokens()`; on failure, fall back to service key auth config
+4. **Error**: If all attempts fail, throw an error (or `BROWSER_AUTH_REQUIRED` when browser auth is disabled)
 
 #### refreshToken()
 
-Force refresh token for destination using service key. If no refresh token exists, starts browser authentication flow.
+Force refresh token for destination. Calls `getToken()` to run the full refresh flow and persist updated tokens.
 
 ```typescript
 async refreshToken(destination: string): Promise<string>
@@ -310,13 +323,7 @@ try {
 ```
 
 **Flow**:
-1. Load service key from `{destination}.json`
-2. Check for existing refresh token in `.env`
-3. If refresh token exists, use it to refresh
-4. If no refresh token, start browser authentication
-5. Save new tokens to `.env` file
-6. Update cache
-7. Return new access token
+1. Delegates to `getToken(destination)`
 
 #### clearCache()
 

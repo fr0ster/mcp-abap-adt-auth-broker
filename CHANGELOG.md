@@ -11,6 +11,11 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+### Changed
+- **Auth flow**: Broker now relies on `ITokenProvider.getTokens()` with no parameters and expects providers to manage refresh/re-auth internally.
+- **Constructor**: `tokenProvider` is required and `allowBrowserAuth` is supported for non-interactive flows.
+- **Docs**: Updated usage/architecture/export docs to reflect provider injection, new flow, and CLI usage.
+
 ## [0.2.11] - 2025-12-23
 
 ### Changed

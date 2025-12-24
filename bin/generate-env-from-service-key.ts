@@ -16,8 +16,16 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { AuthBroker } from '../src/AuthBroker';
-import { AbapServiceKeyStore, AbapSessionStore, XsuaaServiceKeyStore, XsuaaSessionStore } from '@mcp-abap-adt/auth-stores';
-import { BtpTokenProvider, XsuaaTokenProvider } from '@mcp-abap-adt/auth-providers';
+import {
+  AbapServiceKeyStore,
+  AbapSessionStore,
+  XsuaaServiceKeyStore,
+  XsuaaSessionStore,
+} from '@mcp-abap-adt/auth-stores';
+import {
+  AuthorizationCodeProvider,
+  ClientCredentialsProvider,
+} from '@mcp-abap-adt/auth-providers';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -65,10 +73,24 @@ async function main() {
       ? new XsuaaSessionStore(sessionDir)
       : new AbapSessionStore(sessionDir);
 
+    const authConfig = await serviceKeyStore.getAuthorizationConfig(destination);
+    if (!authConfig) {
+      throw new Error(`Missing authorization config for ${destination}`);
+    }
+
     // Create token provider
     const tokenProvider = isXsuaa
-      ? new XsuaaTokenProvider()
-      : new BtpTokenProvider();
+      ? new ClientCredentialsProvider({
+          uaaUrl: authConfig.uaaUrl,
+          clientId: authConfig.uaaClientId,
+          clientSecret: authConfig.uaaClientSecret,
+        })
+      : new AuthorizationCodeProvider({
+          uaaUrl: authConfig.uaaUrl,
+          clientId: authConfig.uaaClientId,
+          clientSecret: authConfig.uaaClientSecret,
+          browser: 'system',
+        });
 
     // Create AuthBroker
     // For ABAP, use 'system' browser (will open browser for auth)
@@ -124,4 +146,3 @@ main().catch((error) => {
   console.error('Fatal error:', error);
   process.exit(1);
 });
-

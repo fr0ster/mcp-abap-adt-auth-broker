@@ -15,8 +15,8 @@ export { AuthBroker, type AuthBrokerConfig } from './AuthBroker';
 // Token provider interface
 export type {
   ITokenProvider,
+  ITokenResult,
   TokenProviderOptions,
-  TokenProviderResult,
 } from './providers';
 // Main interfaces for consumers - stores return values through these
 // These are the ONLY types consumers should use

@@ -1,10 +1,7 @@
 /**
  * Token Provider interface
  *
- * Converts IAuthorizationConfig to IConnectionConfig by obtaining tokens.
- * Different implementations handle different authentication flows:
- * - XSUAA: client_credentials grant type (no browser)
- * - BTP/ABAP: browser-based OAuth2 or refresh token
+ * Stateful providers handle token lifecycle internally (refresh/relogin).
  */
 
 // Import interfaces from shared package
@@ -13,10 +10,14 @@ import type {
   IConnectionConfig,
   ITokenProvider,
   ITokenProviderOptions,
-  ITokenProviderResult,
+  ITokenResult,
 } from '@mcp-abap-adt/interfaces';
 
 // Re-export for backward compatibility
-export type { ITokenProvider, IAuthorizationConfig, IConnectionConfig };
-export type TokenProviderResult = ITokenProviderResult;
+export type {
+  ITokenProvider,
+  IAuthorizationConfig,
+  IConnectionConfig,
+  ITokenResult,
+};
 export type TokenProviderOptions = ITokenProviderOptions;

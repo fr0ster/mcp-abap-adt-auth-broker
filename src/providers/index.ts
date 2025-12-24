@@ -7,6 +7,6 @@
 
 export type {
   ITokenProvider,
+  ITokenResult,
   TokenProviderOptions,
-  TokenProviderResult,
 } from './ITokenProvider';

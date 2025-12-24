@@ -4,7 +4,7 @@
  * Real tests using service keys, session stores, and actual token providers
  */
 
-import { BtpTokenProvider } from '@mcp-abap-adt/auth-providers';
+import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
 import {
   AbapServiceKeyStore,
   AbapSessionStore,
@@ -73,8 +73,17 @@ describe('AuthBroker Integration', () => {
       `Direct sessionStore.getConnectionConfig result: ${directConnConfig ? 'found' : 'not found'}`,
     );
 
+    if (!directAuthConfig) {
+      throw new Error('Missing auth config for integration test');
+    }
+
     // Create real token provider
-    const tokenProvider = new BtpTokenProvider();
+    const tokenProvider = new AuthorizationCodeProvider({
+      uaaUrl: directAuthConfig.uaaUrl,
+      clientId: directAuthConfig.uaaClientId,
+      clientSecret: directAuthConfig.uaaClientSecret,
+      browser: 'system',
+    });
 
     // Create AuthBroker with real stores and provider
     const broker = new AuthBroker(
@@ -131,8 +140,19 @@ describe('AuthBroker Integration', () => {
     const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir, logger);
     const sessionStore = new AbapSessionStore(sessionsDir, logger);
 
+    const authConfig =
+      await serviceKeyStore.getAuthorizationConfig(destination);
+    if (!authConfig) {
+      throw new Error('Missing auth config for integration test');
+    }
+
     // Create real token provider
-    const tokenProvider = new BtpTokenProvider();
+    const tokenProvider = new AuthorizationCodeProvider({
+      uaaUrl: authConfig.uaaUrl,
+      clientId: authConfig.uaaClientId,
+      clientSecret: authConfig.uaaClientSecret,
+      browser: 'system',
+    });
 
     // Create AuthBroker with real stores and provider
     const broker = new AuthBroker(
@@ -184,8 +204,20 @@ describe('AuthBroker Integration', () => {
     const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir, logger);
     const sessionStore = new AbapSessionStore(sessionsDir, logger);
 
+    const serviceKeyAuthConfig =
+      await serviceKeyStore.getAuthorizationConfig(destination);
+    if (!serviceKeyAuthConfig) {
+      throw new Error('Missing auth config for integration test');
+    }
+
     // Create real token provider
-    const tokenProvider = new BtpTokenProvider();
+    const tokenProvider = new AuthorizationCodeProvider({
+      uaaUrl: serviceKeyAuthConfig.uaaUrl,
+      clientId: serviceKeyAuthConfig.uaaClientId,
+      clientSecret: serviceKeyAuthConfig.uaaClientSecret,
+      refreshToken: serviceKeyAuthConfig.refreshToken,
+      browser: 'system',
+    });
 
     // Create AuthBroker with real stores and provider
     const broker = new AuthBroker(
@@ -236,8 +268,20 @@ describe('AuthBroker Integration', () => {
     const serviceKeyStore = new AbapServiceKeyStore(serviceKeysDir, logger);
     const sessionStore = new AbapSessionStore(sessionsDir, logger);
 
+    const serviceKeyAuthConfig =
+      await serviceKeyStore.getAuthorizationConfig(destination);
+    if (!serviceKeyAuthConfig) {
+      throw new Error('Missing auth config for integration test');
+    }
+
     // Create real token provider
-    const tokenProvider = new BtpTokenProvider();
+    const tokenProvider = new AuthorizationCodeProvider({
+      uaaUrl: serviceKeyAuthConfig.uaaUrl,
+      clientId: serviceKeyAuthConfig.uaaClientId,
+      clientSecret: serviceKeyAuthConfig.uaaClientSecret,
+      refreshToken: serviceKeyAuthConfig.refreshToken,
+      browser: 'system',
+    });
 
     // Create AuthBroker with real stores and provider
     const broker = new AuthBroker(

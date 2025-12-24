@@ -5,6 +5,7 @@
 import {
   type ILogger,
   type ITokenRefresher,
+  type ITokenResult,
   STORE_ERROR_CODES,
 } from '@mcp-abap-adt/interfaces';
 import type { ITokenProvider } from './providers';
@@ -142,10 +143,8 @@ export class AuthBroker {
     }
 
     // Check tokenProvider methods (required)
-    if (typeof tokenProvider.getConnectionConfig !== 'function') {
-      throw new Error(
-        'AuthBroker: tokenProvider.getConnectionConfig must be a function',
-      );
+    if (typeof tokenProvider.getTokens !== 'function') {
+      throw new Error('AuthBroker: tokenProvider.getTokens must be a function');
     }
     // validateToken is optional, so we don't check it
 
@@ -301,21 +300,12 @@ export class AuthBroker {
   /**
    * Get UAA credentials from session or service key
    */
-  private async getUaaCredentials(
+  private async getAuthorizationConfigFromServiceKey(
     destination: string,
-    authConfig: IAuthorizationConfig | null,
   ): Promise<IAuthorizationConfig> {
-    if (
-      authConfig?.uaaUrl &&
-      authConfig?.uaaClientId &&
-      authConfig?.uaaClientSecret
-    ) {
-      return authConfig;
-    }
-
     if (!this.serviceKeyStore) {
       throw new Error(
-        `UAA credentials not found for ${destination}. Session has no UAA credentials and serviceKeyStore is not available.`,
+        `Authorization config not found for ${destination}. Session has no auth config and serviceKeyStore is not available.`,
       );
     }
 
@@ -335,29 +325,23 @@ export class AuthBroker {
           );
         } else {
           this.logger?.warn(
-            `Failed to get UAA credentials from service key store for ${destination}: ${getErrorMessage(error)}`,
+            `Failed to get authorization config from service key store for ${destination}: ${getErrorMessage(error)}`,
           );
         }
       } else {
         this.logger?.warn(
-          `Failed to get UAA credentials from service key store for ${destination}: ${getErrorMessage(error)}`,
+          `Failed to get authorization config from service key store for ${destination}: ${getErrorMessage(error)}`,
         );
       }
     }
 
-    const uaaCredentials = authConfig || serviceKeyAuthConfig;
-    if (
-      !uaaCredentials ||
-      !uaaCredentials.uaaUrl ||
-      !uaaCredentials.uaaClientId ||
-      !uaaCredentials.uaaClientSecret
-    ) {
+    if (!serviceKeyAuthConfig) {
       throw new Error(
-        `UAA credentials not found for ${destination}. Session has no UAA credentials${this.serviceKeyStore ? ' and serviceKeyStore has no UAA credentials' : ' and serviceKeyStore is not available'}.`,
+        `Authorization config not found for ${destination}. Session has no auth config${this.serviceKeyStore ? ' and serviceKeyStore has no auth config' : ' and serviceKeyStore is not available'}.`,
       );
     }
 
-    return uaaCredentials;
+    return serviceKeyAuthConfig;
   }
 
   /**
@@ -397,115 +381,83 @@ export class AuthBroker {
     }
   }
 
-  /**
-   * Initialize session from service key (Step 0)
-   */
-  private async initializeSessionFromServiceKey(
+  private async requestTokens(
     destination: string,
-    serviceUrl: string,
-  ): Promise<string> {
-    if (!this.serviceKeyStore) {
-      throw new Error(
-        `Cannot initialize session for destination "${destination}": authorizationToken is empty, UAA credentials are empty, and serviceKeyStore is not available. Provide serviceKeyStore to initialize from service key.`,
-      );
-    }
-
-    const serviceKeyAuthConfig =
-      await this.serviceKeyStore.getAuthorizationConfig(destination);
-    if (
-      !serviceKeyAuthConfig ||
-      !serviceKeyAuthConfig.uaaUrl ||
-      !serviceKeyAuthConfig.uaaClientId ||
-      !serviceKeyAuthConfig.uaaClientSecret
-    ) {
-      throw new Error(
-        `Service key for destination "${destination}" does not contain UAA credentials`,
-      );
-    }
-
-    if (!this.allowBrowserAuth) {
-      const error = new Error(
-        `Browser authentication required for destination "${destination}" but allowBrowserAuth is disabled. Either enable browser auth or provide a valid session with token.`,
-      ) as Error & { code: string; destination: string };
-      error.code = 'BROWSER_AUTH_REQUIRED';
-      error.destination = destination;
-      this.logger?.error(
-        `Step 0: Browser auth required but disabled for ${destination}`,
-      );
-      throw error;
-    }
-
+    sourceLabel: string,
+  ): Promise<ITokenResult> {
     this.logger?.debug(
-      `Step 0: Authenticating via provider (browser) for ${destination} using service key UAA credentials`,
+      `Requesting tokens for ${destination} via ${sourceLabel}`,
     );
-
-    const getConnectionConfig = this.tokenProvider.getConnectionConfig;
-    if (!getConnectionConfig) {
-      throw new Error(
-        'AuthBroker: tokenProvider.getConnectionConfig is required',
-      );
-    }
-    let tokenResult: Awaited<ReturnType<typeof getConnectionConfig>>;
     try {
-      tokenResult = await getConnectionConfig(serviceKeyAuthConfig, {
-        browser: this.browser,
-        logger: this.logger,
-      });
+      const getTokens = this.tokenProvider.getTokens;
+      if (!getTokens) {
+        throw new Error('AuthBroker: tokenProvider.getTokens is required');
+      }
+      return await getTokens.call(this.tokenProvider);
     } catch (error: any) {
       if (hasErrorCode(error)) {
         if (error.code === 'VALIDATION_ERROR') {
           throw new Error(
-            `Cannot initialize session for destination "${destination}": provider validation failed - missing ${error.missingFields?.join(', ') || 'required fields'}`,
+            `Token provider validation failed for ${destination}: missing ${error.missingFields?.join(', ') || 'required fields'}`,
           );
-        } else if (error.code === 'BROWSER_AUTH_ERROR') {
+        }
+        if (error.code === 'BROWSER_AUTH_ERROR') {
           throw new Error(
-            `Cannot initialize session for destination "${destination}": browser authentication failed - ${getErrorMessage(error)}`,
+            `Token provider browser authentication failed for ${destination}: ${getErrorMessage(error)}`,
           );
-        } else if (
+        }
+        if (
           error.code === 'ECONNREFUSED' ||
           error.code === 'ETIMEDOUT' ||
           error.code === 'ENOTFOUND'
         ) {
           throw new Error(
-            `Cannot initialize session for destination "${destination}": network error - cannot reach authentication server (${error.code})`,
+            `Token provider network error for ${destination}: ${error.code}`,
+          );
+        }
+        if (error.code === 'SERVICE_KEY_ERROR') {
+          throw new Error(
+            `Token provider service key error for ${destination}: ${getErrorMessage(error)}`,
           );
         }
       }
       throw new Error(
-        `Cannot initialize session for destination "${destination}": provider error - ${getErrorMessage(error)}`,
+        `Token provider error for ${destination}: ${getErrorMessage(error)}`,
       );
     }
+  }
 
-    const token = tokenResult.connectionConfig.authorizationToken;
+  private async persistTokenResult(
+    destination: string,
+    serviceUrl: string,
+    baseConnConfig: IConnectionConfig | null,
+    authConfig: IAuthorizationConfig,
+    tokenResult: ITokenResult,
+  ): Promise<void> {
+    const token = tokenResult.authorizationToken;
     if (!token) {
       throw new Error(
         `Token provider did not return authorization token for destination "${destination}"`,
       );
     }
 
-    const tokenLength = token.length;
-    this.logger?.info(
-      `Step 0: Token initialized for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`,
-    );
-
-    // Get serviceUrl from service key store if not in connectionConfig
-    const serviceKeyConnConfig =
-      await this.serviceKeyStore.getConnectionConfig(destination);
     const connectionConfigWithServiceUrl: IConnectionConfig = {
-      ...tokenResult.connectionConfig,
-      serviceUrl:
-        tokenResult.connectionConfig.serviceUrl ||
-        serviceKeyConnConfig?.serviceUrl ||
-        serviceUrl,
+      ...baseConnConfig,
+      serviceUrl,
+      authorizationToken: token,
+      authType: 'jwt',
     };
 
-    await this.saveTokenToSession(destination, connectionConfigWithServiceUrl, {
-      ...serviceKeyAuthConfig,
-      refreshToken:
-        tokenResult.refreshToken || serviceKeyAuthConfig.refreshToken,
-    });
+    const authorizationConfig: IAuthorizationConfig = {
+      ...authConfig,
+      refreshToken: tokenResult.refreshToken ?? authConfig.refreshToken,
+    };
 
-    return token;
+    await this.saveTokenToSession(
+      destination,
+      connectionConfigWithServiceUrl,
+      authorizationConfig,
+    );
   }
 
   /**
@@ -539,213 +491,6 @@ export class AuthBroker {
       );
       return false;
     }
-  }
-
-  /**
-   * Refresh token from session (Step 2a)
-   */
-  private async refreshTokenFromSession(
-    destination: string,
-    uaaCredentials: IAuthorizationConfig,
-    refreshToken: string,
-    serviceUrl: string,
-  ): Promise<string> {
-    this.logger?.debug(
-      `Step 2a: Trying refreshTokenFromSession for ${destination}`,
-    );
-
-    const authConfigWithRefresh = { ...uaaCredentials, refreshToken };
-    const refreshTokenFromSession = this.tokenProvider.refreshTokenFromSession;
-    if (!refreshTokenFromSession) {
-      throw new Error(
-        'AuthBroker: tokenProvider.refreshTokenFromSession is required',
-      );
-    }
-    let tokenResult: Awaited<ReturnType<typeof refreshTokenFromSession>>;
-
-    try {
-      tokenResult = await refreshTokenFromSession(authConfigWithRefresh, {
-        browser: this.browser,
-        logger: this.logger,
-      });
-    } catch (error: any) {
-      if (hasErrorCode(error)) {
-        if (
-          error.code === 'ECONNREFUSED' ||
-          error.code === 'ETIMEDOUT' ||
-          error.code === 'ENOTFOUND'
-        ) {
-          this.logger?.debug(
-            `Step 2a: Network error during refreshTokenFromSession for ${destination}: ${error.code}. Trying refreshTokenFromServiceKey`,
-          );
-          throw error; // Re-throw to trigger fallback to Step 2b
-        }
-      }
-      throw error; // Re-throw other errors
-    }
-
-    const token = tokenResult.connectionConfig.authorizationToken;
-    if (!token) {
-      throw new Error(
-        `Token provider did not return authorization token for destination "${destination}"`,
-      );
-    }
-
-    const tokenLength = token.length;
-    this.logger?.info(
-      `Step 2a: Token refreshed from session for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`,
-    );
-
-    // Get serviceUrl from session or service key
-    let serviceKeyServiceUrl: string | undefined;
-    if (this.serviceKeyStore) {
-      try {
-        const serviceKeyConn =
-          await this.serviceKeyStore.getConnectionConfig(destination);
-        serviceKeyServiceUrl = serviceKeyConn?.serviceUrl;
-      } catch (error: any) {
-        this.logger?.debug(
-          `Could not get serviceUrl from service key store: ${getErrorMessage(error)}`,
-        );
-      }
-    }
-    const finalServiceUrl =
-      tokenResult.connectionConfig.serviceUrl ||
-      serviceUrl ||
-      serviceKeyServiceUrl;
-
-    const connectionConfigWithServiceUrl: IConnectionConfig = {
-      ...tokenResult.connectionConfig,
-      serviceUrl: finalServiceUrl,
-    };
-
-    const authorizationConfig: IAuthorizationConfig = {
-      ...uaaCredentials,
-      refreshToken: tokenResult.refreshToken || refreshToken,
-    };
-
-    await this.saveTokenToSession(
-      destination,
-      connectionConfigWithServiceUrl,
-      authorizationConfig,
-    );
-
-    return token;
-  }
-
-  /**
-   * Refresh token from service key (Step 2b)
-   */
-  private async refreshTokenFromServiceKey(
-    destination: string,
-    uaaCredentials: IAuthorizationConfig,
-    serviceUrl: string,
-  ): Promise<string> {
-    if (!this.allowBrowserAuth) {
-      const error = new Error(
-        `Browser authentication required for destination "${destination}" but allowBrowserAuth is disabled. Token refresh via session failed and browser auth is not allowed. Either enable browser auth or ensure a valid refresh token exists in session.`,
-      ) as Error & { code: string; destination: string };
-      error.code = 'BROWSER_AUTH_REQUIRED';
-      error.destination = destination;
-      this.logger?.error(
-        `Step 2b: Browser auth required but disabled for ${destination}`,
-      );
-      throw error;
-    }
-
-    this.logger?.debug(
-      `Step 2b: Trying refreshTokenFromServiceKey for ${destination}`,
-    );
-
-    const refreshTokenFromServiceKey =
-      this.tokenProvider.refreshTokenFromServiceKey;
-    if (!refreshTokenFromServiceKey) {
-      throw new Error(
-        'AuthBroker: tokenProvider.refreshTokenFromServiceKey is required',
-      );
-    }
-    let tokenResult: Awaited<ReturnType<typeof refreshTokenFromServiceKey>>;
-    try {
-      tokenResult = await refreshTokenFromServiceKey(uaaCredentials, {
-        browser: this.browser,
-        logger: this.logger,
-      });
-    } catch (error: any) {
-      if (hasErrorCode(error)) {
-        if (error.code === 'VALIDATION_ERROR') {
-          throw new Error(
-            `Token refresh failed: Missing required fields in authConfig - ${error.missingFields?.join(', ')}`,
-          );
-        } else if (error.code === 'BROWSER_AUTH_ERROR') {
-          throw new Error(
-            `Token refresh failed: Browser authentication failed or was cancelled - ${getErrorMessage(error)}`,
-          );
-        } else if (
-          error.code === 'ECONNREFUSED' ||
-          error.code === 'ETIMEDOUT' ||
-          error.code === 'ENOTFOUND'
-        ) {
-          throw new Error(
-            `Token refresh failed: Network error - ${error.code}: Cannot reach authentication server`,
-          );
-        } else if (error.code === 'SERVICE_KEY_ERROR') {
-          throw new Error(
-            `Token refresh failed: Service key not found or invalid for ${destination}`,
-          );
-        }
-      }
-      throw new Error(
-        `Token refresh failed for ${destination}: ${getErrorMessage(error)}`,
-      );
-    }
-
-    const token = tokenResult.connectionConfig.authorizationToken;
-    if (!token) {
-      throw new Error(
-        `Token provider did not return authorization token for destination "${destination}"`,
-      );
-    }
-
-    const tokenLength = token.length;
-    this.logger?.info(
-      `Step 2b: Token refreshed from service key for ${destination}: token(${tokenLength} chars), hasRefreshToken(${!!tokenResult.refreshToken})`,
-    );
-
-    // Get serviceUrl from session or service key
-    let serviceKeyServiceUrl: string | undefined;
-    if (this.serviceKeyStore) {
-      try {
-        const serviceKeyConn =
-          await this.serviceKeyStore.getConnectionConfig(destination);
-        serviceKeyServiceUrl = serviceKeyConn?.serviceUrl;
-      } catch (error: any) {
-        this.logger?.debug(
-          `Could not get serviceUrl from service key store: ${getErrorMessage(error)}`,
-        );
-      }
-    }
-    const finalServiceUrl =
-      tokenResult.connectionConfig.serviceUrl ||
-      serviceUrl ||
-      serviceKeyServiceUrl;
-
-    const connectionConfigWithServiceUrl: IConnectionConfig = {
-      ...tokenResult.connectionConfig,
-      serviceUrl: finalServiceUrl,
-    };
-
-    const authorizationConfig: IAuthorizationConfig = {
-      ...uaaCredentials,
-      refreshToken: tokenResult.refreshToken || uaaCredentials.refreshToken,
-    };
-
-    await this.saveTokenToSession(
-      destination,
-      connectionConfigWithServiceUrl,
-      authorizationConfig,
-    );
-
-    return token;
   }
 
   /**
@@ -799,46 +544,38 @@ export class AuthBroker {
 
     // Check if we have token or UAA credentials
     const hasToken = !!connConfig?.authorizationToken;
-    const hasUaaCredentials = !!(
-      authConfig?.uaaUrl &&
-      authConfig?.uaaClientId &&
-      authConfig?.uaaClientSecret
-    );
+    const hasAuthConfig = !!authConfig;
 
     this.logger?.debug(
-      `Session check for ${destination}: hasToken(${hasToken}), hasUaaCredentials(${hasUaaCredentials}), serviceUrl(${serviceUrl ? 'yes' : 'no'})`,
+      `Session check for ${destination}: hasToken(${hasToken}), hasAuthConfig(${hasAuthConfig}), serviceUrl(${serviceUrl ? 'yes' : 'no'})`,
     );
 
     // Step 0: Initialize Session with Token (if needed)
-    if (!hasToken && !hasUaaCredentials) {
-      try {
-        return await this.initializeSessionFromServiceKey(
-          destination,
-          serviceUrl,
+    if (!hasToken && !hasAuthConfig) {
+      if (!this.allowBrowserAuth) {
+        const error = new Error(
+          `Browser authentication required for destination "${destination}" but allowBrowserAuth is disabled. Either enable browser auth or provide a valid session with token.`,
+        ) as Error & { code: string; destination: string };
+        error.code = 'BROWSER_AUTH_REQUIRED';
+        error.destination = destination;
+        this.logger?.error(
+          `Step 0: Browser auth required but disabled for ${destination}`,
         );
-      } catch (error: any) {
-        // Re-throw BROWSER_AUTH_REQUIRED error without wrapping
-        if (hasErrorCode(error) && error.code === 'BROWSER_AUTH_REQUIRED') {
-          throw error;
-        }
-        // Handle typed store errors
-        if (hasErrorCode(error)) {
-          if (error.code === STORE_ERROR_CODES.FILE_NOT_FOUND) {
-            throw new Error(
-              `Cannot initialize session for destination "${destination}": service key file not found`,
-            );
-          } else if (error.code === STORE_ERROR_CODES.PARSE_ERROR) {
-            throw new Error(
-              `Cannot initialize session for destination "${destination}": service key parsing failed - ${getErrorMessage(error)}`,
-            );
-          } else if (error.code === STORE_ERROR_CODES.INVALID_CONFIG) {
-            throw new Error(
-              `Cannot initialize session for destination "${destination}": invalid service key - missing ${error.missingFields?.join(', ') || 'required fields'}`,
-            );
-          }
-        }
         throw error;
       }
+
+      const serviceKeyAuthConfig =
+        await this.getAuthorizationConfigFromServiceKey(destination);
+      const tokenResult = await this.requestTokens(destination, 'serviceKey');
+      await this.persistTokenResult(
+        destination,
+        serviceUrl,
+        connConfig,
+        serviceKeyAuthConfig,
+        tokenResult,
+      );
+
+      return tokenResult.authorizationToken;
     }
 
     // Step 1: Validate existing token
@@ -860,42 +597,73 @@ export class AuthBroker {
       }
     }
 
-    // Step 2: Refresh Token Flow
-    this.logger?.debug(`Step 2: Attempting token refresh for ${destination}`);
+    // Step 2: Request tokens via provider, preferring session auth config
+    this.logger?.debug(`Step 2: Requesting tokens for ${destination}`);
 
-    const uaaCredentials = await this.getUaaCredentials(
-      destination,
-      authConfig,
-    );
-
-    // Step 2a: Try refresh from session (if refresh token exists)
-    const refreshToken = authConfig?.refreshToken;
-    if (refreshToken) {
-      try {
-        return await this.refreshTokenFromSession(
-          destination,
-          uaaCredentials,
-          refreshToken,
-          serviceUrl,
+    let lastError: Error | null = null;
+    if (authConfig) {
+      if (!this.allowBrowserAuth && !authConfig.refreshToken) {
+        const error = new Error(
+          `Browser authentication required for destination "${destination}" but allowBrowserAuth is disabled. Session has no refresh token.`,
+        ) as Error & { code: string; destination: string };
+        error.code = 'BROWSER_AUTH_REQUIRED';
+        error.destination = destination;
+        this.logger?.error(
+          `Step 2: Browser auth required but disabled for ${destination}`,
         );
-      } catch (error: any) {
-        this.logger?.debug(
-          `Step 2a: refreshTokenFromSession failed for ${destination}: ${getErrorMessage(error)}, trying refreshTokenFromServiceKey`,
-        );
-        // Continue to try service key refresh
+        throw error;
       }
-    } else {
-      this.logger?.debug(
-        `Step 2a: No refresh token in session for ${destination}, skipping to service key refresh`,
+      try {
+        const tokenResult = await this.requestTokens(destination, 'session');
+        await this.persistTokenResult(
+          destination,
+          serviceUrl,
+          connConfig,
+          authConfig,
+          tokenResult,
+        );
+        return tokenResult.authorizationToken;
+      } catch (error: any) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        this.logger?.debug(
+          `Step 2: Token request via session failed for ${destination}: ${getErrorMessage(error)}, trying service key`,
+        );
+      }
+    }
+
+    if (!this.allowBrowserAuth) {
+      const error = new Error(
+        `Browser authentication required for destination "${destination}" but allowBrowserAuth is disabled. Token refresh via session failed and browser auth is not allowed. Either enable browser auth or ensure a valid refresh token exists in session.`,
+      ) as Error & { code: string; destination: string };
+      error.code = 'BROWSER_AUTH_REQUIRED';
+      error.destination = destination;
+      this.logger?.error(
+        `Step 2: Browser auth required but disabled for ${destination}`,
+      );
+      throw error;
+    }
+
+    if (!this.serviceKeyStore) {
+      if (lastError) {
+        throw lastError;
+      }
+      throw new Error(
+        `Authorization config not found for ${destination}. Session has no auth config and serviceKeyStore is not available.`,
       );
     }
 
-    // Step 2b: Try refresh from service key (browser authentication)
-    return await this.refreshTokenFromServiceKey(
+    const serviceKeyAuthConfig =
+      await this.getAuthorizationConfigFromServiceKey(destination);
+    const tokenResult = await this.requestTokens(destination, 'serviceKey');
+    await this.persistTokenResult(
       destination,
-      uaaCredentials,
       serviceUrl,
+      connConfig,
+      serviceKeyAuthConfig,
+      tokenResult,
     );
+
+    return tokenResult.authorizationToken;
   }
 
   /**
