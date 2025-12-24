@@ -11,6 +11,11 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.13] - 2025-12-26
+
+### Fixed
+- **Compatibility with auth-providers 0.2.8**: Removed dependency on deprecated `refreshTokenFromServiceKey()` method from token providers. Broker now exclusively uses `getTokens()` method which handles all token lifecycle operations internally. This ensures compatibility with stateful token providers that manage refresh/re-auth internally.
+
 ## [0.2.12] - 2025-12-25
 
 ### Changed
