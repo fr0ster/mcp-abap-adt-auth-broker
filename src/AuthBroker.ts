@@ -15,6 +15,7 @@ import type {
   IServiceKeyStore,
   ISessionStore,
 } from './stores/interfaces';
+import { formatExpirationDate, formatToken } from './utils/formatting';
 
 /**
  * No-op logger implementation for default fallback when logger is not provided
@@ -176,9 +177,13 @@ export class AuthBroker {
 
     // Log successful initialization
     const hasServiceKeyStore = !!this.serviceKeyStore;
-    this.logger?.debug(
-      `AuthBroker initialized: sessionStore(ok), serviceKeyStore(${hasServiceKeyStore ? 'ok' : 'none'}), tokenProvider(ok)`,
-    );
+    this.logger?.info('[AuthBroker] Broker initialized', {
+      hasServiceKeyStore,
+      hasSessionStore: true,
+      hasTokenProvider: true,
+      browser: this.browser,
+      allowBrowserAuth: this.allowBrowserAuth,
+    });
   }
 
   /**
@@ -385,15 +390,27 @@ export class AuthBroker {
     destination: string,
     sourceLabel: string,
   ): Promise<ITokenResult> {
-    this.logger?.debug(
-      `Requesting tokens for ${destination} via ${sourceLabel}`,
+    this.logger?.info(
+      `[AuthBroker] Requesting tokens for ${destination} via ${sourceLabel}`,
     );
     try {
       const getTokens = this.tokenProvider.getTokens;
       if (!getTokens) {
         throw new Error('AuthBroker: tokenProvider.getTokens is required');
       }
-      return await getTokens.call(this.tokenProvider);
+      const tokenResult = await getTokens.call(this.tokenProvider);
+      const expiresAt = tokenResult.expiresIn
+        ? Date.now() + tokenResult.expiresIn * 1000
+        : undefined;
+      this.logger?.info(`[AuthBroker] Tokens received for ${destination}`, {
+        authorizationToken: formatToken(tokenResult.authorizationToken),
+        hasRefreshToken: !!tokenResult.refreshToken,
+        refreshToken: formatToken(tokenResult.refreshToken),
+        authType: tokenResult.authType,
+        expiresIn: tokenResult.expiresIn,
+        expiresAt: expiresAt ? formatExpirationDate(expiresAt) : undefined,
+      });
+      return tokenResult;
     } catch (error: any) {
       if (hasErrorCode(error)) {
         if (error.code === 'VALIDATION_ERROR') {
@@ -453,6 +470,21 @@ export class AuthBroker {
       refreshToken: tokenResult.refreshToken ?? authConfig.refreshToken,
     };
 
+    const expiresAt = tokenResult.expiresIn
+      ? Date.now() + tokenResult.expiresIn * 1000
+      : undefined;
+    this.logger?.info(
+      `[AuthBroker] Saving tokens to session for ${destination}`,
+      {
+        serviceUrl,
+        authorizationToken: formatToken(token),
+        hasRefreshToken: !!authorizationConfig.refreshToken,
+        refreshToken: formatToken(authorizationConfig.refreshToken),
+        expiresIn: tokenResult.expiresIn,
+        expiresAt: expiresAt ? formatExpirationDate(expiresAt) : undefined,
+      },
+    );
+
     await this.saveTokenToSession(
       destination,
       connectionConfigWithServiceUrl,
@@ -501,7 +533,9 @@ export class AuthBroker {
    * @throws Error if session initialization fails or authentication failed
    */
   async getToken(destination: string): Promise<string> {
-    this.logger?.debug(`Getting token for destination: ${destination}`);
+    this.logger?.info(
+      `[AuthBroker] Getting token for destination: ${destination}`,
+    );
 
     // Load session data
     const { connConfig, authConfig } = await this.loadSessionData(destination);
@@ -513,9 +547,15 @@ export class AuthBroker {
     const hasToken = !!connConfig?.authorizationToken;
     const hasAuthConfig = !!authConfig;
 
-    this.logger?.debug(
-      `Session check for ${destination}: hasToken(${hasToken}), hasAuthConfig(${hasAuthConfig}), serviceUrl(${serviceUrl ? 'yes' : 'no'})`,
-    );
+    this.logger?.info(`[AuthBroker] Session check for ${destination}`, {
+      hasToken,
+      hasAuthConfig,
+      hasServiceUrl: !!serviceUrl,
+      serviceUrl,
+      authorizationToken: formatToken(connConfig?.authorizationToken),
+      hasRefreshToken: !!authConfig?.refreshToken,
+      refreshToken: formatToken(authConfig?.refreshToken),
+    });
 
     // Step 0: Initialize Session with Token (if needed)
     if (!hasToken && !hasAuthConfig) {
@@ -540,6 +580,13 @@ export class AuthBroker {
         connConfig,
         serviceKeyAuthConfig,
         tokenResult,
+      );
+
+      this.logger?.info(
+        `[AuthBroker] Token retrieved for ${destination} (initialized from service key)`,
+        {
+          authorizationToken: formatToken(tokenResult.authorizationToken),
+        },
       );
 
       return tokenResult.authorizationToken;
@@ -573,6 +620,12 @@ export class AuthBroker {
           connConfig,
           authConfig,
           tokenResult,
+        );
+        this.logger?.info(
+          `[AuthBroker] Token retrieved for ${destination} (via session)`,
+          {
+            authorizationToken: formatToken(tokenResult.authorizationToken),
+          },
         );
         return tokenResult.authorizationToken;
       } catch (error: any) {
@@ -613,6 +666,13 @@ export class AuthBroker {
       connConfig,
       serviceKeyAuthConfig,
       tokenResult,
+    );
+
+    this.logger?.info(
+      `[AuthBroker] Token retrieved for ${destination} (fallback to service key)`,
+      {
+        authorizationToken: formatToken(tokenResult.authorizationToken),
+      },
     );
 
     return tokenResult.authorizationToken;
@@ -729,8 +789,10 @@ export class AuthBroker {
       );
     }
     if (sessionConnConfig) {
+      const tokenLength = sessionConnConfig.authorizationToken?.length || 0;
+      const formattedToken = formatToken(sessionConnConfig.authorizationToken);
       this.logger?.debug(
-        `Connection config from session for ${destination}: token(${sessionConnConfig.authorizationToken?.length || 0} chars), serviceUrl(${sessionConnConfig.serviceUrl ? 'yes' : 'no'})`,
+        `Connection config from session for ${destination}: token(${tokenLength} chars${formattedToken ? `, ${formattedToken}` : ''}), serviceUrl(${sessionConnConfig.serviceUrl ? 'yes' : 'no'})`,
       );
       return sessionConnConfig;
     }

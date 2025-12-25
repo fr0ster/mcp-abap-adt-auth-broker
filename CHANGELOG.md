@@ -11,6 +11,27 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.14] - 2025-12-26
+
+### Added
+- **Structured logging**: Added detailed logging throughout `AuthBroker` for better debugging and observability
+  - Logs broker initialization with configuration details
+  - Logs token retrieval operations with formatted tokens (start...end format)
+  - Logs token persistence with expiration dates in readable format
+  - Logs session state checks with token and refresh token information
+  - Uses `formatToken()` and `formatExpirationDate()` utilities for consistent formatting
+- **Token formatting utilities**: Added `formatExpirationDate()` function to `utils/formatting.ts` for readable date/time formatting (e.g., "2025-12-25 19:21:27 UTC")
+- **Test configuration**: Added `forceExit: true` to `jest.config.js` to prevent test hanging after completion
+
+### Changed
+- **Dependencies**: Updated `@mcp-abap-adt/auth-providers` from `^0.2.8` to `^0.2.10`
+- **Dependencies**: Updated `@mcp-abap-adt/auth-stores` from `^0.2.9` to `^0.2.10`
+- **Logging format**: All token logging now uses formatted tokens (shows first 25 and last 25 characters, skipping middle)
+- **Logging format**: All expiration date logging now uses readable date/time format instead of raw timestamps
+
+### Fixed
+- **Test hanging**: Fixed issue where tests would hang after completion by adding `forceExit: true` to Jest configuration
+
 ## [0.2.13] - 2025-12-26
 
 ### Changed

@@ -177,10 +177,14 @@ const connection = new JwtAbapConnection(config, tokenRefresher);
 
 #### Debugging Variables
 
-- `DEBUG_AUTH_BROKER` - Enable debug logging for `auth-broker` package
+- `DEBUG_BROKER` - Enable debug logging for `auth-broker` package (short name)
   - Set to `true` to enable logging (default: `false`)
   - When enabled, logs authentication steps, token operations, and error details
   - Can be explicitly disabled by setting to `false`
+  - Example: `DEBUG_BROKER=true npm test`
+  
+- `DEBUG_AUTH_BROKER` - Long name (backward compatibility)
+  - Same as `DEBUG_BROKER`, but longer name
   - Example: `DEBUG_AUTH_BROKER=true npm test`
   
 - `LOG_LEVEL` - Control log verbosity level
@@ -189,18 +193,48 @@ const connection = new JwtAbapConnection(config, tokenRefresher);
   - `info` - Informational messages, warnings, and errors
   - `warn` - Warnings and errors only
   - `error` - Errors only
-  - Example: `LOG_LEVEL=debug DEBUG_AUTH_BROKER=true npm test`
+  - Example: `LOG_LEVEL=debug DEBUG_BROKER=true npm test`
 
 - `DEBUG` - Alternative way to enable debugging
   - Set to `true` to enable all debug logging
-  - Or set to a string containing `auth-broker` to enable only this package
-  - Example: `DEBUG=true npm test` or `DEBUG=auth-broker npm test`
+  - Or set to a string containing `broker` or `auth-broker` to enable only this package
+  - Example: `DEBUG=true npm test` or `DEBUG=broker npm test` or `DEBUG=auth-broker npm test`
 
 **Note**: For debugging related packages:
-- `DEBUG_AUTH_STORES` - Enable logging for `@mcp-abap-adt/auth-stores` package
-- `DEBUG_AUTH_PROVIDERS` - Enable logging for `@mcp-abap-adt/auth-providers` package
+- `DEBUG_STORES` (short) or `DEBUG_AUTH_STORES` (long) - Enable logging for `@mcp-abap-adt/auth-stores` package
+- `DEBUG_PROVIDER` (short) or `DEBUG_AUTH_PROVIDERS` (long) - Enable logging for `@mcp-abap-adt/auth-providers` package
 
-**Legacy Support**: `DEBUG_AUTH_LOG` is still supported for backward compatibility (equivalent to `DEBUG_AUTH_BROKER=true LOG_LEVEL=debug`)
+**Legacy Support**: `DEBUG_AUTH_LOG` is still supported for backward compatibility (equivalent to `DEBUG_BROKER=true LOG_LEVEL=debug`)
+
+### Logging Features
+
+When logging is enabled (via `DEBUG_BROKER=true` or `DEBUG_AUTH_BROKER=true`), the broker provides detailed structured logging:
+
+**What is logged:**
+- **Broker initialization**: Configuration details, stores, token provider, browser settings
+- **Token retrieval**: Session state checks, token presence, refresh token availability
+- **Token operations**: Token requests via provider, received tokens with expiration information
+- **Token persistence**: Saving tokens to session with formatted token values and expiration dates
+- **Error context**: Detailed error information with file paths, error codes, missing fields
+
+**Logging Features:**
+- **Token Formatting**: Tokens are logged in truncated format (first 25 and last 25 characters, skipping middle) for security and readability
+- **Date Formatting**: Expiration dates are logged in readable format (e.g., "2025-12-25 19:21:27 UTC") instead of raw timestamps
+- **Structured Logging**: Uses `DefaultLogger` from `@mcp-abap-adt/logger` for proper formatting with icons and level prefixes
+- **Log Levels**: Controlled via `LOG_LEVEL` or `AUTH_LOG_LEVEL` environment variable (error, warn, info, debug)
+
+Example output with `DEBUG_BROKER=true LOG_LEVEL=info`:
+```
+[INFO] ℹ️ [AUTH-BROKER] Broker initialized: hasServiceKeyStore(true), hasSessionStore(true), hasTokenProvider(true), browser(system), allowBrowserAuth(true)
+[INFO] ℹ️ [AUTH-BROKER] Getting token for destination: TRIAL
+[INFO] ℹ️ [AUTH-BROKER] Session check for TRIAL: hasToken(true), hasAuthConfig(true), hasServiceUrl(true), serviceUrl(https://...abap...), authorizationToken(eyJ0eXAiOiJKV1QiLCJqaWQiO...Q5ti7aYmEzItIDuLp7axNYo6w), hasRefreshToken(true)
+[INFO] ℹ️ [AUTH-BROKER] Requesting tokens for TRIAL via session
+[INFO] ℹ️ [AUTH-BROKER] Tokens received for TRIAL: authorizationToken(eyJ0eXAiOiJKV1QiLCJqaWQiO...Q5ti7aYmEzItIDuLp7axNYo6w), hasRefreshToken(true), authType(authorization_code), expiresIn(43199), expiresAt(2025-12-26 20:15:30 UTC)
+[INFO] ℹ️ [AUTH-BROKER] Saving tokens to session for TRIAL: serviceUrl(https://...abap...), authorizationToken(eyJ0eXAiOiJKV1QiLCJqaWQiO...Q5ti7aYmEzItIDuLp7axNYo6w), hasRefreshToken(true), expiresAt(2025-12-26 20:15:30 UTC)
+[INFO] ℹ️ [AUTH-BROKER] Token retrieved for TRIAL (via session): authorizationToken(eyJ0eXAiOiJKV1QiLCJqaWQiO...Q5ti7aYmEzItIDuLp7axNYo6w)
+```
+
+**Note**: Logging only works when a logger is explicitly provided to the broker constructor. The broker will not output anything to console if no logger is passed.
 
 ### File Structure
 

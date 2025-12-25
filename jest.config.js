@@ -27,4 +27,5 @@ module.exports = {
   maxWorkers: 1, // Only 1 worker process
   maxConcurrency: 1, // Only run 1 test at a time (even within same file)
   // This ensures tests run one by one in the order they are defined
+  forceExit: true, // Force Jest to exit after tests complete (prevents hanging on open handles)
 };
