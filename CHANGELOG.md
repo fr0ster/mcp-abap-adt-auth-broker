@@ -13,6 +13,14 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [0.2.13] - 2025-12-26
 
+### Changed
+- **Token lifecycle management**: Broker now always calls `provider.getTokens()` instead of validating tokens itself. Provider handles all token lifecycle operations internally (validation, refresh, login). Consumer doesn't need to know about token issues - provider manages everything automatically.
+- **Removed token validation step**: Removed Step 1 (Token Validation) from broker flow. Broker no longer checks token validity before calling provider - provider decides what to do based on token state.
+- **Simplified broker logic**: Broker is now a thin wrapper that always delegates to provider. Provider is responsible for token lifecycle management.
+
+### Removed
+- **`validateExistingToken()` method**: Removed internal token validation method. Broker no longer validates tokens - provider handles this internally via `getTokens()`.
+
 ### Fixed
 - **Compatibility with auth-providers 0.2.8**: Removed dependency on deprecated `refreshTokenFromServiceKey()` method from token providers. Broker now exclusively uses `getTokens()` method which handles all token lifecycle operations internally. This ensures compatibility with stateful token providers that manage refresh/re-auth internally.
 

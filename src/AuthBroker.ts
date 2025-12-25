@@ -461,39 +461,6 @@ export class AuthBroker {
   }
 
   /**
-   * Validate existing token (Step 1)
-   */
-  private async validateExistingToken(
-    destination: string,
-    token: string,
-    serviceUrl: string,
-  ): Promise<boolean> {
-    if (!this.tokenProvider?.validateToken) {
-      return false;
-    }
-
-    try {
-      const isValid = await this.tokenProvider.validateToken(token, serviceUrl);
-      if (isValid) {
-        this.logger?.info(
-          `Step 1: Token valid for ${destination}: token(${token.length} chars)`,
-        );
-        return true;
-      }
-      this.logger?.debug(
-        `Step 1: Token invalid for ${destination}, continuing to refresh`,
-      );
-      return false;
-    } catch (error: any) {
-      // Validation failed due to network/server error - log and continue to refresh
-      this.logger?.warn(
-        `Step 1: Token validation failed for ${destination} (network error): ${getErrorMessage(error)}. Continuing to refresh.`,
-      );
-      return false;
-    }
-  }
-
-  /**
    * Get authentication token for destination.
    * Uses tokenProvider for all authentication operations (browser-based authorization).
    *
@@ -578,27 +545,12 @@ export class AuthBroker {
       return tokenResult.authorizationToken;
     }
 
-    // Step 1: Validate existing token
-    if (hasToken && connConfig?.authorizationToken) {
-      const isValid = await this.validateExistingToken(
-        destination,
-        connConfig.authorizationToken,
-        serviceUrl,
-      );
-      if (isValid) {
-        return connConfig.authorizationToken;
-      }
-      // If no validation or validation failed, continue to refresh
-      if (!this.tokenProvider?.validateToken) {
-        this.logger?.info(
-          `Token found for ${destination} (no validation): token(${connConfig.authorizationToken.length} chars)`,
-        );
-        return connConfig.authorizationToken;
-      }
-    }
-
-    // Step 2: Request tokens via provider, preferring session auth config
-    this.logger?.debug(`Step 2: Requesting tokens for ${destination}`);
+    // Step 1: Request tokens via provider (provider handles token lifecycle internally)
+    // Broker always calls provider.getTokens() - provider decides whether to return cached token,
+    // refresh, or perform login. Consumer doesn't need to know about token issues.
+    this.logger?.debug(
+      `Step 1: Requesting tokens via provider for ${destination}`,
+    );
 
     let lastError: Error | null = null;
     if (authConfig) {

@@ -17,6 +17,8 @@ export interface TestConfig {
     };
     abap?: {
       destination?: string;
+      expired_token?: string; // Real expired token from previous session (optional)
+      refresh_token?: string; // Real refresh token for testing (optional)
     };
     xsuaa?: {
       btp_destination?: string;
@@ -197,4 +199,20 @@ export function getSessionsDir(config?: TestConfig): string | null {
   // Expand ~ and normalize path
   const expanded = expandTilde(dir);
   return path.resolve(expanded);
+}
+
+/**
+ * Get expired token from config (real expired token from YAML)
+ */
+export function getExpiredToken(config?: TestConfig): string | null {
+  const cfg = config || loadTestConfig();
+  return cfg.auth_broker?.abap?.expired_token || null;
+}
+
+/**
+ * Get refresh token from config (real refresh token from YAML)
+ */
+export function getRefreshToken(config?: TestConfig): string | null {
+  const cfg = config || loadTestConfig();
+  return cfg.auth_broker?.abap?.refresh_token || null;
 }

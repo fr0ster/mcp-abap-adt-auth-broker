@@ -293,9 +293,10 @@ try {
 
 **Flow**:
 1. **Step 0 - Initialize**: If session has no token and no auth config, load auth config from service key and call `tokenProvider.getTokens()`
-2. **Step 1 - Validate**: If session token exists and provider supports validation, validate it (return if valid)
-3. **Step 2 - Refresh/Re-auth**: If session auth config exists, call `tokenProvider.getTokens()`; on failure, fall back to service key auth config
-4. **Error**: If all attempts fail, throw an error (or `BROWSER_AUTH_REQUIRED` when browser auth is disabled)
+2. **Step 1 - Refresh/Re-auth**: Broker always calls `tokenProvider.getTokens()`. Provider handles token lifecycle internally (validation, refresh, login). If session auth config exists, use it; on failure, fall back to service key auth config
+3. **Error**: If all attempts fail, throw an error (or `BROWSER_AUTH_REQUIRED` when browser auth is disabled)
+
+**Important**: Broker always calls `provider.getTokens()` - provider decides whether to return cached token, refresh, or perform login. Consumer doesn't need to know about token issues.
 
 #### refreshToken()
 

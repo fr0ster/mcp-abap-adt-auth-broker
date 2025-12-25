@@ -20,6 +20,18 @@ auth_broker:
     # ABAP destination name (used for service key file: <destination>.json and session file: <destination>.env)
     # Example: "TRIAL" -> looks for TRIAL.json in service-keys directory and TRIAL.env in sessions directory
     destination: <TEST_ABAP_DESTINATION>
+    
+    # Expired token for testing Scenario 3 (optional)
+    # Real expired JWT token from previous session - used to test re-authentication flow
+    # If not provided, test will generate a fake expired token
+    # Example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE2MDAwMDAwMDB9.signature"
+    expired_token: <EXPIRED_TOKEN>
+    
+    # Refresh token for testing Scenario 3 (optional)
+    # Real refresh token from previous session - used to test token refresh flow
+    # If not provided, test will use invalid refresh token
+    # Example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE2MDAwMDAwMDB9.signature"
+    refresh_token: <REFRESH_TOKEN>
 
   # XSUAA destination configuration (for XSUAA service connections with reduced scope)
   xsuaa:

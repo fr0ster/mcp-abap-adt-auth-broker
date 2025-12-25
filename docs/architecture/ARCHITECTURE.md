@@ -48,14 +48,13 @@ Providers are configured at construction time and manage refresh/re-auth interna
    - If the session has no token and no auth config, the broker loads auth config from `serviceKeyStore` and calls `tokenProvider.getTokens()`.
    - Tokens are persisted to the session store.
 
-2. **Step 1 - Validate**
-   - If a token exists and `validateToken` is available, validate it.
-   - If valid, return the existing token.
-
-3. **Step 2 - Refresh/Re-auth**
-   - If session auth config exists, call `tokenProvider.getTokens()`.
-   - If that fails (or no session auth config), fall back to service key auth config and call `tokenProvider.getTokens()` again.
+2. **Step 1 - Request Tokens via Provider**
+   - Broker always calls `tokenProvider.getTokens()`.
+   - Provider handles token lifecycle internally (validation, refresh, login).
+   - If session auth config exists, use it; on failure, fall back to service key auth config.
    - If browser auth is disabled and a refresh token is not available, the broker throws `BROWSER_AUTH_REQUIRED`.
+
+**Important**: Broker always delegates to provider - provider decides whether to return cached token, refresh, or perform login. Consumer doesn't need to know about token issues.
 
 ## Error Handling
 

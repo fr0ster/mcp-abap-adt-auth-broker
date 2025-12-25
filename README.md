@@ -443,13 +443,7 @@ Gets authentication token for destination. Implements a three-step flow:
   - Persists tokens to session
 - Otherwise → proceeds to Step 1
 
-**Step 1: Token Validation**
-- If token exists in session and provider supports `validateToken`, validate it
-- If valid → returns token
-- If provider does not support validation → returns token as-is
-- Otherwise → proceeds to Step 2
-
-**Step 2: Token Refresh / Re-Auth**
+**Step 1: Token Refresh / Re-Auth**
 - If session has authorization config:
   - Uses `tokenProvider.getTokens()` to refresh or re-authenticate
   - Persists tokens to session
@@ -463,7 +457,8 @@ Gets authentication token for destination. Implements a three-step flow:
 **Important Notes:**
 - All authentication is handled by the injected provider (authorization_code or client_credentials).
 - `tokenProvider` is required for all token acquisition and refresh flows.
-- Token validation is performed only when checking existing session. Tokens obtained through refresh are not validated before being saved.
+- **Broker always calls `provider.getTokens()`** - provider handles token lifecycle internally (validation, refresh, login). Consumer doesn't need to know about token issues.
+- Provider decides whether to return cached token, refresh, or perform login based on token state.
 - **Store errors are handled gracefully**: If service key files are missing or malformed, the broker logs the error and continues with fallback mechanisms (session store data or provider-based auth)
 
 ##### Error Handling

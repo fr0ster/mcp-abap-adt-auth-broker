@@ -296,10 +296,21 @@ describe('AuthBroker', () => {
           serviceUrl: 'https://test.sap.com',
           authorizationToken: sessionToken,
         };
+        const authConfig: IAuthorizationConfig = {
+          uaaUrl: 'https://uaa.test.com',
+          uaaClientId: 'client123',
+          uaaClientSecret: 'secret123',
+          refreshToken: 'refresh-token-123', // Has refresh token, so no browser auth needed
+        };
+        const tokenResult: ITokenResult = {
+          authorizationToken: sessionToken, // Provider returns cached token
+          authType: 'authorization_code',
+        };
 
         mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
-        mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
-        mockTokenProvider.validateToken = jest.fn().mockResolvedValue(true);
+        mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
+        mockTokenProvider.getTokens.mockResolvedValue(tokenResult);
+        mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
 
         const brokerNoBrowser = new AuthBroker(
           {
@@ -314,8 +325,8 @@ describe('AuthBroker', () => {
         const token = await brokerNoBrowser.getToken('TEST');
 
         expect(token).toBe(sessionToken);
-        // No browser auth calls needed
-        expect(mockTokenProvider.getTokens).not.toHaveBeenCalled();
+        // Broker always calls provider.getTokens() - provider returns cached token
+        expect(mockTokenProvider.getTokens).toHaveBeenCalled();
       });
 
       it('should succeed with allowBrowserAuth=false if refresh token works', async () => {
@@ -366,10 +377,20 @@ describe('AuthBroker', () => {
         serviceUrl: 'https://test.sap.com',
         authorizationToken: sessionToken,
       };
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://uaa.test.com',
+        uaaClientId: 'client123',
+        uaaClientSecret: 'secret123',
+      };
+      const tokenResult: ITokenResult = {
+        authorizationToken: sessionToken, // Provider returns cached token
+        authType: 'authorization_code',
+      };
 
       mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
-      mockSessionStore.getAuthorizationConfig.mockResolvedValue(null);
-      mockTokenProvider.validateToken = jest.fn().mockResolvedValue(true);
+      mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
+      mockTokenProvider.getTokens.mockResolvedValue(tokenResult);
+      mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
 
       const token = await broker.getToken('TEST');
 
@@ -378,10 +399,8 @@ describe('AuthBroker', () => {
       expect(mockSessionStore.getAuthorizationConfig).toHaveBeenCalledWith(
         'TEST',
       );
-      expect(mockTokenProvider.validateToken).toHaveBeenCalledWith(
-        sessionToken,
-        connConfig.serviceUrl,
-      );
+      // Broker always calls provider.getTokens() - provider returns cached token
+      expect(mockTokenProvider.getTokens).toHaveBeenCalled();
     });
 
     it('should throw error if session missing serviceUrl', async () => {
@@ -429,15 +448,11 @@ describe('AuthBroker', () => {
       mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
       mockTokenProvider.getTokens.mockResolvedValue(tokenResult);
       mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
-      mockTokenProvider.validateToken = jest.fn().mockResolvedValue(false);
 
       const token = await broker.getToken('TEST');
 
       expect(token).toBe(newToken);
-      expect(mockTokenProvider.validateToken).toHaveBeenCalledWith(
-        invalidToken,
-        connConfig.serviceUrl,
-      );
+      // Broker always calls provider.getTokens() - provider handles token validation/refresh internally
       expect(mockTokenProvider.getTokens).toHaveBeenCalled();
       expect(mockSessionStore.setConnectionConfig).toHaveBeenCalled();
     });
@@ -519,7 +534,7 @@ describe('AuthBroker', () => {
         uaaUrl: 'https://uaa.test.com',
         uaaClientId: 'client123',
         uaaClientSecret: 'secret123',
-        // No refreshToken - will skip Step 2a and go to Step 2b
+        // No refreshToken - will use provider.getTokens() which handles refresh/login internally
       };
 
       mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
@@ -559,7 +574,7 @@ describe('AuthBroker', () => {
         uaaUrl: 'https://uaa.test.com',
         uaaClientId: 'client123',
         uaaClientSecret: 'secret123',
-        // No refreshToken - will use Step 2b (refreshTokenFromServiceKey)
+        // No refreshToken - will fallback to service key and use provider.getTokens()
       };
       const tokenResult: ITokenResult = {
         authorizationToken: newToken,
@@ -1006,14 +1021,26 @@ describe('AuthBroker', () => {
         serviceUrl: 'https://test.sap.com',
         authorizationToken: 'valid-token-123',
       };
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://uaa.test.com',
+        uaaClientId: 'client123',
+        uaaClientSecret: 'secret123',
+      };
+      const tokenResult: ITokenResult = {
+        authorizationToken: 'valid-token-123',
+        authType: 'authorization_code',
+      };
       mockSessionStore.getConnectionConfig.mockResolvedValue(connConfig);
-      mockTokenProvider.validateToken = jest.fn().mockResolvedValue(true);
+      mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
+      mockTokenProvider.getTokens.mockResolvedValue(tokenResult);
+      mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
 
       const tokenRefresher = broker.createTokenRefresher('TEST');
       const token = await tokenRefresher.getToken();
 
       expect(token).toBe('valid-token-123');
       expect(mockSessionStore.getConnectionConfig).toHaveBeenCalledWith('TEST');
+      expect(mockTokenProvider.getTokens).toHaveBeenCalled();
     });
 
     it('should call broker.refreshToken when tokenRefresher.refreshToken is called', async () => {
@@ -1057,6 +1084,24 @@ describe('AuthBroker', () => {
         serviceUrl: 'https://dest2.sap.com',
         authorizationToken: 'token-dest2',
       };
+      const authConfig1: IAuthorizationConfig = {
+        uaaUrl: 'https://uaa.test.com',
+        uaaClientId: 'client123',
+        uaaClientSecret: 'secret123',
+      };
+      const authConfig2: IAuthorizationConfig = {
+        uaaUrl: 'https://uaa.test.com',
+        uaaClientId: 'client123',
+        uaaClientSecret: 'secret123',
+      };
+      const tokenResult1: ITokenResult = {
+        authorizationToken: 'token-dest1',
+        authType: 'authorization_code',
+      };
+      const tokenResult2: ITokenResult = {
+        authorizationToken: 'token-dest2',
+        authType: 'authorization_code',
+      };
 
       mockSessionStore.getConnectionConfig.mockImplementation(
         async (dest: string) => {
@@ -1065,7 +1110,17 @@ describe('AuthBroker', () => {
           return null;
         },
       );
-      mockTokenProvider.validateToken = jest.fn().mockResolvedValue(true);
+      mockSessionStore.getAuthorizationConfig.mockImplementation(
+        async (dest: string) => {
+          if (dest === 'DEST1') return authConfig1;
+          if (dest === 'DEST2') return authConfig2;
+          return null;
+        },
+      );
+      mockTokenProvider.getTokens
+        .mockResolvedValueOnce(tokenResult1)
+        .mockResolvedValueOnce(tokenResult2);
+      mockSessionStore.setConnectionConfig.mockResolvedValue(undefined);
 
       const refresher1 = broker.createTokenRefresher('DEST1');
       const refresher2 = broker.createTokenRefresher('DEST2');
@@ -1075,6 +1130,8 @@ describe('AuthBroker', () => {
 
       expect(token1).toBe('token-dest1');
       expect(token2).toBe('token-dest2');
+      // Broker always calls provider.getTokens() for each destination
+      expect(mockTokenProvider.getTokens).toHaveBeenCalledTimes(2);
     });
   });
 });
