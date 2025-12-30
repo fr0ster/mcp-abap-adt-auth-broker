@@ -11,6 +11,11 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.15] - 2025-12-30
+
+### Fixed
+- **CLI**: Remove duplicate `authConfig` declaration in `mcp-auth.ts` that caused esbuild/tsx to fail with "symbol already declared" error
+
 ## [0.2.14] - 2025-12-26
 
 ### Added
