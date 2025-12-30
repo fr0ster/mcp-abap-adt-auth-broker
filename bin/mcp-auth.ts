@@ -486,7 +486,6 @@ async function main() {
     console.log(`✅ Token obtained successfully`);
 
     const connConfig = await sessionStore.getConnectionConfig(destination);
-    const authConfig = await sessionStore.getAuthorizationConfig(destination);
 
     if (!token) {
       throw new Error(
