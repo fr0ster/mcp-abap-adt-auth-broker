@@ -11,6 +11,12 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.17] - 2025-12-31
+
+### Changed
+- **Dependencies**: Depend on the published `@mcp-abap-adt/auth-broker` `^0.2.17` package to keep the CLI wiring aligned with the latest release.
+- **Dependencies**: Bump `@mcp-abap-adt/interfaces` to `^0.2.15` so consumers pick up the current interface contracts.
+
 ## [0.2.16] - 2025-12-31
 
 ### Changed
