@@ -1,20 +1,22 @@
 #!/usr/bin/env tsx
 /**
  * MCP Auth - Get tokens and generate .env files from service keys
- * 
+ *
  * Usage:
- *   mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--browser none|chrome|edge|firefox|system] [--format json|env]
- * 
+ *   mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--credential] [--browser auto|none|chrome|edge|firefox|system] [--format json|env]
+ *
  * Examples:
- *   # Generate .env file (default)
+ *   # Generate .env file with authorization_code (default)
+ *   mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa
+ *
+ *   # With authorization_code, show URL in console (no browser)
  *   mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --browser none
- *   mcp-auth --env ./mcp.env --service-key ./service-key.json --output ./mcp.env --type xsuaa --browser system
- *   
- *   # Get tokens in JSON format
- *   mcp-auth --service-key ./abap-key.json --output ./tokens.json --type abap --browser system --format json
- *   
+ *
+ *   # With client_credentials (special cases)
+ *   mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --credential
+ *
  *   # Generate .env file for ABAP
- *   mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap --browser system --format env
+ *   mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap
  */
 
 import * as path from 'path';
@@ -44,7 +46,8 @@ interface McpAuthOptions {
   envFilePath?: string;
   outputFile: string;
   authType: 'abap' | 'xsuaa';
-  browser?: string; // undefined = client_credentials, any value = browser auth
+  browser: string; // Browser for authorization_code flow (default: 'auto')
+  credential: boolean; // Use client_credentials instead of authorization_code
   format: 'json' | 'env';
   serviceUrl?: string;
   redirectPort?: number; // Port for OAuth redirect URI (default: 3001)
@@ -75,13 +78,13 @@ function showHelp(): void {
   console.log('');
   console.log('Optional Options:');
   console.log('  --type <type>           Auth type: abap or xsuaa (default: abap)');
-  console.log('  --browser <browser>     Browser auth:');
-  console.log('                            - none: Show URL and wait for callback (no browser)');
+  console.log('  --credential            Use client_credentials flow (clientId/clientSecret, no browser)');
+  console.log('                          By default uses authorization_code flow');
+  console.log('  --browser <browser>     Browser for authorization_code flow (default: auto):');
   console.log('                            - auto: Try to open browser, fallback to showing URL (like cf login)');
+  console.log('                            - none/headless: Show URL in console and wait for callback');
   console.log('                            - system/chrome/edge/firefox: Open specific browser');
-  console.log('                            - headless: Same as none (show URL and wait)');
-  console.log('                          If not specified: uses client_credentials (clientId/clientSecret)');
-  console.log('  --format <format>      Output format: json or env (default: env)');
+  console.log('  --format <format>       Output format: json or env (default: env)');
   console.log('  --service-url <url>     Service URL (SAP URL for ABAP, MCP URL for XSUAA). For XSUAA, optional.');
   console.log('  --redirect-port <port>  Port for OAuth redirect URI (default: 3001). Must match XSUAA redirect-uris config.');
   console.log('');
@@ -89,37 +92,39 @@ function showHelp(): void {
   console.log('  --help, -h             Show this help message');
   console.log('');
   console.log('Examples:');
-  console.log('  # XSUAA with client_credentials (--browser not specified)');
+  console.log('  # XSUAA with authorization_code (default, opens browser)');
   console.log('  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa');
+  console.log('');
+  console.log('  # XSUAA with authorization_code (show URL in console, no browser)');
+  console.log('  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --browser none');
   console.log('');
   console.log('  # XSUAA using existing .env refresh token, fallback to service key');
   console.log('  mcp-auth --env ./mcp.env --service-key ./service-key.json --output ./mcp.env --type xsuaa');
   console.log('');
-  console.log('  # XSUAA with browser OAuth2 (show URL, don\'t open browser)');
-  console.log('  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --browser none');
+  console.log('  # XSUAA with client_credentials (special cases)');
+  console.log('  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --credential');
   console.log('');
-  console.log('  # XSUAA with browser OAuth2 (auto - try to open browser, like cf login)');
-  console.log('  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --browser auto');
+  console.log('  # XSUAA with custom redirect port');
+  console.log('  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --redirect-port 8080');
   console.log('');
-  console.log('  # XSUAA with browser OAuth2 (custom redirect port, e.g., 8080)');
-  console.log('  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --browser auto --redirect-port 8080');
-  console.log('');
-  console.log('  # ABAP with client_credentials (--browser not specified)');
+  console.log('  # ABAP with authorization_code (default)');
   console.log('  mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap');
   console.log('');
-  console.log('  # ABAP with browser OAuth2');
-  console.log('  mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap --browser system');
+  console.log('  # ABAP with client_credentials (special cases)');
+  console.log('  mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap --credential');
   console.log('');
   console.log('Notes:');
   console.log('  - --type determines the provider (xsuaa or abap)');
   console.log('  - If --env is provided and file exists, refresh token is attempted first');
   console.log('  - If refresh fails or env file is missing, service key auth is used');
-  console.log('  - Authentication method:');
-  console.log('    * --browser NOT specified → client_credentials (clientId/clientSecret, no browser)');
-  console.log('    * --browser none/headless → Show URL in console and wait for callback');
-  console.log('    * --browser auto → Try to open browser (like cf login), fallback to showing URL');
-  console.log('    * --browser system/chrome/edge/firefox → Open specific browser for OAuth2');
-  console.log('  - Both providers (xsuaa and abap) support both methods');
+  console.log('  - Authentication flow:');
+  console.log('    * Default: authorization_code (browser-based OAuth2)');
+  console.log('    * --credential: client_credentials (clientId/clientSecret, no browser)');
+  console.log('  - Browser options for authorization_code:');
+  console.log('    * auto (default): Try to open browser, fallback to showing URL');
+  console.log('    * none/headless: Show URL in console and wait for callback');
+  console.log('    * system/chrome/edge/firefox: Open specific browser');
+  console.log('  - Both providers (xsuaa and abap) support both flows');
   console.log('  - --redirect-port: Port for OAuth redirect URI (default: 3001)');
   console.log('    * Must match redirect_uri configured in XSUAA/ABAP OAuth2 settings');
   console.log('    * Common values: 3001 (default), 8080 (SAP examples)');
@@ -146,7 +151,8 @@ function parseArgs(): McpAuthOptions | null {
   let envFilePath: string | undefined;
   let outputFile: string | undefined;
   let authType: 'abap' | 'xsuaa' = 'abap';
-  let browser: string | undefined; // undefined = client_credentials, any value = browser auth
+  let browser: string = 'auto'; // Default to auto for authorization_code flow
+  let credential: boolean = false; // Use client_credentials instead of authorization_code
   let format: 'json' | 'env' = 'env';
   let serviceUrl: string | undefined;
   let redirectPort: number | undefined;
@@ -198,6 +204,8 @@ function parseArgs(): McpAuthOptions | null {
       }
       redirectPort = port;
       i++;
+    } else if (args[i] === '--credential') {
+      credential = true;
     } else {
       console.error(`Unknown option: ${args[i]}`);
       console.error('Run "mcp-auth --help" for usage information');
@@ -229,6 +237,7 @@ function parseArgs(): McpAuthOptions | null {
     outputFile,
     authType,
     browser,
+    credential,
     format,
     serviceUrl,
     redirectPort,
@@ -407,7 +416,10 @@ async function main() {
     console.log(`📁 Service key: ${path.resolve(options.serviceKeyPath)}`);
   }
   console.log(`🔐 Auth type: ${options.authType}`);
-  console.log(`🌐 Browser: ${options.browser || 'none (client_credentials)'}`);
+  console.log(`🔑 Flow: ${options.credential ? 'client_credentials' : 'authorization_code'}`);
+  if (!options.credential) {
+    console.log(`🌐 Browser: ${options.browser}`);
+  }
   console.log(`📄 Format: ${options.format}`);
   if (options.serviceUrl) {
     console.log(`🔗 Service URL: ${options.serviceUrl}`);
@@ -456,20 +468,21 @@ async function main() {
       throw new Error(`Authorization config not found for ${destination}`);
     }
 
-    const useBrowserAuth = options.browser !== undefined;
-    const tokenProvider = useBrowserAuth
-      ? new AuthorizationCodeProvider({
+    // Default: authorization_code flow with browser
+    // --credential: client_credentials flow (no browser needed)
+    const tokenProvider = options.credential
+      ? new ClientCredentialsProvider({
+          uaaUrl: authConfig.uaaUrl,
+          clientId: authConfig.uaaClientId,
+          clientSecret: authConfig.uaaClientSecret,
+        })
+      : new AuthorizationCodeProvider({
           uaaUrl: authConfig.uaaUrl,
           clientId: authConfig.uaaClientId,
           clientSecret: authConfig.uaaClientSecret,
           refreshToken: authConfig.refreshToken,
           browser: options.browser,
           redirectPort: options.redirectPort,
-        })
-      : new ClientCredentialsProvider({
-          uaaUrl: authConfig.uaaUrl,
-          clientId: authConfig.uaaClientId,
-          clientSecret: authConfig.uaaClientSecret,
         });
 
     const broker = new AuthBroker(
@@ -568,6 +581,9 @@ async function main() {
     } catch {
       // Ignore cleanup errors
     }
+
+    // Exit explicitly to close any open handles (e.g., OAuth callback server)
+    process.exit(0);
 
   } catch (error: any) {
     console.error(`❌ Error: ${error.message}`);

@@ -11,6 +11,19 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.2.16] - 2025-12-31
+
+### Changed
+- **CLI**: Changed default authentication flow from `client_credentials` to `authorization_code`
+  - Both ABAP and XSUAA now use `authorization_code` by default (browser-based OAuth2)
+  - Default browser is `auto` (tries to open browser, falls back to showing URL)
+  - Added `--credential` flag for `client_credentials` flow (special cases)
+  - `--browser none` shows URL in console and waits for callback (no browser opened)
+- **CLI**: Updated help text and examples to reflect new defaults
+
+### Fixed
+- **CLI**: Fixed process hanging after successful token retrieval by adding explicit `process.exit(0)`
+
 ## [0.2.15] - 2025-12-30
 
 ### Fixed

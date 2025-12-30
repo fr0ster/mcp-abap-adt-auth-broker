@@ -644,25 +644,34 @@ const btpBrokerFull = new AuthBroker({
 Generate or refresh `.env`/JSON output using AuthBroker + stores:
 
 ```bash
-mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--browser system|chrome|edge|firefox|none] [--format json|env]
+mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--credential] [--browser auto|none|system|chrome|edge|firefox] [--format json|env]
 ```
 
-**Behavior:**
-- If `--env` is provided and exists, refresh token is attempted first.
-- If refresh fails (or env is missing), service key auth is used.
-- If `--browser` is omitted → client_credentials (no browser).
-- If `--browser` is provided → authorization_code (browser OAuth2).
+**Authentication Flow:**
+- Default: `authorization_code` (browser-based OAuth2)
+- `--credential`: `client_credentials` (clientId/clientSecret, no browser)
+
+**Browser Options (for authorization_code):**
+- `auto` (default): Try to open browser, fallback to showing URL
+- `none`: Show URL in console and wait for callback (no browser)
+- `system/chrome/edge/firefox`: Open specific browser
 
 **Examples:**
 ```bash
-# XSUAA: try refresh from env, fallback to service key
-mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsuaa
+# ABAP: authorization_code (default, opens browser)
+mcp-auth --service-key ./abap.json --output ./abap.env --type abap
 
-# ABAP: browser auth (system browser)
-mcp-auth --service-key ./abap.json --output ./abap.env --type abap --browser system
+# ABAP: authorization_code (show URL in console, no browser)
+mcp-auth --service-key ./abap.json --output ./abap.env --type abap --browser none
 
-# XSUAA: client_credentials (no browser)
+# XSUAA: authorization_code (default)
 mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa
+
+# XSUAA: client_credentials (special cases)
+mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --credential
+
+# Using existing .env for refresh token
+mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsuaa
 ```
 
 ### Utility Script
