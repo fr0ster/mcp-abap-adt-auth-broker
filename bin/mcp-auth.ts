@@ -29,6 +29,7 @@ import {
   AbapSessionStore,
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
+  JsonFileHandler,
 } from '@mcp-abap-adt/auth-stores';
 import {
   AuthorizationCodeProvider,
@@ -378,9 +379,12 @@ async function main() {
     destination = path.basename(resolvedEnvPath, path.extname(resolvedEnvPath));
   }
 
+  // Store raw service key JSON for fallback parsing
+  let rawServiceKeyJson: any = null;
+
   if (options.serviceKeyPath) {
     const resolvedServiceKeyPath = path.resolve(options.serviceKeyPath);
-    const serviceKeyDir = path.dirname(resolvedServiceKeyPath);
+    let serviceKeyDir = path.dirname(resolvedServiceKeyPath);
 
     // Check if service key file exists
     if (!fs.existsSync(resolvedServiceKeyPath)) {
@@ -396,11 +400,62 @@ async function main() {
       process.exit(1);
     }
     destination = serviceKeyFileName;
-    
-    // Create appropriate stores based on auth type
-    serviceKeyStore = options.authType === 'xsuaa'
-      ? new XsuaaServiceKeyStore(serviceKeyDir)
-      : new AbapServiceKeyStore(serviceKeyDir);
+
+    // Determine which store to use based on service key content
+    // ABAP format has nested "uaa" object, XSUAA format has flat structure
+    let isAbapFormat = options.authType === 'abap'; // default fallback
+    try {
+      // Use JsonFileHandler to ensure consistent parsing behavior
+      const json = await JsonFileHandler.load(path.basename(resolvedServiceKeyPath), serviceKeyDir);
+
+      let effectiveJson = json;
+      if (json && json.credentials) {
+        console.log('🔍 Detected "credentials" wrapper -> unwrapping to temp file');
+        effectiveJson = json.credentials;
+
+        // Create temp file with unwrapped content to make it compatible with standard stores
+        const tempDir = path.join(path.dirname(resolvedOutputPath), '.tmp');
+        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+        const tempKeyPath = path.join(tempDir, `${destination}.json`);
+        fs.writeFileSync(tempKeyPath, JSON.stringify(effectiveJson, null, 2));
+
+        // Point store to temp directory so it reads the unwrapped file
+        serviceKeyDir = tempDir;
+      }
+
+      // Store raw JSON for fallback parsing
+      rawServiceKeyJson = effectiveJson;
+
+      if (effectiveJson) {
+        // If it has uaa property (even if null/string/object), XSUAA parser rejects it.
+        // So we must use ABAP store which expects uaa object.
+        if (effectiveJson.uaa) {
+          isAbapFormat = true;
+        } else {
+          isAbapFormat = false;
+        }
+      }
+    } catch (e: any) {
+      // If parsing fails here, let the store handle the error
+    }
+
+    // Create appropriate stores based on detected format
+    serviceKeyStore = isAbapFormat
+      ? new AbapServiceKeyStore(serviceKeyDir)
+      : new XsuaaServiceKeyStore(serviceKeyDir);
+
+    // Patch serviceKeyStore for XSUAA to ensure serviceUrl is present (AuthBroker requirement)
+    // even if not in the file. XSUAA doesn't strictly need it, but AuthBroker enforces it.
+    if (options.authType === 'xsuaa') {
+      const originalGetConnectionConfig = serviceKeyStore.getConnectionConfig.bind(serviceKeyStore);
+      serviceKeyStore.getConnectionConfig = async (dest: string) => {
+        const config = await originalGetConnectionConfig(dest);
+        if (config && !config.serviceUrl) {
+          config.serviceUrl = '<SERVICE_URL>';
+        }
+        return config;
+      };
+    }
   }
 
   if (!destination) {
@@ -443,10 +498,15 @@ async function main() {
     // Resolve serviceUrl from service key if not provided explicitly
     let actualServiceUrl = options.serviceUrl;
     if (!actualServiceUrl && serviceKeyStore) {
-      const serviceKeyConn = await serviceKeyStore.getConnectionConfig(
-        destination,
-      );
-      actualServiceUrl = serviceKeyConn?.serviceUrl;
+      try {
+        const serviceKeyConn = await serviceKeyStore.getConnectionConfig(
+          destination,
+        );
+        actualServiceUrl = serviceKeyConn?.serviceUrl;
+      } catch {
+        // For XSUAA, serviceUrl is optional and may not exist in service key
+        // This is expected - continue without serviceUrl
+      }
     }
 
     // For XSUAA, serviceUrl is optional - use placeholder only for AuthBroker internal work
@@ -459,17 +519,49 @@ async function main() {
 
     const sessionAuthConfig =
       await sessionStore.getAuthorizationConfig(destination);
-    const serviceKeyAuthConfig =
-      serviceKeyStore?.getAuthorizationConfig
-        ? await serviceKeyStore.getAuthorizationConfig(destination)
-        : null;
-    const authConfig = sessionAuthConfig || serviceKeyAuthConfig;
+    let serviceKeyAuthConfig = null;
+    if (serviceKeyStore?.getAuthorizationConfig) {
+      try {
+        serviceKeyAuthConfig = await serviceKeyStore.getAuthorizationConfig(destination);
+      } catch (e: any) {
+        // Service key parsing might fail - try fallback parsing from raw JSON
+        console.log(`ℹ️  Store could not parse service key, using fallback parsing`);
+      }
+    }
+
+    // Fallback: if stores failed, try to construct authConfig from raw service key JSON
+    let fallbackAuthConfig = null;
+    if (!sessionAuthConfig && !serviceKeyAuthConfig && rawServiceKeyJson) {
+      // XSUAA format: clientid, clientsecret, url at top level
+      // ABAP format: uaa.clientid, uaa.clientsecret, uaa.url
+      const uaa = rawServiceKeyJson.uaa || rawServiceKeyJson;
+      if (uaa.clientid && uaa.clientsecret && uaa.url) {
+        fallbackAuthConfig = {
+          uaaUrl: uaa.url,
+          uaaClientId: uaa.clientid,
+          uaaClientSecret: uaa.clientsecret,
+        };
+        console.log(`✅ Constructed auth config from raw service key`);
+      }
+    }
+
+    const authConfig = sessionAuthConfig || serviceKeyAuthConfig || fallbackAuthConfig;
     if (!authConfig) {
-      throw new Error(`Authorization config not found for ${destination}`);
+      throw new Error(`Authorization config not found for ${destination}. Service key must contain clientid, clientsecret, and url fields.`);
     }
 
     // Default: authorization_code flow with browser
     // --credential: client_credentials flow (no browser needed)
+    const redirectPort = options.redirectPort || 3001;
+
+    // Log authorization URL for debugging
+    if (!options.credential) {
+      const redirectUri = `http://localhost:${redirectPort}/callback`;
+      const authorizationUrl = `${authConfig.uaaUrl}/oauth/authorize?client_id=${encodeURIComponent(authConfig.uaaClientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`;
+      console.log(`🔗 Authorization URL: ${authorizationUrl}`);
+      console.log(`📍 Redirect URI: ${redirectUri}`);
+    }
+
     const tokenProvider = options.credential
       ? new ClientCredentialsProvider({
           uaaUrl: authConfig.uaaUrl,
@@ -482,7 +574,7 @@ async function main() {
           clientSecret: authConfig.uaaClientSecret,
           refreshToken: authConfig.refreshToken,
           browser: options.browser,
-          redirectPort: options.redirectPort,
+          redirectPort: redirectPort,
         });
 
     const broker = new AuthBroker(
@@ -508,6 +600,9 @@ async function main() {
 
     const outputServiceUrl =
       options.serviceUrl || connConfig?.serviceUrl || actualServiceUrl;
+    
+    // Filter out placeholder service URL
+    const finalServiceUrl = outputServiceUrl === '<SERVICE_URL>' ? undefined : outputServiceUrl;
 
     // Write output file based on format
     if (options.format === 'env') {
@@ -516,7 +611,7 @@ async function main() {
         options.authType,
         token,
         authConfig?.refreshToken,
-        outputServiceUrl,
+        finalServiceUrl,
         authConfig?.uaaUrl,
         authConfig?.uaaClientId,
         authConfig?.uaaClientSecret,
@@ -527,8 +622,8 @@ async function main() {
       // Show what was written
       console.log(`📋 .env file contains:`);
       if (options.authType === 'abap') {
-        if (outputServiceUrl) {
-          console.log(`   - ${ABAP_CONNECTION_VARS.SERVICE_URL}=${outputServiceUrl}`);
+        if (finalServiceUrl) {
+          console.log(`   - ${ABAP_CONNECTION_VARS.SERVICE_URL}=${finalServiceUrl}`);
         }
         console.log(
           `   - ${ABAP_CONNECTION_VARS.AUTHORIZATION_TOKEN}=${token.substring(0, 50)}...`,
@@ -539,8 +634,8 @@ async function main() {
           );
         }
       } else {
-        if (outputServiceUrl) {
-          console.log(`   - XSUAA_MCP_URL=${outputServiceUrl}`);
+        if (finalServiceUrl) {
+          console.log(`   - XSUAA_MCP_URL=${finalServiceUrl}`);
         }
         console.log(
           `   - ${XSUAA_CONNECTION_VARS.AUTHORIZATION_TOKEN}=${token.substring(0, 50)}...`,
@@ -556,7 +651,7 @@ async function main() {
         resolvedOutputPath,
         token,
         authConfig?.refreshToken,
-        outputServiceUrl,
+        finalServiceUrl,
         authConfig?.uaaUrl,
         authConfig?.uaaClientId,
         authConfig?.uaaClientSecret,
@@ -570,8 +665,8 @@ async function main() {
           `   - refreshToken: ${authConfig.refreshToken.substring(0, 50)}...`,
         );
       }
-      if (outputServiceUrl) {
-        console.log(`   - serviceUrl: ${outputServiceUrl}`);
+      if (finalServiceUrl) {
+        console.log(`   - serviceUrl: ${finalServiceUrl}`);
       }
     }
 
