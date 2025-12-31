@@ -11,6 +11,21 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.3.0] - 2025-12-31
+
+### Added
+- **CLI**: Auto-detect service key format (ABAP vs XSUAA) based on content structure
+- **CLI**: Support for "credentials" wrapper in service keys (common in SAP BTP)
+- **CLI**: Fallback parsing when stores fail to parse service key
+- **CLI**: Log authorization URL and redirect URI for easier debugging
+- **Documentation**: Added `CLAUDE.md` for Claude Code project guidance
+
+### Changed
+- **Dependencies**: Updated `@mcp-abap-adt/auth-stores` from `^0.2.10` to `^0.3.0`
+
+### Fixed
+- **CLI**: Filter placeholder `<SERVICE_URL>` from output when not available
+
 ## [0.2.17] - 2025-12-31
 
 ### Changed
