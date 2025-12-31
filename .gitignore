@@ -43,3 +43,4 @@ test-destinations/*.env
 # Test configuration (contains real credentials)
 tests/test-config.yaml
 
+*.json
