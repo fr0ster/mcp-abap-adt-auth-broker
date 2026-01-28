@@ -6,7 +6,6 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "bin",
     "README.md",
     "CHANGELOG.md",
     "CONTRIBUTORS.md",
@@ -47,6 +46,7 @@
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:check": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "prepublishOnly": "npm run build",
+    "prepack": "npm run build",
     "generate-env": "tsx bin/generate-env-from-service-key.ts"
   },
   "bin": {

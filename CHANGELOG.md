@@ -11,6 +11,11 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-01-28
+
+### Changed
+- **Packaging**: Build runs on `npm pack` to ensure `dist/bin/mcp-auth.js` is up to date in the tarball.
+
 ## [0.3.5] - 2026-01-28
 
 ### Changed

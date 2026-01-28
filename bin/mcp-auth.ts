@@ -56,8 +56,21 @@ interface McpAuthOptions {
 
 function getVersion(): string {
   try {
-    const packageJsonPath = path.join(__dirname, '..', 'package.json');
-    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    const candidates = [
+      path.join(__dirname, 'package.json'),
+      path.join(__dirname, '..', 'package.json'),
+      path.join(__dirname, '..', '..', 'package.json'),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        const packageJson = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+        return packageJson.version || 'unknown';
+      }
+    }
+
+    const localRequire = require('module').createRequire(__filename);
+    const resolved = localRequire.resolve('@mcp-abap-adt/auth-broker/package.json');
+    const packageJson = JSON.parse(fs.readFileSync(resolved, 'utf8'));
     return packageJson.version || 'unknown';
   } catch {
     return 'unknown';
@@ -408,10 +421,10 @@ async function main() {
       // Use JsonFileHandler to ensure consistent parsing behavior
       const json = await JsonFileHandler.load(path.basename(resolvedServiceKeyPath), serviceKeyDir);
 
-      let effectiveJson = json;
-      if (json && json.credentials) {
+      let effectiveJson: Record<string, unknown> | null = json as Record<string, unknown>;
+      if (json && (json as Record<string, unknown>).credentials) {
         console.log('🔍 Detected "credentials" wrapper -> unwrapping to temp file');
-        effectiveJson = json.credentials;
+        effectiveJson = (json as Record<string, unknown>).credentials as Record<string, unknown>;
 
         // Create temp file with unwrapped content to make it compatible with standard stores
         const tempDir = path.join(path.dirname(resolvedOutputPath), '.tmp');
