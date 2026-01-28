@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env node
 /**
  * MCP Auth - Get tokens and generate .env files from service keys
  *
@@ -22,7 +22,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 // Use require for CommonJS dist files with absolute path
-const distPath = path.resolve(__dirname, '..', 'dist', 'index.js');
+const distPath = path.resolve(__dirname, '..', 'index.js');
 const { AuthBroker } = require(distPath);
 import {
   AbapServiceKeyStore,

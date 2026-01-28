@@ -11,6 +11,17 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-01-28
+
+### Changed
+- **CLI**: Remove legacy wrapper; only compiled `dist/bin/mcp-auth.js` remains (no runtime `spawn`).
+
+## [0.3.4] - 2026-01-28
+
+### Changed
+- **CLI**: Ship a compiled `mcp-auth` binary in `dist/bin` and point `bin` to it (no runtime `tsx`).
+- **Build**: Added `tsconfig.cli.json` to compile the CLI during build.
+
 ## [0.3.3] - 2026-01-28
 
 ### Fixed

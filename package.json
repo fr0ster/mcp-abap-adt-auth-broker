@@ -42,15 +42,15 @@
     "lint": "biome check --write src",
     "lint:check": "biome check src",
     "format": "biome format --write src",
-    "build": "npm run --silent clean && biome check src --diagnostic-level=error && tsc -p tsconfig.json",
-    "build:fast": "tsc -p tsconfig.json",
+    "build": "npm run --silent clean && biome check src --diagnostic-level=error && tsc -p tsconfig.json && tsc -p tsconfig.cli.json",
+    "build:fast": "tsc -p tsconfig.json && tsc -p tsconfig.cli.json",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:check": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "prepublishOnly": "npm run build",
     "generate-env": "tsx bin/generate-env-from-service-key.ts"
   },
   "bin": {
-    "mcp-auth": "./bin/mcp-auth.js"
+    "mcp-auth": "./dist/bin/mcp-auth.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -59,11 +59,11 @@
     "@mcp-abap-adt/auth-providers": "^0.2.10",
     "@mcp-abap-adt/auth-stores": "^0.3.0",
     "@mcp-abap-adt/interfaces": "^0.2.15",
-    "axios": "^1.13.2",
+    "axios": "^1.13.4",
     "tsx": "^4.21.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.3.10",
+    "@biomejs/biome": "^2.3.13",
     "@mcp-abap-adt/logger": "^0.1.4",
     "@types/express": "^5.0.5",
     "@types/jest": "^30.0.0",

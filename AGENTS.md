@@ -15,7 +15,7 @@
 - `npm test`: Run Jest tests sequentially (VM modules enabled).
 - `npm run test:check`: Typecheck app + tests without emitting.
 - `npm run generate-env`: Generate `.env` from a service key (see `bin/generate-env-from-service-key.ts`).
-- `mcp-auth` CLI requires local dependencies (`npm install` in repo). No global `tsx` is needed.
+- `mcp-auth` CLI is compiled to `dist/bin` for published builds (no `tsx` at runtime).
 
 ## Coding Style & Naming Conventions
 - Indentation: 2 spaces, single quotes, semicolons (Biome).
