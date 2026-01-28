@@ -647,6 +647,8 @@ Generate or refresh `.env`/JSON output using AuthBroker + stores:
 mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--credential] [--browser auto|none|system|chrome|edge|firefox] [--format json|env]
 ```
 
+**Note**: The CLI runs via the local `tsx` dependency. For repo usage, run `npm install` first. For package usage, no global `tsx` install is required.
+
 **Authentication Flow:**
 - Default: `authorization_code` (browser-based OAuth2)
 - `--credential`: `client_credentials` (clientId/clientSecret, no browser)

@@ -11,6 +11,14 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-01-28
+
+### Changed
+- **CLI**: Run via local `tsx` CLI using Node to avoid platform-specific spawn issues (no `npx`/`.cmd`).
+
+### Documentation
+- **README**: Clarify that `mcp-auth` uses local dependencies and does not require global `tsx`.
+
 ## [0.3.0] - 2025-12-31
 
 ### Added

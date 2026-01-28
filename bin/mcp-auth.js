@@ -6,30 +6,24 @@
 
 const { spawn } = require('child_process');
 const path = require('path');
-const fs = require('fs');
 
 // Get absolute path to TypeScript file
 const scriptPath = path.resolve(__dirname, 'mcp-auth.ts');
 
-// Check if tsx is available locally, otherwise use npx
-const localTsx = path.join(__dirname, '..', 'node_modules', '.bin', 'tsx');
-const useLocalTsx = fs.existsSync(localTsx);
-
-let command;
-let args;
-
-if (useLocalTsx) {
-  // Use local tsx
-  command = process.platform === 'win32' ? `${localTsx}.cmd` : localTsx;
-  args = [scriptPath, ...process.argv.slice(2)];
-} else {
-  // Use npx tsx
-  command = 'npx';
-  args = ['tsx', scriptPath, ...process.argv.slice(2)];
+let tsxCliPath;
+try {
+  // Resolve tsx CLI from local dependency (cross-platform, no npx/cmd)
+  tsxCliPath = require.resolve('tsx/dist/cli.js');
+} catch (error) {
+  console.error('Error: tsx is not installed. Run `npm install` first to install local dependencies.');
+  process.exit(1);
 }
 
-// Run the TypeScript file
-const child = spawn(command, args, {
+const nodePath = process.execPath;
+const args = [tsxCliPath, scriptPath, ...process.argv.slice(2)];
+
+// Run the TypeScript file via node + tsx CLI
+const child = spawn(nodePath, args, {
   stdio: 'inherit',
   shell: false, // Don't use shell to avoid security warnings
   env: process.env,
@@ -46,4 +40,3 @@ child.on('error', (error) => {
 child.on('exit', (code) => {
   process.exit(code || 0);
 });
-
