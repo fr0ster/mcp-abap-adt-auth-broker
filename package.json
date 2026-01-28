@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/auth-broker",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "JWT authentication broker for MCP ABAP ADT - manages tokens based on destination headers",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
