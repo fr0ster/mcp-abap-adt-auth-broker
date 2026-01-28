@@ -6,6 +6,8 @@
 
 const { spawn } = require('child_process');
 const path = require('path');
+const { createRequire } = require('module');
+const fs = require('fs');
 
 // Get absolute path to TypeScript file
 const scriptPath = path.resolve(__dirname, 'mcp-auth.ts');
@@ -13,9 +15,19 @@ const scriptPath = path.resolve(__dirname, 'mcp-auth.ts');
 let tsxCliPath;
 try {
   // Resolve tsx CLI from local dependency (cross-platform, no npx/cmd)
-  tsxCliPath = require.resolve('tsx/dist/cli.js');
+  const localRequire = createRequire(path.resolve(__dirname, 'mcp-auth.js'));
+  const tsxPkgPath = localRequire.resolve('tsx/package.json');
+  const tsxPkg = JSON.parse(fs.readFileSync(tsxPkgPath, 'utf8'));
+  if (!tsxPkg.bin) {
+    throw new Error('tsx package.json missing bin entry');
+  }
+  const binRel = typeof tsxPkg.bin === 'string' ? tsxPkg.bin : tsxPkg.bin.tsx;
+  if (!binRel) {
+    throw new Error('tsx package.json missing bin.tsx entry');
+  }
+  tsxCliPath = path.resolve(path.dirname(tsxPkgPath), binRel);
 } catch (error) {
-  console.error('Error: tsx is not installed. Run `npm install` first to install local dependencies.');
+  console.error('Error: tsx is not installed. Reinstall package or run `npm install` in the repo.');
   process.exit(1);
 }
 
