@@ -11,6 +11,11 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-02-10
+
+### Added
+- Persist SAML session cookies when token providers return `tokenType: 'saml'`.
+
 ## [0.3.6] - 2026-01-28
 
 ### Changed

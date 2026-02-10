@@ -458,11 +458,13 @@ export class AuthBroker {
       );
     }
 
+    const isSaml = tokenResult.tokenType === 'saml';
     const connectionConfigWithServiceUrl: IConnectionConfig = {
       ...baseConnConfig,
       serviceUrl,
-      authorizationToken: token,
-      authType: 'jwt',
+      authorizationToken: isSaml ? undefined : token,
+      sessionCookies: isSaml ? token : undefined,
+      authType: isSaml ? 'saml' : 'jwt',
     };
 
     const authorizationConfig: IAuthorizationConfig = {
@@ -544,7 +546,9 @@ export class AuthBroker {
     const serviceUrl = await this.getServiceUrl(destination, connConfig);
 
     // Check if we have token or UAA credentials
-    const hasToken = !!connConfig?.authorizationToken;
+    const sessionToken =
+      connConfig?.authorizationToken || connConfig?.sessionCookies;
+    const hasToken = !!sessionToken;
     const hasAuthConfig = !!authConfig;
 
     this.logger?.info(`[AuthBroker] Session check for ${destination}`, {
@@ -552,7 +556,9 @@ export class AuthBroker {
       hasAuthConfig,
       hasServiceUrl: !!serviceUrl,
       serviceUrl,
-      authorizationToken: formatToken(connConfig?.authorizationToken),
+      authorizationToken: formatToken(
+        connConfig?.authorizationToken || connConfig?.sessionCookies,
+      ),
       hasRefreshToken: !!authConfig?.refreshToken,
       refreshToken: formatToken(authConfig?.refreshToken),
     });
@@ -789,8 +795,15 @@ export class AuthBroker {
       );
     }
     if (sessionConnConfig) {
-      const tokenLength = sessionConnConfig.authorizationToken?.length || 0;
-      const formattedToken = formatToken(sessionConnConfig.authorizationToken);
+      const tokenLength =
+        (
+          sessionConnConfig.authorizationToken ||
+          sessionConnConfig.sessionCookies
+        )?.length || 0;
+      const formattedToken = formatToken(
+        sessionConnConfig.authorizationToken ||
+          sessionConnConfig.sessionCookies,
+      );
       this.logger?.debug(
         `Connection config from session for ${destination}: token(${tokenLength} chars${formattedToken ? `, ${formattedToken}` : ''}), serviceUrl(${sessionConnConfig.serviceUrl ? 'yes' : 'no'})`,
       );
