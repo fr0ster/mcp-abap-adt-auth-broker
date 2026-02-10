@@ -44,3 +44,4 @@ test-destinations/*.env
 tests/test-config.yaml
 
 *.json
+!tsconfig.cli.json

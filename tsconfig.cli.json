@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022"],
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "./dist/bin",
+    "rootDir": "./bin",
+    "types": ["node"]
+  },
+  "include": ["bin/mcp-auth.ts"],
+  "exclude": ["node_modules", "dist"]
+}

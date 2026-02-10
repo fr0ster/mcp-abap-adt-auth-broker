@@ -11,6 +11,11 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-02-10
+
+### Fixed
+- Include `tsconfig.cli.json` in git so `npm run build` works in CI.
+
 ## [1.0.0] - 2026-02-10
 
 ### Added
