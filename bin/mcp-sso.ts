@@ -36,8 +36,14 @@ const distPath = path.resolve(__dirname, '..', 'index.js');
 const { AuthBroker } = require(distPath);
 
 import {
-  type SsoProviderConfig,
   SsoProviderFactory,
+  type OidcBrowserProviderConfig,
+  type OidcDeviceFlowProviderConfig,
+  type OidcPasswordProviderConfig,
+  type OidcTokenExchangeProviderConfig,
+  type Saml2BearerProviderConfig,
+  type Saml2PureProviderConfig,
+  type SsoProviderConfig,
 } from '@mcp-abap-adt/auth-providers';
 import { AbapSessionStore, XsuaaSessionStore } from '@mcp-abap-adt/auth-stores';
 
@@ -48,7 +54,13 @@ interface McpSsoOptions {
   authType: 'abap' | 'xsuaa';
   format: 'json' | 'env';
   protocol?: 'oidc' | 'saml2';
-  flow?: string;
+  flow?:
+    | 'browser'
+    | 'device'
+    | 'password'
+    | 'token_exchange'
+    | 'bearer'
+    | 'pure';
   configPath?: string;
   serviceUrl?: string;
   browser?: string;
@@ -239,7 +251,7 @@ function parseArgs(): McpSsoOptions | null {
   let authType: 'abap' | 'xsuaa' = 'abap';
   let format: 'env' | 'json' = 'env';
   let protocol: 'oidc' | 'saml2' | undefined;
-  let flow: string | undefined;
+  let flow: McpSsoOptions['flow'];
   let configPath: string | undefined;
   let serviceUrl: string | undefined;
   let browser: string | undefined;
@@ -317,7 +329,7 @@ function parseArgs(): McpSsoOptions | null {
         i++;
         break;
       case '--flow':
-        flow = next;
+        flow = next as McpSsoOptions['flow'];
         i++;
         break;
       case '--config':
@@ -472,7 +484,7 @@ function parseArgs(): McpSsoOptions | null {
     authType,
     format,
     protocol,
-    flow,
+    flow: flow as McpSsoOptions['flow'],
     configPath,
     serviceUrl,
     browser,
@@ -618,34 +630,74 @@ function buildProviderConfig(
 ): SsoProviderConfig {
   let configFromCli: SsoProviderConfig | null = null;
   if (options.protocol && options.flow) {
-    const flow = options.flow;
     if (options.protocol === 'oidc') {
-      configFromCli = {
-        protocol: 'oidc',
-        flow,
-        config: buildOidcConfig(options),
-      };
+      switch (options.flow) {
+        case 'browser':
+          configFromCli = {
+            protocol: 'oidc',
+            flow: 'browser',
+            config: buildOidcConfig(options) as unknown as OidcBrowserProviderConfig,
+          };
+          break;
+        case 'device':
+          configFromCli = {
+            protocol: 'oidc',
+            flow: 'device',
+            config: buildOidcConfig(options) as unknown as OidcDeviceFlowProviderConfig,
+          };
+          break;
+        case 'password':
+          configFromCli = {
+            protocol: 'oidc',
+            flow: 'password',
+            config: buildOidcConfig(options) as unknown as OidcPasswordProviderConfig,
+          };
+          break;
+        case 'token_exchange':
+          configFromCli = {
+            protocol: 'oidc',
+            flow: 'token_exchange',
+            config: buildOidcConfig(options) as unknown as OidcTokenExchangeProviderConfig,
+          };
+          break;
+        default:
+          throw new Error(`Unsupported OIDC flow: ${options.flow}`);
+      }
     } else if (options.protocol === 'saml2') {
-      configFromCli = {
-        protocol: 'saml2',
-        flow,
-        config: buildSamlConfig(options),
-      };
+      switch (options.flow) {
+        case 'bearer':
+          configFromCli = {
+            protocol: 'saml2',
+            flow: 'bearer',
+            config: buildSamlConfig(options) as unknown as Saml2BearerProviderConfig,
+          };
+          break;
+        case 'pure':
+          configFromCli = {
+            protocol: 'saml2',
+            flow: 'pure',
+            config: buildSamlConfig(options) as unknown as Saml2PureProviderConfig,
+          };
+          break;
+        default:
+          throw new Error(`Unsupported SAML flow: ${options.flow}`);
+      }
     }
   }
 
-  let result = fileConfig ?? configFromCli;
-  if (!result) {
+  const base = fileConfig ?? configFromCli;
+  if (!base) {
     throw new Error(
       'Provider config is missing. Use --config or --protocol/--flow options.',
     );
   }
 
+  let result: SsoProviderConfig = base;
   if (options.protocol) {
-    result = { ...result, protocol: options.protocol };
+    result = { ...result, protocol: options.protocol } as SsoProviderConfig;
   }
   if (options.flow) {
-    result = { ...result, flow: options.flow };
+    result = { ...result, flow: options.flow } as SsoProviderConfig;
   }
 
   if (configFromCli) {
@@ -655,7 +707,7 @@ function buildProviderConfig(
         (result as any).config || {},
         (configFromCli as any).config || {},
       ),
-    };
+    } as unknown as SsoProviderConfig;
   }
 
   const accessToken = existingConn?.authorizationToken;
@@ -671,7 +723,7 @@ function buildProviderConfig(
         accessToken,
         refreshToken,
       }),
-    };
+    } as unknown as SsoProviderConfig;
   }
 
   return result;
@@ -768,6 +820,12 @@ async function main() {
         `❌ Invalid SAML flow: ${options.flow}. Use one of: ${valid.join(', ')}`,
       );
       process.exit(1);
+    }
+  }
+
+  if (options.protocol === 'oidc' && options.flow === 'password') {
+    if (!options.passcode && !options.password) {
+      options.passcode = await readManualInput('Paste passcode: ');
     }
   }
 
