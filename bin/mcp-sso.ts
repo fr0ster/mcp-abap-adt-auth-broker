@@ -839,7 +839,11 @@ async function main() {
     fs.copyFileSync(resolvedEnvPath, tempEnvPath);
   }
 
-  const defaultServiceUrl = options.serviceUrl || '';
+  const placeholderServiceUrl = '<SERVICE_URL>';
+  const defaultServiceUrl =
+    options.authType === 'xsuaa'
+      ? options.serviceUrl || placeholderServiceUrl
+      : options.serviceUrl || '';
   const sessionStore =
     options.authType === 'xsuaa'
       ? new XsuaaSessionStore(tempSessionDir, defaultServiceUrl)
@@ -874,6 +878,23 @@ async function main() {
     authorizationToken: existingConn?.authorizationToken,
     sessionCookies: existingConn?.sessionCookies,
   });
+
+  let stripClientSecret = false;
+  const authUaaUrl =
+    options.uaaUrl || options.tokenEndpoint || options.issuerUrl || undefined;
+  if (options.clientId && authUaaUrl) {
+    let clientSecret = options.clientSecret;
+    if (!clientSecret) {
+      clientSecret = '__public__';
+      stripClientSecret = true;
+    }
+    await sessionStore.setAuthorizationConfig(destination, {
+      uaaUrl: authUaaUrl,
+      uaaClientId: options.clientId,
+      uaaClientSecret: clientSecret,
+      refreshToken: existingAuth?.refreshToken,
+    });
+  }
 
   const providerConfig = buildProviderConfig(
     options,
@@ -920,7 +941,24 @@ async function main() {
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
-    fs.copyFileSync(tempEnvPath, resolvedOutputPath);
+    let envContent = fs.readFileSync(tempEnvPath, 'utf8');
+    if (options.authType === 'xsuaa' && !serviceUrl) {
+      const lines = envContent
+        .split('\n')
+        .filter((line) => !line.startsWith('XSUAA_MCP_URL='));
+      envContent = `${lines.join('\n')}\n`;
+    }
+    if (stripClientSecret) {
+      const lines = envContent
+        .split('\n')
+        .filter(
+          (line) =>
+            !line.startsWith('XSUAA_UAA_CLIENT_SECRET=') &&
+            !line.startsWith('SAP_UAA_CLIENT_SECRET='),
+        );
+      envContent = `${lines.join('\n')}\n`;
+    }
+    fs.writeFileSync(resolvedOutputPath, envContent, 'utf8');
     console.log(`✅ .env file created: ${resolvedOutputPath}`);
   } else {
     const outputData: Record<string, unknown> = {
@@ -944,7 +982,9 @@ async function main() {
       outputData.uaaClientId = authConfig.uaaClientId;
     }
     if (authConfig?.uaaClientSecret) {
-      outputData.uaaClientSecret = authConfig.uaaClientSecret;
+      if (!stripClientSecret) {
+        outputData.uaaClientSecret = authConfig.uaaClientSecret;
+      }
     }
 
     const outputDir = path.dirname(resolvedOutputPath);

@@ -11,6 +11,12 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-02-11
+
+### Fixed
+- `mcp-sso`: ensure auth config is seeded for broker and avoid writing placeholder secrets.
+
+
 ## [1.0.3] - 2026-02-11
 
 ### Fixed
