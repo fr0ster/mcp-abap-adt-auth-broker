@@ -55,9 +55,31 @@ async function fetchWithRedirect(url, options = {}) {
   throw new Error('Too many redirects');
 }
 
+function parseLoginActionFromHtml(html) {
+  const actionMatch = html.match(/action\s*:\s*['"]([^'"]+)['"]/i);
+  return actionMatch ? actionMatch[1] : null;
+}
+
 function parseLoginForm(html) {
-  const actionMatch = html.match(/<form[^>]+action="([^"]+)"/i);
-  if (!actionMatch) throw new Error('Login form action not found');
+  const formTag =
+    html.match(/<form[^>]*id=['"]kc-form-login['"][^>]*>/i)?.[0] ||
+    html.match(/<form[^>]*name=['"]kc-form-login['"][^>]*>/i)?.[0] ||
+    html.match(/<form[^>]*>/i)?.[0];
+
+  if (!formTag) {
+    const snippet = html.slice(0, 400).replace(/\s+/g, ' ');
+    throw new Error(`Login form tag not found. HTML: ${snippet}`);
+  }
+
+  const actionMatch =
+    formTag.match(/action=['"]([^'"]+)['"]/i) ||
+    formTag.match(/action=([^ >]+)/i);
+
+  if (!actionMatch) {
+    const snippet = formTag.replace(/\s+/g, ' ');
+    throw new Error(`Login form action not found. FORM: ${snippet}`);
+  }
+
   const action = actionMatch[1];
 
   const hiddenInputs = {};
@@ -75,7 +97,9 @@ function parseLoginForm(html) {
 }
 
 function extractSamlResponse(html) {
-  const match = html.match(/name="SAMLResponse"\s+value="([^"]+)"/i);
+  const match =
+    html.match(/name="SAMLResponse"\s+value="([^"]+)"/i) ||
+    html.match(/name='SAMLResponse'\s+value='([^']+)'/i);
   if (!match) return null;
   return match[1];
 }
@@ -84,7 +108,22 @@ async function main() {
   const samlUrl = `${baseUrl}/realms/${realm}/protocol/saml/clients/${clientId}`;
   const loginPage = await fetchWithRedirect(samlUrl);
   const loginHtml = await loginPage.text();
-  const { action, hiddenInputs } = parseLoginForm(loginHtml);
+  const preLoginSaml = extractSamlResponse(loginHtml);
+  if (preLoginSaml) {
+    process.stdout.write(preLoginSaml);
+    return;
+  }
+  let action;
+  let hiddenInputs = {};
+  try {
+    ({ action, hiddenInputs } = parseLoginForm(loginHtml));
+  } catch (error) {
+    const actionFromScript = parseLoginActionFromHtml(loginHtml);
+    if (!actionFromScript) {
+      throw error;
+    }
+    action = actionFromScript;
+  }
 
   const form = new URLSearchParams({
     username,
@@ -103,7 +142,8 @@ async function main() {
   const samlHtml = await loginRes.text();
   const samlResponse = extractSamlResponse(samlHtml);
   if (!samlResponse) {
-    throw new Error('SAMLResponse not found after login');
+    const snippet = samlHtml.slice(0, 400).replace(/\s+/g, ' ');
+    throw new Error(`SAMLResponse not found after login. HTML: ${snippet}`);
   }
 
   process.stdout.write(samlResponse);

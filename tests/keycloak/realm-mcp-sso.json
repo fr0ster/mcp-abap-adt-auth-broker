@@ -26,15 +26,16 @@
       "name": "MCP SSO SAML",
       "protocol": "saml",
       "enabled": true,
+      "adminUrl": "http://localhost:3002",
+      "baseUrl": "http://localhost:3002",
+      "attributes": {
+        "saml_force_post_binding": "false",
+        "saml_name_id_format": "username",
+        "saml_idp_initiated_sso_url_name": "mcp-sso-saml"
+      },
       "redirectUris": [
         "http://localhost:3002/acs"
-      ],
-      "baseUrl": "http://localhost:3002",
-      "adminUrl": "http://localhost:3002",
-      "attributes": {
-        "saml_force_post_binding": "true",
-        "saml_name_id_format": "username"
-      }
+      ]
     }
   ],
   "users": [
@@ -42,6 +43,7 @@
       "username": "demo",
       "enabled": true,
       "emailVerified": true,
+      "requiredActions": [],
       "credentials": [
         {
           "type": "password",

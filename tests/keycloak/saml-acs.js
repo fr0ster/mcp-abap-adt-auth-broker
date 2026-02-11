@@ -4,6 +4,8 @@ const http = require('http');
 const { URLSearchParams } = require('url');
 
 const port = Number(process.env.PORT || 3002);
+const outputFile =
+  process.env.SAML_OUTPUT || '/tmp/keycloak-saml-response.txt';
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -34,6 +36,13 @@ const server = http.createServer(async (req, res) => {
     if (!samlResponse) {
       console.error('SAMLResponse not found in POST body.');
       return;
+    }
+
+    try {
+      require('fs').writeFileSync(outputFile, samlResponse, 'utf8');
+      console.log(`SAMLResponse written to ${outputFile}`);
+    } catch (error) {
+      console.error('Failed to write SAMLResponse to file:', error);
     }
 
     console.log('');

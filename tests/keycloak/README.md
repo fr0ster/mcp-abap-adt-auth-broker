@@ -97,3 +97,20 @@ tests/keycloak/run-tests.sh
 This runs:
 - OIDC password flow with `demo/demo`
 - SAML pure flow with auto login (no manual copy of assertion)
+
+## Interactive (Split)
+
+Run OIDC:
+```bash
+tests/keycloak/run-oidc.sh
+```
+
+Run SAML:
+```bash
+tests/keycloak/run-saml.sh
+```
+
+Notes:
+- OIDC device flow needs browser approval but no code paste.
+- SAML flow requires browser login, but no copy/paste of assertion.
+- `run-saml.sh` uses a simple SP-initiated AuthnRequest to avoid IdP-initiated URL issues.

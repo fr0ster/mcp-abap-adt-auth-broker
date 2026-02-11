@@ -587,9 +587,12 @@ function buildSamlConfig(options: McpSsoOptions): Record<string, unknown> {
     : assertionFlow === 'assertion'
       ? async () => readManualInput('Paste SAMLResponse: ')
       : undefined;
-  const cookieProvider = async () => {
+  const cookieProvider = async (samlResponse: string) => {
     if (options.cookie) {
       return options.cookie;
+    }
+    if (assertionFlow === 'assertion') {
+      return `SAMLResponse=${samlResponse}`;
     }
     return readManualInput('Paste session cookies: ');
   };
@@ -819,7 +822,7 @@ async function main() {
   const sessionStore =
     options.authType === 'xsuaa'
       ? new XsuaaSessionStore(tempSessionDir, defaultServiceUrl)
-      : new AbapSessionStore(tempSessionDir);
+      : new AbapSessionStore(tempSessionDir, undefined, options.serviceUrl);
 
   const existingConn = await sessionStore.getConnectionConfig(destination);
   const existingAuth = await sessionStore.getAuthorizationConfig(destination);
@@ -843,11 +846,18 @@ async function main() {
     process.exit(1);
   }
 
+  const isSamlPureAbap =
+    options.authType === 'abap' &&
+    options.protocol === 'saml2' &&
+    options.flow === 'pure';
+
   await sessionStore.setConnectionConfig(destination, {
     serviceUrl:
       serviceUrl ||
       (options.authType === 'xsuaa' ? defaultServiceUrl : undefined),
-    authorizationToken: existingConn?.authorizationToken,
+    authorizationToken: isSamlPureAbap
+      ? existingConn?.authorizationToken || '__init__'
+      : existingConn?.authorizationToken,
     sessionCookies: existingConn?.sessionCookies,
   });
 
@@ -885,7 +895,18 @@ async function main() {
   );
 
   console.log(`🔐 Getting token for destination "${destination}"...`);
-  await broker.getToken(destination);
+  if (isSamlPureAbap) {
+    const tokenResult = await tokenProvider.getTokens();
+    if (!tokenResult.authorizationToken) {
+      throw new Error('Token provider did not return SAML assertion/cookies');
+    }
+    await sessionStore.setConnectionConfig(destination, {
+      serviceUrl: serviceUrl || options.serviceUrl || defaultServiceUrl,
+      sessionCookies: tokenResult.authorizationToken,
+    });
+  } else {
+    await broker.getToken(destination);
+  }
   console.log(`✅ Token obtained successfully`);
 
   const connConfig = await sessionStore.getConnectionConfig(destination);
