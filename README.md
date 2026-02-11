@@ -718,7 +718,7 @@ For local testing of `mcp-sso`, a ready-to-run Keycloak setup is included
 (OIDC browser/password/device + SAML assertion capture).
 
 ```bash
-cd tools/keycloak
+cd tests/keycloak
 docker compose up -d
 ```
 
@@ -734,7 +734,7 @@ node dist/bin/mcp-sso.js \
   --type xsuaa
 ```
 
-See `tools/keycloak/README.md` for device flow and SAML examples.
+See `tests/keycloak/README.md` for device flow and SAML examples.
 
 ### XSUAA Demo (CAP)
 

@@ -15,7 +15,7 @@ node "$ROOT_DIR/dist/bin/mcp-sso.js" \
   --type xsuaa
 
 echo "Running SAML pure flow (auto login)..."
-SAML_RESPONSE="$(node "$ROOT_DIR/tools/keycloak/saml-auto.js")"
+SAML_RESPONSE="$(node "$ROOT_DIR/tests/keycloak/saml-auto.js")"
 
 node "$ROOT_DIR/dist/bin/mcp-sso.js" \
   --protocol saml2 \

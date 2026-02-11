@@ -6,7 +6,7 @@ plus a basic SAML IdP client for generating SAML assertions (pure SAML tests).
 ## Start
 
 ```bash
-cd tools/keycloak
+cd tests/keycloak
 docker compose up -d
 ```
 
@@ -65,7 +65,7 @@ Notes:
 Start a local ACS endpoint and capture SAMLResponse:
 
 ```bash
-node tools/keycloak/saml-acs.js
+node tests/keycloak/saml-acs.js
 ```
 
 Then open the IdP SSO URL in a browser:
@@ -91,7 +91,7 @@ node dist/bin/mcp-sso.js \
 
 Run:
 ```bash
-tools/keycloak/run-tests.sh
+tests/keycloak/run-tests.sh
 ```
 
 This runs:
