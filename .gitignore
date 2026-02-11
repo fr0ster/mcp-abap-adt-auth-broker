@@ -45,3 +45,17 @@ tests/test-config.yaml
 
 *.json
 !tsconfig.cli.json
+
+# Allow JSON for local test tooling
+!tools/keycloak/*.json
+!tests/sso-demo/**/*.json
+
+# CAP demo build artifacts
+tests/sso-demo/node_modules/
+tests/sso-demo/gen/
+tests/sso-demo/mta_archives/
+tests/sso-demo/.cds-gen/
+tests/sso-demo/.cds-services.json
+tests/sso-demo/*.sqlite
+tests/sso-demo/*.db
+tests/sso-demo/.env

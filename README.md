@@ -712,6 +712,36 @@ mcp-sso --protocol saml2 --flow bearer --idp-sso-url https://idp/sso --sp-entity
 mcp-sso --protocol saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --assertion <base64> --cookie "SAP_SESSION=..." --output ./sso.env --type abap
 ```
 
+### Local Keycloak (OIDC + SAML Tests)
+
+For local testing of `mcp-sso`, a ready-to-run Keycloak setup is included
+(OIDC browser/password/device + SAML assertion capture).
+
+```bash
+cd tools/keycloak
+docker compose up -d
+```
+
+Then use:
+```bash
+node dist/bin/mcp-sso.js \
+  --protocol oidc \
+  --flow browser \
+  --issuer http://localhost:8080/realms/mcp-sso \
+  --client-id mcp-sso-cli \
+  --scopes openid,profile,email \
+  --output /tmp/keycloak.env \
+  --type xsuaa
+```
+
+See `tools/keycloak/README.md` for device flow and SAML examples.
+
+### XSUAA Demo (CAP)
+
+A minimal CAP app for testing XSUAA flows is included at `tests/sso-demo`.
+It enables `authorization_code` and `saml2-bearer` grant types and provides a
+simple `CatalogService`. See `tests/sso-demo/readme.md` for deploy steps.
+
 **Config file:**
 You can pass a JSON file with provider config:
 

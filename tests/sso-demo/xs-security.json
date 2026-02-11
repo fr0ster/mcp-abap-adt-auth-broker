@@ -1,0 +1,32 @@
+{
+  "xsappname": "mcp-sso-demo",
+  "tenant-mode": "dedicated",
+  "scopes": [
+    {
+      "name": "$XSAPPNAME.User",
+      "description": "User scope for demo access"
+    }
+  ],
+  "role-templates": [
+    {
+      "name": "User",
+      "description": "User role",
+      "scope-references": [
+        "$XSAPPNAME.User"
+      ]
+    }
+  ],
+  "oauth2-configuration": {
+    "redirect-uris": [
+      "http://localhost:3001/*",
+      "https://*.cfapps.*/*"
+    ],
+    "grant-types": [
+      "authorization_code",
+      "refresh_token",
+      "client_credentials",
+      "password",
+      "urn:ietf:params:oauth:grant-type:saml2-bearer"
+    ]
+  }
+}
