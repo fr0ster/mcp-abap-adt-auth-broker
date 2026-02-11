@@ -699,8 +699,8 @@ mcp-sso --protocol oidc --flow browser --token-endpoint https://issuer/token --c
 # OIDC device flow
 mcp-sso --protocol oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
 
-# OIDC password flow (CF passcode)
-mcp-sso --protocol oidc --flow password --cf-api https://api.cf.eu10-004.hana.ondemand.com --client-id cf --passcode <code> --output ./sso.env --type xsuaa
+# OIDC password flow
+mcp-sso --protocol oidc --flow password --token-endpoint https://issuer/oauth/token --client-id my-client --username user --password pass --output ./sso.env --type xsuaa
 
 # OIDC token exchange
 mcp-sso --protocol oidc --flow token_exchange --issuer https://issuer --client-id my-client --subject-token <token> --output ./sso.env --type xsuaa

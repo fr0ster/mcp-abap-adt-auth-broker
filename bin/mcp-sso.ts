@@ -13,8 +13,8 @@
  *   # OIDC device flow
  *   mcp-sso --protocol oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
  *
- *   # OIDC password flow (passcode)
- *   mcp-sso --protocol oidc --flow password --token-endpoint https://uaa.example/oauth/token --client-id cf --passcode <code> --output ./sso.env --type xsuaa
+ *   # OIDC password flow
+ *   mcp-sso --protocol oidc --flow password --token-endpoint https://issuer/oauth/token --client-id my-client --username user --password pass --output ./sso.env --type xsuaa
  *
  *   # OIDC token exchange
  *   mcp-sso --protocol oidc --flow token_exchange --issuer https://issuer --client-id my-client --subject-token <token> --output ./sso.env --type xsuaa
@@ -27,7 +27,6 @@
  */
 
 import { createInterface } from 'node:readline';
-import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -91,7 +90,6 @@ interface McpSsoOptions {
   assertion?: string;
   cookie?: string;
   uaaUrl?: string;
-  cfApi?: string;
 }
 
 function getVersion(): string {
@@ -186,9 +184,6 @@ function showHelp(): void {
   console.log(
     '  --uaa-url <url>           UAA base URL (used to build token endpoint)',
   );
-  console.log(
-    '  --cf-api <url>            CF API URL (resolve login/uaa endpoints)',
-  );
   console.log('');
   console.log('SAML Options:');
   console.log('  --idp-sso-url <url>        IdP SSO URL');
@@ -282,7 +277,6 @@ function parseArgs(): McpSsoOptions | null {
   let assertion: string | undefined;
   let cookie: string | undefined;
   let uaaUrl: string | undefined;
-  let cfApi: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -468,10 +462,6 @@ function parseArgs(): McpSsoOptions | null {
         uaaUrl = next;
         i++;
         break;
-      case '--cf-api':
-        cfApi = next;
-        i++;
-        break;
       default:
         break;
     }
@@ -515,7 +505,6 @@ function parseArgs(): McpSsoOptions | null {
     assertion,
     cookie,
     uaaUrl,
-    cfApi,
   };
 }
 
@@ -729,17 +718,6 @@ function buildProviderConfig(
   return result;
 }
 
-async function resolveCfEndpoints(apiUrl: string): Promise<{
-  loginUrl?: string;
-  uaaUrl?: string;
-}> {
-  const response = await axios.get(apiUrl);
-  const data = response.data as any;
-  const loginUrl = data?.links?.login?.href;
-  const uaaUrl = data?.links?.uaa?.href;
-  return { loginUrl, uaaUrl };
-}
-
 async function main() {
   const options = parseArgs();
   if (!options) {
@@ -792,15 +770,9 @@ async function main() {
     }
   }
 
-  if (options.cfApi) {
-    const cfInfo = await resolveCfEndpoints(options.cfApi);
-    if (cfInfo.uaaUrl && !options.uaaUrl) {
-      options.uaaUrl = cfInfo.uaaUrl;
-    }
-    if (cfInfo.loginUrl) {
-      console.log(
-        `🔗 CF passcode URL: ${cfInfo.loginUrl.replace(/\/+$/, '')}/passcode`,
-      );
+  if (options.protocol === 'oidc' && options.flow === 'password') {
+    if (options.uaaUrl && !options.tokenEndpoint) {
+      options.tokenEndpoint = `${options.uaaUrl.replace(/\/+$/, '')}/oauth/token`;
     }
   }
 
