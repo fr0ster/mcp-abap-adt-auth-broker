@@ -11,6 +11,12 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-02-11
+
+### Fixed
+- `mcp-sso`: prompt for passcode when not provided and tighten CLI typing.
+
+
 ## [1.0.2] - 2026-02-11
 
 ### Added
