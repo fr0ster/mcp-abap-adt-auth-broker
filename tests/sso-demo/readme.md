@@ -28,13 +28,28 @@ This runs without XSUAA in local profile and is only for smoke tests.
 ## Cloud Foundry Deploy (Trial)
 
 1. Login and target a CF space.
-2. Build and deploy:
+2. Install build tools (once):
+
+```bash
+npm install -g @sap/cds-dk mbt
+```
+
+3. Build and deploy:
 
 ```bash
 cds build --production
 mbt build -t gen
 cf deploy gen/mta_archives/*.mtar
 ```
+
+4. Create a service key (example):
+
+```bash
+cf create-service-key <xsuaa-instance> sso-demo-key
+cf service-key <xsuaa-instance> sso-demo-key
+```
+
+Use the service key JSON for `mcp-auth` / `mcp-sso` tests.
 
 This creates the XSUAA instance and deploys the app.
 
