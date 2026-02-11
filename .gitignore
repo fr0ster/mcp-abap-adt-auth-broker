@@ -59,3 +59,4 @@ tests/sso-demo/.cds-services.json
 tests/sso-demo/*.sqlite
 tests/sso-demo/*.db
 tests/sso-demo/.env
+tests/sso-demo/*.xsuaa.json

@@ -13,7 +13,8 @@
     "start": "cds-serve",
     "build:cds": "npx cds build --production",
     "build:mta": "npx mbt build -t gen",
-    "deploy:cf": "cf deploy gen/sso-demo_1.0.0.mtar --abort-on-error --delete-services"
+    "deploy:cf": "cf deploy gen/sso-demo_1.0.0.mtar --abort-on-error --delete-services",
+    "service-key:cf": "cf service-key sso-demo-srv sso-demo-key > sso-demo.xsuaa.json"
   },
   "private": true,
   "cds": {
