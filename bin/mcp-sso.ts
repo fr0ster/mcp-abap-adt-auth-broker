@@ -895,18 +895,7 @@ async function main() {
   );
 
   console.log(`🔐 Getting token for destination "${destination}"...`);
-  if (isSamlPureAbap) {
-    const tokenResult = await tokenProvider.getTokens();
-    if (!tokenResult.authorizationToken) {
-      throw new Error('Token provider did not return SAML assertion/cookies');
-    }
-    await sessionStore.setConnectionConfig(destination, {
-      serviceUrl: serviceUrl || options.serviceUrl || defaultServiceUrl,
-      sessionCookies: tokenResult.authorizationToken,
-    });
-  } else {
-    await broker.getToken(destination);
-  }
+  await broker.getToken(destination);
   console.log(`✅ Token obtained successfully`);
 
   const connConfig = await sessionStore.getConnectionConfig(destination);

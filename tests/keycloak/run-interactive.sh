@@ -18,7 +18,10 @@ if [ "$READY" != "yes" ]; then
   exit 1
 fi
 
-echo "This script has been split. Use:"
-echo "  tests/keycloak/run-oidc.sh"
-echo "  tests/keycloak/run-saml.sh"
-exit 1
+ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+
+echo "Running OIDC flow..."
+sh "$ROOT_DIR/tests/keycloak/run-oidc.sh"
+
+echo "Running SAML flow..."
+sh "$ROOT_DIR/tests/keycloak/run-saml.sh"

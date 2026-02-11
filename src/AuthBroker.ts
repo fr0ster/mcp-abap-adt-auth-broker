@@ -371,17 +371,27 @@ export class AuthBroker {
       );
     }
 
-    try {
-      await this.sessionStore.setAuthorizationConfig(
-        destination,
-        authorizationConfig,
-      );
-    } catch (error: any) {
-      this.logger?.error(
-        `Failed to save authorization config to session for ${destination}: ${getErrorMessage(error)}`,
-      );
-      throw new Error(
-        `Failed to save authorization config for destination "${destination}": ${getErrorMessage(error)}`,
+    if (
+      authorizationConfig.uaaUrl &&
+      authorizationConfig.uaaClientId &&
+      authorizationConfig.uaaClientSecret
+    ) {
+      try {
+        await this.sessionStore.setAuthorizationConfig(
+          destination,
+          authorizationConfig,
+        );
+      } catch (error: any) {
+        this.logger?.error(
+          `Failed to save authorization config to session for ${destination}: ${getErrorMessage(error)}`,
+        );
+        throw new Error(
+          `Failed to save authorization config for destination "${destination}": ${getErrorMessage(error)}`,
+        );
+      }
+    } else {
+      this.logger?.debug(
+        `Skipping authorization config save for ${destination}: missing UAA fields`,
       );
     }
   }
@@ -655,6 +665,24 @@ export class AuthBroker {
     }
 
     if (!this.serviceKeyStore) {
+      const tokenType = (this.tokenProvider as any)?.tokenType;
+      if (tokenType === 'saml') {
+        const tokenResult = await this.requestTokens(destination, 'session');
+        await this.persistTokenResult(
+          destination,
+          serviceUrl,
+          connConfig,
+          authConfig || ({} as IAuthorizationConfig),
+          tokenResult,
+        );
+        this.logger?.info(
+          `[AuthBroker] Token retrieved for ${destination} (SAML without auth config)`,
+          {
+            authorizationToken: formatToken(tokenResult.authorizationToken),
+          },
+        );
+        return tokenResult.authorizationToken;
+      }
       if (lastError) {
         throw lastError;
       }

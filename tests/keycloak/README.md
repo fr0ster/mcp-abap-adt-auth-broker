@@ -68,10 +68,10 @@ Start a local ACS endpoint and capture SAMLResponse:
 node tests/keycloak/saml-acs.js
 ```
 
-Then open the IdP SSO URL in a browser:
+Then open the SP-initiated URL printed by:
 
 ```
-http://localhost:8080/realms/mcp-sso/protocol/saml/clients/mcp-sso-saml
+node tests/keycloak/saml-sp.js
 ```
 
 After login, `saml-acs.js` will print `SAMLResponse` (base64). Use it with:
@@ -97,6 +97,17 @@ tests/keycloak/run-tests.sh
 This runs:
 - OIDC password flow with `demo/demo`
 - SAML pure flow with auto login (no manual copy of assertion)
+
+## Interactive (Single Entry)
+
+Run:
+```bash
+tests/keycloak/run-interactive.sh
+```
+
+This runs:
+- OIDC device flow
+- SAML pure flow (browser login, no copy/paste)
 
 ## Interactive (Split)
 
