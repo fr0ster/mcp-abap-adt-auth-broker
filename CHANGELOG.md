@@ -11,6 +11,16 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-02-11
+
+### Added
+- New `mcp-sso` CLI for SSO flows (OIDC browser/device/password/token_exchange and SAML2 bearer/pure).
+
+### Changed
+- Bumped `@mcp-abap-adt/auth-providers` to ^1.0.2.
+
+
+
 ## [1.0.1] - 2026-02-10
 
 ### Fixed

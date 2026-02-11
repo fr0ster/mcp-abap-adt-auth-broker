@@ -12,6 +12,6 @@
     "rootDir": "./bin",
     "types": ["node"]
   },
-  "include": ["bin/mcp-auth.ts"],
+  "include": ["bin/mcp-auth.ts", "bin/mcp-sso.ts"],
   "exclude": ["node_modules", "dist"]
 }

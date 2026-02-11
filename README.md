@@ -676,6 +676,55 @@ mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --credential
 mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsuaa
 ```
 
+### CLI: mcp-sso
+
+Get tokens via SSO providers (OIDC/SAML) and generate `.env`/JSON output:
+
+```bash
+mcp-sso --protocol <oidc|saml2> --flow <flow> --output <path> [--type abap|xsuaa] [--format env|json] [--env <path>] [--config <path>]
+```
+
+**Supported flows:**
+- OIDC: `browser`, `device`, `password`, `token_exchange`
+- SAML2: `bearer`, `pure`
+
+**Examples:**
+```bash
+# OIDC browser flow
+mcp-sso --protocol oidc --flow browser --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
+
+# OIDC browser flow (manual code / OOB)
+mcp-sso --protocol oidc --flow browser --token-endpoint https://issuer/token --client-id my-client --code <auth_code> --redirect-uri urn:ietf:wg:oauth:2.0:oob --output ./sso.env --type xsuaa
+
+# OIDC device flow
+mcp-sso --protocol oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
+
+# OIDC password flow (CF passcode)
+mcp-sso --protocol oidc --flow password --cf-api https://api.cf.eu10-004.hana.ondemand.com --client-id cf --passcode <code> --output ./sso.env --type xsuaa
+
+# OIDC token exchange
+mcp-sso --protocol oidc --flow token_exchange --issuer https://issuer --client-id my-client --subject-token <token> --output ./sso.env --type xsuaa
+
+# SAML bearer flow (assertion -> token)
+mcp-sso --protocol saml2 --flow bearer --idp-sso-url https://idp/sso --sp-entity-id my-sp --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
+
+# SAML pure flow (cookie)
+mcp-sso --protocol saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --assertion <base64> --cookie "SAP_SESSION=..." --output ./sso.env --type abap
+```
+
+**Config file:**
+You can pass a JSON file with provider config:
+
+```json
+{
+  "protocol": "oidc",
+  "flow": "device",
+  "issuerUrl": "https://issuer",
+  "clientId": "my-client",
+  "scopes": ["openid", "profile"]
+}
+```
+
 ### Utility Script
 
 Generate `.env` files from service keys:

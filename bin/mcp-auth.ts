@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 /**
  * MCP Auth - Get tokens and generate .env files from service keys
  *
@@ -19,27 +20,27 @@
  *   mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap
  */
 
-import * as path from 'path';
 import * as fs from 'fs';
+import * as path from 'path';
+
 // Use require for CommonJS dist files with absolute path
 const distPath = path.resolve(__dirname, '..', 'index.js');
 const { AuthBroker } = require(distPath);
-import {
-  AbapServiceKeyStore,
-  AbapSessionStore,
-  XsuaaServiceKeyStore,
-  XsuaaSessionStore,
-  JsonFileHandler,
-} from '@mcp-abap-adt/auth-stores';
+
 import {
   AuthorizationCodeProvider,
   ClientCredentialsProvider,
 } from '@mcp-abap-adt/auth-providers';
 import {
-  ABAP_CONNECTION_VARS,
   ABAP_AUTHORIZATION_VARS,
-  XSUAA_CONNECTION_VARS,
+  ABAP_CONNECTION_VARS,
+  AbapServiceKeyStore,
+  AbapSessionStore,
+  JsonFileHandler,
   XSUAA_AUTHORIZATION_VARS,
+  XSUAA_CONNECTION_VARS,
+  XsuaaServiceKeyStore,
+  XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
 
 interface McpAuthOptions {
@@ -69,7 +70,9 @@ function getVersion(): string {
     }
 
     const localRequire = require('module').createRequire(__filename);
-    const resolved = localRequire.resolve('@mcp-abap-adt/auth-broker/package.json');
+    const resolved = localRequire.resolve(
+      '@mcp-abap-adt/auth-broker/package.json',
+    );
     const packageJson = JSON.parse(fs.readFileSync(resolved, 'utf8'));
     return packageJson.version || 'unknown';
   } catch {
@@ -78,7 +81,9 @@ function getVersion(): string {
 }
 
 function showHelp(): void {
-  console.log('MCP Auth - Get tokens and generate .env files from service keys');
+  console.log(
+    'MCP Auth - Get tokens and generate .env files from service keys',
+  );
   console.log('');
   console.log('Usage:');
   console.log('  mcp-auth --service-key <path> --output <path> [options]');
@@ -88,79 +93,137 @@ function showHelp(): void {
   console.log('');
   console.log('Service Key or Env (one required):');
   console.log('  --service-key <path>    Path to service key JSON file');
-  console.log('  --env <path>            Path to existing .env file (used for refresh token)');
+  console.log(
+    '  --env <path>            Path to existing .env file (used for refresh token)',
+  );
   console.log('');
   console.log('Optional Options:');
-  console.log('  --type <type>           Auth type: abap or xsuaa (default: abap)');
-  console.log('  --credential            Use client_credentials flow (clientId/clientSecret, no browser)');
-  console.log('                          By default uses authorization_code flow');
-  console.log('  --browser <browser>     Browser for authorization_code flow (default: auto):');
-  console.log('                            - auto: Try to open browser, fallback to showing URL (like cf login)');
-  console.log('                            - none/headless: Show URL in console and wait for callback');
-  console.log('                            - system/chrome/edge/firefox: Open specific browser');
-  console.log('  --format <format>       Output format: json or env (default: env)');
-  console.log('  --service-url <url>     Service URL (SAP URL for ABAP, MCP URL for XSUAA). For XSUAA, optional.');
-  console.log('  --redirect-port <port>  Port for OAuth redirect URI (default: 3001). Must match XSUAA redirect-uris config.');
+  console.log(
+    '  --type <type>           Auth type: abap or xsuaa (default: abap)',
+  );
+  console.log(
+    '  --credential            Use client_credentials flow (clientId/clientSecret, no browser)',
+  );
+  console.log(
+    '                          By default uses authorization_code flow',
+  );
+  console.log(
+    '  --browser <browser>     Browser for authorization_code flow (default: auto):',
+  );
+  console.log(
+    '                            - auto: Try to open browser, fallback to showing URL (like cf login)',
+  );
+  console.log(
+    '                            - none/headless: Show URL in console and wait for callback',
+  );
+  console.log(
+    '                            - system/chrome/edge/firefox: Open specific browser',
+  );
+  console.log(
+    '  --format <format>       Output format: json or env (default: env)',
+  );
+  console.log(
+    '  --service-url <url>     Service URL (SAP URL for ABAP, MCP URL for XSUAA). For XSUAA, optional.',
+  );
+  console.log(
+    '  --redirect-port <port>  Port for OAuth redirect URI (default: 3001). Must match XSUAA redirect-uris config.',
+  );
   console.log('');
   console.log('  --version, -v          Show version number');
   console.log('  --help, -h             Show this help message');
   console.log('');
   console.log('Examples:');
   console.log('  # XSUAA with authorization_code (default, opens browser)');
-  console.log('  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa');
+  console.log(
+    '  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa',
+  );
   console.log('');
-  console.log('  # XSUAA with authorization_code (show URL in console, no browser)');
-  console.log('  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --browser none');
+  console.log(
+    '  # XSUAA with authorization_code (show URL in console, no browser)',
+  );
+  console.log(
+    '  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --browser none',
+  );
   console.log('');
-  console.log('  # XSUAA using existing .env refresh token, fallback to service key');
-  console.log('  mcp-auth --env ./mcp.env --service-key ./service-key.json --output ./mcp.env --type xsuaa');
+  console.log(
+    '  # XSUAA using existing .env refresh token, fallback to service key',
+  );
+  console.log(
+    '  mcp-auth --env ./mcp.env --service-key ./service-key.json --output ./mcp.env --type xsuaa',
+  );
   console.log('');
   console.log('  # XSUAA with client_credentials (special cases)');
-  console.log('  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --credential');
+  console.log(
+    '  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --credential',
+  );
   console.log('');
   console.log('  # XSUAA with custom redirect port');
-  console.log('  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --redirect-port 8080');
+  console.log(
+    '  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --redirect-port 8080',
+  );
   console.log('');
   console.log('  # ABAP with authorization_code (default)');
-  console.log('  mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap');
+  console.log(
+    '  mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap',
+  );
   console.log('');
   console.log('  # ABAP with client_credentials (special cases)');
-  console.log('  mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap --credential');
+  console.log(
+    '  mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap --credential',
+  );
   console.log('');
   console.log('Notes:');
   console.log('  - --type determines the provider (xsuaa or abap)');
-  console.log('  - If --env is provided and file exists, refresh token is attempted first');
-  console.log('  - If refresh fails or env file is missing, service key auth is used');
+  console.log(
+    '  - If --env is provided and file exists, refresh token is attempted first',
+  );
+  console.log(
+    '  - If refresh fails or env file is missing, service key auth is used',
+  );
   console.log('  - Authentication flow:');
   console.log('    * Default: authorization_code (browser-based OAuth2)');
-  console.log('    * --credential: client_credentials (clientId/clientSecret, no browser)');
+  console.log(
+    '    * --credential: client_credentials (clientId/clientSecret, no browser)',
+  );
   console.log('  - Browser options for authorization_code:');
-  console.log('    * auto (default): Try to open browser, fallback to showing URL');
+  console.log(
+    '    * auto (default): Try to open browser, fallback to showing URL',
+  );
   console.log('    * none/headless: Show URL in console and wait for callback');
   console.log('    * system/chrome/edge/firefox: Open specific browser');
   console.log('  - Both providers (xsuaa and abap) support both flows');
-  console.log('  - --redirect-port: Port for OAuth redirect URI (default: 3001)');
-  console.log('    * Must match redirect_uri configured in XSUAA/ABAP OAuth2 settings');
+  console.log(
+    '  - --redirect-port: Port for OAuth redirect URI (default: 3001)',
+  );
+  console.log(
+    '    * Must match redirect_uri configured in XSUAA/ABAP OAuth2 settings',
+  );
   console.log('    * Common values: 3001 (default), 8080 (SAP examples)');
-  console.log('  - For XSUAA, serviceUrl (MCP URL) is optional - can be provided via --service-url or service key');
-  console.log('  - For ABAP, serviceUrl (SAP URL) is required - can be provided via --service-url or service key');
-  console.log('  - SAP_URL/XSUAA_MCP_URL is written to .env (from --service-url, service key, or placeholder)');
+  console.log(
+    '  - For XSUAA, serviceUrl (MCP URL) is optional - can be provided via --service-url or service key',
+  );
+  console.log(
+    '  - For ABAP, serviceUrl (SAP URL) is required - can be provided via --service-url or service key',
+  );
+  console.log(
+    '  - SAP_URL/XSUAA_MCP_URL is written to .env (from --service-url, service key, or placeholder)',
+  );
 }
 
 function parseArgs(): McpAuthOptions | null {
   const args = process.argv.slice(2);
-  
+
   // Handle --version and --help first
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
     showHelp();
     process.exit(0);
   }
-  
+
   if (args.includes('--version') || args.includes('-v')) {
     console.log(getVersion());
     process.exit(0);
   }
-  
+
   let serviceKeyPath: string | undefined;
   let envFilePath: string | undefined;
   let outputFile: string | undefined;
@@ -193,8 +256,20 @@ function parseArgs(): McpAuthOptions | null {
       i++;
     } else if (args[i] === '--browser' && i + 1 < args.length) {
       browser = args[i + 1];
-      if (!['none', 'chrome', 'edge', 'firefox', 'system', 'headless', 'auto'].includes(browser)) {
-        console.error(`Invalid browser: ${browser}. Must be one of: none, chrome, edge, firefox, system, headless, auto`);
+      if (
+        ![
+          'none',
+          'chrome',
+          'edge',
+          'firefox',
+          'system',
+          'headless',
+          'auto',
+        ].includes(browser)
+      ) {
+        console.error(
+          `Invalid browser: ${browser}. Must be one of: none, chrome, edge, firefox, system, headless, auto`,
+        );
         process.exit(1);
       }
       i++;
@@ -213,7 +288,9 @@ function parseArgs(): McpAuthOptions | null {
     } else if (args[i] === '--redirect-port' && i + 1 < args.length) {
       const port = parseInt(args[i + 1], 10);
       if (isNaN(port) || port < 1 || port > 65535) {
-        console.error(`Invalid redirect port: ${args[i + 1]}. Must be a number between 1 and 65535`);
+        console.error(
+          `Invalid redirect port: ${args[i + 1]}. Must be a number between 1 and 65535`,
+        );
         process.exit(1);
       }
       redirectPort = port;
@@ -231,16 +308,20 @@ function parseArgs(): McpAuthOptions | null {
   if (!outputFile) {
     console.error('Error: --output is required');
     console.error('');
-    console.error('Usage: mcp-auth --output <path> [--service-key <path> | --env <path>] [options]');
+    console.error(
+      'Usage: mcp-auth --output <path> [--service-key <path> | --env <path>] [options]',
+    );
     console.error('Run "mcp-auth --help" for more information');
     process.exit(1);
   }
-  
+
   // Either service-key or env must be provided
   if (!serviceKeyPath && !envFilePath) {
     console.error('Error: Either --service-key or --env must be provided');
     console.error('');
-    console.error('Usage: mcp-auth --output <path> [--service-key <path> | --env <path>] [options]');
+    console.error(
+      'Usage: mcp-auth --output <path> [--service-key <path> | --env <path>] [options]',
+    );
     console.error('Run "mcp-auth --help" for more information');
     process.exit(1);
   }
@@ -276,21 +357,23 @@ function writeEnvFile(
       lines.push(`${ABAP_CONNECTION_VARS.SERVICE_URL}=${serviceUrl}`);
     }
     lines.push(`${ABAP_CONNECTION_VARS.AUTHORIZATION_TOKEN}=${token}`);
-    
+
     if (refreshToken) {
       lines.push(`${ABAP_AUTHORIZATION_VARS.REFRESH_TOKEN}=${refreshToken}`);
     }
-    
+
     if (uaaUrl) {
       lines.push(`${ABAP_AUTHORIZATION_VARS.UAA_URL}=${uaaUrl}`);
     }
-    
+
     if (uaaClientId) {
       lines.push(`${ABAP_AUTHORIZATION_VARS.UAA_CLIENT_ID}=${uaaClientId}`);
     }
-    
+
     if (uaaClientSecret) {
-      lines.push(`${ABAP_AUTHORIZATION_VARS.UAA_CLIENT_SECRET}=${uaaClientSecret}`);
+      lines.push(
+        `${ABAP_AUTHORIZATION_VARS.UAA_CLIENT_SECRET}=${uaaClientSecret}`,
+      );
     }
   } else {
     // XSUAA format
@@ -298,21 +381,23 @@ function writeEnvFile(
       lines.push(`XSUAA_MCP_URL=${serviceUrl}`);
     }
     lines.push(`${XSUAA_CONNECTION_VARS.AUTHORIZATION_TOKEN}=${token}`);
-    
+
     if (refreshToken) {
       lines.push(`${XSUAA_AUTHORIZATION_VARS.REFRESH_TOKEN}=${refreshToken}`);
     }
-    
+
     if (uaaUrl) {
       lines.push(`${XSUAA_AUTHORIZATION_VARS.UAA_URL}=${uaaUrl}`);
     }
-    
+
     if (uaaClientId) {
       lines.push(`${XSUAA_AUTHORIZATION_VARS.UAA_CLIENT_ID}=${uaaClientId}`);
     }
-    
+
     if (uaaClientSecret) {
-      lines.push(`${XSUAA_AUTHORIZATION_VARS.UAA_CLIENT_SECRET}=${uaaClientSecret}`);
+      lines.push(
+        `${XSUAA_AUTHORIZATION_VARS.UAA_CLIENT_SECRET}=${uaaClientSecret}`,
+      );
     }
   }
 
@@ -371,7 +456,7 @@ function writeJsonFile(
 
 async function main() {
   const options = parseArgs();
-  
+
   if (!options) {
     // Help or version was shown, exit already handled
     return;
@@ -382,12 +467,12 @@ async function main() {
   const resolvedEnvPath = options.envFilePath
     ? path.resolve(options.envFilePath)
     : undefined;
-  
+
   // If service key is provided, use it; optionally read session from env
   let serviceKeyStore: any = null;
   let destination: string | undefined;
   const envExists = resolvedEnvPath ? fs.existsSync(resolvedEnvPath) : false;
-  
+
   if (resolvedEnvPath) {
     destination = path.basename(resolvedEnvPath, path.extname(resolvedEnvPath));
   }
@@ -419,12 +504,23 @@ async function main() {
     let isAbapFormat = options.authType === 'abap'; // default fallback
     try {
       // Use JsonFileHandler to ensure consistent parsing behavior
-      const json = await JsonFileHandler.load(path.basename(resolvedServiceKeyPath), serviceKeyDir);
+      const json = await JsonFileHandler.load(
+        path.basename(resolvedServiceKeyPath),
+        serviceKeyDir,
+      );
 
-      let effectiveJson: Record<string, unknown> | null = json as Record<string, unknown>;
+      let effectiveJson: Record<string, unknown> | null = json as Record<
+        string,
+        unknown
+      >;
       if (json && (json as Record<string, unknown>).credentials) {
-        console.log('🔍 Detected "credentials" wrapper -> unwrapping to temp file');
-        effectiveJson = (json as Record<string, unknown>).credentials as Record<string, unknown>;
+        console.log(
+          '🔍 Detected "credentials" wrapper -> unwrapping to temp file',
+        );
+        effectiveJson = (json as Record<string, unknown>).credentials as Record<
+          string,
+          unknown
+        >;
 
         // Create temp file with unwrapped content to make it compatible with standard stores
         const tempDir = path.join(path.dirname(resolvedOutputPath), '.tmp');
@@ -460,7 +556,8 @@ async function main() {
     // Patch serviceKeyStore for XSUAA to ensure serviceUrl is present (AuthBroker requirement)
     // even if not in the file. XSUAA doesn't strictly need it, but AuthBroker enforces it.
     if (options.authType === 'xsuaa') {
-      const originalGetConnectionConfig = serviceKeyStore.getConnectionConfig.bind(serviceKeyStore);
+      const originalGetConnectionConfig =
+        serviceKeyStore.getConnectionConfig.bind(serviceKeyStore);
       serviceKeyStore.getConnectionConfig = async (dest: string) => {
         const config = await originalGetConnectionConfig(dest);
         if (config && !config.serviceUrl) {
@@ -478,13 +575,17 @@ async function main() {
 
   console.log(`📁 Output file: ${resolvedOutputPath}`);
   if (resolvedEnvPath) {
-    console.log(`📁 Env file: ${resolvedEnvPath} (${envExists ? 'found' : 'not found'})`);
+    console.log(
+      `📁 Env file: ${resolvedEnvPath} (${envExists ? 'found' : 'not found'})`,
+    );
   }
   if (options.serviceKeyPath) {
     console.log(`📁 Service key: ${path.resolve(options.serviceKeyPath)}`);
   }
   console.log(`🔐 Auth type: ${options.authType}`);
-  console.log(`🔑 Flow: ${options.credential ? 'client_credentials' : 'authorization_code'}`);
+  console.log(
+    `🔑 Flow: ${options.credential ? 'client_credentials' : 'authorization_code'}`,
+  );
   if (!options.credential) {
     console.log(`🌐 Browser: ${options.browser}`);
   }
@@ -512,9 +613,8 @@ async function main() {
     let actualServiceUrl = options.serviceUrl;
     if (!actualServiceUrl && serviceKeyStore) {
       try {
-        const serviceKeyConn = await serviceKeyStore.getConnectionConfig(
-          destination,
-        );
+        const serviceKeyConn =
+          await serviceKeyStore.getConnectionConfig(destination);
         actualServiceUrl = serviceKeyConn?.serviceUrl;
       } catch {
         // For XSUAA, serviceUrl is optional and may not exist in service key
@@ -535,10 +635,13 @@ async function main() {
     let serviceKeyAuthConfig = null;
     if (serviceKeyStore?.getAuthorizationConfig) {
       try {
-        serviceKeyAuthConfig = await serviceKeyStore.getAuthorizationConfig(destination);
+        serviceKeyAuthConfig =
+          await serviceKeyStore.getAuthorizationConfig(destination);
       } catch (e: any) {
         // Service key parsing might fail - try fallback parsing from raw JSON
-        console.log(`ℹ️  Store could not parse service key, using fallback parsing`);
+        console.log(
+          `ℹ️  Store could not parse service key, using fallback parsing`,
+        );
       }
     }
 
@@ -558,9 +661,12 @@ async function main() {
       }
     }
 
-    const authConfig = sessionAuthConfig || serviceKeyAuthConfig || fallbackAuthConfig;
+    const authConfig =
+      sessionAuthConfig || serviceKeyAuthConfig || fallbackAuthConfig;
     if (!authConfig) {
-      throw new Error(`Authorization config not found for ${destination}. Service key must contain clientid, clientsecret, and url fields.`);
+      throw new Error(
+        `Authorization config not found for ${destination}. Service key must contain clientid, clientsecret, and url fields.`,
+      );
     }
 
     // Default: authorization_code flow with browser
@@ -613,9 +719,10 @@ async function main() {
 
     const outputServiceUrl =
       options.serviceUrl || connConfig?.serviceUrl || actualServiceUrl;
-    
+
     // Filter out placeholder service URL
-    const finalServiceUrl = outputServiceUrl === '<SERVICE_URL>' ? undefined : outputServiceUrl;
+    const finalServiceUrl =
+      outputServiceUrl === '<SERVICE_URL>' ? undefined : outputServiceUrl;
 
     // Write output file based on format
     if (options.format === 'env') {
@@ -636,7 +743,9 @@ async function main() {
       console.log(`📋 .env file contains:`);
       if (options.authType === 'abap') {
         if (finalServiceUrl) {
-          console.log(`   - ${ABAP_CONNECTION_VARS.SERVICE_URL}=${finalServiceUrl}`);
+          console.log(
+            `   - ${ABAP_CONNECTION_VARS.SERVICE_URL}=${finalServiceUrl}`,
+          );
         }
         console.log(
           `   - ${ABAP_CONNECTION_VARS.AUTHORIZATION_TOKEN}=${token.substring(0, 50)}...`,
@@ -692,7 +801,6 @@ async function main() {
 
     // Exit explicitly to close any open handles (e.g., OAuth callback server)
     process.exit(0);
-
   } catch (error: any) {
     console.error(`❌ Error: ${error.message}`);
     if (error.stack) {
