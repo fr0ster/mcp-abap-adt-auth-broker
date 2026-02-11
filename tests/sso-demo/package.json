@@ -14,7 +14,9 @@
     "build:cds": "npx cds build --production",
     "build:mta": "npx mbt build -t gen",
     "deploy:cf": "cf deploy gen/sso-demo_1.0.0.mtar --abort-on-error --delete-services",
-    "service-key:cf": "cf service-key sso-demo-srv sso-demo-key > sso-demo.xsuaa.json"
+    "service-key:create": "cf create-service-key sso-demo-auth sso-demo-key",
+    "service-key:fetch": "cf service-key sso-demo-auth sso-demo-key > sso-demo.xsuaa.json",
+    "service-key:delete": "cf delete-service-key sso-demo-auth sso-demo-key -f"
   },
   "private": true,
   "cds": {

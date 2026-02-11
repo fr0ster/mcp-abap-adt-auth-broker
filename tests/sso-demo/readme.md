@@ -45,8 +45,13 @@ cf deploy gen/mta_archives/*.mtar
 4. Create a service key (example):
 
 ```bash
-cf create-service-key <xsuaa-instance> sso-demo-key
-cf service-key <xsuaa-instance> sso-demo-key
+npm run service-key:create
+npm run service-key:fetch
+```
+
+Cleanup (optional):
+```bash
+npm run service-key:delete
 ```
 
 Use the service key JSON for `mcp-auth` / `mcp-sso` tests.
