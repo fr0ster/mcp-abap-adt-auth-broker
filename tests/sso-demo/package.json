@@ -10,7 +10,10 @@
     "@sap/cds-dk": "^9"
   },
   "scripts": {
-    "start": "cds-serve"
+    "start": "cds-serve",
+    "build:cds": "cds build --production",
+    "build:mta": "mbt build -t gen",
+    "deploy:cf": "cf deploy gen/sso-demo_1.0.0.mtar --abort-on-error --delete-services"
   },
   "private": true,
   "cds": {
