@@ -86,3 +86,14 @@ node dist/bin/mcp-sso.js \
   --output /tmp/keycloak-saml.env \
   --type abap
 ```
+
+## Automated (No Manual Codes)
+
+Run:
+```bash
+tools/keycloak/run-tests.sh
+```
+
+This runs:
+- OIDC password flow with `demo/demo`
+- SAML pure flow with auto login (no manual copy of assertion)
