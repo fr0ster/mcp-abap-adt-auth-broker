@@ -49,7 +49,7 @@ SAML_RESPONSE="$(cat "$SAML_OUT")"
 kill "$ACS_PID" 2>/dev/null || true
 
 node "$ROOT_DIR/dist/bin/mcp-sso.js" \
-  --protocol saml2 \
+  saml2 \
   --flow pure \
   --idp-sso-url http://localhost:8080/realms/mcp-sso/protocol/saml \
   --sp-entity-id mcp-sso-saml \

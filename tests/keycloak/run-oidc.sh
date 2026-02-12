@@ -20,7 +20,7 @@ fi
 
 echo "Starting OIDC device flow (approve in browser)..."
 node "$ROOT_DIR/dist/bin/mcp-sso.js" \
-  --protocol oidc \
+  oidc \
   --flow device \
   --issuer http://localhost:8080/realms/mcp-sso \
   --client-id mcp-sso-cli \

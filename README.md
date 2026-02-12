@@ -644,6 +644,7 @@ const btpBrokerFull = new AuthBroker({
 Generate or refresh `.env`/JSON output using AuthBroker + stores:
 
 ```bash
+mcp-auth <auth-code|oidc|saml2-pure|saml2-bearer> [options]
 mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--credential] [--browser auto|none|system|chrome|edge|firefox] [--format json|env]
 ```
 
@@ -660,6 +661,18 @@ mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa]
 
 **Examples:**
 ```bash
+# Auth code (default via service key)
+mcp-auth auth-code --service-key ./abap.json --output ./abap.env --type abap
+
+# OIDC SSO (device flow example)
+mcp-auth oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
+
+# SAML2 pure (cookie)
+mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --output ./saml.env --type abap
+
+# SAML2 bearer (in progress, requires --dev)
+mcp-auth saml2-bearer --dev --service-key ./mcp.json --assertion <base64> --output ./sso.env --type xsuaa
+
 # ABAP: authorization_code (default, opens browser)
 mcp-auth --service-key ./abap.json --output ./abap.env --type abap
 
@@ -681,6 +694,7 @@ mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsua
 Get tokens via SSO providers (OIDC/SAML) and generate `.env`/JSON output:
 
 ```bash
+mcp-sso <oidc|saml2|bearer> [options]
 mcp-sso --protocol <oidc|saml2> --flow <flow> --output <path> [--type abap|xsuaa] [--format env|json] [--env <path>] [--config <path>]
 ```
 
@@ -691,25 +705,32 @@ mcp-sso --protocol <oidc|saml2> --flow <flow> --output <path> [--type abap|xsuaa
 **Examples:**
 ```bash
 # OIDC browser flow
-mcp-sso --protocol oidc --flow browser --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
+mcp-sso oidc --flow browser --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
 
 # OIDC browser flow (manual code / OOB)
-mcp-sso --protocol oidc --flow browser --token-endpoint https://issuer/token --client-id my-client --code <auth_code> --redirect-uri urn:ietf:wg:oauth:2.0:oob --output ./sso.env --type xsuaa
+mcp-sso oidc --flow browser --token-endpoint https://issuer/token --client-id my-client --code <auth_code> --redirect-uri urn:ietf:wg:oauth:2.0:oob --output ./sso.env --type xsuaa
 
 # OIDC device flow
-mcp-sso --protocol oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
+mcp-sso oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
 
 # OIDC password flow
-mcp-sso --protocol oidc --flow password --token-endpoint https://issuer/oauth/token --client-id my-client --username user --password pass --output ./sso.env --type xsuaa
+mcp-sso oidc --flow password --token-endpoint https://issuer/oauth/token --client-id my-client --username user --password pass --output ./sso.env --type xsuaa
 
 # OIDC token exchange
-mcp-sso --protocol oidc --flow token_exchange --issuer https://issuer --client-id my-client --subject-token <token> --output ./sso.env --type xsuaa
+mcp-sso oidc --flow token_exchange --issuer https://issuer --client-id my-client --subject-token <token> --output ./sso.env --type xsuaa
 
 # SAML bearer flow (assertion -> token)
-mcp-sso --protocol saml2 --flow bearer --idp-sso-url https://idp/sso --sp-entity-id my-sp --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
+mcp-sso bearer --idp-sso-url https://idp/sso --sp-entity-id my-sp --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
 
 # SAML pure flow (cookie)
-mcp-sso --protocol saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --assertion <base64> --cookie "SAP_SESSION=..." --output ./sso.env --type abap
+mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --assertion <base64> --cookie "SAP_SESSION=..." --output ./sso.env --type abap
+```
+
+**SAML token alias (XSUAA):**
+If your IdP requires the token alias endpoint, pass SAML metadata XML:
+
+```bash
+mcp-sso bearer --saml-metadata ./saml-sp.xml --assertion <base64> --service-key ./service-key.json --output ./sso.env --type xsuaa
 ```
 
 ### Local Keycloak (OIDC + SAML Tests)
@@ -725,7 +746,7 @@ docker compose up -d
 Then use:
 ```bash
 node dist/bin/mcp-sso.js \
-  --protocol oidc \
+  oidc \
   --flow browser \
   --issuer http://localhost:8080/realms/mcp-sso \
   --client-id mcp-sso-cli \

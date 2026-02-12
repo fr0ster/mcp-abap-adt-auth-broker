@@ -4,26 +4,27 @@
  * MCP SSO - Get tokens via SSO providers and generate .env files
  *
  * Usage:
+ *   mcp-sso <oidc|saml2|bearer> [options]
  *   mcp-sso --protocol <oidc|saml2> --flow <flow> --output <path> [options]
  *
  * Examples:
  *   # OIDC browser flow (authorization code with local callback)
- *   mcp-sso --protocol oidc --flow browser --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
+ *   mcp-sso oidc --flow browser --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
  *
  *   # OIDC device flow
- *   mcp-sso --protocol oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
+ *   mcp-sso oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
  *
  *   # OIDC password flow
- *   mcp-sso --protocol oidc --flow password --token-endpoint https://issuer/oauth/token --client-id my-client --username user --password pass --output ./sso.env --type xsuaa
+ *   mcp-sso oidc --flow password --token-endpoint https://issuer/oauth/token --client-id my-client --username user --password pass --output ./sso.env --type xsuaa
  *
  *   # OIDC token exchange
- *   mcp-sso --protocol oidc --flow token_exchange --issuer https://issuer --client-id my-client --subject-token <token> --output ./sso.env --type xsuaa
+ *   mcp-sso oidc --flow token_exchange --issuer https://issuer --client-id my-client --subject-token <token> --output ./sso.env --type xsuaa
  *
  *   # SAML bearer flow
- *   mcp-sso --protocol saml2 --flow bearer --idp-sso-url https://idp/sso --sp-entity-id my-sp --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
+ *   mcp-sso bearer --idp-sso-url https://idp/sso --sp-entity-id my-sp --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
  *
  *   # SAML pure flow (cookie)
- *   mcp-sso --protocol saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --assertion <base64> --cookie "SAP_SESSION=..." --output ./sso.env --type abap
+ *   mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --assertion <base64> --cookie "SAP_SESSION=..." --output ./sso.env --type abap
  */
 
 import { createInterface } from 'node:readline';
@@ -34,6 +35,8 @@ import * as path from 'path';
 const distPath = path.resolve(__dirname, '..', 'index.js');
 const { AuthBroker } = require(distPath);
 
+import type { ILogger } from '@mcp-abap-adt/interfaces';
+import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
 import {
   SsoProviderFactory,
   type OidcBrowserProviderConfig,
@@ -44,12 +47,18 @@ import {
   type Saml2PureProviderConfig,
   type SsoProviderConfig,
 } from '@mcp-abap-adt/auth-providers';
-import { AbapSessionStore, XsuaaSessionStore } from '@mcp-abap-adt/auth-stores';
+import {
+  AbapServiceKeyStore,
+  AbapSessionStore,
+  XsuaaServiceKeyStore,
+  XsuaaSessionStore,
+} from '@mcp-abap-adt/auth-stores';
 
 interface McpSsoOptions {
   outputFile?: string;
   envFilePath?: string;
   destination?: string;
+  serviceKeyPath?: string;
   authType: 'abap' | 'xsuaa';
   format: 'json' | 'env';
   protocol?: 'oidc' | 'saml2';
@@ -90,6 +99,7 @@ interface McpSsoOptions {
   assertion?: string;
   cookie?: string;
   uaaUrl?: string;
+  samlMetadataPath?: string;
 }
 
 function getVersion(): string {
@@ -121,16 +131,18 @@ function showHelp(): void {
   console.log('MCP SSO - Get tokens via SSO providers and generate .env files');
   console.log('');
   console.log('Usage:');
+  console.log('  mcp-sso <oidc|saml2|bearer> [options]');
   console.log(
     '  mcp-sso --protocol <oidc|saml2> --flow <flow> --output <path> [options]',
   );
   console.log('');
   console.log('Required Options:');
   console.log('  --output <path>           Output file path');
-  console.log('  --protocol <oidc|saml2>   Protocol');
-  console.log('  --flow <flow>             Flow for protocol');
+  console.log('  --protocol <oidc|saml2>   Protocol (if no subcommand)');
+  console.log('  --flow <flow>             Flow for protocol (if no subcommand)');
   console.log('');
   console.log('Common Options:');
+  console.log('  --service-key <path>      Service key JSON (XSUAA/ABAP)');
   console.log('  --type <abap|xsuaa>       Output type (default: abap)');
   console.log('  --format <env|json>       Output format (default: env)');
   console.log(
@@ -191,6 +203,9 @@ function showHelp(): void {
   console.log(
     '  --acs-url <url>            ACS URL (default: http://localhost:<port>/callback)',
   );
+  console.log(
+    '  --saml-metadata <path>     SAML metadata XML (to resolve token alias)',
+  );
   console.log('  --relay-state <value>      RelayState (optional)');
   console.log(
     '  --assertion-flow <flow>    browser|manual|assertion (default: browser)',
@@ -227,8 +242,53 @@ function readManualInput(prompt: string): Promise<string> {
   });
 }
 
+function createCliLogger(prefix: string = 'SSO'): ILogger {
+  const isEnabled = (): boolean => {
+    if (
+      process.env.DEBUG_SSO === 'false' ||
+      process.env.DEBUG_AUTH_SSO === 'false'
+    ) {
+      return false;
+    }
+    if (
+      process.env.DEBUG_SSO === 'true' ||
+      process.env.DEBUG_AUTH_SSO === 'true' ||
+      process.env.DEBUG === 'true' ||
+      process.env.DEBUG?.includes('sso') === true ||
+      process.env.DEBUG?.includes('auth-sso') === true
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  const baseLogger = new DefaultLogger(getLogLevel());
+  return {
+    debug: (message: string, meta?: unknown) => {
+      if (isEnabled()) {
+        baseLogger.debug(`[${prefix}] ${message}`, meta);
+      }
+    },
+    info: (message: string, meta?: unknown) => {
+      if (isEnabled()) {
+        baseLogger.info(`[${prefix}] ${message}`, meta);
+      }
+    },
+    warn: (message: string, meta?: unknown) => {
+      if (isEnabled()) {
+        baseLogger.warn(`[${prefix}] ${message}`, meta);
+      }
+    },
+    error: (message: string, meta?: unknown) => {
+      if (isEnabled()) {
+        baseLogger.error(`[${prefix}] ${message}`, meta);
+      }
+    },
+  };
+}
+
 function parseArgs(): McpSsoOptions | null {
-  const args = process.argv.slice(2);
+  let args = process.argv.slice(2);
 
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
     showHelp();
@@ -243,6 +303,7 @@ function parseArgs(): McpSsoOptions | null {
   let outputFile: string | undefined;
   let envFilePath: string | undefined;
   let destination: string | undefined;
+  let serviceKeyPath: string | undefined;
   let authType: 'abap' | 'xsuaa' = 'abap';
   let format: 'env' | 'json' = 'env';
   let protocol: 'oidc' | 'saml2' | undefined;
@@ -277,6 +338,24 @@ function parseArgs(): McpSsoOptions | null {
   let assertion: string | undefined;
   let cookie: string | undefined;
   let uaaUrl: string | undefined;
+  let samlMetadataPath: string | undefined;
+
+  const firstArg = args[0];
+  if (firstArg && !firstArg.startsWith('-')) {
+    if (firstArg === 'oidc') {
+      protocol = 'oidc';
+    } else if (firstArg === 'saml2') {
+      protocol = 'saml2';
+    } else if (firstArg === 'bearer') {
+      protocol = 'saml2';
+      flow = 'bearer';
+    } else {
+      console.error(`Unknown command: ${firstArg}`);
+      showHelp();
+      process.exit(1);
+    }
+    args = args.slice(1);
+  }
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -289,6 +368,10 @@ function parseArgs(): McpSsoOptions | null {
         break;
       case '--env':
         envFilePath = next;
+        i++;
+        break;
+      case '--service-key':
+        serviceKeyPath = next;
         i++;
         break;
       case '--destination':
@@ -462,6 +545,10 @@ function parseArgs(): McpSsoOptions | null {
         uaaUrl = next;
         i++;
         break;
+      case '--saml-metadata':
+        samlMetadataPath = next;
+        i++;
+        break;
       default:
         break;
     }
@@ -471,6 +558,7 @@ function parseArgs(): McpSsoOptions | null {
     outputFile,
     envFilePath,
     destination,
+    serviceKeyPath,
     authType,
     format,
     protocol,
@@ -505,7 +593,15 @@ function parseArgs(): McpSsoOptions | null {
     assertion,
     cookie,
     uaaUrl,
+    samlMetadataPath,
   };
+}
+
+function resolveSamlTokenAlias(metadataXml: string): string | undefined {
+  const regex =
+    /<md:AssertionConsumerService[^>]*Location="([^"]*\/oauth\/token\/alias\/[^"]+)"/i;
+  const match = metadataXml.match(regex);
+  return match?.[1];
 }
 
 function normalizeProviderConfig(raw: any): SsoProviderConfig | null {
@@ -726,6 +822,7 @@ async function main() {
   if (!options) {
     return;
   }
+  const logger = createCliLogger();
 
   if (!options.outputFile) {
     console.error('❌ Missing required --output');
@@ -738,6 +835,24 @@ async function main() {
     : undefined;
 
   let destination = options.destination;
+  if (options.serviceKeyPath) {
+    const resolvedServiceKeyPath = path.resolve(options.serviceKeyPath);
+    if (!fs.existsSync(resolvedServiceKeyPath)) {
+      console.error(`❌ Service key file not found: ${resolvedServiceKeyPath}`);
+      process.exit(1);
+    }
+    const serviceKeyFileName = path.basename(
+      resolvedServiceKeyPath,
+      path.extname(resolvedServiceKeyPath),
+    );
+    if (destination && destination !== serviceKeyFileName) {
+      console.error(
+        `❌ Destination mismatch: service key (${serviceKeyFileName}) vs output (${destination})`,
+      );
+      process.exit(1);
+    }
+    destination = serviceKeyFileName;
+  }
   if (!destination) {
     destination = path.basename(
       resolvedOutputPath,
@@ -758,6 +873,30 @@ async function main() {
     }
   }
 
+  const allowTokenEndpointWithServiceKey =
+    options.protocol === 'saml2' && options.flow === 'bearer';
+  const serviceKeyConflicts =
+    options.serviceKeyPath &&
+    (options.configPath ||
+      options.issuerUrl ||
+      options.authorizationEndpoint ||
+      (!allowTokenEndpointWithServiceKey && options.tokenEndpoint) ||
+      options.deviceAuthorizationEndpoint ||
+      options.clientId ||
+      options.clientSecret ||
+      options.uaaUrl);
+  if (serviceKeyConflicts) {
+    console.error(
+      '❌ Use either --service-key or explicit OIDC/SAML parameters (issuer/token/client/uaa).',
+    );
+    process.exit(1);
+  }
+
+  if (options.serviceKeyPath && options.authType !== 'xsuaa') {
+    console.error('❌ --service-key is supported only for XSUAA flows.');
+    process.exit(1);
+  }
+
   let providerConfigFromFile: SsoProviderConfig | null = null;
   if (options.configPath) {
     const resolvedConfigPath = path.resolve(options.configPath);
@@ -771,6 +910,55 @@ async function main() {
       console.error(`❌ Config file does not contain provider config`);
       process.exit(1);
     }
+  }
+
+  if (options.serviceKeyPath) {
+    const resolvedServiceKeyPath = path.resolve(options.serviceKeyPath);
+    const serviceKeyDir = path.dirname(resolvedServiceKeyPath);
+    const serviceKeyStore = new XsuaaServiceKeyStore(serviceKeyDir);
+    const authConfig = await serviceKeyStore.getAuthorizationConfig(
+      destination,
+    );
+    if (!authConfig) {
+      console.error(
+        `❌ Authorization config not found for ${destination}. Service key must contain clientid, clientsecret, and url fields.`,
+      );
+      process.exit(1);
+    }
+    const uaaUrl = authConfig.uaaUrl;
+    if (!uaaUrl) {
+      console.error(
+        `❌ Service key missing UAA URL for ${destination}.`,
+      );
+      process.exit(1);
+    }
+    options.uaaUrl = uaaUrl;
+    options.clientId = authConfig.uaaClientId;
+    options.clientSecret = authConfig.uaaClientSecret;
+    if (!options.issuerUrl) {
+      options.issuerUrl = uaaUrl;
+    }
+    if (!options.tokenEndpoint) {
+      options.tokenEndpoint = `${uaaUrl.replace(/\/+$/, '')}/oauth/token`;
+    }
+    if (!options.authorizationEndpoint) {
+      options.authorizationEndpoint = `${uaaUrl.replace(/\/+$/, '')}/oauth/authorize`;
+    }
+  }
+
+  if (options.samlMetadataPath) {
+    const resolvedMetadataPath = path.resolve(options.samlMetadataPath);
+    if (!fs.existsSync(resolvedMetadataPath)) {
+      console.error(`❌ SAML metadata file not found: ${resolvedMetadataPath}`);
+      process.exit(1);
+    }
+    const metadataXml = fs.readFileSync(resolvedMetadataPath, 'utf8');
+    const aliasUrl = resolveSamlTokenAlias(metadataXml);
+    if (!aliasUrl) {
+      console.error('❌ SAML metadata does not contain token alias endpoint.');
+      process.exit(1);
+    }
+    options.tokenEndpoint = aliasUrl;
   }
 
   if (options.protocol === 'oidc' && options.flow === 'password') {
@@ -885,13 +1073,24 @@ async function main() {
     providerConfigFromFile,
   );
 
-  const tokenProvider = SsoProviderFactory.create(providerConfig);
+  const providerConfigWithLogger = (providerConfig as any).config
+    ? {
+        ...providerConfig,
+        config: {
+          ...(providerConfig as any).config,
+          logger: (providerConfig as any).config?.logger ?? logger,
+        },
+      }
+    : providerConfig;
+
+  const tokenProvider = SsoProviderFactory.create(providerConfigWithLogger);
   const broker = new AuthBroker(
     {
       sessionStore,
       tokenProvider,
     },
     options.browser,
+    logger,
   );
 
   console.log(`🔐 Getting token for destination "${destination}"...`);

@@ -14,9 +14,11 @@
     "build:cds": "npx cds build --production",
     "build:mta": "npx mbt build -t gen",
     "deploy:cf": "cf deploy gen/sso-demo_1.0.0.mtar --abort-on-error --delete-services",
-    "service-key:create": "cf create-service-key sso-demo-auth sso-demo-key",
-    "service-key:fetch": "cf service-key sso-demo-auth sso-demo-key > sso-demo.xsuaa.json",
-    "service-key:delete": "cf delete-service-key sso-demo-auth sso-demo-key -f"
+    "service-key:create": "node ./service-key.js create",
+    "service-key:fetch": "node ./service-key.js fetch",
+    "service-key:delete": "node ./service-key.js delete",
+    "test:mcp-auth": "sh ./run-mcp-auth.sh",
+    "test:mcp-sso": "sh ./run-mcp-sso.sh"
   },
   "private": true,
   "cds": {

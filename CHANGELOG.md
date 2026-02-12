@@ -11,6 +11,18 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+### Added
+- `mcp-auth` subcommands: `auth-code`, `oidc`, `saml2-pure`, `saml2-bearer` (delegates to `mcp-sso`).
+- `mcp-auth saml2-bearer` requires `--dev` and warns otherwise (in progress).
+- `mcp-sso` subcommands: `oidc`, `saml2`, `bearer`.
+- `mcp-sso`: `--saml-metadata` to resolve XSUAA token alias endpoint from SP metadata.
+- `tests/sso-demo`: service key helper script with `--service/--key/--out` overrides.
+
+### Changed
+- `mcp-sso`: allow `--token-endpoint` with `--service-key` for SAML bearer.
+- Docs and test scripts updated for new subcommands.
+- Bumped `@mcp-abap-adt/auth-providers` to `^1.0.5`.
+
 ## [1.0.4] - 2026-02-11
 
 ### Fixed

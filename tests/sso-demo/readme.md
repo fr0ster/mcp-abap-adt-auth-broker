@@ -54,6 +54,40 @@ Cleanup (optional):
 npm run service-key:delete
 ```
 
+You can override service/key/output via arguments:
+
+```bash
+npm run service-key:create -- --service my-service
+npm run service-key:fetch -- --service my-service --out my-service.json
+npm run service-key:delete -- --service my-service
+```
+
+## Testbed Setup (End-to-End)
+
+```bash
+# 1) Build
+npm run build:cds
+npm run build:mta
+
+# 2) Deploy
+npm run deploy:cf
+
+# 3) Create + fetch service key
+npm run service-key:create
+npm run service-key:fetch
+```
+
+This produces `tests/sso-demo/sso-demo.xsuaa.json` (gitignored).
+
+## Run Tests (Interactive)
+
+```bash
+npm run test:mcp-auth
+npm run test:mcp-sso
+```
+
+Both flows use authorization_code and open a browser on the same machine.
+
 Use the service key JSON for `mcp-auth` / `mcp-sso` tests.
 
 This creates the XSUAA instance and deploys the app.

@@ -60,3 +60,5 @@ tests/sso-demo/*.sqlite
 tests/sso-demo/*.db
 tests/sso-demo/.env
 tests/sso-demo/*.xsuaa.json
+tests/sso-demo/sso-demo-key.json
+tests/sso-demo/*.xml

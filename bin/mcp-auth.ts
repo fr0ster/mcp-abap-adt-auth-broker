@@ -20,6 +20,7 @@
  *   mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap
  */
 
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -86,6 +87,7 @@ function showHelp(): void {
   );
   console.log('');
   console.log('Usage:');
+  console.log('  mcp-auth <auth-code|oidc|saml2-pure|saml2-bearer> [options]');
   console.log('  mcp-auth --service-key <path> --output <path> [options]');
   console.log('');
   console.log('Required Options:');
@@ -100,6 +102,9 @@ function showHelp(): void {
   console.log('Optional Options:');
   console.log(
     '  --type <type>           Auth type: abap or xsuaa (default: abap)',
+  );
+  console.log(
+    '  --dev                   Enable in-progress commands (saml2-bearer)',
   );
   console.log(
     '  --credential            Use client_credentials flow (clientId/clientSecret, no browser)',
@@ -133,6 +138,26 @@ function showHelp(): void {
   console.log('  --help, -h             Show this help message');
   console.log('');
   console.log('Examples:');
+  console.log('  # Auth code (default flow via service key)');
+  console.log(
+    '  mcp-auth auth-code --service-key ./service-key.json --output ./mcp.env --type xsuaa',
+  );
+  console.log('');
+  console.log('  # OIDC SSO (device/password/browser/token-exchange)');
+  console.log(
+    '  mcp-auth oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa',
+  );
+  console.log('');
+  console.log('  # SAML2 pure (cookies)');
+  console.log(
+    '  mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --output ./saml.env --type abap',
+  );
+  console.log('');
+  console.log('  # SAML2 bearer (in progress, requires --dev)');
+  console.log(
+    '  mcp-auth saml2-bearer --dev --service-key ./service-key.json --assertion <base64> --output ./sso.env --type xsuaa',
+  );
+  console.log('');
   console.log('  # XSUAA with authorization_code (default, opens browser)');
   console.log(
     '  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa',
@@ -210,8 +235,7 @@ function showHelp(): void {
   );
 }
 
-function parseArgs(): McpAuthOptions | null {
-  const args = process.argv.slice(2);
+function parseArgs(args: string[] = process.argv.slice(2)): McpAuthOptions | null {
 
   // Handle --version and --help first
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
@@ -454,8 +478,80 @@ function writeJsonFile(
   fs.writeFileSync(outputPath, JSON.stringify(outputData, null, 2), 'utf8');
 }
 
+function runMcpSso(args: string[]): void {
+  const mcpSsoPath = path.resolve(__dirname, 'mcp-sso.js');
+  const result = spawnSync(process.execPath, [mcpSsoPath, ...args], {
+    stdio: 'inherit',
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  process.exit(result.status ?? 1);
+}
+
 async function main() {
-  const options = parseArgs();
+  const rawArgs = process.argv.slice(2);
+  const subcommand = rawArgs[0];
+  const hasSubcommand =
+    subcommand && !subcommand.startsWith('-') && subcommand.length > 0;
+  if (hasSubcommand) {
+    const remaining = rawArgs.slice(1);
+    const ensureNoProtocol = () => {
+      if (remaining.includes('--protocol')) {
+        console.error('❌ --protocol is not supported with subcommands.');
+        process.exit(1);
+      }
+    };
+    switch (subcommand) {
+      case 'auth-code': {
+        break;
+      }
+      case 'oidc': {
+        ensureNoProtocol();
+        runMcpSso(['oidc', ...remaining]);
+        return;
+      }
+      case 'saml2-pure': {
+        ensureNoProtocol();
+        if (remaining.includes('--flow')) {
+          const idx = remaining.indexOf('--flow');
+          const flow = remaining[idx + 1];
+          if (flow && flow !== 'pure') {
+            console.error('❌ saml2-pure requires --flow pure.');
+            process.exit(1);
+          }
+        } else {
+          remaining.unshift('pure');
+          remaining.unshift('--flow');
+        }
+        runMcpSso(['saml2', ...remaining]);
+        return;
+      }
+      case 'saml2-bearer': {
+        ensureNoProtocol();
+        if (!remaining.includes('--dev')) {
+          console.error(
+            '⚠️  saml2-bearer is in progress. Re-run with --dev to enable.',
+          );
+          process.exit(1);
+        }
+        const filtered = remaining.filter((arg) => arg !== '--dev');
+        if (filtered.includes('--flow')) {
+          console.error('❌ saml2-bearer does not accept --flow.');
+          process.exit(1);
+        }
+        runMcpSso(['bearer', ...filtered]);
+        return;
+      }
+      default: {
+        console.error(`Unknown command: ${subcommand}`);
+        showHelp();
+        process.exit(1);
+      }
+    }
+  }
+
+  const options = parseArgs(hasSubcommand ? rawArgs.slice(1) : rawArgs);
 
   if (!options) {
     // Help or version was shown, exit already handled
