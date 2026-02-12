@@ -11,6 +11,8 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-02-12
+
 ### Added
 - `mcp-auth` subcommands: `auth-code`, `oidc`, `saml2-pure`, `saml2-bearer` (delegates to `mcp-sso`).
 - `mcp-auth saml2-bearer` requires `--dev` and warns otherwise (in progress).
