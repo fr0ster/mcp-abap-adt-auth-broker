@@ -80,3 +80,7 @@ Tests are in `src/__tests__/` and use real implementations (no mocks) for integr
 - Biome for linting and formatting (2-space indent, single quotes, semicolons)
 - Strict TypeScript with `noExplicitAny` as warning (disabled in tests)
 - CommonJS module output targeting ES2022
+
+## Plans and Specs
+
+After a plan under `docs/superpowers/plans/` or spec under `docs/superpowers/specs/` has been fully implemented, delete the file. Keep only active (not yet implemented) plans and specs in the tree — implementation history lives in git, not in these directories.
