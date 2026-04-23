@@ -43,18 +43,7 @@ import {
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
-
-interface McpAuthOptions {
-  serviceKeyPath?: string; // Optional if env file is provided
-  envFilePath?: string;
-  outputFile: string;
-  authType: 'abap' | 'xsuaa';
-  browser: string; // Browser for authorization_code flow (default: 'auto')
-  credential: boolean; // Use client_credentials instead of authorization_code
-  format: 'json' | 'env';
-  serviceUrl?: string;
-  redirectPort?: number; // Port for OAuth redirect URI (default: 3001)
-}
+import { parseArgs, type McpAuthOptions } from '../src/cli/parseArgs';
 
 function getVersion(): string {
   try {
@@ -235,133 +224,6 @@ function showHelp(): void {
   );
 }
 
-function parseArgs(args: string[] = process.argv.slice(2)): McpAuthOptions | null {
-
-  // Handle --version and --help first
-  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
-    showHelp();
-    process.exit(0);
-  }
-
-  if (args.includes('--version') || args.includes('-v')) {
-    console.log(getVersion());
-    process.exit(0);
-  }
-
-  let serviceKeyPath: string | undefined;
-  let envFilePath: string | undefined;
-  let outputFile: string | undefined;
-  let authType: 'abap' | 'xsuaa' = 'abap';
-  let browser: string = 'auto'; // Default to auto for authorization_code flow
-  let credential: boolean = false; // Use client_credentials instead of authorization_code
-  let format: 'json' | 'env' = 'env';
-  let serviceUrl: string | undefined;
-  let redirectPort: number | undefined;
-
-  // Parse arguments
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--service-key' && i + 1 < args.length) {
-      serviceKeyPath = args[i + 1];
-      i++;
-    } else if (args[i] === '--env' && i + 1 < args.length) {
-      envFilePath = args[i + 1];
-      i++;
-    } else if (args[i] === '--output' && i + 1 < args.length) {
-      outputFile = args[i + 1];
-      i++;
-    } else if (args[i] === '--type' && i + 1 < args.length) {
-      const type = args[i + 1];
-      if (type === 'abap' || type === 'xsuaa') {
-        authType = type;
-      } else {
-        console.error(`Invalid auth type: ${type}. Must be 'abap' or 'xsuaa'`);
-        process.exit(1);
-      }
-      i++;
-    } else if (args[i] === '--browser' && i + 1 < args.length) {
-      browser = args[i + 1];
-      if (
-        ![
-          'none',
-          'chrome',
-          'edge',
-          'firefox',
-          'system',
-          'headless',
-          'auto',
-        ].includes(browser)
-      ) {
-        console.error(
-          `Invalid browser: ${browser}. Must be one of: none, chrome, edge, firefox, system, headless, auto`,
-        );
-        process.exit(1);
-      }
-      i++;
-    } else if (args[i] === '--format' && i + 1 < args.length) {
-      const fmt = args[i + 1];
-      if (fmt === 'json' || fmt === 'env') {
-        format = fmt;
-      } else {
-        console.error(`Invalid format: ${fmt}. Must be 'json' or 'env'`);
-        process.exit(1);
-      }
-      i++;
-    } else if (args[i] === '--service-url' && i + 1 < args.length) {
-      serviceUrl = args[i + 1];
-      i++;
-    } else if (args[i] === '--redirect-port' && i + 1 < args.length) {
-      const port = parseInt(args[i + 1], 10);
-      if (isNaN(port) || port < 1 || port > 65535) {
-        console.error(
-          `Invalid redirect port: ${args[i + 1]}. Must be a number between 1 and 65535`,
-        );
-        process.exit(1);
-      }
-      redirectPort = port;
-      i++;
-    } else if (args[i] === '--credential') {
-      credential = true;
-    } else {
-      console.error(`Unknown option: ${args[i]}`);
-      console.error('Run "mcp-auth --help" for usage information');
-      process.exit(1);
-    }
-  }
-
-  // Validate required arguments
-  if (!outputFile) {
-    console.error('Error: --output is required');
-    console.error('');
-    console.error(
-      'Usage: mcp-auth --output <path> [--service-key <path> | --env <path>] [options]',
-    );
-    console.error('Run "mcp-auth --help" for more information');
-    process.exit(1);
-  }
-
-  // Either service-key or env must be provided
-  if (!serviceKeyPath && !envFilePath) {
-    console.error('Error: Either --service-key or --env must be provided');
-    console.error('');
-    console.error(
-      'Usage: mcp-auth --output <path> [--service-key <path> | --env <path>] [options]',
-    );
-    console.error('Run "mcp-auth --help" for more information');
-    process.exit(1);
-  }
-
-  return {
-    serviceKeyPath,
-    envFilePath,
-    outputFile,
-    authType,
-    browser,
-    credential,
-    format,
-    serviceUrl,
-    redirectPort,
-  };
-}
 
 function writeEnvFile(
   outputPath: string,
@@ -491,6 +353,18 @@ function runMcpSso(args: string[]): void {
 
 async function main() {
   const rawArgs = process.argv.slice(2);
+
+  // Handle --version and --help first
+  if (rawArgs.length === 0 || rawArgs.includes('--help') || rawArgs.includes('-h')) {
+    showHelp();
+    process.exit(0);
+  }
+
+  if (rawArgs.includes('--version') || rawArgs.includes('-v')) {
+    console.log(getVersion());
+    process.exit(0);
+  }
+
   const subcommand = rawArgs[0];
   const hasSubcommand =
     subcommand && !subcommand.startsWith('-') && subcommand.length > 0;
@@ -551,11 +425,13 @@ async function main() {
     }
   }
 
-  const options = parseArgs(hasSubcommand ? rawArgs.slice(1) : rawArgs);
-
-  if (!options) {
-    // Help or version was shown, exit already handled
-    return;
+  let options: McpAuthOptions;
+  try {
+    options = parseArgs(hasSubcommand ? rawArgs.slice(1) : rawArgs);
+  } catch (e: any) {
+    console.error('Error:', e.message);
+    console.error('Run "mcp-auth --help" for usage information');
+    process.exit(1);
   }
 
   // Resolve paths

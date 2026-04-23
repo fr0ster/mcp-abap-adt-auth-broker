@@ -8,10 +8,11 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "outDir": "./dist/bin",
-    "rootDir": "./bin",
+    "outDir": "./dist",
+    "rootDir": ".",
+    "typeRoots": ["./node_modules/@types"],
     "types": ["node"]
   },
-  "include": ["bin/mcp-auth.ts", "bin/mcp-sso.ts"],
+  "include": ["bin/mcp-auth.ts", "bin/mcp-sso.ts", "src/cli/parseArgs.ts"],
   "exclude": ["node_modules", "dist"]
 }
