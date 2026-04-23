@@ -20,9 +20,7 @@ export function renderPublicClientEnv(input: PublicClientEnvInput): string {
   lines.push(`${BTP_AUTHORIZATION_VARS.UAA_CLIENT_SECRET}=`);
   lines.push(`${BTP_CONNECTION_VARS.AUTHORIZATION_TOKEN}=${input.accessToken}`);
   if (input.refreshToken) {
-    lines.push(
-      `${BTP_AUTHORIZATION_VARS.REFRESH_TOKEN}=${input.refreshToken}`,
-    );
+    lines.push(`${BTP_AUTHORIZATION_VARS.REFRESH_TOKEN}=${input.refreshToken}`);
   }
   return lines.join('\n') + '\n';
 }
