@@ -689,6 +689,21 @@ mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --credential
 mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsuaa
 ```
 
+#### Public-client mode (no service key)
+
+When you do not have a BTP service key but do have the ABAP system URL, the XSUAA tenant URL, and a public OAuth `client_id` (registered with `http://localhost:<port>/callback` redirect and a foreign-scope reference to the ABAP system's `xsappname`):
+
+```bash
+mcp-auth --abap-url https://<system>.abap.<region>.hana.ondemand.com \
+         --uaa-url  https://<tenant>.authentication.<region>.hana.ondemand.com \
+         --client-id '<sb-xs-...|xsuaa-abapcp-prod-<region>!b4584>' \
+         --output ./mcp.env
+```
+
+A browser opens for login; on success the `.env` file contains `BTP_*` variables with an empty `BTP_UAA_CLIENT_SECRET=` line marking the session as a public-client (PKCE) session. Whether a refresh token is issued depends on the client registration; if it is not, you will be asked to re-authenticate when the access token expires.
+
+In this mode `--credential`, `--format json`, and `--service-url` are rejected — the flow is always browser-based authorization code with PKCE and always writes `.env`. `--abap-url` is mutually exclusive with `--service-key` and `--env`.
+
 ### CLI: mcp-sso
 
 Get tokens via SSO providers (OIDC/SAML) and generate `.env`/JSON output:
