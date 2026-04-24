@@ -224,7 +224,6 @@ function showHelp(): void {
   );
 }
 
-
 function writeEnvFile(
   outputPath: string,
   authType: 'abap' | 'xsuaa',
