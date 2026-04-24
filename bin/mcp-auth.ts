@@ -44,6 +44,8 @@ import {
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
 import { parseArgs, type McpAuthOptions } from '../src/cli/parseArgs';
+import { bootstrapPublicClient } from '../src/cli/publicClientBootstrap';
+import { renderPublicClientEnv } from '../src/cli/publicClientEnv';
 
 function getVersion(): string {
   try {
@@ -126,6 +128,17 @@ function showHelp(): void {
   console.log('  --version, -v          Show version number');
   console.log('  --help, -h             Show this help message');
   console.log('');
+  console.log('Public-client mode (no service key — URL + client_id only):');
+  console.log(
+    '  --abap-url <url>        ABAP system URL (required for public-client)',
+  );
+  console.log(
+    '  --uaa-url <url>         XSUAA tenant URL (required for public-client)',
+  );
+  console.log(
+    '  --client-id <id>        Public OAuth client_id (required for public-client)',
+  );
+  console.log('');
   console.log('Examples:');
   console.log('  # Auth code (default flow via service key)');
   console.log(
@@ -185,6 +198,18 @@ function showHelp(): void {
   console.log(
     '  mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap --credential',
   );
+  console.log('');
+  console.log('  # Public-client (no service key)');
+  console.log(
+    '  mcp-auth --abap-url https://...abap.eu10.hana.ondemand.com \\',
+  );
+  console.log(
+    '           --uaa-url  https://...authentication.eu10.hana.ondemand.com \\',
+  );
+  console.log(
+    "           --client-id 'sb-xs-...!b1|xsuaa-abapcp-prod-eu10!b4584' \\",
+  );
+  console.log('           --output ./mcp.env');
   console.log('');
   console.log('Notes:');
   console.log('  - --type determines the provider (xsuaa or abap)');
@@ -354,7 +379,11 @@ async function main() {
   const rawArgs = process.argv.slice(2);
 
   // Handle --version and --help first
-  if (rawArgs.length === 0 || rawArgs.includes('--help') || rawArgs.includes('-h')) {
+  if (
+    rawArgs.length === 0 ||
+    rawArgs.includes('--help') ||
+    rawArgs.includes('-h')
+  ) {
     showHelp();
     process.exit(0);
   }
@@ -431,6 +460,49 @@ async function main() {
     console.error('Error:', e.message);
     console.error('Run "mcp-auth --help" for usage information');
     process.exit(1);
+  }
+
+  if (options.mode === 'public-client') {
+    console.log(`📁 Output file: ${path.resolve(options.outputFile)}`);
+    console.log(`🌐 ABAP URL: ${options.abapUrl}`);
+    console.log(`🛡  UAA URL: ${options.uaaUrl}`);
+    console.log(`🆔 Client ID: ${options.clientId}`);
+    console.log(`🔑 Flow: authorization_code + PKCE (public client)`);
+
+    const tokens = await bootstrapPublicClient({
+      uaaUrl: options.uaaUrl!,
+      clientId: options.clientId!,
+      redirectPort: options.redirectPort,
+      browser: options.browser,
+    });
+
+    const envContent = renderPublicClientEnv({
+      abapUrl: options.abapUrl!,
+      uaaUrl: options.uaaUrl!,
+      clientId: options.clientId!,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    });
+
+    const outputPath = path.resolve(options.outputFile);
+    const outputDir = path.dirname(outputPath);
+    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(outputPath, envContent, 'utf8');
+
+    console.log(`✅ .env file created: ${outputPath}`);
+    console.log(`   - BTP_ABAP_URL=${options.abapUrl}`);
+    console.log(`   - BTP_UAA_URL=${options.uaaUrl}`);
+    console.log(`   - BTP_UAA_CLIENT_ID=${options.clientId}`);
+    console.log(`   - BTP_UAA_CLIENT_SECRET= (empty — public client)`);
+    console.log(`   - BTP_JWT_TOKEN=${tokens.accessToken.substring(0, 50)}...`);
+    if (tokens.refreshToken) {
+      console.log(
+        `   - BTP_REFRESH_TOKEN=${tokens.refreshToken.substring(0, 50)}...`,
+      );
+    } else {
+      console.log(`   - (no BTP_REFRESH_TOKEN — XSUAA did not issue one)`);
+    }
+    process.exit(0);
   }
 
   // Resolve paths
