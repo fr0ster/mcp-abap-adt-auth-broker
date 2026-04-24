@@ -68,6 +68,73 @@ function readBody(req) {
   });
 }
 
+// Base of the original ABAP request (used for reentrance-ticket exchange probes).
+const abapBase = `${original.protocol}//${original.host}`;
+
+/**
+ * Probe four candidate mechanisms for exchanging a reentrance-ticket for a
+ * server session (Set-Cookie). Runs each in sequence until one produces
+ * Set-Cookie, or all fail. Note: reentrance-ticket is typically one-shot,
+ * so only one variant will succeed per captured ticket. Failing variants
+ * usually return 401 without consuming the ticket, but that is not guaranteed.
+ */
+async function probeReentranceExchange(ticket) {
+  const variants = [
+    {
+      name: 'A) GET /sap/bc/adt/core/http/reentranceticket?reentrance-ticket=…',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/core/http/reentranceticket?reentrance-ticket=${encodeURIComponent(ticket)}`,
+      headers: {},
+    },
+    {
+      name: 'B) GET /sap/bc/adt/discovery?reentrance-ticket=…',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/discovery?reentrance-ticket=${encodeURIComponent(ticket)}`,
+      headers: {},
+    },
+    {
+      name: 'C) GET /sap/bc/adt/discovery  Authorization: Bearer <ticket>',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/discovery`,
+      headers: { Authorization: `Bearer ${ticket}` },
+    },
+    {
+      name: 'D) GET /sap/bc/adt/discovery  X-SAP-Reentrance-Ticket: <ticket>',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/discovery`,
+      headers: { 'X-SAP-Reentrance-Ticket': ticket },
+    },
+  ];
+
+  log('');
+  log('=== reentrance-ticket exchange probe ===');
+  for (const v of variants) {
+    log(`→ ${v.name}`);
+    try {
+      const r = await fetch(v.url, {
+        method: v.method,
+        headers: { accept: 'application/*', ...v.headers },
+        redirect: 'manual',
+      });
+      const setCookie =
+        r.headers.getSetCookie?.() ?? r.headers.get('set-cookie');
+      const cookieSummary = Array.isArray(setCookie)
+        ? setCookie.map((c) => c.split(';')[0]).join(' | ')
+        : setCookie || '(none)';
+      log(`   status    : ${r.status}`);
+      log(`   set-cookie: ${cookieSummary}`);
+      if (setCookie && (Array.isArray(setCookie) ? setCookie.length : true)) {
+        log(`   ✅ variant worked — this is the exchange mechanism`);
+        break;
+      }
+    } catch (e) {
+      log(`   error     : ${e.message}`);
+    }
+  }
+  log('=== end probe ===');
+  log('');
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const body = await readBody(req);
@@ -76,6 +143,11 @@ const server = http.createServer(async (req, res) => {
   log('  headers:', JSON.stringify(req.headers, null, 2));
   log('  query  :', JSON.stringify(Object.fromEntries(url.searchParams), null, 2));
   if (body) log('  body   :', body);
+
+  const ticket = url.searchParams.get('reentrance-ticket');
+  if (ticket) {
+    await probeReentranceExchange(ticket);
+  }
 
   const forwardTarget = new URL(origRedirect);
   for (const [k, v] of url.searchParams) forwardTarget.searchParams.append(k, v);
