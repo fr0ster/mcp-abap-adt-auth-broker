@@ -79,30 +79,71 @@ const abapBase = `${original.protocol}//${original.host}`;
  * usually return 401 without consuming the ticket, but that is not guaranteed.
  */
 async function probeReentranceExchange(ticket) {
+  const UA_ECLIPSE =
+    'Java/17.0.12 (Eclipse ADT)'; // Eclipse-like UA; approuter may key off this.
   const variants = [
     {
-      name: 'A) GET /sap/bc/adt/core/http/reentranceticket?reentrance-ticket=…',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/core/http/reentranceticket?reentrance-ticket=${encodeURIComponent(ticket)}`,
-      headers: {},
-    },
-    {
-      name: 'B) GET /sap/bc/adt/discovery?reentrance-ticket=…',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/discovery?reentrance-ticket=${encodeURIComponent(ticket)}`,
-      headers: {},
-    },
-    {
-      name: 'C) GET /sap/bc/adt/discovery  Authorization: Bearer <ticket>',
+      name: 'A) GET /discovery  Authorization: Bearer <ticket>',
       method: 'GET',
       url: `${abapBase}/sap/bc/adt/discovery`,
       headers: { Authorization: `Bearer ${ticket}` },
     },
     {
-      name: 'D) GET /sap/bc/adt/discovery  X-SAP-Reentrance-Ticket: <ticket>',
+      name: 'B) GET /discovery  Authorization: <ticket>  (raw, no scheme)',
       method: 'GET',
       url: `${abapBase}/sap/bc/adt/discovery`,
-      headers: { 'X-SAP-Reentrance-Ticket': ticket },
+      headers: { Authorization: ticket },
+    },
+    {
+      name: 'C) GET /discovery  Authorization: SAP-Logon-Ticket <ticket>',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/discovery`,
+      headers: { Authorization: `SAP-Logon-Ticket ${ticket}` },
+    },
+    {
+      name: 'D) GET /discovery  Authorization: Basic base64(":"+ticket)',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/discovery`,
+      headers: {
+        Authorization: `Basic ${Buffer.from(`:${ticket}`).toString('base64')}`,
+      },
+    },
+    {
+      name: 'E) GET /discovery  Cookie: MYSAPSSO2=<ticket>',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/discovery`,
+      headers: { Cookie: `MYSAPSSO2=${ticket}` },
+    },
+    {
+      name: 'F) GET /discovery  Cookie: sap-reentrance-ticket=<ticket>',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/discovery`,
+      headers: { Cookie: `sap-reentrance-ticket=${ticket}` },
+    },
+    {
+      name: 'G) GET /discovery?reentrance-ticket=<ticket>',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/discovery?reentrance-ticket=${encodeURIComponent(ticket)}`,
+      headers: {},
+    },
+    {
+      name: 'H) GET /sap/bc/adt/core/http/reentranceticket?reentrance-ticket=<ticket>',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/core/http/reentranceticket?reentrance-ticket=${encodeURIComponent(ticket)}`,
+      headers: {},
+    },
+    {
+      name: 'I) GET /discovery  Authorization: Bearer <ticket>  +Eclipse UA',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/discovery`,
+      headers: { Authorization: `Bearer ${ticket}`, 'User-Agent': UA_ECLIPSE },
+    },
+    {
+      name: 'J) POST /sap/bc/adt/core/http/reentranceticket  body=ticket',
+      method: 'POST',
+      url: `${abapBase}/sap/bc/adt/core/http/reentranceticket`,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `reentrance-ticket=${encodeURIComponent(ticket)}`,
     },
   ];
 
@@ -114,19 +155,20 @@ async function probeReentranceExchange(ticket) {
       const r = await fetch(v.url, {
         method: v.method,
         headers: { accept: 'application/*', ...v.headers },
+        body: v.body,
         redirect: 'manual',
       });
       const setCookie =
         r.headers.getSetCookie?.() ?? r.headers.get('set-cookie');
       const allHeaders = Object.fromEntries(r.headers.entries());
       const bodyText = await r.text();
-      const bodySnippet = bodyText.slice(0, 400).replace(/\s+/g, ' ');
 
       log(`   status    : ${r.status}`);
       log(`   location  : ${r.headers.get('location') || '(none)'}`);
       log(`   set-cookie: ${JSON.stringify(setCookie) || '(none)'}`);
       log(`   all-hdrs  : ${JSON.stringify(allHeaders)}`);
-      log(`   body[0..400]: ${bodySnippet}${bodyText.length > 400 ? ' …' : ''}`);
+      log(`   body (${bodyText.length} bytes):`);
+      log(bodyText.length > 3000 ? `${bodyText.slice(0, 3000)}…` : bodyText);
 
       const gotCookie =
         setCookie && (Array.isArray(setCookie) ? setCookie.length > 0 : true);
