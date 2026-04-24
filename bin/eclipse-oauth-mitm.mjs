@@ -84,139 +84,52 @@ const abapRuntimeBase = abapBase.replace('.abap-web.', '.abap.');
  * usually return 401 without consuming the ticket, but that is not guaranteed.
  */
 async function probeReentranceExchange(ticket) {
-  const UA_ECLIPSE =
-    'Java/17.0.12 (Eclipse ADT)'; // Eclipse-like UA; approuter may key off this.
+  // Ticket is single-use: one probe will consume it, the rest will see
+  // "already used". Therefore we run only a FEW focused variants that
+  // mimic Eclipse's exact /sessions request (per live log capture),
+  // varying only the placement of the ticket itself.
+  const cacheBuster = String(Date.now()) + '0';
+  const eclipseHeaders = {
+    Accept:
+      'application/vnd.sap.adt.core.http.session.v3+xml, application/vnd.sap.adt.core.http.session.v2+xml, application/vnd.sap.adt.core.http.session.v1+xml',
+    'User-Agent':
+      'Eclipse/4.39.0.v20260226-0420 (linux; x86_64; Java 21.0.7) ADT/3.56.0 (devedition)',
+    'sap-adt-purpose': 'preflight_logon',
+    'sap-client': '100',
+    'sap-language': 'EN',
+    'x-sap-security-session': 'create',
+  };
+  const sessionsUrl = (qs) =>
+    `${abapRuntimeBase}/sap/bc/adt/core/http/sessions?_=${cacheBuster}${qs ? `&${qs}` : ''}`;
+
   const variants = [
     {
-      name: 'A) GET /discovery  Authorization: Bearer <ticket>',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/discovery`,
-      headers: { Authorization: `Bearer ${ticket}` },
+      name: '1) /sessions  Cookie: MYSAPSSO2=<ticket>',
+      url: sessionsUrl(),
+      headers: { ...eclipseHeaders, Cookie: `MYSAPSSO2=${ticket}` },
     },
     {
-      name: 'B) GET /discovery  Authorization: <ticket>  (raw, no scheme)',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/discovery`,
-      headers: { Authorization: ticket },
+      name: '2) /sessions  Cookie: sap-reentrance-ticket=<ticket>',
+      url: sessionsUrl(),
+      headers: { ...eclipseHeaders, Cookie: `sap-reentrance-ticket=${ticket}` },
     },
     {
-      name: 'C) GET /discovery  Authorization: SAP-Logon-Ticket <ticket>',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/discovery`,
-      headers: { Authorization: `SAP-Logon-Ticket ${ticket}` },
+      name: '3) /sessions  Authorization: Bearer <ticket>',
+      url: sessionsUrl(),
+      headers: { ...eclipseHeaders, Authorization: `Bearer ${ticket}` },
     },
     {
-      name: 'D) GET /discovery  Authorization: Basic base64(":"+ticket)',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/discovery`,
+      name: '4) /sessions  Authorization: SAP-Logon-Ticket <ticket>',
+      url: sessionsUrl(),
       headers: {
-        Authorization: `Basic ${Buffer.from(`:${ticket}`).toString('base64')}`,
+        ...eclipseHeaders,
+        Authorization: `SAP-Logon-Ticket ${ticket}`,
       },
     },
     {
-      name: 'E) GET /discovery  Cookie: MYSAPSSO2=<ticket>',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/discovery`,
-      headers: { Cookie: `MYSAPSSO2=${ticket}` },
-    },
-    {
-      name: 'F) GET /discovery  Cookie: sap-reentrance-ticket=<ticket>',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/discovery`,
-      headers: { Cookie: `sap-reentrance-ticket=${ticket}` },
-    },
-    {
-      name: 'G) GET /discovery?reentrance-ticket=<ticket>',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/discovery?reentrance-ticket=${encodeURIComponent(ticket)}`,
-      headers: {},
-    },
-    {
-      name: 'H) GET /sap/bc/adt/core/http/reentranceticket?reentrance-ticket=<ticket>',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/core/http/reentranceticket?reentrance-ticket=${encodeURIComponent(ticket)}`,
-      headers: {},
-    },
-    {
-      name: 'I) GET /discovery  Authorization: Bearer <ticket>  +Eclipse UA',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/discovery`,
-      headers: { Authorization: `Bearer ${ticket}`, 'User-Agent': UA_ECLIPSE },
-    },
-    {
-      name: 'J) POST /sap/bc/adt/core/http/reentranceticket  body=ticket',
-      method: 'POST',
-      url: `${abapBase}/sap/bc/adt/core/http/reentranceticket`,
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `reentrance-ticket=${encodeURIComponent(ticket)}`,
-    },
-    // --- Probes against the ABAP runtime host (not the approuter) ---
-    {
-      name: `K) GET ${abapRuntimeBase}/sap/bc/adt/discovery  Authorization: Bearer <ticket>`,
-      method: 'GET',
-      url: `${abapRuntimeBase}/sap/bc/adt/discovery`,
-      headers: { Authorization: `Bearer ${ticket}` },
-    },
-    {
-      name: `L) GET ${abapRuntimeBase}/sap/bc/adt/discovery?reentrance-ticket=<ticket>`,
-      method: 'GET',
-      url: `${abapRuntimeBase}/sap/bc/adt/discovery?reentrance-ticket=${encodeURIComponent(ticket)}`,
-      headers: {},
-    },
-    {
-      name: `M) GET ${abapRuntimeBase}/sap/bc/adt/core/http/reentranceticket?reentrance-ticket=<ticket>`,
-      method: 'GET',
-      url: `${abapRuntimeBase}/sap/bc/adt/core/http/reentranceticket?reentrance-ticket=${encodeURIComponent(ticket)}`,
-      headers: {},
-    },
-    // --- sap- prefix variant on approuter ---
-    {
-      name: 'N) GET /discovery?sap-reentrance-ticket=<ticket> (approuter)',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/discovery?sap-reentrance-ticket=${encodeURIComponent(ticket)}`,
-      headers: {},
-    },
-    {
-      name: 'O) GET /discovery  Authorization: ReEntranceTicket <ticket>',
-      method: 'GET',
-      url: `${abapBase}/sap/bc/adt/discovery`,
-      headers: { Authorization: `ReEntranceTicket ${ticket}` },
-    },
-    // --- Probes against runtime's /sap/bc/adt/core/http/sessions ---
-    // (this is the endpoint Eclipse's log shows being hit right after
-    // the public virtualhost call; so this is the real exchange point)
-    {
-      name: 'P) GET <runtime>/sap/bc/adt/core/http/sessions?reentrance-ticket=<ticket>',
-      method: 'GET',
-      url: `${abapRuntimeBase}/sap/bc/adt/core/http/sessions?reentrance-ticket=${encodeURIComponent(ticket)}`,
-      headers: {},
-    },
-    {
-      name: 'Q) GET <runtime>/sap/bc/adt/core/http/sessions?sap-reentrance-ticket=<ticket>',
-      method: 'GET',
-      url: `${abapRuntimeBase}/sap/bc/adt/core/http/sessions?sap-reentrance-ticket=${encodeURIComponent(ticket)}`,
-      headers: {},
-    },
-    {
-      name: 'R) GET <runtime>/sap/bc/adt/core/http/sessions  Cookie: sap-reentrance-ticket=<ticket>',
-      method: 'GET',
-      url: `${abapRuntimeBase}/sap/bc/adt/core/http/sessions`,
-      headers: { Cookie: `sap-reentrance-ticket=${ticket}` },
-    },
-    {
-      name: 'S) GET <runtime>/sap/bc/adt/core/http/sessions  X-SAP-Reentrance-Ticket: <ticket>',
-      method: 'GET',
-      url: `${abapRuntimeBase}/sap/bc/adt/core/http/sessions`,
-      headers: { 'X-SAP-Reentrance-Ticket': ticket },
-    },
-    {
-      name: 'T) GET <runtime>/sap/bc/adt/core/http/sessions  Authorization: Bearer <ticket>  +x-sap-security-session:create',
-      method: 'GET',
-      url: `${abapRuntimeBase}/sap/bc/adt/core/http/sessions`,
-      headers: {
-        Authorization: `Bearer ${ticket}`,
-        'x-sap-security-session': 'create',
-      },
+      name: '5) /sessions?reentrance-ticket=<ticket>',
+      url: sessionsUrl(`reentrance-ticket=${encodeURIComponent(ticket)}`),
+      headers: eclipseHeaders,
     },
   ];
 
@@ -226,8 +139,8 @@ async function probeReentranceExchange(ticket) {
     log(`→ ${v.name}`);
     try {
       const r = await fetch(v.url, {
-        method: v.method,
-        headers: { accept: 'application/*', ...v.headers },
+        method: v.method ?? 'GET',
+        headers: v.headers,
         body: v.body,
         redirect: 'manual',
       });
