@@ -70,6 +70,11 @@ function readBody(req) {
 
 // Base of the original ABAP request (used for reentrance-ticket exchange probes).
 const abapBase = `${original.protocol}//${original.host}`;
+// If the request went to <uuid>.abap-web.<region>.hana.ondemand.com, the
+// corresponding ABAP *runtime* host is <uuid>.abap.<region>.hana.ondemand.com.
+// ADT's reentrance-ticket endpoint lives on the runtime (ICF), while
+// the approuter (abap-web) just proxies browser-level OAuth. Probe both.
+const abapRuntimeBase = abapBase.replace('.abap-web.', '.abap.');
 
 /**
  * Probe four candidate mechanisms for exchanging a reentrance-ticket for a
@@ -144,6 +149,38 @@ async function probeReentranceExchange(ticket) {
       url: `${abapBase}/sap/bc/adt/core/http/reentranceticket`,
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: `reentrance-ticket=${encodeURIComponent(ticket)}`,
+    },
+    // --- Probes against the ABAP runtime host (not the approuter) ---
+    {
+      name: `K) GET ${abapRuntimeBase}/sap/bc/adt/discovery  Authorization: Bearer <ticket>`,
+      method: 'GET',
+      url: `${abapRuntimeBase}/sap/bc/adt/discovery`,
+      headers: { Authorization: `Bearer ${ticket}` },
+    },
+    {
+      name: `L) GET ${abapRuntimeBase}/sap/bc/adt/discovery?reentrance-ticket=<ticket>`,
+      method: 'GET',
+      url: `${abapRuntimeBase}/sap/bc/adt/discovery?reentrance-ticket=${encodeURIComponent(ticket)}`,
+      headers: {},
+    },
+    {
+      name: `M) GET ${abapRuntimeBase}/sap/bc/adt/core/http/reentranceticket?reentrance-ticket=<ticket>`,
+      method: 'GET',
+      url: `${abapRuntimeBase}/sap/bc/adt/core/http/reentranceticket?reentrance-ticket=${encodeURIComponent(ticket)}`,
+      headers: {},
+    },
+    // --- sap- prefix variant on approuter ---
+    {
+      name: 'N) GET /discovery?sap-reentrance-ticket=<ticket> (approuter)',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/discovery?sap-reentrance-ticket=${encodeURIComponent(ticket)}`,
+      headers: {},
+    },
+    {
+      name: 'O) GET /discovery  Authorization: ReEntranceTicket <ticket>',
+      method: 'GET',
+      url: `${abapBase}/sap/bc/adt/discovery`,
+      headers: { Authorization: `ReEntranceTicket ${ticket}` },
     },
   ];
 
