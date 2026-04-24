@@ -118,12 +118,19 @@ async function probeReentranceExchange(ticket) {
       });
       const setCookie =
         r.headers.getSetCookie?.() ?? r.headers.get('set-cookie');
-      const cookieSummary = Array.isArray(setCookie)
-        ? setCookie.map((c) => c.split(';')[0]).join(' | ')
-        : setCookie || '(none)';
+      const allHeaders = Object.fromEntries(r.headers.entries());
+      const bodyText = await r.text();
+      const bodySnippet = bodyText.slice(0, 400).replace(/\s+/g, ' ');
+
       log(`   status    : ${r.status}`);
-      log(`   set-cookie: ${cookieSummary}`);
-      if (setCookie && (Array.isArray(setCookie) ? setCookie.length : true)) {
+      log(`   location  : ${r.headers.get('location') || '(none)'}`);
+      log(`   set-cookie: ${JSON.stringify(setCookie) || '(none)'}`);
+      log(`   all-hdrs  : ${JSON.stringify(allHeaders)}`);
+      log(`   body[0..400]: ${bodySnippet}${bodyText.length > 400 ? ' …' : ''}`);
+
+      const gotCookie =
+        setCookie && (Array.isArray(setCookie) ? setCookie.length > 0 : true);
+      if (gotCookie) {
         log(`   ✅ variant worked — this is the exchange mechanism`);
         break;
       }
