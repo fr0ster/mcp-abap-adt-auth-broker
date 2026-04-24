@@ -102,34 +102,81 @@ async function probeReentranceExchange(ticket) {
   const sessionsUrl = (qs) =>
     `${abapRuntimeBase}/sap/bc/adt/core/http/sessions?_=${cacheBuster}${qs ? `&${qs}` : ''}`;
 
+  const b64 = (s) => Buffer.from(s).toString('base64');
   const variants = [
+    // Basic-auth variants (Eclipse might be using ticket as Basic password)
     {
-      name: '1) /sessions  Cookie: MYSAPSSO2=<ticket>',
+      name: '1) /sessions  Authorization: Basic base64("x:<ticket>")',
       url: sessionsUrl(),
-      headers: { ...eclipseHeaders, Cookie: `MYSAPSSO2=${ticket}` },
+      headers: { ...eclipseHeaders, Authorization: `Basic ${b64(`x:${ticket}`)}` },
     },
     {
-      name: '2) /sessions  Cookie: sap-reentrance-ticket=<ticket>',
-      url: sessionsUrl(),
-      headers: { ...eclipseHeaders, Cookie: `sap-reentrance-ticket=${ticket}` },
-    },
-    {
-      name: '3) /sessions  Authorization: Bearer <ticket>',
-      url: sessionsUrl(),
-      headers: { ...eclipseHeaders, Authorization: `Bearer ${ticket}` },
-    },
-    {
-      name: '4) /sessions  Authorization: SAP-Logon-Ticket <ticket>',
+      name: '2) /sessions  Authorization: Basic base64("reentrance:<ticket>")',
       url: sessionsUrl(),
       headers: {
         ...eclipseHeaders,
-        Authorization: `SAP-Logon-Ticket ${ticket}`,
+        Authorization: `Basic ${b64(`reentrance:${ticket}`)}`,
       },
     },
     {
-      name: '5) /sessions?reentrance-ticket=<ticket>',
-      url: sessionsUrl(`reentrance-ticket=${encodeURIComponent(ticket)}`),
+      name: '3) /sessions  Authorization: Basic base64("<ticket>:")',
+      url: sessionsUrl(),
+      headers: { ...eclipseHeaders, Authorization: `Basic ${b64(`${ticket}:`)}` },
+    },
+    // SID-specific cookie names
+    {
+      name: '4) /sessions  Cookie: SAP_SESSIONID_TRL_100=<ticket>',
+      url: sessionsUrl(),
+      headers: { ...eclipseHeaders, Cookie: `SAP_SESSIONID_TRL_100=${ticket}` },
+    },
+    {
+      name: '5) /sessions  Cookie: sap-contextid=<ticket>',
+      url: sessionsUrl(),
+      headers: { ...eclipseHeaders, Cookie: `sap-contextid=${ticket}` },
+    },
+    {
+      name: '6) /sessions  Cookie: sap-loginticket=<ticket>',
+      url: sessionsUrl(),
+      headers: { ...eclipseHeaders, Cookie: `sap-loginticket=${ticket}` },
+    },
+    // Exotic Authorization schemes
+    {
+      name: '7) /sessions  Authorization: Ticket <ticket>',
+      url: sessionsUrl(),
+      headers: { ...eclipseHeaders, Authorization: `Ticket ${ticket}` },
+    },
+    {
+      name: '8) /sessions  Authorization: Reentrance <ticket>',
+      url: sessionsUrl(),
+      headers: { ...eclipseHeaders, Authorization: `Reentrance ${ticket}` },
+    },
+    // Custom SAP-specific headers
+    {
+      name: '9) /sessions  X-SAP-ADT-REENTRANCE-TICKET: <ticket>',
+      url: sessionsUrl(),
+      headers: { ...eclipseHeaders, 'X-SAP-ADT-REENTRANCE-TICKET': ticket },
+    },
+    {
+      name: '10) /sessions  sap-adt-reentrance-ticket: <ticket>',
+      url: sessionsUrl(),
+      headers: { ...eclipseHeaders, 'sap-adt-reentrance-ticket': ticket },
+    },
+    // Different endpoint: the reentranceticket endpoint on runtime without redirect-url
+    {
+      name: '11) GET <runtime>/sap/bc/adt/core/http/reentranceticket?reentrance-ticket=<ticket>',
+      url: `${abapRuntimeBase}/sap/bc/adt/core/http/reentranceticket?reentrance-ticket=${encodeURIComponent(ticket)}`,
       headers: eclipseHeaders,
+    },
+    // POST with ticket in body (form-encoded)
+    {
+      name: '12) POST /sessions  body=reentrance-ticket=<ticket>',
+      method: 'POST',
+      url: sessionsUrl(),
+      headers: {
+        ...eclipseHeaders,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: `reentrance-ticket=${encodeURIComponent(ticket)}`,
     },
   ];
 
