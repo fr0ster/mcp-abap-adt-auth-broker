@@ -182,6 +182,42 @@ async function probeReentranceExchange(ticket) {
       url: `${abapBase}/sap/bc/adt/discovery`,
       headers: { Authorization: `ReEntranceTicket ${ticket}` },
     },
+    // --- Probes against runtime's /sap/bc/adt/core/http/sessions ---
+    // (this is the endpoint Eclipse's log shows being hit right after
+    // the public virtualhost call; so this is the real exchange point)
+    {
+      name: 'P) GET <runtime>/sap/bc/adt/core/http/sessions?reentrance-ticket=<ticket>',
+      method: 'GET',
+      url: `${abapRuntimeBase}/sap/bc/adt/core/http/sessions?reentrance-ticket=${encodeURIComponent(ticket)}`,
+      headers: {},
+    },
+    {
+      name: 'Q) GET <runtime>/sap/bc/adt/core/http/sessions?sap-reentrance-ticket=<ticket>',
+      method: 'GET',
+      url: `${abapRuntimeBase}/sap/bc/adt/core/http/sessions?sap-reentrance-ticket=${encodeURIComponent(ticket)}`,
+      headers: {},
+    },
+    {
+      name: 'R) GET <runtime>/sap/bc/adt/core/http/sessions  Cookie: sap-reentrance-ticket=<ticket>',
+      method: 'GET',
+      url: `${abapRuntimeBase}/sap/bc/adt/core/http/sessions`,
+      headers: { Cookie: `sap-reentrance-ticket=${ticket}` },
+    },
+    {
+      name: 'S) GET <runtime>/sap/bc/adt/core/http/sessions  X-SAP-Reentrance-Ticket: <ticket>',
+      method: 'GET',
+      url: `${abapRuntimeBase}/sap/bc/adt/core/http/sessions`,
+      headers: { 'X-SAP-Reentrance-Ticket': ticket },
+    },
+    {
+      name: 'T) GET <runtime>/sap/bc/adt/core/http/sessions  Authorization: Bearer <ticket>  +x-sap-security-session:create',
+      method: 'GET',
+      url: `${abapRuntimeBase}/sap/bc/adt/core/http/sessions`,
+      headers: {
+        Authorization: `Bearer ${ticket}`,
+        'x-sap-security-session': 'create',
+      },
+    },
   ];
 
   log('');
@@ -207,12 +243,22 @@ async function probeReentranceExchange(ticket) {
       log(`   body (${bodyText.length} bytes):`);
       log(bodyText.length > 3000 ? `${bodyText.slice(0, 3000)}…` : bodyText);
 
-      const gotCookie =
-        setCookie && (Array.isArray(setCookie) ? setCookie.length > 0 : true);
-      if (gotCookie) {
-        log(`   ✅ variant worked — this is the exchange mechanism`);
-        break;
+      // Only a real SSO session cookie counts as success. Trace/context
+      // cookies (sap-usercontext, sap-login-XSRF_*) are set on any response
+      // from the ICF and do NOT mean we authenticated.
+      const cookieList = Array.isArray(setCookie)
+        ? setCookie
+        : setCookie
+          ? [setCookie]
+          : [];
+      const sessionCookie = cookieList.find((c) =>
+        /^(MYSAPSSO2|JSESSIONID|SAP_SESSIONID|sap-contextid)=/i.test(c),
+      );
+      if (sessionCookie) {
+        log(`   ✅ variant worked — real session cookie: ${sessionCookie.split(';')[0]}`);
       }
+      // Do NOT break — continue probing all variants so we see the full
+      // picture; trial systems don't penalize failed attempts.
     } catch (e) {
       log(`   error     : ${e.message}`);
     }
