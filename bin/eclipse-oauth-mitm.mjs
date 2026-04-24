@@ -36,11 +36,25 @@ try {
   process.exit(2);
 }
 
-const origRedirect = original.searchParams.get('redirect_uri');
-if (!origRedirect) {
-  console.error('URL has no redirect_uri query parameter — nothing to rewrite');
+// Autodetect which query param carries the callback URL.
+// OAuth2 uses `redirect_uri`; SAP ADT reentrance-ticket uses `redirect-url`;
+// some flows use `redirect_url` or `callback_url`.
+const REDIRECT_PARAM_CANDIDATES = [
+  'redirect_uri',
+  'redirect-url',
+  'redirect_url',
+  'callback_url',
+];
+const redirectParamName = REDIRECT_PARAM_CANDIDATES.find((p) =>
+  original.searchParams.has(p),
+);
+if (!redirectParamName) {
+  console.error(
+    `URL has no redirect param — looked for any of: ${REDIRECT_PARAM_CANDIDATES.join(', ')}`,
+  );
   process.exit(2);
 }
+const origRedirect = original.searchParams.get(redirectParamName);
 
 function log(...a) {
   console.log(`[mitm] ${new Date().toISOString()}`, ...a);
@@ -56,14 +70,8 @@ function readBody(req) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  if (url.pathname !== '/callback') {
-    res.writeHead(404, { 'content-type': 'text/plain' });
-    res.end(`not found: ${url.pathname}\n`);
-    return;
-  }
-
   const body = await readBody(req);
-  log('callback received');
+  log('callback received on', url.pathname);
   log('  method :', req.method);
   log('  headers:', JSON.stringify(req.headers, null, 2));
   log('  query  :', JSON.stringify(Object.fromEntries(url.searchParams), null, 2));
@@ -89,13 +97,21 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(0, '127.0.0.1', () => {
   const { port } = server.address();
-  const myRedirect = `http://localhost:${port}/callback`;
+  // Preserve the original URL path so the rewritten URL is as close to the
+  // original as possible; our listener accepts any path anyway.
+  let origPath = '/callback';
+  try {
+    origPath = new URL(origRedirect).pathname || '/callback';
+  } catch {
+    // origRedirect not a full URL — fall back to /callback
+  }
+  const myRedirect = `http://localhost:${port}${origPath}`;
 
   const rewritten = new URL(original.toString());
-  rewritten.searchParams.set('redirect_uri', myRedirect);
+  rewritten.searchParams.set(redirectParamName, myRedirect);
 
-  log('listening on        :', myRedirect);
-  log('original redirect_uri:', origRedirect);
+  log('listening on              :', myRedirect);
+  log(`original ${redirectParamName.padEnd(16)}:`, origRedirect);
   log('');
   console.log(rewritten.toString());
   console.log('');
