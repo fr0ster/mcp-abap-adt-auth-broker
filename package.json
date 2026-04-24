@@ -50,6 +50,7 @@
     "test:device-code": "sh tests/keycloak/run-oidc.sh",
     "test:saml-pure": "sh tests/keycloak/run-saml.sh",
     "test:sso": "sh tests/keycloak/run-interactive.sh",
+    "test:integration:public-client": "node scripts/run-public-client-integration.mjs",
     "prepublishOnly": "npm run build",
     "prepack": "npm run build",
     "generate-env": "tsx bin/generate-env-from-service-key.ts"
