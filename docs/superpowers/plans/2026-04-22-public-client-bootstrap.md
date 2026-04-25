@@ -6,6 +6,8 @@
 
 **Architecture:** No new providers or stores. CLI bypasses `AuthBroker` and `IServiceKeyStore` for this mode entirely — it instantiates `OidcBrowserProvider` directly with explicit `authorizationEndpoint` / `tokenEndpoint` (so OIDC discovery is skipped), drives the login, and writes env vars using existing `BTP_AUTHORIZATION_VARS` / `BTP_CONNECTION_VARS` constants. Output `.env` has `BTP_UAA_CLIENT_SECRET=` empty.
 
+**Mode boundaries:** Public-client mode always writes `.env` output and always uses browser-based authorization-code + PKCE. In this mode, `--format json`, `--credential`, and `--service-url` are not supported and must be rejected by argument parsing rather than silently ignored.
+
 **Tech Stack:** TypeScript, Node.js, Jest (`ts-jest`), `@mcp-abap-adt/auth-providers` (`OidcBrowserProvider`), `@mcp-abap-adt/auth-stores` (constants only).
 
 ---
@@ -256,6 +258,38 @@ describe('parseArgs — public-client mode', () => {
     expect(opts.serviceKeyPath).toBe('key.json');
     expect(opts.authType).toBe('xsuaa');
   });
+
+  it('rejects unsupported flags in public-client mode', () => {
+    expect(() =>
+      parseArgs([
+        '--abap-url', 'x',
+        '--uaa-url', 'y',
+        '--client-id', 'z',
+        '--credential',
+        '--output', 'o.env',
+      ]),
+    ).toThrow(/--credential/);
+
+    expect(() =>
+      parseArgs([
+        '--abap-url', 'x',
+        '--uaa-url', 'y',
+        '--client-id', 'z',
+        '--format', 'json',
+        '--output', 'o.env',
+      ]),
+    ).toThrow(/--format json/);
+
+    expect(() =>
+      parseArgs([
+        '--abap-url', 'x',
+        '--uaa-url', 'y',
+        '--client-id', 'z',
+        '--service-url', 'https://ignored.example',
+        '--output', 'o.env',
+      ]),
+    ).toThrow(/--service-url/);
+  });
 });
 ```
 
@@ -372,6 +406,15 @@ export function parseArgs(args: string[]): McpAuthOptions {
     if (!abapUrl) throw new Error('--abap-url is required in public-client mode');
     if (!uaaUrl)  throw new Error('--uaa-url is required in public-client mode');
     if (!clientId) throw new Error('--client-id is required in public-client mode');
+    if (credential) {
+      throw new Error('--credential is not supported in public-client mode');
+    }
+    if (format !== 'env') {
+      throw new Error('--format json is not supported in public-client mode');
+    }
+    if (serviceUrl) {
+      throw new Error('--service-url is not supported in public-client mode; use --abap-url instead');
+    }
     return {
       mode: 'public-client',
       abapUrl, uaaUrl, clientId, outputFile,
@@ -401,7 +444,7 @@ In `bin/mcp-auth.ts`:
 - [ ] **Step 5: Run tests and type-check**
 
 Run: `npm test -- parseArgs.test.ts && npm run test:check`
-Expected: 4 tests pass; no type errors.
+Expected: 5 tests pass; no type errors.
 
 - [ ] **Step 6: Commit**
 
@@ -561,9 +604,7 @@ const CLIENT_ID  = process.env.TEST_CLIENT_ID;
       const adt = await fetch(`${ABAP_URL!.replace(/\/$/,'')}/sap/bc/adt/discovery`, {
         headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/atomsvc+xml' },
       });
-      expect([200, 401, 403]).toContain(adt.status);
-      // Record the actual status for the test report; 200 = full success,
-      // 401/403 = token reached the server but scope/audience may be off.
+      expect(adt.status).toBe(200);
       console.log(`ADT discovery status: ${adt.status}`);
     });
   },
@@ -612,7 +653,8 @@ Use the URL/`client_id` from the spec's "Probe Findings" section. Run the integr
 
 - `.env` file is written.
 - `BTP_JWT_TOKEN` is non-empty.
-- ADT discovery returned `200` (full success). If `401`/`403`, the token reached the server but scope/audience needs review — record it; this is signal, not failure of Phase 1.
+- ADT discovery returned `200` (full success for Phase 1 acceptance).
+- If `401`/`403`, record that outcome in the spec as probe evidence, but do **not** mark Phase 1 complete; audience/scope remains unresolved.
 
 - [ ] **Step 3: Record refresh-token outcome**
 
@@ -637,7 +679,7 @@ git commit -m "docs: record observed end-to-end outcome for public-client target
 Skip this task if Task 6 recorded "no refresh".
 
 **Files:**
-- Use existing `AuthBroker` and `BtpSessionStore` (no new files).
+- Use existing `AuthBroker` and BTP session-store implementation (no new production files unless a tolerance fix is required).
 
 - [ ] **Step 1: Write a small script in the integration test**
 
@@ -646,17 +688,16 @@ Append a second `it(...)` to `publicClientBootstrap.integration.test.ts` that, a
 ```ts
 it('subsequent broker call refreshes silently when refresh_token was issued', async () => {
   // Re-use outFile from previous it() — restructure with describe/beforeAll if needed.
-  // Construct AuthBroker exactly the way mcp-abap-adt does in
-  // /home/okyslytsia/prj/mcp-abap-adt/src/lib/auth/brokerFactory.ts:420
-  // — i.e. BtpSessionStore + an OidcBrowserProvider configured with
-  // empty client_secret. Call broker.getToken(destination); expect a JWT,
-  // expect no browser was launched (assert via `browser: 'none'`).
+  // Construct AuthBroker with the same local contracts the produced env is expected
+  // to satisfy: a BTP session-store implementation reading that env file plus
+  // an OidcBrowserProvider configured for the same public client with browser:'none'.
+  // Call broker.getToken(destination); expect a JWT and no browser interaction.
 });
 ```
 
 - [ ] **Step 2: Address any tolerance gap discovered**
 
-If the broker or `BtpSessionStore` rejects the empty `BTP_UAA_CLIENT_SECRET`, find the validation site and relax it to "secret optional when client_id present". Add a focused unit test next to the change. Keep the change one-file, one-call-site if possible. If the gap proves wider than one site, stop and revisit the spec — do not start a refactor here.
+If the broker or BTP session-store implementation rejects the empty `BTP_UAA_CLIENT_SECRET`, find the validation site and relax it to "secret optional when client_id present". Also check the broker persistence path: `AuthBroker` currently skips saving authorization config when `uaaClientSecret` is missing, so this condition is an expected hotspot, not a surprise. Add a focused unit test next to the change. Keep the change one-file, one-call-site if possible. If the gap proves wider than one site, stop and revisit the spec — do not start a refactor here.
 
 - [ ] **Step 3: Commit**
 
@@ -708,6 +749,6 @@ git commit -m "docs: document public-client mode in README"
   - Storage → Tasks 1, 7
   - Refresh / `allowBrowserAuth` → Task 7 (and design note in Task 4)
   - Probe-target validation → Tasks 5, 6
-- **Placeholders:** Task 7 step 1 deliberately points the implementer at an existing file in another package for the construction pattern, with the exact path. Task 6 has no code because it is a manual verification step.
+- **Placeholders:** Task 7 step 1 intentionally describes the required local contract instead of depending on a specific file in another package. Task 6 has no code because it is a manual verification step.
 - **Type consistency:** `bootstrapPublicClient` returns `{accessToken, refreshToken?}`; `renderPublicClientEnv` consumes the same names. `parseArgs` adds a `mode: 'service-key' | 'public-client'` discriminator that the bin file branches on.
-- **Tolerance gap risk:** Task 7 explicitly bounds it: if the gap is bigger than one call site, stop and revisit the spec.
+- **Tolerance gap risk:** Task 7 explicitly bounds it: if the gap is bigger than one call site, stop and revisit the spec. Check both session-store validation and broker persistence gating around missing `uaaClientSecret`.
