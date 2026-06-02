@@ -836,6 +836,40 @@ describe('AuthBroker', () => {
       expect(mockSessionStore.setConnectionConfig).toHaveBeenCalled();
     });
 
+    it('should NOT retry via service key when the session login fails interactively (no duplicate browser login)', async () => {
+      const authConfig: IAuthorizationConfig = {
+        uaaUrl: 'https://uaa.test.com',
+        uaaClientId: 'client123',
+        uaaClientSecret: 'secret123',
+        refreshToken: 'refresh-token-123',
+      };
+
+      mockSessionStore.getConnectionConfig.mockResolvedValue({
+        serviceUrl: 'https://test.sap.com',
+        authorizationToken: '',
+      });
+      mockSessionStore.getAuthorizationConfig.mockResolvedValue(authConfig);
+      mockServiceKeyStore.getAuthorizationConfig?.mockResolvedValue(authConfig);
+
+      // The session login times out (an interactive failure). A second
+      // provider.getTokens() would start a duplicate browser login on the same
+      // redirect port and mask the real cause — it must NOT be attempted.
+      const timeoutError = new Error(
+        'Authentication timeout after 30 seconds. Please try again.',
+      );
+      mockTokenProvider.getTokens.mockRejectedValueOnce(timeoutError);
+      // Would resolve on a (wrong) 2nd attempt — present to prove it isn't used.
+      mockTokenProvider.getTokens.mockResolvedValueOnce({
+        authorizationToken: 'should-not-be-used',
+        authType: 'authorization_code',
+      });
+
+      await expect(broker.getToken('TEST')).rejects.toThrow(
+        /Authentication timeout/,
+      );
+      expect(mockTokenProvider.getTokens).toHaveBeenCalledTimes(1);
+    });
+
     it('should throw error when session and service key attempts fail', async () => {
       const authConfig: IAuthorizationConfig = {
         uaaUrl: 'https://uaa.test.com',

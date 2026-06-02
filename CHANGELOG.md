@@ -11,6 +11,11 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-06-02
+
+### Fixed
+- `getToken`: no longer retries via the `serviceKey` strategy after the `session` strategy fails with an *interactive* browser-login error (timeout / `BROWSER_AUTH_ERROR`). Both strategies call the same `tokenProvider.getTokens()`, so the retry could not succeed and merely started a duplicate browser login on the same redirect port — surfacing a misleading `Port <n> is already in use` instead of the real cause. Transient/non-interactive session failures still fall through to the `serviceKey` attempt.
+
 ## [1.0.5] - 2026-02-12
 
 ### Added
