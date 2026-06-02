@@ -60,6 +60,23 @@ function getErrorMessage(error: any): string {
 }
 
 /**
+ * Whether an error represents a failed *interactive* browser login (the user
+ * did not complete the OAuth flow / it timed out), as opposed to a transient or
+ * configuration error. Such failures must not be retried via a second
+ * provider.getTokens() — that would start a duplicate browser login on the same
+ * redirect port and mask the real cause with a "Port in use" error.
+ */
+function isInteractiveAuthFailure(error: unknown): boolean {
+  if (hasErrorCode(error) && error.code === 'BROWSER_AUTH_ERROR') {
+    return true;
+  }
+  const message = getErrorMessage(error);
+  return /authentication timeout|browser authentication|already in use/i.test(
+    message,
+  );
+}
+
+/**
  * Configuration object for AuthBroker constructor
  */
 export interface AuthBrokerConfig {
@@ -689,6 +706,20 @@ export class AuthBroker {
       throw new Error(
         `Authorization config not found for ${destination}. Session has no auth config and serviceKeyStore is not available.`,
       );
+    }
+
+    // If the session attempt already performed an *interactive* browser login
+    // and it failed (the user didn't complete it / it timed out), the serviceKey
+    // strategy would call the SAME provider.getTokens() again and start a
+    // duplicate browser login on the same redirect port — surfacing a misleading
+    // "Port in use" instead of the real cause. Don't retry interactive failures;
+    // propagate the original error. Transient/non-interactive session failures
+    // still fall through to the serviceKey attempt below.
+    if (lastError && isInteractiveAuthFailure(lastError)) {
+      this.logger?.debug(
+        `Step 2: session login failed interactively for ${destination}; not retrying via service key (${getErrorMessage(lastError)})`,
+      );
+      throw lastError;
     }
 
     const serviceKeyAuthConfig =
