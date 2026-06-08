@@ -11,6 +11,11 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-06-08
+
+### Fixed
+- Moved `tsx` from `dependencies` to `devDependencies`. `tsx` is only used by the `generate-env` dev script; it is never imported by the shipped `dist/` code (the `mcp-auth`/`mcp-sso` bins run compiled JS via node). Having it in `dependencies` pulled `tsx → esbuild → @esbuild/<platform>` into every consumer's production and global install, triggering an `allow-scripts`/ignored-build-script prompt for esbuild's postinstall on Windows/macOS package managers. Consumers no longer install esbuild.
+
 ## [1.0.6] - 2026-06-02
 
 ### Fixed
