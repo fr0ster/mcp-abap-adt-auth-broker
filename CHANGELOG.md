@@ -11,6 +11,28 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-07-29
+
+### Changed
+- Requires `@mcp-abap-adt/auth-providers` `^1.2.0` (was `^1.0.5`), which gives every callback
+  server one owner and one release point. A callback port is now held for the duration of a
+  login and nothing longer: it is released when the login ends — by success, failure, timeout
+  or cancellation — and the promise settles only once the socket is actually free.
+
+  This matters here because `AuthBroker` classifies a failure by matching
+  `/authentication timeout|browser authentication|already in use/i`. Before this,
+  `already in use` could be reported while the port was still in the process of being
+  released, or long after a previous login had abandoned it. The message is unchanged; what
+  changed is that it is now always true when it appears.
+
+- **`engines.node` is now `>=18.2.0`** (was `>=18.0.0`), matching the floor `auth-providers`
+  requires for `server.closeAllConnections()`.
+
+### Notes
+- No API change. The bump is a realignment: consumers get the fixed callback lifetime without
+  touching their own code.
+
+
 ## [1.0.7] - 2026-06-08
 
 ### Fixed
