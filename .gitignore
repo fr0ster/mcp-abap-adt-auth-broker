@@ -62,3 +62,9 @@ tests/sso-demo/.env
 tests/sso-demo/*.xsuaa.json
 tests/sso-demo/sso-demo-key.json
 tests/sso-demo/*.xml
+
+# Git worktrees
+.worktrees/
+
+# Superpowers scratch (ledger, briefs, review packages)
+.superpowers/
