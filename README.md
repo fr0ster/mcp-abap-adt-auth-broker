@@ -26,13 +26,16 @@ AuthBroker requires a token provider configured for the destination:
 
 ```typescript
 import { AuthBroker, AbapSessionStore } from '@mcp-abap-adt/auth-broker';
-import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
+import {
+  AuthorizationCodeProvider,
+  browserCallbackStrategy,
+} from '@mcp-abap-adt/auth-providers';
 
 const tokenProvider = new AuthorizationCodeProvider({
   uaaUrl: 'https://...authentication...hana.ondemand.com',
   clientId: '...',
   clientSecret: '...',
-  browser: 'system',
+  authorization: browserCallbackStrategy({ browser: 'system' }),
 });
 
 const broker = new AuthBroker({
@@ -53,7 +56,10 @@ import {
   AbapServiceKeyStore,
   AbapSessionStore,
 } from '@mcp-abap-adt/auth-broker';
-import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
+import {
+  AuthorizationCodeProvider,
+  browserCallbackStrategy,
+} from '@mcp-abap-adt/auth-providers';
 
 const broker = new AuthBroker({
   sessionStore: new AbapSessionStore('/path/to/destinations'),
@@ -62,7 +68,7 @@ const broker = new AuthBroker({
     uaaUrl: 'https://...authentication...hana.ondemand.com',
     clientId: '...',
     clientSecret: '...',
-    browser: 'system',
+    authorization: browserCallbackStrategy({ browser: 'system' }),
   }),
 }, 'chrome', logger);
 
@@ -74,7 +80,7 @@ const brokerNoBrowser = new AuthBroker({
     uaaUrl: 'https://...authentication...hana.ondemand.com',
     clientId: '...',
     clientSecret: '...',
-    browser: 'none',
+    authorization: browserCallbackStrategy({ browser: 'none' }),
   }),
   allowBrowserAuth: false, // Throws BROWSER_AUTH_REQUIRED if browser auth needed
 }, 'chrome', logger);
@@ -92,7 +98,7 @@ const broker = new AuthBroker({
     uaaUrl: 'https://...authentication...hana.ondemand.com',
     clientId: '...',
     clientSecret: '...',
-    browser: 'system',
+    authorization: browserCallbackStrategy({ browser: 'system' }),
   }),
 });
 ```
@@ -111,7 +117,13 @@ const broker = new AuthBroker({
 
 ### Custom Browser Auth Port
 
-To avoid port conflicts with browser authentication:
+How a login is conducted — including which port the local OAuth2 callback
+listens on — is an `IAuthorizationStrategy` passed as `authorization`, not a
+field on the provider config. `browserCallbackStrategy` from
+`@mcp-abap-adt/auth-providers` builds the ready-made one; its default port is
+`61001`, chosen to sit well clear of the range application servers and
+proxies typically use (e.g. `3001`/`3333`). Pass `port` to avoid conflicts
+with a specific redirect URI registered at the identity provider:
 
 ```typescript
 const broker = new AuthBroker({
@@ -121,8 +133,7 @@ const broker = new AuthBroker({
     uaaUrl: 'https://...authentication...hana.ondemand.com',
     clientId: '...',
     clientSecret: '...',
-    browser: 'system',
-    redirectPort: 4001,
+    authorization: browserCallbackStrategy({ browser: 'system', port: 4001 }),
   }),
 }, 'chrome');
 ```
@@ -572,10 +583,13 @@ The package uses the `ITokenProvider` interface for token acquisition. Provider 
   - No refresh token provided
 
 - **`AuthorizationCodeProvider`** - For BTP/ABAP authentication (full scope)
-  - Constructor accepts optional `browserAuthPort?: number` parameter (default: 3001)
-  - Automatically finds an available port if the requested port is in use (prevents `EADDRINUSE` errors)
-  - Server properly closes all connections and frees the port after authentication completes
-  - Use custom port to avoid conflicts when running alongside other services (e.g., proxy server)
+  - How the login is conducted is an `authorization?: IAuthorizationStrategy<string>`, not a
+    provider field. Omitted, it defaults to a browser callback on port `61001`
+  - `browserCallbackStrategy({ browser?, port?, timeoutMs? })` from `@mcp-abap-adt/auth-providers`
+    builds the ready-made strategy; pass `port` to avoid conflicts when running alongside other
+    services (e.g. a proxy server) or to match a redirect URI registered at the identity provider
+  - The callback port is held only for the duration of a login and released when it ends —
+    by success, failure, timeout, or cancellation
   - Uses browser-based OAuth2 flow (if no refresh token)
   - Uses refresh token if available
   - Provides refresh token for future use
@@ -593,6 +607,7 @@ import {
 import {
   ClientCredentialsProvider,
   AuthorizationCodeProvider,
+  browserCallbackStrategy,
 } from '@mcp-abap-adt/auth-providers';
 
 // XSUAA authentication
@@ -623,7 +638,7 @@ const btpBroker = new AuthBroker({
     uaaUrl: 'https://auth.example.com',
     clientId: '...',
     clientSecret: '...',
-    browser: 'system',
+    authorization: browserCallbackStrategy({ browser: 'system' }),
   }),
 });
 
@@ -635,7 +650,7 @@ const btpBrokerFull = new AuthBroker({
     uaaUrl: 'https://auth.example.com',
     clientId: '...',
     clientSecret: '...',
-    browser: 'system',
+    authorization: browserCallbackStrategy({ browser: 'system' }),
   }),
 });
 ```
@@ -659,6 +674,14 @@ mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa]
 - `auto` (default): Try to open browser, fallback to showing URL
 - `none`: Show URL in console and wait for callback (no browser)
 - `system/chrome/edge/firefox`: Open specific browser
+
+`--browser` and `--redirect-port` are routed into `browserCallbackStrategy`. This CLI has no
+default of its own for the callback port: `--redirect-port` overrides it when given; omitted,
+the port comes from `auth-providers` (currently `61001`, chosen to sit above the ephemeral range
+and clear of the `3001`/`3333` range servers and proxies typically use). If you registered a
+redirect URI with a specific port at your identity provider, pass `--redirect-port` to match it.
+A login is given 5 minutes to complete (this is a person switching to a browser and signing in
+by hand, not an unattended caller).
 
 **Examples:**
 ```bash
@@ -703,12 +726,22 @@ mcp-sso --protocol <oidc|saml2> --flow <flow> --output <path> [--type abap|xsuaa
 - OIDC: `browser`, `device`, `password`, `token_exchange`
 - SAML2: `bearer`, `pure`
 
+Only the flows that actually open a browser (OIDC `browser`; SAML2 `bearer`/`pure` with the
+default `--assertion-flow browser`) use `--browser` and `--redirect-port` — they are routed
+into `browserCallbackStrategy`/`oidcCallbackStrategy`/`samlCallbackStrategy`. This CLI has no
+default of its own for the callback port: `--redirect-port` overrides it when given; omitted,
+the port comes from `auth-providers` (currently `61001`). A login is given 5 minutes to
+complete. `device`, `password`, and `token_exchange` never open a browser from this process, so
+`--browser`/`--redirect-port` have no effect for them. This applies the same way whether
+`--protocol`/`--flow` come from CLI flags or from `--config` (below) — a field's origin doesn't
+change how it's handled, and CLI flags always take precedence over the same field in a file.
+
 **Examples:**
 ```bash
 # OIDC browser flow
 mcp-sso oidc --flow browser --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
 
-# OIDC browser flow (manual code / OOB)
+# OIDC browser flow (manual code / OOB — no callback server is opened for this combination)
 mcp-sso oidc --flow browser --token-endpoint https://issuer/token --client-id my-client --code <auth_code> --redirect-uri urn:ietf:wg:oauth:2.0:oob --output ./sso.env --type xsuaa
 
 # OIDC device flow
@@ -765,7 +798,8 @@ It enables `authorization_code` and `saml2-bearer` grant types and provides a
 simple `CatalogService`. See `tests/sso-demo/readme.md` for deploy steps.
 
 **Config file:**
-You can pass a JSON file with provider config:
+You can pass a JSON file with provider config instead of (or alongside) `--protocol`/`--flow`
+and the OIDC/SAML flags — `--config` alone is enough to run a flow, with no other flags required:
 
 ```json
 {
@@ -776,6 +810,14 @@ You can pass a JSON file with provider config:
   "scopes": ["openid", "profile"]
 }
 ```
+
+Any CLI flag given alongside `--config` overrides the same field in the file; a field the file
+sets and no flag overrides is used as-is. A file written for a pre-2.0.0 config still works:
+`browser` and `redirectPort` are routed into the strategy exactly as the equivalent CLI flags
+are, and `authorizationCode`/`assertionFlow` are honored the same way `--code`/`--assertion-flow`
+are. A file that sets `authorizationCodeProvider`, `assertionProvider`, or `manualInput` — all
+functions, which JSON cannot express — is refused with an error naming the CLI flag to use
+instead, rather than having the field silently dropped.
 
 ### Utility Script
 

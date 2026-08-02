@@ -30,7 +30,9 @@ const { AuthBroker } = require(distPath);
 
 import {
   AuthorizationCodeProvider,
+  browserCallbackStrategy,
   ClientCredentialsProvider,
+  DEFAULT_CALLBACK_PORT,
 } from '@mcp-abap-adt/auth-providers';
 import {
   ABAP_AUTHORIZATION_VARS,
@@ -44,6 +46,12 @@ import {
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
 
+/**
+ * A person completes this login at a browser; the provider's own default
+ * (30s) is sized for an unattended caller instead.
+ */
+const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+
 interface McpAuthOptions {
   serviceKeyPath?: string; // Optional if env file is provided
   envFilePath?: string;
@@ -53,7 +61,9 @@ interface McpAuthOptions {
   credential: boolean; // Use client_credentials instead of authorization_code
   format: 'json' | 'env';
   serviceUrl?: string;
-  redirectPort?: number; // Port for OAuth redirect URI (default: 3001)
+  // The callback port is the provider's own choice (`auth-providers`'
+  // DEFAULT_CALLBACK_PORT); this only overrides it when the user asks.
+  redirectPort?: number;
 }
 
 function getVersion(): string {
@@ -131,7 +141,10 @@ function showHelp(): void {
     '  --service-url <url>     Service URL (SAP URL for ABAP, MCP URL for XSUAA). For XSUAA, optional.',
   );
   console.log(
-    '  --redirect-port <port>  Port for OAuth redirect URI (default: 3001). Must match XSUAA redirect-uris config.',
+    '  --redirect-port <port>  Port for OAuth redirect URI (default: from auth-providers, currently 61001).',
+  );
+  console.log(
+    '                          Must match XSUAA redirect-uris config.',
   );
   console.log('');
   console.log('  --version, -v          Show version number');
@@ -218,12 +231,14 @@ function showHelp(): void {
   console.log('    * system/chrome/edge/firefox: Open specific browser');
   console.log('  - Both providers (xsuaa and abap) support both flows');
   console.log(
-    '  - --redirect-port: Port for OAuth redirect URI (default: 3001)',
+    '  - --redirect-port: Port for OAuth redirect URI (default: from auth-providers, currently 61001)',
   );
   console.log(
     '    * Must match redirect_uri configured in XSUAA/ABAP OAuth2 settings',
   );
-  console.log('    * Common values: 3001 (default), 8080 (SAP examples)');
+  console.log(
+    '    * If your registered redirect URI uses a different port (e.g. 3001, 8080), pass it explicitly',
+  );
   console.log(
     '  - For XSUAA, serviceUrl (MCP URL) is optional - can be provided via --service-url or service key',
   );
@@ -767,7 +782,12 @@ async function main() {
 
     // Default: authorization_code flow with browser
     // --credential: client_credentials flow (no browser needed)
-    const redirectPort = options.redirectPort || 3001;
+    // The callback port is the provider's own choice (DEFAULT_CALLBACK_PORT,
+    // currently 61001) unless the user overrides it with --redirect-port.
+    // Only resolved to a concrete number here for the URL preview below —
+    // the strategy itself re-derives the same default independently when
+    // `port` is left undefined.
+    const redirectPort = options.redirectPort ?? DEFAULT_CALLBACK_PORT;
 
     // Log authorization URL for debugging
     if (!options.credential) {
@@ -788,8 +808,14 @@ async function main() {
           clientId: authConfig.uaaClientId,
           clientSecret: authConfig.uaaClientSecret,
           refreshToken: authConfig.refreshToken,
-          browser: options.browser,
-          redirectPort: redirectPort,
+          // Passing `options.redirectPort` (not the resolved `redirectPort`
+          // above) so an omitted --redirect-port lets the strategy bind its
+          // own default rather than this CLI pinning a number it doesn't own.
+          authorization: browserCallbackStrategy({
+            browser: options.browser,
+            port: options.redirectPort,
+            timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+          }),
         });
 
     const broker = new AuthBroker(

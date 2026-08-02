@@ -27,7 +27,6 @@
  *   mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --assertion <base64> --cookie "SAP_SESSION=..." --output ./sso.env --type abap
  */
 
-import { createInterface } from 'node:readline';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -35,72 +34,22 @@ import * as path from 'path';
 const distPath = path.resolve(__dirname, '..', 'index.js');
 const { AuthBroker } = require(distPath);
 
-import type { ILogger } from '@mcp-abap-adt/interfaces';
-import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
-import {
-  SsoProviderFactory,
-  type OidcBrowserProviderConfig,
-  type OidcDeviceFlowProviderConfig,
-  type OidcPasswordProviderConfig,
-  type OidcTokenExchangeProviderConfig,
-  type Saml2BearerProviderConfig,
-  type Saml2PureProviderConfig,
-  type SsoProviderConfig,
-} from '@mcp-abap-adt/auth-providers';
+import { SsoProviderFactory } from '@mcp-abap-adt/auth-providers';
 import {
   AbapServiceKeyStore,
   AbapSessionStore,
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
-
-interface McpSsoOptions {
-  outputFile?: string;
-  envFilePath?: string;
-  destination?: string;
-  serviceKeyPath?: string;
-  authType: 'abap' | 'xsuaa';
-  format: 'json' | 'env';
-  protocol?: 'oidc' | 'saml2';
-  flow?:
-    | 'browser'
-    | 'device'
-    | 'password'
-    | 'token_exchange'
-    | 'bearer'
-    | 'pure';
-  configPath?: string;
-  serviceUrl?: string;
-  browser?: string;
-  redirectPort?: number;
-  redirectUri?: string;
-  issuerUrl?: string;
-  authorizationEndpoint?: string;
-  tokenEndpoint?: string;
-  deviceAuthorizationEndpoint?: string;
-  clientId?: string;
-  clientSecret?: string;
-  scopes?: string[];
-  scope?: string;
-  code?: string;
-  username?: string;
-  password?: string;
-  passcode?: string;
-  subjectToken?: string;
-  subjectTokenType?: string;
-  audience?: string;
-  actorToken?: string;
-  actorTokenType?: string;
-  idpSsoUrl?: string;
-  spEntityId?: string;
-  acsUrl?: string;
-  relayState?: string;
-  assertionFlow?: 'browser' | 'manual' | 'assertion';
-  assertion?: string;
-  cookie?: string;
-  uaaUrl?: string;
-  samlMetadataPath?: string;
-}
+import type { ILogger } from '@mcp-abap-adt/interfaces';
+import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
+import {
+  applyFileConfig,
+  buildProviderConfig,
+  type McpSsoOptions,
+  normalizeProviderConfig,
+  readManualInput,
+} from './mcpSsoConfig';
 
 function getVersion(): string {
   try {
@@ -139,7 +88,9 @@ function showHelp(): void {
   console.log('Required Options:');
   console.log('  --output <path>           Output file path');
   console.log('  --protocol <oidc|saml2>   Protocol (if no subcommand)');
-  console.log('  --flow <flow>             Flow for protocol (if no subcommand)');
+  console.log(
+    '  --flow <flow>             Flow for protocol (if no subcommand)',
+  );
   console.log('');
   console.log('Common Options:');
   console.log('  --service-key <path>      Service key JSON (XSUAA/ABAP)');
@@ -161,7 +112,7 @@ function showHelp(): void {
     '  --browser <browser>       Browser: auto|none|system|chrome|edge|firefox',
   );
   console.log(
-    '  --redirect-port <port>    Redirect port for browser flows (default: 3001)',
+    '  --redirect-port <port>    Redirect port for browser flows (default: from auth-providers, currently 61001)',
   );
   console.log(
     '  --redirect-uri <uri>      Custom redirect URI (OOB/manual code flows)',
@@ -227,19 +178,6 @@ function parseScopes(value?: string): string[] | undefined {
     .map((p) => p.trim())
     .filter(Boolean);
   return parts.length > 0 ? parts : undefined;
-}
-
-function readManualInput(prompt: string): Promise<string> {
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-  return new Promise((resolve) => {
-    rl.question(prompt, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
 }
 
 function createCliLogger(prefix: string = 'SSO'): ILogger {
@@ -604,219 +542,6 @@ function resolveSamlTokenAlias(metadataXml: string): string | undefined {
   return match?.[1];
 }
 
-function normalizeProviderConfig(raw: any): SsoProviderConfig | null {
-  if (!raw || typeof raw !== 'object') {
-    return null;
-  }
-  if (raw.provider) {
-    return raw.provider as SsoProviderConfig;
-  }
-  if (raw.protocol && raw.flow) {
-    const { protocol, flow, config, ...rest } = raw;
-    return {
-      protocol,
-      flow,
-      config: config ?? rest,
-    } as SsoProviderConfig;
-  }
-  return null;
-}
-
-function mergeConfig(
-  target: Record<string, unknown>,
-  source: Record<string, unknown>,
-): Record<string, unknown> {
-  const result = { ...target };
-  for (const [key, value] of Object.entries(source)) {
-    if (value !== undefined) {
-      result[key] = value;
-    }
-  }
-  return result;
-}
-
-function buildOidcConfig(options: McpSsoOptions): Record<string, unknown> {
-  const scopeList = options.scopes;
-  const tokenEndpoint =
-    options.tokenEndpoint ||
-    (options.uaaUrl
-      ? `${options.uaaUrl.replace(/\/+$/, '')}/oauth/token`
-      : undefined);
-  const passcode = options.passcode;
-  const username = options.username || (passcode ? 'passcode' : undefined);
-  const password = options.password || passcode;
-  return {
-    issuerUrl: options.issuerUrl,
-    authorizationEndpoint: options.authorizationEndpoint,
-    tokenEndpoint,
-    deviceAuthorizationEndpoint: options.deviceAuthorizationEndpoint,
-    clientId: options.clientId,
-    clientSecret: options.clientSecret,
-    scopes: scopeList,
-    scope: options.scope,
-    authorizationCode: options.code,
-    username,
-    password,
-    subjectToken: options.subjectToken,
-    subjectTokenType:
-      options.subjectTokenType ||
-      'urn:ietf:params:oauth:token-type:access_token',
-    audience: options.audience,
-    actorToken: options.actorToken,
-    actorTokenType: options.actorTokenType,
-    browser: options.browser,
-    redirectPort: options.redirectPort,
-    redirectUri: options.redirectUri,
-  };
-}
-
-function buildSamlConfig(options: McpSsoOptions): Record<string, unknown> {
-  const assertionFlow =
-    options.assertionFlow || (options.assertion ? 'assertion' : 'browser');
-  const tokenUrl =
-    options.tokenEndpoint ||
-    (options.uaaUrl
-      ? `${options.uaaUrl.replace(/\/+$/, '')}/oauth/token`
-      : undefined);
-  const assertionProvider = options.assertion
-    ? async () => options.assertion as string
-    : assertionFlow === 'assertion'
-      ? async () => readManualInput('Paste SAMLResponse: ')
-      : undefined;
-  const cookieProvider = async (samlResponse: string) => {
-    if (options.cookie) {
-      return options.cookie;
-    }
-    if (assertionFlow === 'assertion') {
-      return `SAMLResponse=${samlResponse}`;
-    }
-    return readManualInput('Paste session cookies: ');
-  };
-
-  return {
-    idpSsoUrl: options.idpSsoUrl,
-    spEntityId: options.spEntityId,
-    acsUrl: options.acsUrl,
-    relayState: options.relayState,
-    assertionFlow,
-    assertionProvider,
-    tokenUrl,
-    uaaUrl: options.uaaUrl,
-    clientId: options.clientId,
-    clientSecret: options.clientSecret,
-    browser: options.browser,
-    redirectPort: options.redirectPort,
-    cookieProvider,
-  };
-}
-
-function buildProviderConfig(
-  options: McpSsoOptions,
-  existingAuth: { refreshToken?: string } | null,
-  existingConn: { authorizationToken?: string } | null,
-  fileConfig: SsoProviderConfig | null,
-): SsoProviderConfig {
-  let configFromCli: SsoProviderConfig | null = null;
-  if (options.protocol && options.flow) {
-    if (options.protocol === 'oidc') {
-      switch (options.flow) {
-        case 'browser':
-          configFromCli = {
-            protocol: 'oidc',
-            flow: 'browser',
-            config: buildOidcConfig(options) as unknown as OidcBrowserProviderConfig,
-          };
-          break;
-        case 'device':
-          configFromCli = {
-            protocol: 'oidc',
-            flow: 'device',
-            config: buildOidcConfig(options) as unknown as OidcDeviceFlowProviderConfig,
-          };
-          break;
-        case 'password':
-          configFromCli = {
-            protocol: 'oidc',
-            flow: 'password',
-            config: buildOidcConfig(options) as unknown as OidcPasswordProviderConfig,
-          };
-          break;
-        case 'token_exchange':
-          configFromCli = {
-            protocol: 'oidc',
-            flow: 'token_exchange',
-            config: buildOidcConfig(options) as unknown as OidcTokenExchangeProviderConfig,
-          };
-          break;
-        default:
-          throw new Error(`Unsupported OIDC flow: ${options.flow}`);
-      }
-    } else if (options.protocol === 'saml2') {
-      switch (options.flow) {
-        case 'bearer':
-          configFromCli = {
-            protocol: 'saml2',
-            flow: 'bearer',
-            config: buildSamlConfig(options) as unknown as Saml2BearerProviderConfig,
-          };
-          break;
-        case 'pure':
-          configFromCli = {
-            protocol: 'saml2',
-            flow: 'pure',
-            config: buildSamlConfig(options) as unknown as Saml2PureProviderConfig,
-          };
-          break;
-        default:
-          throw new Error(`Unsupported SAML flow: ${options.flow}`);
-      }
-    }
-  }
-
-  const base = fileConfig ?? configFromCli;
-  if (!base) {
-    throw new Error(
-      'Provider config is missing. Use --config or --protocol/--flow options.',
-    );
-  }
-
-  let result: SsoProviderConfig = base;
-  if (options.protocol) {
-    result = { ...result, protocol: options.protocol } as SsoProviderConfig;
-  }
-  if (options.flow) {
-    result = { ...result, flow: options.flow } as SsoProviderConfig;
-  }
-
-  if (configFromCli) {
-    result = {
-      ...result,
-      config: mergeConfig(
-        (result as any).config || {},
-        (configFromCli as any).config || {},
-      ),
-    } as unknown as SsoProviderConfig;
-  }
-
-  const accessToken = existingConn?.authorizationToken;
-  const refreshToken = existingAuth?.refreshToken;
-  if (
-    (result.protocol === 'oidc' ||
-      (result.protocol === 'saml2' && result.flow === 'bearer')) &&
-    (accessToken || refreshToken)
-  ) {
-    result = {
-      ...result,
-      config: mergeConfig((result as any).config || {}, {
-        accessToken,
-        refreshToken,
-      }),
-    } as unknown as SsoProviderConfig;
-  }
-
-  return result;
-}
-
 async function main() {
   const options = parseArgs();
   if (!options) {
@@ -897,7 +622,7 @@ async function main() {
     process.exit(1);
   }
 
-  let providerConfigFromFile: SsoProviderConfig | null = null;
+  let providerConfigFromFile: ReturnType<typeof normalizeProviderConfig> = null;
   if (options.configPath) {
     const resolvedConfigPath = path.resolve(options.configPath);
     if (!fs.existsSync(resolvedConfigPath)) {
@@ -912,13 +637,22 @@ async function main() {
     }
   }
 
+  // Merge the file into `options` *before* anything downstream reads
+  // options.protocol/flow or builds a strategy from them — a run driven by
+  // --config alone must reach exactly the same validation and
+  // strategy-building code a --protocol/--flow run does, or a field the file
+  // carries (including a legacy one 2.0.0 removed) can reach the provider
+  // untouched with no error and no warning. CLI flags already parsed above
+  // are left alone; the file only fills what they didn't set. A no-op when
+  // --config wasn't given.
+  applyFileConfig(options, providerConfigFromFile);
+
   if (options.serviceKeyPath) {
     const resolvedServiceKeyPath = path.resolve(options.serviceKeyPath);
     const serviceKeyDir = path.dirname(resolvedServiceKeyPath);
     const serviceKeyStore = new XsuaaServiceKeyStore(serviceKeyDir);
-    const authConfig = await serviceKeyStore.getAuthorizationConfig(
-      destination,
-    );
+    const authConfig =
+      await serviceKeyStore.getAuthorizationConfig(destination);
     if (!authConfig) {
       console.error(
         `❌ Authorization config not found for ${destination}. Service key must contain clientid, clientsecret, and url fields.`,
@@ -927,9 +661,7 @@ async function main() {
     }
     const uaaUrl = authConfig.uaaUrl;
     if (!uaaUrl) {
-      console.error(
-        `❌ Service key missing UAA URL for ${destination}.`,
-      );
+      console.error(`❌ Service key missing UAA URL for ${destination}.`);
       process.exit(1);
     }
     options.uaaUrl = uaaUrl;
@@ -1070,7 +802,6 @@ async function main() {
     options,
     existingAuth,
     existingConn,
-    providerConfigFromFile,
   );
 
   const providerConfigWithLogger = (providerConfig as any).config

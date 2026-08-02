@@ -16,6 +16,7 @@
 
 import {
   AuthorizationCodeProvider,
+  browserCallbackStrategy,
   ClientCredentialsProvider,
 } from '@mcp-abap-adt/auth-providers';
 import {
@@ -27,6 +28,12 @@ import {
 import * as fs from 'fs';
 import * as path from 'path';
 import { AuthBroker } from '../src/AuthBroker';
+
+/**
+ * A person completes this login at a browser; the provider's own default
+ * (30s) is sized for an unattended caller instead.
+ */
+const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 async function main() {
   const args = process.argv.slice(2);
@@ -101,7 +108,12 @@ async function main() {
           uaaUrl: authConfig.uaaUrl,
           clientId: authConfig.uaaClientId,
           clientSecret: authConfig.uaaClientSecret,
-          browser: 'system',
+          // No port override: this script has no `--redirect-port` flag, so
+          // the callback port is entirely the strategy's own choice.
+          authorization: browserCallbackStrategy({
+            browser: 'system',
+            timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+          }),
         });
 
     // Create AuthBroker

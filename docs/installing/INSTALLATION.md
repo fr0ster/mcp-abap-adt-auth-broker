@@ -172,7 +172,9 @@ If you see "file not found" errors:
 If browser doesn't open:
 
 1. **Check System Browser**: Verify default browser is configured
-2. **Check Port 3001**: Ensure port 3001 is available for OAuth callback
+2. **Check the callback port is available**: The OAuth callback port comes from
+   `@mcp-abap-adt/auth-providers` (currently `61001`) unless overridden — with the `mcp-auth`/
+   `mcp-sso` CLIs, via `--redirect-port`. Ensure whichever port is actually in use is free.
 3. **Check Firewall**: Ensure localhost connections are allowed
 
 ### Token Refresh Issues
