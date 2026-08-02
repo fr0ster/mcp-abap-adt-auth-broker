@@ -16,6 +16,7 @@
 
 import {
   AuthorizationCodeProvider,
+  browserCallbackStrategy,
   ClientCredentialsProvider,
 } from '@mcp-abap-adt/auth-providers';
 import {
@@ -27,6 +28,18 @@ import {
 import * as fs from 'fs';
 import * as path from 'path';
 import { AuthBroker } from '../src/AuthBroker';
+
+/**
+ * A person completes this login at a browser; the provider's own default
+ * (30s) is sized for an unattended caller instead.
+ */
+const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * This script never set `redirectPort`, so it relied on the provider's own
+ * default of 3001 in auth-providers 1.x. That default moved to 61001 in
+ * 2.0.0, so it is pinned here explicitly to avoid a silent change.
+ */
+const DEFAULT_REDIRECT_PORT = 3001;
 
 async function main() {
   const args = process.argv.slice(2);
@@ -101,7 +114,11 @@ async function main() {
           uaaUrl: authConfig.uaaUrl,
           clientId: authConfig.uaaClientId,
           clientSecret: authConfig.uaaClientSecret,
-          browser: 'system',
+          authorization: browserCallbackStrategy({
+            browser: 'system',
+            port: DEFAULT_REDIRECT_PORT,
+            timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+          }),
         });
 
     // Create AuthBroker

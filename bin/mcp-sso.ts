@@ -38,14 +38,19 @@ const { AuthBroker } = require(distPath);
 import type { ILogger } from '@mcp-abap-adt/interfaces';
 import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
 import {
-  SsoProviderFactory,
+  asOidcResult,
+  manualSamlResponseStrategy,
   type OidcBrowserProviderConfig,
   type OidcDeviceFlowProviderConfig,
   type OidcPasswordProviderConfig,
   type OidcTokenExchangeProviderConfig,
+  oidcCallbackStrategy,
   type Saml2BearerProviderConfig,
   type Saml2PureProviderConfig,
   type SsoProviderConfig,
+  SsoProviderFactory,
+  samlCallbackStrategy,
+  staticCodeStrategy,
 } from '@mcp-abap-adt/auth-providers';
 import {
   AbapServiceKeyStore,
@@ -53,6 +58,20 @@ import {
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
+
+/**
+ * This CLI's own default whenever `--redirect-port` is omitted. The
+ * library's own default moved to 61001 in auth-providers 2.0.0; pinning
+ * 3001 here keeps this CLI's documented default ("Redirect port for browser
+ * flows (default: 3001)") from silently changing.
+ */
+const DEFAULT_REDIRECT_PORT = 3001;
+
+/**
+ * A person completes these logins at a browser; the library's own default
+ * (30s) is sized for an unattended caller instead.
+ */
+const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface McpSsoOptions {
   outputFile?: string;
@@ -635,55 +654,150 @@ function mergeConfig(
   return result;
 }
 
-function buildOidcConfig(options: McpSsoOptions): Record<string, unknown> {
-  const scopeList = options.scopes;
-  const tokenEndpoint =
+function requireOption(value: string | undefined, flagName: string): string {
+  if (!value) {
+    console.error(`❌ ${flagName} is required for this flow.`);
+    process.exit(1);
+  }
+  return value;
+}
+
+function resolveOidcTokenEndpoint(options: McpSsoOptions): string | undefined {
+  return (
     options.tokenEndpoint ||
     (options.uaaUrl
       ? `${options.uaaUrl.replace(/\/+$/, '')}/oauth/token`
-      : undefined);
+      : undefined)
+  );
+}
+
+/**
+ * Only the OIDC 'browser' flow opens a browser; routes `--browser`,
+ * `--redirect-port` and manual/OOB code paste into the strategy that
+ * replaces them.
+ */
+function buildOidcBrowserAuthorization(options: McpSsoOptions) {
+  if (options.code) {
+    // The consumer already holds the code (manual paste / OOB redirect
+    // URI); no callback server is opened at all.
+    return asOidcResult(
+      staticCodeStrategy({
+        redirectUri: options.redirectUri,
+        payload: options.code,
+      }),
+    );
+  }
+  return oidcCallbackStrategy({
+    port: options.redirectPort ?? DEFAULT_REDIRECT_PORT,
+    browser: options.browser,
+    timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+  });
+}
+
+function buildOidcCommon(options: McpSsoOptions) {
+  return {
+    issuerUrl: options.issuerUrl,
+    clientId: requireOption(options.clientId, '--client-id'),
+    clientSecret: options.clientSecret,
+  };
+}
+
+function buildOidcBrowserConfig(
+  options: McpSsoOptions,
+): OidcBrowserProviderConfig {
+  return {
+    ...buildOidcCommon(options),
+    authorizationEndpoint: options.authorizationEndpoint,
+    tokenEndpoint: resolveOidcTokenEndpoint(options),
+    scopes: options.scopes,
+    authorization: buildOidcBrowserAuthorization(options),
+  };
+}
+
+function buildOidcDeviceConfig(
+  options: McpSsoOptions,
+): OidcDeviceFlowProviderConfig {
+  // Device flow never opens a browser from this process; --browser and
+  // --redirect-port have nothing to attach to here.
+  return {
+    ...buildOidcCommon(options),
+    deviceAuthorizationEndpoint: options.deviceAuthorizationEndpoint,
+    tokenEndpoint: resolveOidcTokenEndpoint(options),
+    scopes: options.scopes,
+  };
+}
+
+function buildOidcPasswordConfig(
+  options: McpSsoOptions,
+): OidcPasswordProviderConfig {
+  // Password flow never opens a browser; --browser and --redirect-port are
+  // not meaningful here either.
   const passcode = options.passcode;
   const username = options.username || (passcode ? 'passcode' : undefined);
   const password = options.password || passcode;
   return {
-    issuerUrl: options.issuerUrl,
-    authorizationEndpoint: options.authorizationEndpoint,
-    tokenEndpoint,
-    deviceAuthorizationEndpoint: options.deviceAuthorizationEndpoint,
-    clientId: options.clientId,
-    clientSecret: options.clientSecret,
-    scopes: scopeList,
-    scope: options.scope,
-    authorizationCode: options.code,
-    username,
-    password,
-    subjectToken: options.subjectToken,
-    subjectTokenType:
-      options.subjectTokenType ||
-      'urn:ietf:params:oauth:token-type:access_token',
-    audience: options.audience,
-    actorToken: options.actorToken,
-    actorTokenType: options.actorTokenType,
-    browser: options.browser,
-    redirectPort: options.redirectPort,
-    redirectUri: options.redirectUri,
+    ...buildOidcCommon(options),
+    username: requireOption(username, '--username (or --passcode)'),
+    password: requireOption(password, '--password (or --passcode)'),
+    tokenEndpoint: resolveOidcTokenEndpoint(options),
+    scopes: options.scopes,
   };
 }
 
-function buildSamlConfig(options: McpSsoOptions): Record<string, unknown> {
+function buildOidcTokenExchangeConfig(
+  options: McpSsoOptions,
+): OidcTokenExchangeProviderConfig {
+  // Token exchange never opens a browser; --browser and --redirect-port are
+  // not meaningful here either.
+  return {
+    ...buildOidcCommon(options),
+    subjectToken: requireOption(options.subjectToken, '--subject-token'),
+    subjectTokenType:
+      options.subjectTokenType ||
+      'urn:ietf:params:oauth:token-type:access_token',
+    scope: options.scope,
+    audience: options.audience,
+    actorToken: options.actorToken,
+    actorTokenType: options.actorTokenType,
+    tokenEndpoint: resolveOidcTokenEndpoint(options),
+  };
+}
+
+/**
+ * Both SAML flows (bearer, pure) can open a browser; routes `--browser`,
+ * `--redirect-port` and the manual/static assertion options into the
+ * strategy that replaces them.
+ */
+function buildSamlAuthorization(options: McpSsoOptions) {
+  if (options.assertion) {
+    // The consumer already holds the assertion; nothing is opened or asked.
+    return staticCodeStrategy({
+      redirectUri: options.acsUrl,
+      payload: options.assertion,
+    });
+  }
+  const assertionFlow = options.assertionFlow || 'browser';
+  if (assertionFlow !== 'browser') {
+    // 'manual', and an 'assertion' flow given no value, both need a human to
+    // lift the SAMLResponse out of the POST body by hand.
+    return manualSamlResponseStrategy({
+      redirectUri: options.acsUrl,
+      read: readManualInput,
+    });
+  }
+  return samlCallbackStrategy({
+    port: options.redirectPort ?? DEFAULT_REDIRECT_PORT,
+    browser: options.browser,
+    timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+  });
+}
+
+function buildSamlCookieProvider(
+  options: McpSsoOptions,
+): (samlResponse: string) => Promise<string> {
   const assertionFlow =
     options.assertionFlow || (options.assertion ? 'assertion' : 'browser');
-  const tokenUrl =
-    options.tokenEndpoint ||
-    (options.uaaUrl
-      ? `${options.uaaUrl.replace(/\/+$/, '')}/oauth/token`
-      : undefined);
-  const assertionProvider = options.assertion
-    ? async () => options.assertion as string
-    : assertionFlow === 'assertion'
-      ? async () => readManualInput('Paste SAMLResponse: ')
-      : undefined;
-  const cookieProvider = async (samlResponse: string) => {
+  return async (samlResponse: string) => {
     if (options.cookie) {
       return options.cookie;
     }
@@ -692,21 +806,32 @@ function buildSamlConfig(options: McpSsoOptions): Record<string, unknown> {
     }
     return readManualInput('Paste session cookies: ');
   };
+}
 
+function buildSamlBearerConfig(
+  options: McpSsoOptions,
+): Saml2BearerProviderConfig {
   return {
-    idpSsoUrl: options.idpSsoUrl,
-    spEntityId: options.spEntityId,
+    idpSsoUrl: requireOption(options.idpSsoUrl, '--idp-sso-url'),
+    spEntityId: requireOption(options.spEntityId, '--sp-entity-id'),
     acsUrl: options.acsUrl,
     relayState: options.relayState,
-    assertionFlow,
-    assertionProvider,
-    tokenUrl,
+    tokenUrl: options.tokenEndpoint,
     uaaUrl: options.uaaUrl,
     clientId: options.clientId,
     clientSecret: options.clientSecret,
-    browser: options.browser,
-    redirectPort: options.redirectPort,
-    cookieProvider,
+    authorization: buildSamlAuthorization(options),
+  };
+}
+
+function buildSamlPureConfig(options: McpSsoOptions): Saml2PureProviderConfig {
+  return {
+    idpSsoUrl: requireOption(options.idpSsoUrl, '--idp-sso-url'),
+    spEntityId: requireOption(options.spEntityId, '--sp-entity-id'),
+    acsUrl: options.acsUrl,
+    relayState: options.relayState,
+    authorization: buildSamlAuthorization(options),
+    cookieProvider: buildSamlCookieProvider(options),
   };
 }
 
@@ -724,28 +849,28 @@ function buildProviderConfig(
           configFromCli = {
             protocol: 'oidc',
             flow: 'browser',
-            config: buildOidcConfig(options) as unknown as OidcBrowserProviderConfig,
+            config: buildOidcBrowserConfig(options),
           };
           break;
         case 'device':
           configFromCli = {
             protocol: 'oidc',
             flow: 'device',
-            config: buildOidcConfig(options) as unknown as OidcDeviceFlowProviderConfig,
+            config: buildOidcDeviceConfig(options),
           };
           break;
         case 'password':
           configFromCli = {
             protocol: 'oidc',
             flow: 'password',
-            config: buildOidcConfig(options) as unknown as OidcPasswordProviderConfig,
+            config: buildOidcPasswordConfig(options),
           };
           break;
         case 'token_exchange':
           configFromCli = {
             protocol: 'oidc',
             flow: 'token_exchange',
-            config: buildOidcConfig(options) as unknown as OidcTokenExchangeProviderConfig,
+            config: buildOidcTokenExchangeConfig(options),
           };
           break;
         default:
@@ -757,14 +882,14 @@ function buildProviderConfig(
           configFromCli = {
             protocol: 'saml2',
             flow: 'bearer',
-            config: buildSamlConfig(options) as unknown as Saml2BearerProviderConfig,
+            config: buildSamlBearerConfig(options),
           };
           break;
         case 'pure':
           configFromCli = {
             protocol: 'saml2',
             flow: 'pure',
-            config: buildSamlConfig(options) as unknown as Saml2PureProviderConfig,
+            config: buildSamlPureConfig(options),
           };
           break;
         default:

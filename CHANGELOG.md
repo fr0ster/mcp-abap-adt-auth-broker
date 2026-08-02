@@ -11,6 +11,59 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-02
+
+### Changed
+- Requires `@mcp-abap-adt/auth-providers` `^2.0.0` (was `^1.2.0`). Every provider config's
+  `browser`/`redirectPort` fields are gone; how a login is conducted is now an
+  `IAuthorizationStrategy` passed as `authorization`. `AuthBroker` itself never imported those
+  fields — the exposure was entirely in the `mcp-auth`/`mcp-sso` CLIs and
+  `generate-env-from-service-key` (`bin/`), which construct providers directly.
+
+- **`mcp-auth`, `mcp-sso`, `npm run generate-env`**: every browser-opening flow (`mcp-auth`'s
+  default `authorization_code` flow, `mcp-sso oidc --flow browser`, `mcp-sso saml2`/`bearer`
+  with the default browser assertion flow) now routes `--browser` and `--redirect-port` into
+  `browserCallbackStrategy` / `oidcCallbackStrategy` / `samlCallbackStrategy` instead of a
+  removed provider field. Each CLI's own documented default port (3001) is passed explicitly
+  so it does not silently move to the library's new default of 61001.
+
+- **Login timeout for these three CLIs raised from 30s to 5 minutes.** 30s was the token
+  provider's own default, sized for an unattended caller. These CLIs hand the login to a person
+  at a keyboard, who needs time to reach the browser, authenticate — possibly through SSO/MFA —
+  and get redirected back.
+
+- `mcp-sso oidc --flow browser --code <value>`: manual/OOB code paste now goes through the
+  library's `staticCodeStrategy` (adapted with `asOidcResult`) instead of a removed
+  `authorizationCode` field. Behaviour for this combination is unchanged.
+
+- `--redirect-uri` now only takes effect on the manual/static (OOB) code path. Combining it
+  with the listening browser flow is no longer meaningful: the local callback server always
+  derives its own redirect URI from `--redirect-port`.
+
+- OIDC `device`/`password`/`token_exchange` flows never accepted `--browser`/`--redirect-port`
+  in the underlying library, before or after this change — `mcp-sso` was building them into the
+  config regardless, where they were silently ignored (masked by a cast, see below). They are
+  no longer passed at all; passing them for these flows now has visibly no effect, same as it
+  always did.
+
+- `mcp-sso`'s per-flow config builders now construct the real `@mcp-abap-adt/auth-providers`
+  config types directly (`OidcBrowserProviderConfig`, `Saml2BearerProviderConfig`, etc.)
+  instead of building an untyped bag and force-casting it with `as unknown as X`. That cast is
+  exactly what let the `browser`/`redirectPort` regression above compile silently. Required
+  fields (`--client-id`, `--idp-sso-url`, `--sp-entity-id`, `--subject-token`,
+  `--username`/`--password`) are now checked and reported per flow instead of reaching the
+  provider as `undefined` behind the cast.
+
+### Fixed
+- `mcp-sso saml2`/`bearer --assertion-flow manual`, and an `--assertion-flow assertion` with no
+  `--assertion` value supplied, now announce the authorization URL before prompting for a pasted
+  `SAMLResponse` (via `manualSamlResponseStrategy`). The old fallback for the latter combination
+  prompted without ever showing the URL the user needed to visit.
+
+### Notes
+- `AuthBroker`'s own constructor and public API are unchanged; this is a realignment with the
+  provider library plus the CLI-level fixes above.
+
 ## [1.0.8] - 2026-07-29
 
 ### Changed

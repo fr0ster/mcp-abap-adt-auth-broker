@@ -30,8 +30,15 @@ const { AuthBroker } = require(distPath);
 
 import {
   AuthorizationCodeProvider,
+  browserCallbackStrategy,
   ClientCredentialsProvider,
 } from '@mcp-abap-adt/auth-providers';
+
+/**
+ * A person completes this login at a browser; the provider's own default
+ * (30s) is sized for an unattended caller instead.
+ */
+const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 import {
   ABAP_AUTHORIZATION_VARS,
   ABAP_CONNECTION_VARS,
@@ -788,8 +795,14 @@ async function main() {
           clientId: authConfig.uaaClientId,
           clientSecret: authConfig.uaaClientSecret,
           refreshToken: authConfig.refreshToken,
-          browser: options.browser,
-          redirectPort: redirectPort,
+          // `redirectPort` already carries this CLI's documented default of
+          // 3001 (see above); the library's own default moved to 61001 in
+          // 2.0.0, so it must be passed explicitly to avoid a silent change.
+          authorization: browserCallbackStrategy({
+            browser: options.browser,
+            port: redirectPort,
+            timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+          }),
         });
 
     const broker = new AuthBroker(

@@ -13,7 +13,10 @@
  */
 
 import * as dns from 'node:dns/promises';
-import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
+import {
+  AuthorizationCodeProvider,
+  browserCallbackStrategy,
+} from '@mcp-abap-adt/auth-providers';
 import {
   AbapServiceKeyStore,
   SafeAbapSessionStore,
@@ -29,6 +32,12 @@ import {
 } from '../helpers/configHelpers';
 import { canListenOnLocalhost, getAvailablePort } from '../helpers/netHelpers';
 import { createTestLogger } from '../helpers/testLogger';
+
+// These tests drive a login a person completes by hand at a browser, not an
+// unattended caller — the provider's own default (30s) is sized for the
+// latter. 290s leaves headroom under each test's own 300_000ms Jest timeout,
+// so a real login timeout surfaces its own message instead of Jest's.
+const INTERACTIVE_LOGIN_TIMEOUT_MS = 290_000;
 
 // Helper to create expired JWT token
 const createExpiredJWT = (): string => {
@@ -171,10 +180,13 @@ describe('AuthBroker Integration', () => {
         uaaUrl: authConfig.uaaUrl,
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
-        browser: 'system', // Use system browser for authentication
-        redirectPort: port1,
+        authorization: browserCallbackStrategy({
+          browser: 'system', // Use system browser for authentication
+          port: port1,
+          timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+        }),
         logger,
-      } as any);
+      });
 
       // Create AuthBroker with real stores and provider
       const broker = new AuthBroker(
@@ -231,10 +243,13 @@ describe('AuthBroker Integration', () => {
         clientSecret: authConfig.uaaClientSecret,
         refreshToken: sessionAuthConfig?.refreshToken,
         accessToken: token1, // Use token from Scenario 1
-        browser: 'system', // Use system browser if token refresh/login needed
-        redirectPort: port2,
+        authorization: browserCallbackStrategy({
+          browser: 'system', // Use system browser if token refresh/login needed
+          port: port2,
+          timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+        }),
         logger,
-      } as any);
+      });
 
       // Create new broker with updated provider
       const broker2 = new AuthBroker(
@@ -377,10 +392,13 @@ describe('AuthBroker Integration', () => {
         clientSecret: authConfig.uaaClientSecret,
         refreshToken: validRefreshToken || 'invalid-expired-refresh-token', // Use valid if available
         accessToken: expiredToken, // Expired/invalid token - this might cause issues
-        browser: 'system', // Use system browser for authentication (login, not refresh)
-        redirectPort,
+        authorization: browserCallbackStrategy({
+          browser: 'system', // Use system browser for authentication (login, not refresh)
+          port: redirectPort,
+          timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+        }),
         logger,
-      } as any);
+      });
 
       logger.info(
         `Scenario 3: Provider initialized with accessToken: ${expiredToken.substring(0, 50)}..., refreshToken: ${validRefreshToken ? 'valid' : 'invalid'}`,
@@ -512,7 +530,7 @@ describe('AuthBroker Integration', () => {
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
         logger,
-      } as any);
+      });
 
       const broker = new AuthBroker(
         {
@@ -593,9 +611,9 @@ describe('AuthBroker Integration', () => {
         uaaUrl: authConfig.uaaUrl,
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
-        browser: 'none', // No browser for this test
+        authorization: browserCallbackStrategy({ browser: 'none' }), // No browser for this test
         logger,
-      } as any);
+      });
 
       // Create broker with allowBrowserAuth=false
       const broker = new AuthBroker(
@@ -660,10 +678,13 @@ describe('AuthBroker Integration', () => {
         uaaUrl: authConfig.uaaUrl,
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
-        browser: 'system',
-        redirectPort,
+        authorization: browserCallbackStrategy({
+          browser: 'system',
+          port: redirectPort,
+          timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+        }),
         logger,
-      } as any);
+      });
 
       const broker1 = new AuthBroker(
         {
@@ -694,9 +715,9 @@ describe('AuthBroker Integration', () => {
         clientSecret: authConfig.uaaClientSecret,
         refreshToken: sessionAuthConfig?.refreshToken,
         accessToken: sessionConnConfig?.authorizationToken,
-        browser: 'none',
+        authorization: browserCallbackStrategy({ browser: 'none' }),
         logger,
-      } as any);
+      });
 
       const broker2 = new AuthBroker(
         {
@@ -767,10 +788,13 @@ describe('AuthBroker Integration', () => {
         uaaUrl: authConfig.uaaUrl,
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
-        browser: 'system',
-        redirectPort: await getAvailablePort(),
+        authorization: browserCallbackStrategy({
+          browser: 'system',
+          port: await getAvailablePort(),
+          timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+        }),
         logger,
-      } as any);
+      });
 
       const broker = new AuthBroker(
         {
@@ -822,9 +846,9 @@ describe('AuthBroker Integration', () => {
         clientId: serviceKeyAuthConfig.uaaClientId,
         clientSecret: serviceKeyAuthConfig.uaaClientSecret,
         refreshToken: serviceKeyAuthConfig.refreshToken,
-        browser: 'system',
+        authorization: browserCallbackStrategy({ browser: 'system' }),
         logger,
-      } as any);
+      });
 
       const broker = new AuthBroker(
         {
@@ -870,9 +894,9 @@ describe('AuthBroker Integration', () => {
         clientId: serviceKeyAuthConfig.uaaClientId,
         clientSecret: serviceKeyAuthConfig.uaaClientSecret,
         refreshToken: serviceKeyAuthConfig.refreshToken,
-        browser: 'system',
+        authorization: browserCallbackStrategy({ browser: 'system' }),
         logger,
-      } as any);
+      });
 
       const broker = new AuthBroker(
         {

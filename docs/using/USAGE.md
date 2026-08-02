@@ -26,6 +26,7 @@ import {
 } from '@mcp-abap-adt/auth-broker';
 import {
   AuthorizationCodeProvider,
+  browserCallbackStrategy,
   ClientCredentialsProvider,
 } from '@mcp-abap-adt/auth-providers';
 
@@ -37,7 +38,7 @@ const abapBroker = new AuthBroker({
     uaaUrl: 'https://auth.example.com',
     clientId: '...',
     clientSecret: '...',
-    browser: 'system',
+    authorization: browserCallbackStrategy({ browser: 'system' }),
   }),
 });
 
@@ -60,7 +61,7 @@ const btpBroker = new AuthBroker({
     uaaUrl: 'https://auth.example.com',
     clientId: '...',
     clientSecret: '...',
-    browser: 'system',
+    authorization: browserCallbackStrategy({ browser: 'system' }),
   }),
 });
 
@@ -72,7 +73,7 @@ const abapMemoryBroker = new AuthBroker({
     uaaUrl: 'https://auth.example.com',
     clientId: '...',
     clientSecret: '...',
-    browser: 'system',
+    authorization: browserCallbackStrategy({ browser: 'system' }),
   }),
 });
 
@@ -93,7 +94,7 @@ const btpMemoryBroker = new AuthBroker({
     uaaUrl: 'https://auth.example.com',
     clientId: '...',
     clientSecret: '...',
-    browser: 'system',
+    authorization: browserCallbackStrategy({ browser: 'system' }),
   }),
 });
 ```
@@ -186,6 +187,12 @@ mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa]
 - `none`: Show URL in console and wait for callback (no browser)
 - `system/chrome/edge/firefox`: Open specific browser
 
+`--browser` and `--redirect-port` are routed into `browserCallbackStrategy` from
+`@mcp-abap-adt/auth-providers`. `--redirect-port` keeps this CLI's own default of `3001` when
+omitted — the underlying library's own default moved to `61001` in `auth-providers` 2.0.0. A
+login is given 5 minutes to complete (a person switching to a browser and signing in by hand,
+not an unattended caller).
+
 **Behavior:**
 - If `--env` is provided and exists, refresh token is attempted first.
 - If refresh fails (or env is missing), service key auth is used.
@@ -252,7 +259,10 @@ constructor(
 **Example**:
 ```typescript
 import { AuthBroker, AbapServiceKeyStore, AbapSessionStore, SafeAbapSessionStore } from '@mcp-abap-adt/auth-broker';
-import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
+import {
+  AuthorizationCodeProvider,
+  browserCallbackStrategy,
+} from '@mcp-abap-adt/auth-providers';
 
 // ABAP with browser-based authorization_code
 const broker = new AuthBroker({
@@ -262,7 +272,7 @@ const broker = new AuthBroker({
     uaaUrl: 'https://auth.example.com',
     clientId: '...',
     clientSecret: '...',
-    browser: 'system',
+    authorization: browserCallbackStrategy({ browser: 'system' }),
   }),
 });
 
@@ -274,7 +284,7 @@ const memoryBroker = new AuthBroker({
     uaaUrl: 'https://auth.example.com',
     clientId: '...',
     clientSecret: '...',
-    browser: 'none',
+    authorization: browserCallbackStrategy({ browser: 'none' }),
   }),
 }, 'none');
 ```
