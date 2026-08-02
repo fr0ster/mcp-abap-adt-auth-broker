@@ -732,7 +732,9 @@ into `browserCallbackStrategy`/`oidcCallbackStrategy`/`samlCallbackStrategy`. Th
 default of its own for the callback port: `--redirect-port` overrides it when given; omitted,
 the port comes from `auth-providers` (currently `61001`). A login is given 5 minutes to
 complete. `device`, `password`, and `token_exchange` never open a browser from this process, so
-`--browser`/`--redirect-port` have no effect for them.
+`--browser`/`--redirect-port` have no effect for them. This applies the same way whether
+`--protocol`/`--flow` come from CLI flags or from `--config` (below) — a field's origin doesn't
+change how it's handled, and CLI flags always take precedence over the same field in a file.
 
 **Examples:**
 ```bash
@@ -796,7 +798,8 @@ It enables `authorization_code` and `saml2-bearer` grant types and provides a
 simple `CatalogService`. See `tests/sso-demo/readme.md` for deploy steps.
 
 **Config file:**
-You can pass a JSON file with provider config:
+You can pass a JSON file with provider config instead of (or alongside) `--protocol`/`--flow`
+and the OIDC/SAML flags — `--config` alone is enough to run a flow, with no other flags required:
 
 ```json
 {
@@ -807,6 +810,14 @@ You can pass a JSON file with provider config:
   "scopes": ["openid", "profile"]
 }
 ```
+
+Any CLI flag given alongside `--config` overrides the same field in the file; a field the file
+sets and no flag overrides is used as-is. A file written for a pre-2.0.0 config still works:
+`browser` and `redirectPort` are routed into the strategy exactly as the equivalent CLI flags
+are, and `authorizationCode`/`assertionFlow` are honored the same way `--code`/`--assertion-flow`
+are. A file that sets `authorizationCodeProvider`, `assertionProvider`, or `manualInput` — all
+functions, which JSON cannot express — is refused with an error naming the CLI flag to use
+instead, rather than having the field silently dropped.
 
 ### Utility Script
 

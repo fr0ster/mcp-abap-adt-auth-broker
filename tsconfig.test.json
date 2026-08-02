@@ -2,8 +2,16 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    // Widened from tsconfig.json's "./src": tests under src/__tests__ import
+    // pure logic straight out of bin/ (e.g. bin/mcpSsoConfig.ts) rather than
+    // duplicating it, so the type-check program must span both directories.
+    "rootDir": "."
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*.ts", "bin/**/*.ts"],
+  // Deliberately outside every build target (see tsconfig.cli.json, which
+  // compiles only mcp-auth.ts/mcp-sso.ts): a dev-only script run via `tsx`,
+  // never shipped, with a pre-existing unrelated type error this check
+  // would otherwise be the first to surface.
+  "exclude": ["node_modules", "dist", "bin/generate-env-from-service-key.ts"]
 }

@@ -67,6 +67,24 @@ deliberately, in `auth-providers` 2.0.0, to sit above the ephemeral port range a
   provider as `undefined` behind the cast.
 
 ### Fixed
+- **`mcp-sso --config <path.json>` now reaches the strategy-building code at all.** Until this
+  fix, `buildProviderConfig` only built a config when `--protocol`/`--flow` were given on the
+  command line; a run driven by `--config` alone (the documented, supported way to use this flag)
+  left the file's fields completely untouched, and they reached `SsoProviderFactory.create()`
+  exactly as written — including a `browser`, `redirectPort`, `authorizationCode`, or
+  `assertionFlow` a 2.0.0 provider no longer accepts directly, with no error and no warning. The
+  merge between the file and CLI flags now happens once, before any validation or strategy
+  building, so `--config` alone, `--protocol`/`--flow` alone, and any combination of the two all
+  go through the same code. `--protocol`/`--flow`/CLI option flags still override the
+  corresponding value from the file. Every field a pre-2.0.0 config could carry either converts
+  onto the strategy (`browser`, `redirectPort`, `authorizationCode`, `assertionFlow`) or the run
+  is refused with a message naming the replacement (`authorizationCodeProvider`,
+  `assertionProvider`, `manualInput` — all function-valued, so a JSON file could never carry a
+  working one regardless).
+- Relatedly, required-field validation (`--client-id`, `--idp-sso-url`, etc.) now runs against
+  the *merged* result. Previously it ran only against CLI options before the file was merged in,
+  so `--config file-with-credentials.json --protocol oidc --flow browser --redirect-port 3001`
+  demanded credentials that were already in the file.
 - `mcp-sso saml2`/`bearer --assertion-flow manual`, and an `--assertion-flow assertion` with no
   `--assertion` value supplied, now announce the authorization URL before prompting for a pasted
   `SAMLResponse` (via `manualSamlResponseStrategy`). The old fallback for the latter combination
