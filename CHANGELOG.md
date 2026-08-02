@@ -11,21 +11,33 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-08-02
+## [2.0.0] - 2026-08-02
 
-### Changed
+### Breaking Changes
+
+**⚠️ The default OAuth callback port for `mcp-auth` and `mcp-sso` moves from `3001` to
+whatever `@mcp-abap-adt/auth-providers` supplies (currently `61001`).** `3001` was never a
+default this package chose: neither CLI listens on a port of its own — `auth-broker` is a
+library plus these two CLIs, not a server — so `3001` only ever arrived by accident, carried in
+from inside the token-provider library's old internal default. That default was itself moved,
+deliberately, in `auth-providers` 2.0.0, to sit above the ephemeral port range and clear of the
+`3001`/`3333` range application servers and proxies typically use. **If you registered
+`http://localhost:3001/callback` (or any other specific port) with your identity provider, pass
+`--redirect-port <that-port>` explicitly from now on** — omitting it no longer lands on `3001`.
+
 - Requires `@mcp-abap-adt/auth-providers` `^2.0.0` (was `^1.2.0`). Every provider config's
   `browser`/`redirectPort` fields are gone; how a login is conducted is now an
   `IAuthorizationStrategy` passed as `authorization`. `AuthBroker` itself never imported those
   fields — the exposure was entirely in the `mcp-auth`/`mcp-sso` CLIs and
   `generate-env-from-service-key` (`bin/`), which construct providers directly.
 
+### Changed
 - **`mcp-auth`, `mcp-sso`, `npm run generate-env`**: every browser-opening flow (`mcp-auth`'s
   default `authorization_code` flow, `mcp-sso oidc --flow browser`, `mcp-sso saml2`/`bearer`
   with the default browser assertion flow) now routes `--browser` and `--redirect-port` into
   `browserCallbackStrategy` / `oidcCallbackStrategy` / `samlCallbackStrategy` instead of a
-  removed provider field. Each CLI's own documented default port (3001) is passed explicitly
-  so it does not silently move to the library's new default of 61001.
+  removed provider field. `--redirect-port` still overrides the port when given; see Breaking
+  Changes above for what happens when it is omitted.
 
 - **Login timeout for these three CLIs raised from 30s to 5 minutes.** 30s was the token
   provider's own default, sized for an unattended caller. These CLIs hand the login to a person

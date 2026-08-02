@@ -188,10 +188,12 @@ mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa]
 - `system/chrome/edge/firefox`: Open specific browser
 
 `--browser` and `--redirect-port` are routed into `browserCallbackStrategy` from
-`@mcp-abap-adt/auth-providers`. `--redirect-port` keeps this CLI's own default of `3001` when
-omitted — the underlying library's own default moved to `61001` in `auth-providers` 2.0.0. A
-login is given 5 minutes to complete (a person switching to a browser and signing in by hand,
-not an unattended caller).
+`@mcp-abap-adt/auth-providers`. This CLI has no default of its own for the callback port:
+`--redirect-port` overrides it when given; omitted, the port comes from `auth-providers`
+(currently `61001`, chosen to sit above the ephemeral range and clear of the `3001`/`3333` range
+servers and proxies typically use). If you registered a redirect URI with a specific port at
+your identity provider, pass `--redirect-port` to match it. A login is given 5 minutes to
+complete (a person switching to a browser and signing in by hand, not an unattended caller).
 
 **Behavior:**
 - If `--env` is provided and exists, refresh token is attempted first.

@@ -675,12 +675,13 @@ mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa]
 - `none`: Show URL in console and wait for callback (no browser)
 - `system/chrome/edge/firefox`: Open specific browser
 
-`--browser` and `--redirect-port` are routed into `browserCallbackStrategy`. `--redirect-port`
-keeps this CLI's own default of `3001` when omitted — the underlying library's own default
-moved to `61001` in `auth-providers` 2.0.0, but this CLI pins its historical default explicitly
-so existing redirect URIs registered at an identity provider keep working. A login is given
-5 minutes to complete (this is a person switching to a browser and signing in by hand, not an
-unattended caller).
+`--browser` and `--redirect-port` are routed into `browserCallbackStrategy`. This CLI has no
+default of its own for the callback port: `--redirect-port` overrides it when given; omitted,
+the port comes from `auth-providers` (currently `61001`, chosen to sit above the ephemeral range
+and clear of the `3001`/`3333` range servers and proxies typically use). If you registered a
+redirect URI with a specific port at your identity provider, pass `--redirect-port` to match it.
+A login is given 5 minutes to complete (this is a person switching to a browser and signing in
+by hand, not an unattended caller).
 
 **Examples:**
 ```bash
@@ -727,9 +728,10 @@ mcp-sso --protocol <oidc|saml2> --flow <flow> --output <path> [--type abap|xsuaa
 
 Only the flows that actually open a browser (OIDC `browser`; SAML2 `bearer`/`pure` with the
 default `--assertion-flow browser`) use `--browser` and `--redirect-port` — they are routed
-into `browserCallbackStrategy`/`oidcCallbackStrategy`/`samlCallbackStrategy`. `--redirect-port`
-keeps this CLI's own default of `3001` when omitted; a login is given 5 minutes to complete.
-`device`, `password`, and `token_exchange` never open a browser from this process, so
+into `browserCallbackStrategy`/`oidcCallbackStrategy`/`samlCallbackStrategy`. This CLI has no
+default of its own for the callback port: `--redirect-port` overrides it when given; omitted,
+the port comes from `auth-providers` (currently `61001`). A login is given 5 minutes to
+complete. `device`, `password`, and `token_exchange` never open a browser from this process, so
 `--browser`/`--redirect-port` have no effect for them.
 
 **Examples:**

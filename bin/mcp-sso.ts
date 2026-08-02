@@ -60,14 +60,6 @@ import {
 } from '@mcp-abap-adt/auth-stores';
 
 /**
- * This CLI's own default whenever `--redirect-port` is omitted. The
- * library's own default moved to 61001 in auth-providers 2.0.0; pinning
- * 3001 here keeps this CLI's documented default ("Redirect port for browser
- * flows (default: 3001)") from silently changing.
- */
-const DEFAULT_REDIRECT_PORT = 3001;
-
-/**
  * A person completes these logins at a browser; the library's own default
  * (30s) is sized for an unattended caller instead.
  */
@@ -91,6 +83,8 @@ interface McpSsoOptions {
   configPath?: string;
   serviceUrl?: string;
   browser?: string;
+  // Overrides the strategy's own callback port (auth-providers'
+  // DEFAULT_CALLBACK_PORT) when set; otherwise the strategy decides.
   redirectPort?: number;
   redirectUri?: string;
   issuerUrl?: string;
@@ -180,7 +174,7 @@ function showHelp(): void {
     '  --browser <browser>       Browser: auto|none|system|chrome|edge|firefox',
   );
   console.log(
-    '  --redirect-port <port>    Redirect port for browser flows (default: 3001)',
+    '  --redirect-port <port>    Redirect port for browser flows (default: from auth-providers, currently 61001)',
   );
   console.log(
     '  --redirect-uri <uri>      Custom redirect URI (OOB/manual code flows)',
@@ -687,8 +681,10 @@ function buildOidcBrowserAuthorization(options: McpSsoOptions) {
       }),
     );
   }
+  // No fallback: an omitted --redirect-port lets the strategy bind its own
+  // default port rather than this CLI pinning a number it doesn't own.
   return oidcCallbackStrategy({
-    port: options.redirectPort ?? DEFAULT_REDIRECT_PORT,
+    port: options.redirectPort,
     browser: options.browser,
     timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
   });
@@ -785,8 +781,10 @@ function buildSamlAuthorization(options: McpSsoOptions) {
       read: readManualInput,
     });
   }
+  // No fallback: an omitted --redirect-port lets the strategy bind its own
+  // default port rather than this CLI pinning a number it doesn't own.
   return samlCallbackStrategy({
-    port: options.redirectPort ?? DEFAULT_REDIRECT_PORT,
+    port: options.redirectPort,
     browser: options.browser,
     timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
   });

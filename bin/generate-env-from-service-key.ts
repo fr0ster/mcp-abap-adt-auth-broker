@@ -34,12 +34,6 @@ import { AuthBroker } from '../src/AuthBroker';
  * (30s) is sized for an unattended caller instead.
  */
 const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
-/**
- * This script never set `redirectPort`, so it relied on the provider's own
- * default of 3001 in auth-providers 1.x. That default moved to 61001 in
- * 2.0.0, so it is pinned here explicitly to avoid a silent change.
- */
-const DEFAULT_REDIRECT_PORT = 3001;
 
 async function main() {
   const args = process.argv.slice(2);
@@ -114,9 +108,10 @@ async function main() {
           uaaUrl: authConfig.uaaUrl,
           clientId: authConfig.uaaClientId,
           clientSecret: authConfig.uaaClientSecret,
+          // No port override: this script has no `--redirect-port` flag, so
+          // the callback port is entirely the strategy's own choice.
           authorization: browserCallbackStrategy({
             browser: 'system',
-            port: DEFAULT_REDIRECT_PORT,
             timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
           }),
         });
