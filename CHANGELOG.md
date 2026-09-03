@@ -27,7 +27,7 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
   is written on top of. The LGPL is a set of additional permissions over the GPL,
   so it cannot be read without both.
 
-  Copyright © 2025 Oleksii Kyslytsia.
+  Copyright © 2025–2026 Oleksii Kyslytsia.
 
 
 ## [2.0.0] - 2026-08-02
