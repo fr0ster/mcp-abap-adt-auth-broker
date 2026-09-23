@@ -3,7 +3,7 @@
  * Uses DefaultLogger from @mcp-abap-adt/logger for proper formatting
  */
 
-import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import type { ILogger } from '@mcp-abap-adt/interfaces';
 import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
 
 export function createTestLogger(prefix: string = 'TEST'): ILogger {

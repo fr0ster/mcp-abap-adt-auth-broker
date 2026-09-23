@@ -46,7 +46,7 @@ npm run test:check
 - Implements a multi-step token acquisition flow: validate cached token -> refresh token -> browser-based OAuth
 - Creates `ITokenRefresher` instances for dependency injection into consuming services
 
-**Stores** (interfaces from `@mcp-abap-adt/interfaces-auth-sap`, implementations in `@mcp-abap-adt/auth-stores`):
+**Stores** (interfaces from `@mcp-abap-adt/interfaces`, implementations in `@mcp-abap-adt/auth-stores`):
 - `ISessionStore` - Stores session data (tokens, connection config) in `.env` files
 - `IServiceKeyStore` - Reads service keys from `.json` files for initial authentication
 
@@ -56,7 +56,7 @@ npm run test:check
 
 ### Package Dependencies
 
-The contracts come from the packages that declare them — `@mcp-abap-adt/interfaces-auth` (tokens, `STORE_ERROR_CODES`), `-auth-sap` (`IConfig`, `IConnectionConfig`, `IAuthorizationConfig`, the store contracts, `AuthType`) and `-utils` (`ILogger`). **Not `@mcp-abap-adt/interfaces`**: that facade is deleted as of its 52.0.0, npm serves 51.0.0 to whoever is pinned to it, and nothing further ships there. Three of those types are re-exported here for convenience. Store and provider implementations are in separate packages:
+This package re-exports interfaces from `@mcp-abap-adt/interfaces` for convenience. Store and provider implementations are in separate packages:
 - `@mcp-abap-adt/auth-stores` - ABAP and XSUAA store implementations
 - `@mcp-abap-adt/auth-providers` - Token provider implementations
 

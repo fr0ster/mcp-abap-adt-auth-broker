@@ -512,7 +512,7 @@ Gets authentication token for destination. Implements a three-step flow:
 The broker implements comprehensive error handling for all external operations, treating all injected dependencies as untrusted:
 
 ```typescript
-import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
+import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces';
 
 try {
   const token = await broker.getToken('TRIAL');

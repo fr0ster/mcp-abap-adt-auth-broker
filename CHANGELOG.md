@@ -9,53 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
-## [2.2.0] - 2026-09-24
-
-### Changed
-
-- **The contracts come from the packages that declare them, not from the deleted
-  facade.** `@mcp-abap-adt/interfaces@^2.3.0` is replaced by
-  `interfaces-auth@^1.2.0`, `interfaces-auth-sap@^1.0.0` and
-  `interfaces-utils@^1.1.0`; 7 files repointed, and the three types this package
-  re-exports for convenience now come from their declaring packages.
-
-  | from | names |
-  |---|---|
-  | `interfaces-auth` | `ITokenProvider`, `ITokenProviderOptions`, `ITokenRefresher`, `ITokenResult`, `STORE_ERROR_CODES` |
-  | `interfaces-auth-sap` | `AuthType`, `IAuthorizationConfig`, `IConfig`, `IConnectionConfig`, `IServiceKeyStore`, `ISessionStore` |
-  | `interfaces-utils` | `ILogger` |
-
-  Of the 12 names this package imports, **not one is an ADT contract** — it was
-  pinned at facade major 2 while the facade passed 51, to describe token
-  brokering.
-
-- **Three implementation ranges move with it, and they are what keep the deleted
-  facade out of the tree** rather than only out of this `package.json`:
-  `@mcp-abap-adt/auth-stores@^1.2.0` (was `^1.0.2`),
-  `@mcp-abap-adt/auth-providers@^2.2.0` (was `^2.0.0`) and
-  `@mcp-abap-adt/logger@^0.4.0` (was `^0.1.4`). Each of the three older versions
-  declares `@mcp-abap-adt/interfaces`, so any one of them put a copy of it in a
-  consumer's tree. Measured after installing:
-
-  ```
-  $ npm ls @mcp-abap-adt/interfaces
-  @mcp-abap-adt/auth-broker@2.2.0
-  └── (empty)
-  ```
-
-- **`bin/mcp-sso.ts` took `ILogger` from the facade**, and nothing noticed until
-  the facade left the tree — at which point `tsc` refused the build with
-  `TS2307: Cannot find module '@mcp-abap-adt/interfaces'`. It comes from
-  `interfaces-utils` now. The repoint had covered `src/` only; the CLI is built by
-  its own `tsconfig.cli.json`, which is why a green `src` build said nothing about
-  it.
-
-- **Two export lists sorted**, in `src/types.ts` and
-  `src/providers/ITokenProvider.ts`. `biome@2.5.14` flags
-  `assist/source/organizeImports` on them and `^2.3.14` admits that version, so a
-  fresh install made `prepublishOnly` fail on two lint errors in source nobody had
-  touched. It happened once here before it was fixed.
-
+## [Unreleased]
 
 ## [2.1.0] - 2026-09-03
 

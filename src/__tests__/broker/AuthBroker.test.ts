@@ -4,7 +4,7 @@
  * Tests use mocked implementations of interfaces, not real store/provider classes.
  */
 
-import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import type { ILogger } from '@mcp-abap-adt/interfaces';
 import { AuthBroker } from '../../AuthBroker';
 import type { ITokenProvider, ITokenResult } from '../../providers';
 import type {
