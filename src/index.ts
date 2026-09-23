@@ -3,14 +3,11 @@
  * JWT authentication broker for MCP ABAP ADT server
  */
 
-// Token refresher interface (re-exported from @mcp-abap-adt/interfaces for convenience)
-// Logger interface (re-exported from @mcp-abap-adt/interfaces for convenience)
-// AuthType (re-exported from @mcp-abap-adt/interfaces for convenience)
-export type {
-  AuthType,
-  ILogger,
-  ITokenRefresher,
-} from '@mcp-abap-adt/interfaces';
+// Three contract types re-exported for convenience, each from the package that
+// declares it — `@mcp-abap-adt/interfaces` is deleted as of its 52.0.0.
+export type { ITokenRefresher } from '@mcp-abap-adt/interfaces-auth';
+export type { AuthType } from '@mcp-abap-adt/interfaces-auth-sap';
+export type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 export { AuthBroker, type AuthBrokerConfig } from './AuthBroker';
 // Token provider interface
 export type {

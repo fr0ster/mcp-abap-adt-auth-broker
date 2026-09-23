@@ -41,7 +41,7 @@ import {
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
-import type { ILogger } from '@mcp-abap-adt/interfaces';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
 import {
   applyFileConfig,

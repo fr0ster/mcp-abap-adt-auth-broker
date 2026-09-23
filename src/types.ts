@@ -11,12 +11,12 @@ import type {
   IConnectionConfig,
   IServiceKeyStore,
   ISessionStore,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth-sap';
 
 // Re-export for backward compatibility
 export type {
-  IConfig,
   IAuthorizationConfig,
+  IConfig,
   IConnectionConfig,
   IServiceKeyStore,
   ISessionStore,
