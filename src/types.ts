@@ -15,8 +15,8 @@ import type {
 
 // Re-export for backward compatibility
 export type {
-  IConfig,
   IAuthorizationConfig,
+  IConfig,
   IConnectionConfig,
   IServiceKeyStore,
   ISessionStore,

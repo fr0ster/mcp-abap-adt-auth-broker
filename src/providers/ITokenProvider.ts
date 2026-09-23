@@ -17,9 +17,9 @@ import type {
 
 // Re-export for backward compatibility
 export type {
-  ITokenProvider,
   IAuthorizationConfig,
   IConnectionConfig,
+  ITokenProvider,
   ITokenResult,
 };
 export type TokenProviderOptions = ITokenProviderOptions;
