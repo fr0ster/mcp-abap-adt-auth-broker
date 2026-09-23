@@ -11,6 +11,31 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+### Changed
+
+- **The contracts come from the packages that declare them, not from the deleted
+  facade.** `@mcp-abap-adt/interfaces@^2.3.0` is replaced by
+  `interfaces-auth@^1.2.0`, `interfaces-auth-sap@^1.0.0` and
+  `interfaces-utils@^1.1.0`; 7 files repointed, and the three types this package
+  re-exports for convenience now come from their declaring packages.
+
+  | from | names |
+  |---|---|
+  | `interfaces-auth` | `ITokenProvider`, `ITokenProviderOptions`, `ITokenRefresher`, `ITokenResult`, `STORE_ERROR_CODES` |
+  | `interfaces-auth-sap` | `AuthType`, `IAuthorizationConfig`, `IConfig`, `IConnectionConfig`, `IServiceKeyStore`, `ISessionStore` |
+  | `interfaces-utils` | `ILogger` |
+
+  Of the 12 names this package imports, **not one is an ADT contract** — it was
+  pinned at facade major 2 while the facade passed 51, to describe token
+  brokering.
+
+- **`@mcp-abap-adt/auth-providers@^2.2.0`** (was `^2.0.0`) and
+  **`@mcp-abap-adt/logger@^0.4.0`** (was `^0.1.4`). Both are what keep the
+  deleted facade out of this tree rather than only out of this `package.json`:
+  `logger@0.1.4` declares it, and `auth-providers@2.0.0` did too until its 2.2.0
+  moved to the contract packages.
+
+
 ## [2.1.0] - 2026-09-03
 
 ### Licence
