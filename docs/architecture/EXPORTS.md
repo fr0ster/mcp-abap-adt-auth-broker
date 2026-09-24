@@ -48,7 +48,7 @@ export type {
 } from './providers';
 ```
 
-**ITokenProvider shape** (from `@mcp-abap-adt/interfaces`):
+**ITokenProvider shape** (from `@mcp-abap-adt/interfaces-auth`):
 ```typescript
 export interface ITokenProvider {
   getTokens(): Promise<ITokenResult>;
@@ -59,7 +59,9 @@ export interface ITokenProvider {
 ### Convenience Re-exports
 
 ```typescript
-export type { AuthType, ILogger, ITokenRefresher } from '@mcp-abap-adt/interfaces';
+export type { ITokenRefresher } from '@mcp-abap-adt/interfaces-auth';
+export type { AuthType } from '@mcp-abap-adt/interfaces-auth-sap';
+export type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 ```
 
 ## External Implementations

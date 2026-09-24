@@ -2,12 +2,12 @@
  * Main AuthBroker class for managing JWT tokens based on destinations
  */
 
-import {
-  type ILogger,
-  type ITokenRefresher,
-  type ITokenResult,
-  STORE_ERROR_CODES,
-} from '@mcp-abap-adt/interfaces';
+import type {
+  ITokenRefresher,
+  ITokenResult,
+} from '@mcp-abap-adt/interfaces-auth';
+import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import type { ITokenProvider } from './providers';
 import type {
   IAuthorizationConfig,
