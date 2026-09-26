@@ -65,10 +65,6 @@ export interface AuthBrokerConfig {
   provider: IRefreshableTokenProvider | TokenProviderFactory;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function errorCode(error: unknown): string | undefined {
   if (error !== null && typeof error === 'object' && 'code' in error) {
     const code = (error as { code: unknown }).code;
@@ -349,9 +345,15 @@ export class AuthBroker {
   }
 
   /**
-   * A store read that does not stop the flow: a missing or unreadable entry is
-   * logged and answered as absent, and whatever needed it fails with its own
-   * message later.
+   * A store read where absence is an answer and anything else is not.
+   *
+   * A store says "nothing here" with `null`, or with `FILE_NOT_FOUND`, and the
+   * flow goes on to the next source. Any other failure — a service key that is
+   * not valid JSON, a file the process may not read — is a different problem
+   * with a different fix, and reaches the caller as the store raised it. It
+   * used to be logged and answered as absent, so the caller saw only the
+   * consequence ("missing required field 'serviceUrl'") and went looking for a
+   * file that was there.
    */
   private async read<T>(
     destination: string,
@@ -361,15 +363,11 @@ export class AuthBroker {
     try {
       return await fn();
     } catch (error) {
-      const code = errorCode(error);
-      if (code === STORE_ERROR_CODES.FILE_NOT_FOUND) {
+      if (errorCode(error) === STORE_ERROR_CODES.FILE_NOT_FOUND) {
         this.logger.debug(`No ${what} for ${destination}: file not found`);
-      } else {
-        this.logger.warn(
-          `Failed to read ${what} for ${destination}: ${errorMessage(error)}`,
-        );
+        return null;
       }
-      return null;
+      throw error;
     }
   }
 

@@ -521,7 +521,7 @@ describe('AuthBroker', () => {
   });
 
   describe('store reads', () => {
-    it('answers an unreadable session as absent and still gets a token', async () => {
+    it('answers a missing session file as absent and still gets a token', async () => {
       const sessionStore = mockSessionStore();
       sessionStore.getConnectionConfig.mockRejectedValue(
         Object.assign(new Error('no file'), { code: 'FILE_NOT_FOUND' }),
@@ -533,6 +533,39 @@ describe('AuthBroker', () => {
       });
 
       await expect(broker.getToken('DEST')).resolves.toBe('cached-token');
+    });
+
+    it('passes an unreadable service key on as the store raised it', async () => {
+      // Absence is null or FILE_NOT_FOUND. A key that is there and broken used
+      // to be logged and answered as absent, and the caller saw only "missing
+      // required field 'serviceUrl'".
+      const broken = new Error('Invalid JSON in file "DEST.json"');
+      const serviceKeyStore = mockServiceKeyStore();
+      serviceKeyStore.getConnectionConfig.mockRejectedValue(broken);
+      const provider = mockProvider();
+      const broker = new AuthBroker({
+        sessionStore: mockSessionStore(),
+        serviceKeyStore,
+        provider,
+      });
+
+      await expect(broker.getToken('DEST')).rejects.toBe(broken);
+      expect(provider.getTokens).not.toHaveBeenCalled();
+    });
+
+    it('passes an unreadable session on as the store raised it', async () => {
+      const denied = Object.assign(new Error('EACCES: permission denied'), {
+        code: 'EACCES',
+      });
+      const sessionStore = mockSessionStore();
+      sessionStore.getConnectionConfig.mockRejectedValue(denied);
+      const broker = new AuthBroker({
+        sessionStore,
+        serviceKeyStore: mockServiceKeyStore(),
+        provider: mockProvider(),
+      });
+
+      await expect(broker.getToken('DEST')).rejects.toBe(denied);
     });
 
     it('getAuthorizationConfig: session first, then service key, then null', async () => {

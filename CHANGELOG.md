@@ -11,6 +11,25 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-09-26
+
+### Fixed
+
+- **A store failure other than a missing file reaches the caller as raised.**
+  The broker answered every store error as absence — logged, then `null` — so
+  a service key that is there but not valid JSON, or a file the process may
+  not read, surfaced only as its consequence: "Session for destination … is
+  missing required field 'serviceUrl'", which sends users to create a file
+  that already exists. Absence is still `null` or `FILE_NOT_FOUND`, and the
+  flow goes on to the next source; anything else is thrown unchanged, before
+  the provider is asked.
+
+  Measured on auth-stores 1.2.3: the service key stores throw on an invalid or
+  unreadable file (`Invalid JSON in file …`, `EACCES`), so this change is what
+  a broker user sees. The session stores answer an unreadable or unparsable
+  file with `null` themselves; that is theirs to change, and this release does
+  not see it.
+
 ## [3.0.0] - 2026-09-26
 
 ### Security
