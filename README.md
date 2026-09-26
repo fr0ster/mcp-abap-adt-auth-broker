@@ -18,6 +18,9 @@ JWT authentication broker for MCP ABAP ADT server. Manages authentication tokens
 npm install @mcp-abap-adt/auth-broker
 ```
 
+Requires Node.js 22 or 24 (`engines: "^22 || ^24"`), the versions SAP BTP's Cloud Foundry
+Node.js buildpack offers.
+
 ## Usage
 
 ### Basic Usage (Provider Required)
@@ -691,11 +694,11 @@ mcp-auth auth-code --service-key ./abap.json --output ./abap.env --type abap
 # OIDC SSO (device flow example)
 mcp-auth oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
 
-# SAML2 pure (cookie)
-mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --output ./saml.env --type abap
+# SAML2 pure (cookie); the SAML flags are mcp-sso's, see "SAML assertion validation" below
+mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --output ./saml.env --type abap
 
 # SAML2 bearer (in progress, requires --dev)
-mcp-auth saml2-bearer --dev --service-key ./mcp.json --assertion <base64> --output ./sso.env --type xsuaa
+mcp-auth saml2-bearer --dev --service-key ./mcp.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa
 
 # ABAP: authorization_code (default, opens browser)
 mcp-auth --service-key ./abap.json --output ./abap.env --type abap
@@ -753,18 +756,62 @@ mcp-sso oidc --flow password --token-endpoint https://issuer/oauth/token --clien
 # OIDC token exchange
 mcp-sso oidc --flow token_exchange --issuer https://issuer --client-id my-client --subject-token <token> --output ./sso.env --type xsuaa
 
-# SAML bearer flow (assertion -> token)
-mcp-sso bearer --idp-sso-url https://idp/sso --sp-entity-id my-sp --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
+# SAML bearer flow against XSUAA with a service key: the Audience, Recipient and token alias
+# come from <uaa.url>/saml/metadata, the IdP's trust from its own metadata
+mcp-sso bearer --service-key ./service-key.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa
 
-# SAML pure flow (cookie)
-mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --assertion <base64> --cookie "SAP_SESSION=..." --output ./sso.env --type abap
+# The same, every value stated (IdP-initiated assertion -> token)
+mcp-sso bearer --idp-sso-url https://idp/sso --sp-entity-id <uaa-entity-id> --acs-url <uaa-bearer-acs> --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --idp-initiated --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
+
+# SAML pure flow (cookie; SP-initiated browser login, the request is sent by mcp-sso)
+mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --cookie "SAP_SESSION=..." --output ./sso.env --type abap
 ```
 
-**SAML token alias (XSUAA):**
-If your IdP requires the token alias endpoint, pass SAML metadata XML:
+**SAML assertion validation:**
+Both SAML flows validate every assertion before using it — signature, issuer, audience,
+recipient, time window, request ID and replay (done by `@mcp-abap-adt/auth-providers` 4; see its
+README, *SAML assertion validation*). The provider will not even be constructed without the
+trust it checks against, and `mcp-sso` invents none of it — it is stated, or read from SAML
+metadata:
+
+| Option | `--config` field | What it is |
+|---|---|---|
+| `--idp-cert <path>` (repeatable) | `idpCertificates` (string or list, inline PEM or base64 DER) | The identity provider's signing certificate(s). A file may be PEM (one or several certificates) or binary DER. Repeat the flag, or list several, to trust both keys during a rotation. |
+| `--idp-entity-id <id>` | `idpEntityId` | The identity provider's `entityID` — the `Issuer` its assertions carry. |
+| `--idp-metadata <url\|path>` | `idpMetadata` | The identity provider's SAML metadata (for SAP Cloud Identity Services `https://<tenant>.accounts.ondemand.com/saml2/metadata`). Fills the two rows above and `--idp-sso-url` where not given: signing keys and keys without `use`, never encryption keys. An https URL or a file; plain http only for loopback. |
+| `--sp-entity-id <id>` | `spEntityId` | Already required; it is now also the `Audience` the assertion must name. For bearer against UAA/XSUAA, the `entityID` in their SAML metadata. |
+| `--acs-url <url>` | `acsUrl` | The `Recipient` the assertion must name. For bearer against UAA/XSUAA, the token endpoint's bearer ACS; the default `http://localhost:<port>/callback` fits only a login delivered to this CLI. |
+| `--idp-initiated` | `idpInitiated` (`true`/`false`) | The identity provider starts the login and no AuthnRequest is sent, so the assertion must carry no `InResponseTo`. |
+| `--authn-request-id <id>` | `authnRequestId` | The AuthnRequest ID an `--assertion` answers, when the request was sent by something other than `mcp-sso`. |
+
+A `--idp-cert` on the command line replaces the file's `idpCertificates` rather than adding to
+them, so a certificate retired on the command line is not still trusted from the file.
+
+Which request setting a run needs:
+
+- **Browser or manual login, SP-initiated** (`--assertion-flow browser`, the default, or
+  `manual`): nothing — `mcp-sso` builds the AuthnRequest and knows its ID.
+- **`--assertion <base64>`** from an SP-initiated login sent elsewhere: `--authn-request-id`.
+- **IdP-initiated** — required for `bearer` against UAA or XSUAA, whose saml2-bearer grant refuses
+  an assertion carrying `InResponseTo`: `--idp-initiated`, with `--assertion`, or with
+  `--assertion-flow manual` (the default under `--idp-initiated`), which asks you to start the
+  login at the identity provider and paste the `SAMLResponse` it posts. `--idp-initiated` with
+  `--assertion-flow browser` is refused, since there is no request URL to open.
+
+`--idp-initiated` together with `--authn-request-id`, a missing certificate or entity ID, or an
+assertion that fails a check is reported by `auth-providers` itself (`ValidationError` or
+`AssertionValidationError`), with the field or the check it refused.
+
+**XSUAA's side of a bearer run:**
+None of `--sp-entity-id`, `--acs-url` and the bearer token endpoint is in an XSUAA service key, but
+XSUAA publishes all three in its SAML metadata: its `entityID` is the `Audience`, and its
+`/oauth/token/alias/<alias>` endpoint is both the `Recipient` and where the assertion is exchanged.
+With `--service-key`, `bearer` reads `<uaa.url>/saml/metadata` and fills whichever of them was not
+given. Without network access to it, pass the file (from *Security > Trust Configuration >
+Download SAML Metadata* in the subaccount):
 
 ```bash
-mcp-sso bearer --saml-metadata ./saml-sp.xml --assertion <base64> --service-key ./service-key.json --output ./sso.env --type xsuaa
+mcp-sso bearer --saml-metadata ./saml-sp.xml --idp-sso-url https://idp/sso --sp-entity-id <uaa-entity-id> --acs-url <uaa-bearer-acs> --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --idp-initiated --assertion <base64> --service-key ./service-key.json --output ./sso.env --type xsuaa
 ```
 
 ### Local Keycloak (OIDC + SAML Tests)
@@ -818,6 +865,40 @@ are, and `authorizationCode`/`assertionFlow` are honored the same way `--code`/`
 are. A file that sets `authorizationCodeProvider`, `assertionProvider`, or `manualInput` — all
 functions, which JSON cannot express — is refused with an error naming the CLI flag to use
 instead, rather than having the field silently dropped.
+
+A SAML config file carries the trust inline:
+
+```json
+{
+  "protocol": "saml2",
+  "flow": "bearer",
+  "idpSsoUrl": "https://idp.example/sso",
+  "spEntityId": "https://uaa.example/entity",
+  "acsUrl": "https://uaa.example/oauth/token/alias/example",
+  "idpEntityId": "https://idp.example/metadata",
+  "idpCertificates": ["MIIC...base64 DER from the IdP metadata's <X509Certificate>..."],
+  "idpInitiated": true,
+  "assertionFlow": "manual"
+}
+```
+
+#### Migrating `mcp-sso` SAML runs from 2.2.0
+
+2.2.0 used `@mcp-abap-adt/auth-providers` 2.x, which trusted any SAML payload it was handed.
+With 4.x every `mcp-sso` SAML run (`bearer`, `saml2 --flow pure`, and `mcp-auth saml2-pure` /
+`saml2-bearer`, which call it) fails before login until you add:
+
+1. `--idp-metadata <url|path>`, or `--idp-cert <path>` and `--idp-entity-id <id>` (or
+   `idpCertificates` and `idpEntityId` in `--config`) — without them the provider refuses to
+   construct.
+2. The real `--sp-entity-id` (the `Audience`) and, unless the assertion is delivered to this CLI's
+   own callback, the `--acs-url` it names as `Recipient`. For `bearer` with `--service-key` both
+   are read from XSUAA's metadata.
+3. For `bearer` against UAA or XSUAA: `--idp-initiated`, with `--assertion` or
+   `--assertion-flow manual`. For any other `--assertion` from an SP-initiated login:
+   `--authn-request-id`.
+
+Node.js 22 or 24 is required.
 
 ### Utility Script
 

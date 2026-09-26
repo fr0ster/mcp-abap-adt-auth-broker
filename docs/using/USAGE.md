@@ -217,6 +217,41 @@ mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --credential
 mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsuaa
 ```
 
+## CLI: mcp-sso (SAML)
+
+`mcp-sso` (and `mcp-auth saml2-pure`/`saml2-bearer`, which call it) validates every SAML
+assertion through `@mcp-abap-adt/auth-providers` 4 before using it, and a SAML run does not start
+without the trust it checks against:
+
+- `--idp-metadata <url|path>` — the identity provider's SAML metadata, e.g.
+  `https://<tenant>.accounts.ondemand.com/saml2/metadata` — or `--idp-cert <path>` (repeatable;
+  PEM or DER) and `--idp-entity-id <id>`, or `idpCertificates` and `idpEntityId` in a `--config`
+  file. Required for both `bearer` and `pure`.
+- `--sp-entity-id` is the `Audience` the assertion must name, and `--acs-url` the `Recipient`.
+  For `bearer` with `--service-key` both, and the token endpoint, are read from XSUAA's
+  `<uaa.url>/saml/metadata`.
+- `--idp-initiated` when the identity provider starts the login. `bearer` against UAA or XSUAA
+  needs it: both refuse an assertion carrying `InResponseTo`. Use it with `--assertion`, or with
+  `--assertion-flow manual` (its default), which asks for the `SAMLResponse` the identity
+  provider posts; the browser flow has no URL to open and is refused.
+- `--authn-request-id <id>` for an `--assertion` answering an SP-initiated request that
+  `mcp-sso` did not send.
+
+```bash
+# With a service key: XSUAA's side from its metadata, the IdP's from the IdP's
+mcp-sso bearer --service-key ./service-key.json \
+  --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated \
+  --output ./sso.env --type xsuaa
+
+# Every value stated
+mcp-sso bearer --idp-sso-url https://idp/sso --sp-entity-id <uaa-entity-id> --acs-url <uaa-bearer-acs> \
+  --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --idp-initiated \
+  --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
+```
+
+See the main README, *CLI: mcp-sso*, for every option, the `--config` fields and the migration
+from 2.2.0.
+
 ## API Reference
 
 ### AuthBroker Class
@@ -392,7 +427,7 @@ const broker = new AuthBroker();
 async function getToken() {
   try {
     const token = await broker.getToken('TRIAL');
-    console.log('Token obtained:', token.substring(0, 20) + '...');
+    console.log(`Token obtained (${token.length} chars)`);
   } catch (error) {
     console.error('Error:', error.message);
   }
@@ -434,7 +469,7 @@ async function refreshToken() {
   try {
     // Force refresh (will use browser auth if no refresh token)
     const newToken = await broker.refreshToken('TRIAL');
-    console.log('Token refreshed:', newToken.substring(0, 20) + '...');
+    console.log(`Token refreshed (${newToken.length} chars)`);
   } catch (error) {
     console.error('Refresh failed:', error.message);
   }

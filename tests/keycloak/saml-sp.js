@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+const fs = require('fs');
 const zlib = require('zlib');
 
 const issuer = process.env.SAML_SP_ENTITY_ID || 'mcp-sso-saml';
@@ -8,11 +9,12 @@ const destination =
   process.env.SAML_IDP_URL ||
   'http://localhost:8080/realms/mcp-sso/protocol/saml';
 const relayState = process.env.SAML_RELAY_STATE || '';
+// The request ID, for `--authn-request-id`: the assertion answers it, and
+// mcp-sso did not build this request, so it cannot know the ID otherwise.
+const requestIdFile =
+  process.env.SAML_REQUEST_ID_FILE || '/tmp/keycloak-saml-request-id.txt';
 
-function buildAuthnRequest() {
-  const id = `_${Date.now().toString(16)}${Math.random()
-    .toString(16)
-    .slice(2)}`;
+function buildAuthnRequest(id) {
   const issueInstant = new Date().toISOString();
   return `<?xml version="1.0" encoding="UTF-8"?>
 <samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
@@ -30,7 +32,9 @@ function deflateAndEncode(xml) {
   return deflated.toString('base64');
 }
 
-const xml = buildAuthnRequest();
+const id = `_${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+fs.writeFileSync(requestIdFile, id);
+const xml = buildAuthnRequest(id);
 const samlRequest = deflateAndEncode(xml);
 
 const params = new URLSearchParams({ SAMLRequest: samlRequest });

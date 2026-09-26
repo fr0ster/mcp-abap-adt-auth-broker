@@ -9,6 +9,127 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
+## [Unreleased]
+
+### Security
+
+- **No token reaches a log line or the terminal.** `formatToken` returned a
+  token of 50 characters or fewer whole, and a longer one's first and last 25
+  characters. UAA and XSUAA refresh tokens are opaque and about 34 characters,
+  so `AuthBroker` logged every refresh token in full, at `info`, on each token
+  request, persist and session check; `mcp-auth` printed the first 50
+  characters of the access and refresh tokens it wrote, which is the whole of
+  a refresh token. Both now say `<redacted, N chars>`. auth-providers 4.1.2
+  closed the same leak in its own `formatToken`, and the range now requires
+  it. **Anyone who shipped broker logs at `info` or `debug`, or kept
+  `mcp-auth` output, should treat the refresh tokens in them as exposed and
+  revoke them.**
+
+### Changed
+
+- **BREAKING: Node.js 22 or 24** — `engines: "^22 || ^24"` (was `>=18.2.0`),
+  following `@mcp-abap-adt/auth-providers` 3.0.0, which requires it: the
+  versions SAP BTP's Cloud Foundry Node.js buildpack offers.
+
+- **BREAKING for `mcp-sso` SAML users: `@mcp-abap-adt/auth-providers@^4.1.2`**
+  (was `^2.2.0`). From 4.0.0 both SAML providers validate every assertion —
+  signature, issuer, audience, recipient, time window, request ID, replay —
+  and refuse to construct without the trust to check it against. Every
+  `mcp-sso bearer`, `mcp-sso saml2 --flow pure`, `mcp-auth saml2-pure` and
+  `mcp-auth saml2-bearer` run that worked with 2.2.0 now fails before login
+  with auth-providers' `ValidationError`
+  (`missing idpCertificates, idpEntityId`), and nothing in TypeScript said so,
+  since the new fields are optional.
+
+  **Migrating:** add `--idp-cert <path>` and `--idp-entity-id <id>` (or
+  `idpCertificates`/`idpEntityId` in `--config`); give the real
+  `--sp-entity-id`, now the `Audience`, and the `--acs-url` the assertion names
+  as `Recipient`; for `bearer` against UAA or XSUAA add `--idp-initiated`,
+  since both refuse an assertion carrying `InResponseTo`; for any other
+  `--assertion` from a request `mcp-sso` did not send, add
+  `--authn-request-id`. The README's *Migrating `mcp-sso` SAML runs from
+  2.2.0* has the details.
+
+  Also from auth-providers 3.0.0: `Saml2BearerProvider` sends one
+  base64url-encoded Assertion, as RFC 7522 requires, instead of the whole
+  `SAMLResponse`, which UAA answered with 401. The rest of what 3.x and 4.x
+  changed does not reach this package: `DeviceFlowProvider` was never used
+  (`mcp-sso oidc --flow device` builds `OidcDeviceFlowProvider`), and
+  `buildSamlAuthorizationUrl`, `getSamlAssertion` and `parseSamlNotOnOrAfter`
+  were never imported. `AuthorizationCodeProvider` and
+  `ClientCredentialsProvider`, which `mcp-auth` builds, are unchanged.
+
+- **`@mcp-abap-adt/interfaces-auth@^2.0.1`** (was `^1.2.0`). Its one break,
+  `AssertionContext.expectedInResponseTo` becoming optional, concerns
+  `IAssertionValidator` implementers; nothing here implements one.
+- **`@mcp-abap-adt/interfaces-auth-sap@^1.0.1`** (was `^1.0.0`), the release
+  that accepts `interfaces-auth` 2, so an install carries one copy of it.
+- **`@mcp-abap-adt/auth-stores@^1.2.1`** (was `^1.2.0`), on the same
+  interface versions; no store API changed.
+
+### Added
+
+- **SAML metadata instead of hand-copied values.**
+  - `--idp-metadata <url|path>` / `idpMetadata`: the identity provider's SAML
+    metadata — for SAP Cloud Identity Services
+    `https://<tenant>.accounts.ondemand.com/saml2/metadata` — fills
+    `--idp-cert`, `--idp-entity-id` and `--idp-sso-url` where they were not
+    given. Signing keys and keys without `use` are trusted, encryption keys
+    never.
+  - `saml2-bearer` with `--service-key` reads XSUAA's own
+    `<uaa.url>/saml/metadata` for the `Audience` (`--sp-entity-id`), the
+    `Recipient` (`--acs-url`) and the token endpoint — all three the
+    `/oauth/token/alias/<alias>` endpoint and the entityID it publishes, none
+    of them in the service key. `--saml-metadata <file>` still works, and now
+    fills the same three.
+  - An explicit option always wins, and trust is replaced, never widened: a
+    `--idp-cert` means no certificate from the metadata is trusted beside it.
+    Metadata carries the certificates assertions are verified against, so a
+    URL must be https (plain http only for loopback, i.e. a local test IdP).
+
+  A bearer run against XSUAA is now
+  `mcp-sso bearer --service-key ./key.json --idp-metadata https://<tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated …`.
+
+- **`mcp-sso` SAML trust options**, passed into both the `bearer` and the
+  `pure` provider config:
+  - `--idp-cert <path>`, repeatable for key rotation: a PEM file (one
+    certificate or several) or a binary DER file. `idpCertificates` in
+    `--config` carries them inline (a string or a list, PEM or base64 DER); a
+    `--idp-cert` replaces the file's list rather than adding to it.
+  - `--idp-entity-id <id>` / `idpEntityId`: the `Issuer` the assertion must
+    name.
+  - `--idp-initiated` / `idpInitiated`: no AuthnRequest is sent. With it,
+    `mcp-sso` never asks auth-providers for an authorization URL, which it
+    refuses for an IdP-initiated login: the default assertion flow becomes
+    `manual` (start the login at the identity provider, paste the
+    `SAMLResponse`), `--assertion` works as before, and
+    `--assertion-flow browser` is refused, having no URL to open.
+  - `--authn-request-id <id>` / `authnRequestId`: the request an
+    `--assertion` answers, when `mcp-sso` did not send it.
+
+  Missing trust material is passed on as missing: auth-providers' own
+  `ValidationError` names it. `mcp-sso --help` says what a SAML run requires.
+
+### Fixed
+
+- **A closed stdin is a failure, not a success.** A prompt for a pasted
+  `SAMLResponse`, passcode or cookie waited on a promise that never settled
+  when stdin was closed; the event loop drained and `mcp-sso` exited 0 having
+  written nothing, which a script reads as success. It now fails, naming the
+  prompt.
+- **`generate-env` constructs its XSUAA session store with a service URL.**
+  `XsuaaSessionStore` requires one since auth-stores 1.x and the script passed
+  none; it now takes the service key's, or the placeholder `mcp-auth` uses.
+
+### Tests
+
+- The Keycloak fixtures run the SAML pure flow end to end with validation:
+  the realm signs its responses and names `http://localhost:3002/acs` as the
+  IdP-initiated ACS, the `demo` user has the profile Keycloak 24 requires, and
+  `run-tests.sh` / `run-saml.sh` pass `--idp-metadata` (and
+  `--authn-request-id` for the SP-initiated login, whose ID `saml-sp.js` now
+  records).
+
 ## [2.2.0] - 2026-09-24
 
 ### Changed

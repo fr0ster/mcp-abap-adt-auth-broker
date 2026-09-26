@@ -3,14 +3,20 @@
  */
 
 /**
- * Format token for logging (start...end)
- * @param token Token string to format
- * @returns Formatted token string or undefined if token is empty
+ * What a log line may say about a token: that it is there, and its length.
+ *
+ * It used to return a token of 50 characters or fewer whole, and the first and
+ * last 25 characters of a longer one. UAA and XSUAA refresh tokens are opaque
+ * and about 34 characters, so every one of them was logged in full, at `info`,
+ * and an access token leaked 50 characters. auth-providers 4.1.2 closed the
+ * same leak in its own `formatToken`; this is the broker's copy of it.
+ *
+ * @param token Token string to describe
+ * @returns `<redacted, N chars>`, or undefined if there is no token
  */
 export function formatToken(token?: string): string | undefined {
   if (!token) return undefined;
-  if (token.length <= 50) return token;
-  return `${token.substring(0, 25)}...${token.substring(token.length - 25)}`;
+  return `<redacted, ${token.length} chars>`;
 }
 
 /**

@@ -87,8 +87,21 @@ async function main() {
       ? new XsuaaServiceKeyStore(serviceKeyDir)
       : new AbapServiceKeyStore(serviceKeyDir);
 
+    // An XSUAA session store needs a service URL, and an XSUAA service key may
+    // not carry one — the same placeholder mcp-auth uses, for the store's own
+    // bookkeeping only.
+    let xsuaaServiceUrl = '<SERVICE_URL>';
+    if (isXsuaa) {
+      try {
+        const connection =
+          await serviceKeyStore.getConnectionConfig(destination);
+        xsuaaServiceUrl = connection?.serviceUrl || xsuaaServiceUrl;
+      } catch {
+        // No serviceUrl in the key: the placeholder stands.
+      }
+    }
     const sessionStore = isXsuaa
-      ? new XsuaaSessionStore(sessionDir)
+      ? new XsuaaSessionStore(sessionDir, xsuaaServiceUrl)
       : new AbapSessionStore(sessionDir);
 
     const authConfig =

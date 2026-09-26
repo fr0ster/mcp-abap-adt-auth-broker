@@ -10,9 +10,12 @@
  * an optional `--config` file, and merging the two — lives here instead.
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import { createInterface } from 'node:readline';
 import {
   asOidcResult,
+  DEFAULT_CALLBACK_PORT,
   manualSamlResponseStrategy,
   type OidcBrowserProviderConfig,
   type OidcDeviceFlowProviderConfig,
@@ -80,6 +83,28 @@ export interface McpSsoOptions {
   cookie?: string;
   uaaUrl?: string;
   samlMetadataPath?: string;
+  /**
+   * The identity provider's signing certificates, inline (PEM or bare base64
+   * DER). Only a `--config` file carries these; `--idp-cert` names files
+   * instead (`idpCertificateFiles`).
+   */
+  idpCertificates?: string[];
+  /** Paths from `--idp-cert`, repeatable; read by `resolveIdpCertificates`. */
+  idpCertificateFiles?: string[];
+  /** The `Issuer` the assertion must name: the identity provider's entityID. */
+  idpEntityId?: string;
+  /**
+   * The identity provider's SAML metadata, an https URL or a file: fills the
+   * entityID, signing certificates and SSO URL that were not given explicitly.
+   */
+  idpMetadata?: string;
+  /**
+   * The identity provider starts the login; no AuthnRequest is sent, so the
+   * assertion must carry no `InResponseTo`.
+   */
+  idpInitiated?: boolean;
+  /** The AuthnRequest ID an `--assertion` answers, when this CLI did not send it. */
+  authnRequestId?: string;
 }
 
 export function readManualInput(prompt: string): Promise<string> {
@@ -87,8 +112,17 @@ export function readManualInput(prompt: string): Promise<string> {
     input: process.stdin,
     output: process.stdout,
   });
-  return new Promise((resolve) => {
+  // A closed stdin never answers the question, and a promise that never
+  // settles lets the event loop drain: the process exited 0 with nothing
+  // written, which a script reads as success. End of input is a refusal.
+  return new Promise((resolve, reject) => {
+    let answered = false;
+    rl.on('close', () => {
+      if (!answered)
+        reject(new Error(`no input: stdin closed at "${prompt.trim()}"`));
+    });
     rl.question(prompt, (answer) => {
+      answered = true;
       rl.close();
       resolve(answer.trim());
     });
@@ -162,6 +196,9 @@ const CONFIG_BACKFILL_FIELDS: (keyof McpSsoOptions)[] = [
   'assertion',
   'cookie',
   'uaaUrl',
+  'idpEntityId',
+  'idpMetadata',
+  'authnRequestId',
 ];
 
 /**
@@ -227,6 +264,132 @@ export function applyFileConfig(
     if (options[field] === undefined && fields[field] !== undefined) {
       (options as unknown as Record<string, unknown>)[field] = fields[field];
     }
+  }
+
+  if (fields.idpInitiated !== undefined) {
+    // A string "false" would be truthy and silently declare the opposite.
+    if (typeof fields.idpInitiated !== 'boolean') {
+      console.error("❌ --config: 'idpInitiated' must be true or false.");
+      process.exit(1);
+    }
+    options.idpInitiated = options.idpInitiated ?? fields.idpInitiated;
+  }
+
+  if (fields.idpCertificates !== undefined) {
+    const raw = fields.idpCertificates;
+    const list = typeof raw === 'string' ? [raw] : raw;
+    if (
+      !Array.isArray(list) ||
+      !list.every((entry) => typeof entry === 'string')
+    ) {
+      console.error(
+        "❌ --config: 'idpCertificates' must be a string or a list of strings (PEM or base64 DER).",
+      );
+      process.exit(1);
+    }
+    // Trust is replaced, never widened: a certificate named on the CLI means
+    // the file's list is not trusted alongside it. A rotated-out certificate
+    // left in the file must not keep verifying assertions.
+    if (
+      options.idpCertificates === undefined &&
+      options.idpCertificateFiles === undefined
+    ) {
+      options.idpCertificates = list as string[];
+    }
+  }
+}
+
+const PEM_CERTIFICATE_BLOCK =
+  /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+const BASE64_TEXT = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * Reads one `--idp-cert` file into the entries `idpCertificates` takes. A
+ * PEM file may hold several certificates (a rotation bundle); each becomes
+ * its own entry, since a single string is read as one certificate and the
+ * rest would be ignored. A binary DER file (`.cer`, `.der`) is base64-encoded.
+ * Whether the result is a certificate at all is the provider's check.
+ */
+export function readIdpCertificateFile(filePath: string): string[] {
+  const resolved = resolvePath(filePath);
+  let content: Buffer;
+  try {
+    content = readFileSync(resolved);
+  } catch {
+    console.error(`❌ IdP certificate file not found: ${resolved}`);
+    process.exit(1);
+  }
+  const text = content.toString('utf8');
+  const blocks = text.match(PEM_CERTIFICATE_BLOCK);
+  if (blocks) {
+    return blocks;
+  }
+  if (
+    text.includes('-----BEGIN') ||
+    BASE64_TEXT.test(text.replace(/\s+/g, ''))
+  ) {
+    return [text.trim()];
+  }
+  return [content.toString('base64')];
+}
+
+/**
+ * The certificates the SAML providers are given: inline ones (a `--config`
+ * file) and those read from `--idp-cert` files. `undefined` when there are
+ * none, so the provider's own `ValidationError` names what is missing.
+ */
+export function resolveIdpCertificates(
+  options: McpSsoOptions,
+): string[] | undefined {
+  const certificates = [
+    ...(options.idpCertificates ?? []),
+    ...(options.idpCertificateFiles ?? []).flatMap(readIdpCertificateFile),
+  ];
+  return certificates.length > 0 ? certificates : undefined;
+}
+
+/**
+ * Parses the SAML trust flags into `target`, returning how many values after
+ * `arg` were consumed (0 for a flag with no value, or an argument that is not
+ * one of these). Kept here rather than in bin/mcp-sso.ts so it can be tested.
+ */
+export function parseSamlTrustArg(
+  target: Partial<McpSsoOptions>,
+  arg: string,
+  next: string | undefined,
+): number {
+  switch (arg) {
+    case '--idp-cert':
+      if (!next || next.startsWith('--')) {
+        console.error('❌ --idp-cert needs a certificate file path.');
+        process.exit(1);
+      }
+      // Repeatable: every occurrence adds a certificate, for key rotation.
+      target.idpCertificateFiles = [
+        ...(target.idpCertificateFiles ?? []),
+        next,
+      ];
+      return 1;
+    case '--idp-entity-id':
+      target.idpEntityId = next;
+      return 1;
+    case '--idp-metadata':
+      if (!next || next.startsWith('--')) {
+        console.error('❌ --idp-metadata needs an https URL or a file path.');
+        process.exit(1);
+      }
+      target.idpMetadata = next;
+      return 1;
+    case '--idp-initiated':
+      // A flag with no value. Left undefined when absent, so a --config
+      // file's idpInitiated can still fill it.
+      target.idpInitiated = true;
+      return 0;
+    case '--authn-request-id':
+      target.authnRequestId = next;
+      return 1;
+    default:
+      return 0;
   }
 }
 
@@ -354,6 +517,9 @@ function buildSamlAuthorization(options: McpSsoOptions) {
       payload: options.assertion,
     });
   }
+  if (options.idpInitiated) {
+    return buildIdpInitiatedAuthorization(options);
+  }
   const assertionFlow = options.assertionFlow || 'browser';
   if (assertionFlow !== 'browser') {
     // 'manual', and an 'assertion' flow given no value, both need a human to
@@ -372,6 +538,40 @@ function buildSamlAuthorization(options: McpSsoOptions) {
   });
 }
 
+/**
+ * An IdP-initiated login has no URL for this CLI to open: the only one
+ * auth-providers can build carries an AuthnRequest, and with `idpInitiated`
+ * it refuses to build one. So the strategy never calls
+ * `buildAuthorizationUrl` — the user starts the login at the identity
+ * provider and pastes the SAMLResponse it posts. The browser flow, which
+ * exists to open that URL, is refused rather than left to fail after the
+ * provider is built.
+ */
+function buildIdpInitiatedAuthorization(options: McpSsoOptions) {
+  if (options.assertionFlow === 'browser') {
+    console.error(
+      '❌ --idp-initiated cannot use --assertion-flow browser: there is no request URL to open. ' +
+        'Start the login at the identity provider and use --assertion-flow manual, or pass --assertion.',
+    );
+    process.exit(1);
+  }
+  // The ACS the assertion names as its Recipient; the same fallback the
+  // auth-providers strategies use when none is declared.
+  const redirectUri =
+    options.acsUrl ?? `http://localhost:${DEFAULT_CALLBACK_PORT}/callback`;
+  return {
+    async authorize() {
+      const payload = await readManualInput(
+        'Start the login at your identity provider, then paste the SAMLResponse (from the POST body): ',
+      );
+      if (!payload) {
+        throw new Error('No SAMLResponse was provided');
+      }
+      return { payload, redirectUri };
+    },
+  };
+}
+
 function buildSamlCookieProvider(
   options: McpSsoOptions,
 ): (samlResponse: string) => Promise<string> {
@@ -388,6 +588,19 @@ function buildSamlCookieProvider(
   };
 }
 
+/**
+ * What auth-providers 4 validates an assertion against. Absent trust material
+ * is passed as absent: the provider's constructor names what is missing.
+ */
+function buildSamlTrust(options: McpSsoOptions) {
+  return {
+    idpCertificates: resolveIdpCertificates(options),
+    idpEntityId: options.idpEntityId,
+    idpInitiated: options.idpInitiated,
+    authnRequestId: options.authnRequestId,
+  };
+}
+
 export function buildSamlBearerConfig(
   options: McpSsoOptions,
 ): Saml2BearerProviderConfig {
@@ -396,6 +609,7 @@ export function buildSamlBearerConfig(
     spEntityId: requireOption(options.spEntityId, '--sp-entity-id'),
     acsUrl: options.acsUrl,
     relayState: options.relayState,
+    ...buildSamlTrust(options),
     tokenUrl: options.tokenEndpoint,
     uaaUrl: options.uaaUrl,
     clientId: options.clientId,
@@ -412,6 +626,7 @@ export function buildSamlPureConfig(
     spEntityId: requireOption(options.spEntityId, '--sp-entity-id'),
     acsUrl: options.acsUrl,
     relayState: options.relayState,
+    ...buildSamlTrust(options),
     authorization: buildSamlAuthorization(options),
     cookieProvider: buildSamlCookieProvider(options),
   };

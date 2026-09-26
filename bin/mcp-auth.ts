@@ -161,14 +161,16 @@ function showHelp(): void {
     '  mcp-auth oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa',
   );
   console.log('');
-  console.log('  # SAML2 pure (cookies)');
   console.log(
-    '  mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --output ./saml.env --type abap',
+    '  # SAML2 pure (cookies); every assertion is validated: see mcp-sso --help',
+  );
+  console.log(
+    '  mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp.pem --idp-entity-id https://idp/metadata --output ./saml.env --type abap',
   );
   console.log('');
   console.log('  # SAML2 bearer (in progress, requires --dev)');
   console.log(
-    '  mcp-auth saml2-bearer --dev --service-key ./service-key.json --assertion <base64> --output ./sso.env --type xsuaa',
+    '  mcp-auth saml2-bearer --dev --service-key ./service-key.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa',
   );
   console.log('');
   console.log('  # XSUAA with authorization_code (default, opens browser)');
@@ -250,8 +252,9 @@ function showHelp(): void {
   );
 }
 
-function parseArgs(args: string[] = process.argv.slice(2)): McpAuthOptions | null {
-
+function parseArgs(
+  args: string[] = process.argv.slice(2),
+): McpAuthOptions | null {
   // Handle --version and --help first
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
     showHelp();
@@ -870,11 +873,11 @@ async function main() {
           );
         }
         console.log(
-          `   - ${ABAP_CONNECTION_VARS.AUTHORIZATION_TOKEN}=${token.substring(0, 50)}...`,
+          `   - ${ABAP_CONNECTION_VARS.AUTHORIZATION_TOKEN}=<redacted, ${token.length} chars>`,
         );
         if (authConfig?.refreshToken) {
           console.log(
-            `   - ${ABAP_AUTHORIZATION_VARS.REFRESH_TOKEN}=${authConfig.refreshToken.substring(0, 50)}...`,
+            `   - ${ABAP_AUTHORIZATION_VARS.REFRESH_TOKEN}=<redacted, ${authConfig.refreshToken.length} chars>`,
           );
         }
       } else {
@@ -882,11 +885,11 @@ async function main() {
           console.log(`   - XSUAA_MCP_URL=${finalServiceUrl}`);
         }
         console.log(
-          `   - ${XSUAA_CONNECTION_VARS.AUTHORIZATION_TOKEN}=${token.substring(0, 50)}...`,
+          `   - ${XSUAA_CONNECTION_VARS.AUTHORIZATION_TOKEN}=<redacted, ${token.length} chars>`,
         );
         if (authConfig?.refreshToken) {
           console.log(
-            `   - ${XSUAA_AUTHORIZATION_VARS.REFRESH_TOKEN}=${authConfig.refreshToken.substring(0, 50)}...`,
+            `   - ${XSUAA_AUTHORIZATION_VARS.REFRESH_TOKEN}=<redacted, ${authConfig.refreshToken.length} chars>`,
           );
         }
       }
@@ -903,10 +906,10 @@ async function main() {
 
       console.log(`✅ JSON file created: ${resolvedOutputPath}`);
       console.log(`📋 Output contains:`);
-      console.log(`   - accessToken: ${token.substring(0, 50)}...`);
+      console.log(`   - accessToken: <redacted, ${token.length} chars>`);
       if (authConfig?.refreshToken) {
         console.log(
-          `   - refreshToken: ${authConfig.refreshToken.substring(0, 50)}...`,
+          `   - refreshToken: <redacted, ${authConfig.refreshToken.length} chars>`,
         );
       }
       if (finalServiceUrl) {

@@ -326,7 +326,7 @@ describe('AuthBroker Integration', () => {
 
       // Debug: Print token to see what we're working with
       logger.info(
-        `Scenario 3: Expired token: ${expiredToken.substring(0, 50)}...`,
+        `Scenario 3: Expired token: <redacted, ${expiredToken.length} chars>`,
       );
       try {
         const parts = expiredToken.split('.');
@@ -401,7 +401,7 @@ describe('AuthBroker Integration', () => {
       });
 
       logger.info(
-        `Scenario 3: Provider initialized with accessToken: ${expiredToken.substring(0, 50)}..., refreshToken: ${validRefreshToken ? 'valid' : 'invalid'}`,
+        `Scenario 3: Provider initialized with accessToken: <redacted, ${expiredToken.length} chars>, refreshToken: ${validRefreshToken ? 'valid' : 'invalid'}`,
       );
 
       // Create AuthBroker
@@ -424,7 +424,7 @@ describe('AuthBroker Integration', () => {
         `Scenario 3: Getting token via broker (expired token in session, invalid refresh token)`,
       );
       logger.info(
-        `Scenario 3: Expired token in session: ${expiredToken.substring(0, 50)}...`,
+        `Scenario 3: Expired token in session: <redacted, ${expiredToken.length} chars>`,
       );
       logger.info(
         `Scenario 3: Provider will try refresh -> fail -> perform login (authorization via browser)`,
@@ -474,7 +474,7 @@ describe('AuthBroker Integration', () => {
       }
       expect(token).not.toBe(expiredToken);
       logger.info(
-        `Scenario 3: Token received: ${token.substring(0, 50)}... (different from expired: ${token !== expiredToken})`,
+        `Scenario 3: Token received: <redacted, ${token.length} chars> (different from expired: ${token !== expiredToken})`,
       );
 
       // Validate that new token is valid and not expired

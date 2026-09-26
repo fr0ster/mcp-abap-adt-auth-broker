@@ -4,7 +4,7 @@ This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` pa
 
 ## Prerequisites
 
-- **Node.js**: Version 18.0.0 or higher
+- **Node.js**: Version 22 or 24 (`engines: "^22 || ^24"`; the versions SAP BTP Cloud Foundry offers)
 - **npm**: Version 7.0.0 or higher (comes with Node.js)
 - **SAP BTP Account**: For obtaining service keys (if using browser authentication)
 

@@ -35,9 +35,11 @@ SAML_RESPONSE="$(node "$ROOT_DIR/tests/keycloak/saml-auto.js")"
 node "$ROOT_DIR/dist/bin/mcp-sso.js" \
   saml2 \
   --flow pure \
-  --idp-sso-url http://localhost:8080/realms/mcp-sso/protocol/saml \
   --sp-entity-id mcp-sso-saml \
+  --acs-url http://localhost:3002/acs \
   --assertion "$SAML_RESPONSE" \
+  --idp-metadata http://localhost:8080/realms/mcp-sso/protocol/saml/descriptor \
+  --idp-initiated \
   --assertion-flow assertion \
   --output /tmp/keycloak-saml.env \
   --type abap \
