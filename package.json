@@ -1,7 +1,7 @@
 {
   "name": "@mcp-abap-adt/auth-broker",
   "version": "2.2.0",
-  "description": "JWT authentication broker for MCP ABAP ADT - manages tokens based on destination headers",
+  "description": "Per-destination token broker for SAP BTP and ABAP: sessions and service keys from stores, tokens from an injected provider, results persisted - plus the mcp-auth and mcp-sso CLIs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -21,7 +21,11 @@
     "token",
     "broker",
     "mcp",
-    "abap-adt"
+    "abap-adt",
+    "xsuaa",
+    "oauth2",
+    "saml",
+    "sso"
   ],
   "author": "Oleksii Kyslytsia <oleksij.kyslytsja@gmail.com>",
   "license": "LGPL-3.0-only",

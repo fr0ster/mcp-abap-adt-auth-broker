@@ -1,16 +1,25 @@
 # @mcp-abap-adt/auth-broker
 [![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/StandWithUkraine.svg)](https://stand-with-ukraine.pp.ua)
 
-JWT authentication broker for MCP ABAP ADT server. Manages authentication tokens based on destination headers, automatically loading tokens from `.env` files and refreshing them using service keys when needed.
+A per-destination token broker for SAP BTP and ABAP systems. For a destination — a name, such as
+`TRIAL` — it reads the session and the service key from the stores it is given, hands them to
+a token provider, and saves what the provider returns back to the session: a JWT or, for SAML,
+session cookies, with the refresh token. It decides nothing about tokens itself: whether the
+cached token is still good, when to refresh and when to log in is the provider's call
+(`@mcp-abap-adt/auth-providers`), and where sessions live is the stores' (`@mcp-abap-adt/auth-stores`).
+
+It is used by the MCP ABAP ADT server, the proxy, the Cloud ALM client and server, and the
+backuper. It also ships two CLIs that write session files: `mcp-auth` (service key → session,
+authorization code or client credentials) and `mcp-sso` (OIDC and SAML single sign-on).
 
 ## Features
 
-- 🔐 **Destination-based Authentication**: Load tokens based on `x-mcp-destination` header
-- 📁 **Environment File Support**: Automatically loads tokens from `{destination}.env` files
+- 🎯 **Per destination**: one provider per destination name, built by a factory or given once
 - 🔄 **Provider-driven token lifecycle**: The provider decides whether its cached token is still good, refreshes it, or logs in; the broker persists what it returns
 - ⚡ **Forced refresh**: `refreshToken()` obtains a new token even when the cached one looks valid — for a caller holding a 401
+- 🧾 **JWT or SAML cookies**: what the provider returns is saved as a token or as session cookies
 - 🔑 **No secrets copied**: The client secret stays in the service key; the session store gets tokens only
-- 🔧 **Configurable Base Path**: Customize where `.env` and `.json` files are stored
+- 🧰 **CLIs**: `mcp-auth` and `mcp-sso` produce `.env`/JSON session files, SAML trust read from metadata
 
 ## Installation
 
