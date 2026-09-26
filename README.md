@@ -8,8 +8,7 @@ session cookies, with the refresh token. It decides nothing about tokens itself:
 cached token is still good, when to refresh and when to log in is the provider's call
 (`@mcp-abap-adt/auth-providers`), and where sessions live is the stores' (`@mcp-abap-adt/auth-stores`).
 
-It is used by the MCP ABAP ADT server, the proxy, the Cloud ALM client and server, and the
-backuper. It also ships two CLIs that write session files: `mcp-auth` (service key → session,
+It also ships two CLIs that write session files: `mcp-auth` (service key → session,
 authorization code or client credentials) and `mcp-sso` (OIDC and SAML single sign-on).
 
 ## Features
