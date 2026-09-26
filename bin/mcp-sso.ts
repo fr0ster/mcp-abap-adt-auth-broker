@@ -38,7 +38,10 @@ import * as path from 'path';
 const distPath = path.resolve(__dirname, '..', 'index.js');
 const { AuthBroker } = require(distPath);
 
-import { SsoProviderFactory } from '@mcp-abap-adt/auth-providers';
+import {
+  type SsoProviderConfig,
+  SsoProviderFactory,
+} from '@mcp-abap-adt/auth-providers';
 import {
   AbapServiceKeyStore,
   AbapSessionStore,
@@ -55,6 +58,7 @@ import {
   parseSamlTrustArg,
   readManualInput,
 } from './mcpSsoConfig';
+import { refreshableProvider } from './refreshableProvider';
 import { applySamlMetadata } from './samlMetadata';
 
 function getVersion(): string {
@@ -839,29 +843,42 @@ async function main() {
     });
   }
 
-  const providerConfig = buildProviderConfig(
-    options,
-    existingAuth,
-    existingConn,
+  const withLogger = (config: SsoProviderConfig): SsoProviderConfig =>
+    (config as any).config
+      ? ({
+          ...config,
+          config: {
+            ...(config as any).config,
+            logger: (config as any).config?.logger ?? logger,
+          },
+        } as SsoProviderConfig)
+      : config;
+
+  // TODO(auth-providers 4.2.0): pass SsoProviderFactory.create(...) itself,
+  // once the factory is typed as returning IRefreshableTokenProvider; the
+  // refreshableProvider adapter goes then.
+  const tokenProvider = refreshableProvider((refresh) =>
+    SsoProviderFactory.create(
+      withLogger(
+        buildProviderConfig(
+          options,
+          refresh
+            ? {
+                refreshToken:
+                  refresh.refreshToken ?? existingAuth?.refreshToken,
+              }
+            : existingAuth,
+          // A forced refresh must not be handed the token it replaces.
+          refresh ? null : existingConn,
+        ),
+      ),
+    ),
   );
-
-  const providerConfigWithLogger = (providerConfig as any).config
-    ? {
-        ...providerConfig,
-        config: {
-          ...(providerConfig as any).config,
-          logger: (providerConfig as any).config?.logger ?? logger,
-        },
-      }
-    : providerConfig;
-
-  const tokenProvider = SsoProviderFactory.create(providerConfigWithLogger);
   const broker = new AuthBroker(
     {
       sessionStore,
-      tokenProvider,
+      provider: tokenProvider,
     },
-    options.browser,
     logger,
   );
 

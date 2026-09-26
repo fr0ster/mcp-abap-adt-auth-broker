@@ -8,9 +8,14 @@
 export type { ITokenRefresher } from '@mcp-abap-adt/interfaces-auth';
 export type { AuthType } from '@mcp-abap-adt/interfaces-auth-sap';
 export type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-export { AuthBroker, type AuthBrokerConfig } from './AuthBroker';
+export {
+  AuthBroker,
+  type AuthBrokerConfig,
+  type TokenProviderFactory,
+} from './AuthBroker';
 // Token provider interface
 export type {
+  IRefreshableTokenProvider,
   ITokenProvider,
   ITokenResult,
   TokenProviderOptions,

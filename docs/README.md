@@ -57,10 +57,9 @@ API reference and usage examples:
 ### AuthBroker Class
 
 The main class for managing JWT authentication tokens:
-- **getToken()** - Get token for destination (loads, validates, refreshes if needed)
-- **refreshToken()** - Force refresh token using service key
-- **clearCache()** - Clear cached token for specific destination
-- **clearAllCache()** - Clear all cached tokens
+- **getToken()** - The provider's current token for the destination (cached while valid, else refreshed or logged in), persisted to the session store
+- **refreshToken()** - A new token from the provider, never the cached one (`refreshTokens()`), persisted
+- **createTokenRefresher()** - `ITokenRefresher` for one destination, for injection into a connection
 
 ### File-Based Configuration
 

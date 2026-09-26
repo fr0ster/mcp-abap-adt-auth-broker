@@ -9,18 +9,20 @@
  * 2. Service key + fresh session - should use token from session
  * 3. Service key + expired session + expired refresh token - should login via browser
  * 4. Token validation - validate token expiration
- * 5. allowBrowserAuth option - test behavior with browser auth disabled
+ * 5. A headless strategy - the login is refused with the strategy's own error
  */
 
 import * as dns from 'node:dns/promises';
 import {
   AuthorizationCodeProvider,
+  type AuthorizationCodeProviderConfig,
   browserCallbackStrategy,
 } from '@mcp-abap-adt/auth-providers';
 import {
   AbapServiceKeyStore,
   SafeAbapSessionStore,
 } from '@mcp-abap-adt/auth-stores';
+import { refreshableProvider } from '../../../bin/refreshableProvider';
 import { AuthBroker } from '../../AuthBroker';
 import {
   getAbapDestination,
@@ -38,6 +40,40 @@ import { createTestLogger } from '../helpers/testLogger';
 // latter. 290s leaves headroom under each test's own 300_000ms Jest timeout,
 // so a real login timeout surfaces its own message instead of Jest's.
 const INTERACTIVE_LOGIN_TIMEOUT_MS = 290_000;
+
+/**
+ * An AuthorizationCodeProvider the broker accepts.
+ *
+ * TODO(auth-providers 4.2.0): `new AuthorizationCodeProvider(config)` itself —
+ * it implements refreshTokens() there, and this helper goes.
+ */
+function authorizationCodeProvider(config: AuthorizationCodeProviderConfig) {
+  const first = new AuthorizationCodeProvider(config);
+  const provider = refreshableProvider((refresh) =>
+    refresh
+      ? authorizationCodeProvider({
+          ...config,
+          accessToken: undefined,
+          refreshToken: refresh.refreshToken ?? config.refreshToken,
+        })
+      : first,
+  );
+  return Object.assign(provider, {
+    validateToken: (token: string) => first.validateToken(token),
+  });
+}
+
+/** What a headless process's strategy throws instead of opening a browser. */
+class LoginRequiredError extends Error {}
+
+/** A strategy for a process no person is watching: it refuses every login. */
+function headlessStrategy() {
+  return {
+    authorize: async (): Promise<never> => {
+      throw new LoginRequiredError('Interactive login required');
+    },
+  };
+}
 
 // Helper to create expired JWT token
 const createExpiredJWT = (): string => {
@@ -176,7 +212,7 @@ describe('AuthBroker Integration', () => {
 
       // Create token provider
       const port1 = await getAvailablePort();
-      const tokenProvider = new AuthorizationCodeProvider({
+      const tokenProvider = authorizationCodeProvider({
         uaaUrl: authConfig.uaaUrl,
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
@@ -193,9 +229,8 @@ describe('AuthBroker Integration', () => {
         {
           serviceKeyStore,
           sessionStore,
-          tokenProvider,
+          provider: tokenProvider,
         },
-        'system', // Use system default browser
         logger,
       );
 
@@ -229,15 +264,15 @@ describe('AuthBroker Integration', () => {
         `Scenario 2: Getting token again for destination: ${destination} (should use session)`,
       );
 
-      // Get auth config from session (should have refresh token now)
-      const sessionAuthConfig =
-        await sessionStore.getAuthorizationConfig(destination);
-      expect(sessionAuthConfig).toBeDefined();
+      // The session holds the refresh token, and no client secret: the
+      // credentials stay in the service key.
+      const sessionAuthConfig = await sessionStore.loadSession(destination);
       expect(sessionAuthConfig?.refreshToken).toBeDefined();
+      expect(sessionAuthConfig?.uaaClientSecret).toBeUndefined();
 
       // Create new provider with tokens from session
       const port2 = await getAvailablePort();
-      const tokenProvider2 = new AuthorizationCodeProvider({
+      const tokenProvider2 = authorizationCodeProvider({
         uaaUrl: authConfig.uaaUrl,
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
@@ -256,9 +291,8 @@ describe('AuthBroker Integration', () => {
         {
           serviceKeyStore,
           sessionStore,
-          tokenProvider: tokenProvider2,
+          provider: tokenProvider2,
         },
-        'system',
         logger,
       );
 
@@ -359,7 +393,7 @@ describe('AuthBroker Integration', () => {
       // Priority: 1. YAML config, 2. Previous scenario session, 3. Invalid (for testing)
       const refreshTokenFromConfig = getRefreshToken(config);
       const sessionAuthConfigBefore =
-        await sessionStore.getAuthorizationConfig(destination);
+        await sessionStore.loadSession(destination);
       const refreshTokenFromSession = sessionAuthConfigBefore?.refreshToken;
       const validRefreshToken =
         refreshTokenFromConfig || refreshTokenFromSession;
@@ -386,7 +420,7 @@ describe('AuthBroker Integration', () => {
       if (!redirectPort) {
         return;
       }
-      const tokenProvider = new AuthorizationCodeProvider({
+      const tokenProvider = authorizationCodeProvider({
         uaaUrl: authConfig.uaaUrl,
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
@@ -409,9 +443,8 @@ describe('AuthBroker Integration', () => {
         {
           serviceKeyStore,
           sessionStore,
-          tokenProvider,
+          provider: tokenProvider,
         },
-        'system',
         logger,
       );
 
@@ -525,7 +558,7 @@ describe('AuthBroker Integration', () => {
         return;
       }
 
-      const tokenProvider = new AuthorizationCodeProvider({
+      const tokenProvider = authorizationCodeProvider({
         uaaUrl: authConfig.uaaUrl,
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
@@ -536,9 +569,8 @@ describe('AuthBroker Integration', () => {
         {
           serviceKeyStore,
           sessionStore,
-          tokenProvider,
+          provider: tokenProvider,
         },
-        undefined,
         logger,
       );
 
@@ -568,8 +600,8 @@ describe('AuthBroker Integration', () => {
     }, 30000);
   });
 
-  describe('allowBrowserAuth option', () => {
-    it('should throw BROWSER_AUTH_REQUIRED when allowBrowserAuth=false and no valid session', async () => {
+  describe('headless strategy', () => {
+    it("propagates the strategy's own error when a login is needed and none is allowed", async () => {
       if (!hasRealConfigValue) {
         console.warn('⚠️  Skipping integration test - no real config');
         return;
@@ -607,33 +639,29 @@ describe('AuthBroker Integration', () => {
         return;
       }
 
-      const tokenProvider = new AuthorizationCodeProvider({
+      const tokenProvider = authorizationCodeProvider({
         uaaUrl: authConfig.uaaUrl,
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
-        authorization: browserCallbackStrategy({ browser: 'none' }), // No browser for this test
+        authorization: headlessStrategy(),
         logger,
       });
 
-      // Create broker with allowBrowserAuth=false
       const broker = new AuthBroker(
         {
           serviceKeyStore,
           sessionStore,
-          tokenProvider,
-          allowBrowserAuth: false,
+          provider: tokenProvider,
         },
-        'none',
         logger,
       );
 
-      // Should throw BROWSER_AUTH_REQUIRED error
-      await expect(broker.getToken(destination)).rejects.toThrow(
-        'Browser authentication required',
+      await expect(broker.getToken(destination)).rejects.toBeInstanceOf(
+        LoginRequiredError,
       );
     }, 30000);
 
-    it('should work with allowBrowserAuth=false if valid token exists in session', async () => {
+    it('succeeds headless when the session holds a valid token', async () => {
       if (!hasRealConfigValue) {
         console.warn('⚠️  Skipping integration test - no real config');
         return;
@@ -674,7 +702,7 @@ describe('AuthBroker Integration', () => {
 
       // First, get a valid token and save it to session
       const redirectPort = await getAvailablePort();
-      const tokenProvider1 = new AuthorizationCodeProvider({
+      const tokenProvider1 = authorizationCodeProvider({
         uaaUrl: authConfig.uaaUrl,
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
@@ -690,9 +718,8 @@ describe('AuthBroker Integration', () => {
         {
           serviceKeyStore,
           sessionStore,
-          tokenProvider: tokenProvider1,
+          provider: tokenProvider1,
         },
-        'system',
         logger,
       );
 
@@ -703,19 +730,18 @@ describe('AuthBroker Integration', () => {
       // Wait a bit
       await new Promise((resolve) => setTimeout(resolve, 500));
 
-      // Now create broker with allowBrowserAuth=false and use token from session
-      const sessionAuthConfig =
-        await sessionStore.getAuthorizationConfig(destination);
+      // Now a headless provider seeded with the token from the session
+      const sessionAuthConfig = await sessionStore.loadSession(destination);
       const sessionConnConfig =
         await sessionStore.getConnectionConfig(destination);
 
-      const tokenProvider2 = new AuthorizationCodeProvider({
+      const tokenProvider2 = authorizationCodeProvider({
         uaaUrl: authConfig.uaaUrl,
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
         refreshToken: sessionAuthConfig?.refreshToken,
         accessToken: sessionConnConfig?.authorizationToken,
-        authorization: browserCallbackStrategy({ browser: 'none' }),
+        authorization: headlessStrategy(),
         logger,
       });
 
@@ -723,10 +749,8 @@ describe('AuthBroker Integration', () => {
         {
           serviceKeyStore,
           sessionStore,
-          tokenProvider: tokenProvider2,
-          allowBrowserAuth: false,
+          provider: tokenProvider2,
         },
-        'none',
         logger,
       );
 
@@ -784,7 +808,7 @@ describe('AuthBroker Integration', () => {
         return;
       }
 
-      const tokenProvider = new AuthorizationCodeProvider({
+      const tokenProvider = authorizationCodeProvider({
         uaaUrl: authConfig.uaaUrl,
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
@@ -800,9 +824,8 @@ describe('AuthBroker Integration', () => {
         {
           serviceKeyStore,
           sessionStore,
-          tokenProvider,
+          provider: tokenProvider,
         },
-        'system',
         logger,
       );
 
@@ -841,7 +864,7 @@ describe('AuthBroker Integration', () => {
         throw new Error('Missing auth config for integration test');
       }
 
-      const tokenProvider = new AuthorizationCodeProvider({
+      const tokenProvider = authorizationCodeProvider({
         uaaUrl: serviceKeyAuthConfig.uaaUrl,
         clientId: serviceKeyAuthConfig.uaaClientId,
         clientSecret: serviceKeyAuthConfig.uaaClientSecret,
@@ -854,9 +877,8 @@ describe('AuthBroker Integration', () => {
         {
           serviceKeyStore,
           sessionStore,
-          tokenProvider,
+          provider: tokenProvider,
         },
-        undefined,
         logger,
       );
 
@@ -889,7 +911,7 @@ describe('AuthBroker Integration', () => {
         throw new Error('Missing auth config for integration test');
       }
 
-      const tokenProvider = new AuthorizationCodeProvider({
+      const tokenProvider = authorizationCodeProvider({
         uaaUrl: serviceKeyAuthConfig.uaaUrl,
         clientId: serviceKeyAuthConfig.uaaClientId,
         clientSecret: serviceKeyAuthConfig.uaaClientSecret,
@@ -902,9 +924,8 @@ describe('AuthBroker Integration', () => {
         {
           serviceKeyStore,
           sessionStore,
-          tokenProvider,
+          provider: tokenProvider,
         },
-        undefined,
         logger,
       );
 

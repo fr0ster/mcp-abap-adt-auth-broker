@@ -12,85 +12,63 @@ import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 
 ### Create AuthBroker Instance
 
+The broker takes a session store, an optional service key store, and a
+provider implementing `IRefreshableTokenProvider` — or a factory building one
+per destination. Stores come from `@mcp-abap-adt/auth-stores`, providers from
+`@mcp-abap-adt/auth-providers`.
+
 ```typescript
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
-  AuthBroker,
   AbapServiceKeyStore,
   AbapSessionStore,
+  SafeAbapSessionStore,
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
-  BtpSessionStore,
-  SafeAbapSessionStore,
-  SafeXsuaaSessionStore,
-  SafeBtpSessionStore,
-} from '@mcp-abap-adt/auth-broker';
+} from '@mcp-abap-adt/auth-stores';
 import {
   AuthorizationCodeProvider,
   browserCallbackStrategy,
   ClientCredentialsProvider,
 } from '@mcp-abap-adt/auth-providers';
 
-// ABAP authentication (authorization_code)
+// ABAP (authorization_code). The factory is called once per destination with
+// what the stores hold: UAA credentials plus the stored refresh token, and the
+// connection config with serviceUrl and the stored token.
 const abapBroker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new AbapSessionStore(['/path/to/destinations']),
-  tokenProvider: new AuthorizationCodeProvider({
-    uaaUrl: 'https://auth.example.com',
-    clientId: '...',
-    clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system' }),
-  }),
+  serviceKeyStore: new AbapServiceKeyStore('/path/to/keys'),
+  sessionStore: new AbapSessionStore('/path/to/sessions'),
+  provider: (destination, authConfig, connConfig) => {
+    if (!authConfig) throw new Error(`No UAA credentials for ${destination}`);
+    return new AuthorizationCodeProvider({
+      uaaUrl: authConfig.uaaUrl,
+      clientId: authConfig.uaaClientId,
+      clientSecret: authConfig.uaaClientSecret,
+      refreshToken: authConfig.refreshToken,
+      accessToken: connConfig.authorizationToken,
+      authorization: browserCallbackStrategy({ browser: 'system' }),
+    });
+  },
 });
 
-// XSUAA authentication (client_credentials)
+// XSUAA (client_credentials)
 const xsuaaBroker = new AuthBroker({
-  serviceKeyStore: new XsuaaServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new XsuaaSessionStore(['/path/to/destinations']),
-  tokenProvider: new ClientCredentialsProvider({
-    uaaUrl: 'https://auth.example.com',
-    clientId: '...',
-    clientSecret: '...',
-  }),
-}, 'none');
-
-// BTP authentication (authorization_code)
-const btpBroker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']), // BTP uses same service key format as ABAP
-  sessionStore: new BtpSessionStore(['/path/to/destinations']),
-  tokenProvider: new AuthorizationCodeProvider({
-    uaaUrl: 'https://auth.example.com',
-    clientId: '...',
-    clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system' }),
-  }),
+  serviceKeyStore: new XsuaaServiceKeyStore('/path/to/keys'),
+  sessionStore: new XsuaaSessionStore('/path/to/sessions', 'https://mcp.example.com'),
+  provider: (destination, authConfig) => {
+    if (!authConfig) throw new Error(`No UAA credentials for ${destination}`);
+    return new ClientCredentialsProvider({
+      uaaUrl: authConfig.uaaUrl,
+      clientId: authConfig.uaaClientId,
+      clientSecret: authConfig.uaaClientSecret,
+    });
+  },
 });
 
-// Safe in-memory session stores (data lost after restart, secure)
-const abapMemoryBroker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new SafeAbapSessionStore(), // In-memory, no disk persistence
-  tokenProvider: new AuthorizationCodeProvider({
-    uaaUrl: 'https://auth.example.com',
-    clientId: '...',
-    clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system' }),
-  }),
-});
-
-const xsuaaMemoryBroker = new AuthBroker({
-  serviceKeyStore: new XsuaaServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new SafeXsuaaSessionStore(), // In-memory, no disk persistence
-  tokenProvider: new ClientCredentialsProvider({
-    uaaUrl: 'https://auth.example.com',
-    clientId: '...',
-    clientSecret: '...',
-  }),
-}, 'none');
-
-const btpMemoryBroker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path/to/destinations']),
-  sessionStore: new SafeBtpSessionStore(), // In-memory, no disk persistence
-  tokenProvider: new AuthorizationCodeProvider({
+// In-memory session store (nothing on disk, lost on restart), provider instance
+const memoryBroker = new AuthBroker({
+  sessionStore: new SafeAbapSessionStore(undefined, 'https://abap.example.com'),
+  provider: new AuthorizationCodeProvider({
     uaaUrl: 'https://auth.example.com',
     clientId: '...',
     clientSecret: '...',
@@ -99,14 +77,17 @@ const btpMemoryBroker = new AuthBroker({
 });
 ```
 
+`@mcp-abap-adt/auth-providers` providers implement `IRefreshableTokenProvider`
+from 4.2.0.
+
 ## Store Methods
 
 Stores provide methods to access configuration values through standardized interfaces:
 
 ```typescript
-import { XsuaaSessionStore } from '@mcp-abap-adt/auth-broker';
+import { XsuaaSessionStore } from '@mcp-abap-adt/auth-stores';
 
-const store = new XsuaaSessionStore(['/path/to/sessions']);
+const store = new XsuaaSessionStore('/path/to/sessions', 'https://mcp.example.com');
 
 // Get authorization config (for token refresh)
 const authConfig = await store.getAuthorizationConfig('mcp');
@@ -263,516 +244,196 @@ constructor(
   config: {
     sessionStore: ISessionStore;
     serviceKeyStore?: IServiceKeyStore;
-    tokenProvider: ITokenProvider;
-    allowBrowserAuth?: boolean;
+    provider: IRefreshableTokenProvider | TokenProviderFactory;
   },
-  browser?: string,
-  logger?: ILogger
+  logger?: ILogger,
 )
+
+type TokenProviderFactory = (
+  destination: string,
+  authConfig: IAuthorizationConfig | null,
+  connConfig: IConnectionConfig,
+) => IRefreshableTokenProvider;
 ```
 
 **Parameters**:
-- `config`: Object with required stores and provider:
-  - `sessionStore` - Store for session data
-  - `serviceKeyStore` - Optional store for service keys
-  - `tokenProvider` - Token provider for token acquisition and refresh
-  - `allowBrowserAuth` - When `false`, throws `BROWSER_AUTH_REQUIRED` instead of launching browser auth
-  - Available store implementations:
-    - `AbapServiceKeyStore(searchPaths?)`, `AbapSessionStore(searchPaths?)`, `SafeAbapSessionStore()`
-    - `XsuaaServiceKeyStore(searchPaths?)`, `XsuaaSessionStore(searchPaths?)`, `SafeXsuaaSessionStore()`
-    - `BtpSessionStore(searchPaths?)`, `SafeBtpSessionStore()`
-  - Provider implementations (from `@mcp-abap-adt/auth-providers`):
-    - `AuthorizationCodeProvider(...)` - browser-based OAuth2 (ABAP/BTP)
-    - `ClientCredentialsProvider(...)` - client_credentials (XSUAA)
-- `browser` (optional): Browser name for authentication. Options:
-  - `'chrome'` - Open in Google Chrome
-  - `'edge'` - Open in Microsoft Edge
-  - `'firefox'` - Open in Mozilla Firefox
-  - `'system'` - Use system default browser (default)
-  - `'headless'` - Don't open browser, print URL and wait for manual callback (SSH/remote)
-  - `'none'` - Don't open browser, print URL and reject immediately (automated tests)
-- `logger` (optional): Custom logger instance. If not provided, uses default logger
+- `config.sessionStore` — where tokens and the refresh token are kept.
+- `config.serviceKeyStore` — optional; UAA credentials and the service URL.
+- `config.provider` — a provider instance, used as given for every destination,
+  or a factory called once per destination and seeded with:
+  - `authConfig`: the session's UAA credentials, else the service key's,
+    carrying the refresh token the session stored; `null` when neither store
+    has credentials;
+  - `connConfig`: the session's connection config with `serviceUrl` resolved
+    and the token stored last.
+- `logger` — optional `ILogger`; without one nothing is logged. No log line
+  contains any part of a token.
 
-**Example**:
-```typescript
-import { AuthBroker, AbapServiceKeyStore, AbapSessionStore, SafeAbapSessionStore } from '@mcp-abap-adt/auth-broker';
-import {
-  AuthorizationCodeProvider,
-  browserCallbackStrategy,
-} from '@mcp-abap-adt/auth-providers';
-
-// ABAP with browser-based authorization_code
-const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/custom/path']),
-  sessionStore: new AbapSessionStore(['/custom/path']),
-  tokenProvider: new AuthorizationCodeProvider({
-    uaaUrl: 'https://auth.example.com',
-    clientId: '...',
-    clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system' }),
-  }),
-});
-
-// Safe in-memory session store for ABAP (secure, no disk persistence)
-const memoryBroker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(['/path1']),
-  sessionStore: new SafeAbapSessionStore(), // Data lost after restart
-  tokenProvider: new AuthorizationCodeProvider({
-    uaaUrl: 'https://auth.example.com',
-    clientId: '...',
-    clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'none' }),
-  }),
-}, 'none');
-```
+There is no browser option and no `allowBrowserAuth`: how a login is conducted
+is the provider's authorization strategy (see *Headless processes* below).
 
 #### getToken()
-
-Get authentication token for destination. Tries to load from session store, validates it, and refreshes if needed using a fallback chain.
 
 ```typescript
 async getToken(destination: string): Promise<string>
 ```
 
-**Parameters**:
-- `destination`: Destination name (e.g., "TRIAL")
-
-**Returns**: Promise that resolves to JWT token string
-
-**Throws**: Error if neither session data nor service key found, or if all authentication methods failed
-
-**Example**:
-```typescript
-try {
-  const token = await broker.getToken('TRIAL');
-  console.log('Token:', token);
-} catch (error) {
-  console.error('Failed to get token:', error.message);
-}
-```
-
-**Flow**:
-1. **Step 0 - Initialize**: If session has no token and no auth config, load auth config from service key and call `tokenProvider.getTokens()`
-2. **Step 1 - Refresh/Re-auth**: Broker always calls `tokenProvider.getTokens()`. Provider handles token lifecycle internally (validation, refresh, login). If session auth config exists, use it; on failure, fall back to service key auth config
-3. **Error**: If all attempts fail, throw an error (or `BROWSER_AUTH_REQUIRED` when browser auth is disabled)
-
-**Important**: Broker always calls `provider.getTokens()` - provider decides whether to return cached token, refresh, or perform login. Consumer doesn't need to know about token issues.
+1. Resolves `serviceUrl` from the session, else the service key — an error if
+   neither has one, before the provider is asked.
+2. Builds the provider on first use (factory) or uses the instance.
+3. Calls `provider.getTokens()` once: the provider answers its cached token
+   while valid, else refreshes, else logs in.
+4. Persists the result: `sessionCookies` when `tokenType` is `'saml'`, else
+   `authorizationToken`; the refresh token when the result carries one.
+5. Returns the token.
 
 #### refreshToken()
-
-Force refresh token for destination. Calls `getToken()` to run the full refresh flow and persist updated tokens.
 
 ```typescript
 async refreshToken(destination: string): Promise<string>
 ```
 
-**Parameters**:
-- `destination`: Destination name (e.g., "TRIAL")
+The same with `provider.refreshTokens()`: a new token, never the cached one.
+Use it when the server refused the token `getToken()` returned (401/403).
 
-**Returns**: Promise that resolves to new JWT token string
-
-**Throws**: Error if service key not found
-
-**Example**:
-```typescript
-try {
-  const newToken = await broker.refreshToken('TRIAL');
-  console.log('New token:', newToken);
-} catch (error) {
-  console.error('Failed to refresh token:', error.message);
-}
-```
-
-**Flow**:
-1. Delegates to `getToken(destination)`
-
-#### clearCache()
-
-Clear cached token for specific destination.
+#### getAuthorizationConfig() / getConnectionConfig()
 
 ```typescript
-clearCache(destination: string): void
+async getAuthorizationConfig(destination: string): Promise<IAuthorizationConfig | null>
+async getConnectionConfig(destination: string): Promise<IConnectionConfig | null>
 ```
 
-**Parameters**:
-- `destination`: Destination name
+The session's configuration, else the service key's, else `null`.
 
-**Example**:
-```typescript
-broker.clearCache('TRIAL');
-```
-
-#### clearAllCache()
-
-Clear all cached tokens.
+#### createTokenRefresher()
 
 ```typescript
-clearAllCache(): void
+createTokenRefresher(destination: string): ITokenRefresher
 ```
 
-**Example**:
-```typescript
-broker.clearAllCache();
-```
+`getToken()` and `refreshToken()` bound to one destination, for injection into
+a connection that refreshes on 401.
 
 ## Usage Examples
 
-### Example 1: Basic Token Retrieval
+### Headless processes
+
+A process nobody is watching gives the provider a strategy that refuses, and
+catches its own error; the broker hands it back unchanged:
 
 ```typescript
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-
-const broker = new AuthBroker();
-
-async function getToken() {
-  try {
-    const token = await broker.getToken('TRIAL');
-    console.log(`Token obtained (${token.length} chars)`);
-  } catch (error) {
-    console.error('Error:', error.message);
-  }
-}
-
-getToken();
-```
-
-### Example 2: Custom Search Paths
-
-```typescript
-import { AuthBroker, AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-broker';
-
-// Search in multiple directories
-const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore([
-    '/home/user/.sap/destinations',
-    '/etc/sap/destinations',
-    process.cwd()
-  ]),
-  sessionStore: new AbapSessionStore([
-    '/home/user/.sap/destinations',
-    '/etc/sap/destinations',
-    process.cwd()
-  ]),
-});
-
-const token = await broker.getToken('PRODUCTION');
-```
-
-### Example 3: Force Token Refresh
-
-```typescript
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-
-const broker = new AuthBroker();
-
-async function refreshToken() {
-  try {
-    // Force refresh (will use browser auth if no refresh token)
-    const newToken = await broker.refreshToken('TRIAL');
-    console.log(`Token refreshed (${newToken.length} chars)`);
-  } catch (error) {
-    console.error('Refresh failed:', error.message);
-  }
-}
-
-refreshToken();
-```
-
-### Example 4: Error Handling
-
-```typescript
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-
-const broker = new AuthBroker();
-
-async function handleTokenRequest() {
-  try {
-    const token = await broker.getToken('MISSING');
-  } catch (error) {
-    if (error.message.includes('No authentication found')) {
-      console.error('Please create MISSING.env or MISSING.json file');
-      console.error('Searched in:', error.message);
-    } else if (error.message.includes('Service key file not found')) {
-      console.error('Please create MISSING.json service key file');
-    } else {
-      console.error('Unexpected error:', error);
-    }
-  }
-}
-
-handleTokenRequest();
-```
-
-### Example 5: Cache Management
-
-```typescript
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-
-const broker = new AuthBroker();
-
-// Get token (will be cached)
-const token1 = await broker.getToken('TRIAL');
-
-// Get again (will use cache if valid)
-const token2 = await broker.getToken('TRIAL');
-
-// Clear cache for this destination
-broker.clearCache('TRIAL');
-
-// Next call will validate again
-const token3 = await broker.getToken('TRIAL');
-
-// Clear all caches
-broker.clearAllCache();
-```
-
-## Integration Examples
-
-### Example: Integration with MCP Server
-
-```typescript
-import { AuthBroker, AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-broker';
+class LoginRequiredError extends Error {}
 
 const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(),
-  sessionStore: new AbapSessionStore(),
+  sessionStore,
+  serviceKeyStore,
+  provider: (destination, authConfig, connConfig) =>
+    new AuthorizationCodeProvider({
+      uaaUrl: authConfig!.uaaUrl,
+      clientId: authConfig!.uaaClientId,
+      clientSecret: authConfig!.uaaClientSecret,
+      refreshToken: authConfig!.refreshToken,
+      accessToken: connConfig.authorizationToken,
+      authorization: {
+        authorize: async () => {
+          throw new LoginRequiredError(`Log in to ${destination} with mcp-auth first`);
+        },
+      },
+    }),
 });
 
-// In MCP handler
-async function handleRequest(headers: Record<string, string>) {
-  const destination = headers['x-mcp-destination'];
-  const authType = headers['x-sap-auth-type'];
-  
-  if (authType === 'jwt' && destination) {
-    try {
-      const token = await broker.getToken(destination);
-      // Use token for SAP connection
-      return { token };
-    } catch (error) {
-      throw new Error(`Authentication failed: ${error.message}`);
-    }
+try {
+  const token = await broker.getToken('TRIAL');
+} catch (error) {
+  if (error instanceof LoginRequiredError) {
+    // Neither a valid token nor a usable refresh token: a person must log in.
   }
 }
 ```
 
-### Example: Multiple Destinations
+### Refresh after a 401
 
 ```typescript
-import { AuthBroker, AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-broker';
-
-const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(),
-  sessionStore: new AbapSessionStore(),
-});
-
-async function getTokensForDestinations() {
-  const destinations = ['TRIAL', 'PRODUCTION', 'DEVELOPMENT'];
-  
-  const tokens = await Promise.all(
-    destinations.map(async (dest) => {
-      try {
-        const token = await broker.getToken(dest);
-        return { destination: dest, token, status: 'success' };
-      } catch (error) {
-        return { destination: dest, error: error.message, status: 'error' };
-      }
-    })
-  );
-  
-  return tokens;
+let token = await broker.getToken('TRIAL');
+let response = await call(token);
+if (response.status === 401) {
+  token = await broker.refreshToken('TRIAL');
+  response = await call(token);
 }
 ```
 
-## Configuration
+### Multiple destinations
 
-### Environment Variables
+One broker serves many destinations; a factory builds one provider per
+destination and reuses it.
 
-#### AUTH_BROKER_PATH
-
-Specify search paths via environment variable:
-
-```bash
-# Linux/macOS
-export AUTH_BROKER_PATH=/path1:/path2:/path3
-
-# Windows
-set AUTH_BROKER_PATH=C:\path1;C:\path2;C:\path3
-```
-
-**Usage**:
 ```typescript
-import { AuthBroker, AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-broker';
-
-// If AUTH_BROKER_PATH is set, it will be used by AbapServiceKeyStore and AbapSessionStore
-// when no paths are provided to their constructors
-const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(), // Uses AUTH_BROKER_PATH if set
-  sessionStore: new AbapSessionStore(), // Uses AUTH_BROKER_PATH if set
-});
+const tokens = await Promise.all(
+  ['TRIAL', 'PRODUCTION'].map((destination) => broker.getToken(destination)),
+);
 ```
-
-#### DEBUG_AUTH_LOG
-
-Control debug logging output:
-
-```bash
-# Enable debug logging
-export DEBUG_AUTH_LOG=true
-
-# Disable debug logging (default)
-unset DEBUG_AUTH_LOG
-# or
-export DEBUG_AUTH_LOG=false
-```
-
-**Behavior**:
-- **When `DEBUG_AUTH_LOG=true`**: Shows detailed debug messages including:
-  - Browser opening notifications
-  - Token refresh operations
-  - Authentication flow details
-- **When `DEBUG_AUTH_LOG=false` or unset** (default): Only shows:
-  - Error messages (always visible)
-  - URL for manual browser opening (when browser is not opened automatically)
-  - No debug messages
-
-**Example**:
-```typescript
-import { AuthBroker, AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-broker';
-
-// With debug logging enabled
-process.env.DEBUG_AUTH_LOG = 'true';
-const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(),
-  sessionStore: new AbapSessionStore(),
-});
-await broker.getToken('TRIAL');
-// Output: [DEBUG] No refresh token found for destination "TRIAL". Starting browser authentication...
-//         [DEBUG] 🌐 Opening browser for authentication...
-
-// Without debug logging (default)
-process.env.DEBUG_AUTH_LOG = 'false';
-const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(),
-  sessionStore: new AbapSessionStore(),
-});
-await broker.getToken('TRIAL');
-// Output: (only errors and manual URL if browser cannot be opened)
-```
-
-### File Naming Convention
-
-Files must follow the naming pattern:
-- Environment file: `{destination}.env`
-- Service key file: `{destination}.json`
-
-**Examples**:
-- Destination "TRIAL" → `TRIAL.env`, `TRIAL.json`
-- Destination "PRODUCTION" → `PRODUCTION.env`, `PRODUCTION.json`
 
 ## Error Handling
 
-### Common Errors
-
-#### 1. File Not Found
-
-```typescript
-Error: No authentication found for destination "TRIAL".
-Neither TRIAL.env file nor TRIAL.json service key found.
-Please create one of:
-  - /path/to/TRIAL.env (with SAP_JWT_TOKEN)
-  - /path/to/TRIAL.json (service key)
-Searched in:
-  - /path1
-  - /path2
-```
-
-**Solution**: Create the required file in one of the searched paths.
-
-#### 2. Service Key Not Found
+- **Provider errors propagate unchanged** — the same object, with its class,
+  `code`, `missingFields` and `cause`: `ValidationError`, `RefreshError`,
+  `AssertionValidationError` from `@mcp-abap-adt/auth-providers`, network
+  errors (`ECONNREFUSED`, `ETIMEDOUT`, `ENOTFOUND`), and whatever the
+  authorization strategy throws. The broker does not retry.
+- **Missing service URL**: `Session for destination "<name>" is missing required
+  field 'serviceUrl'` — neither the session nor the service key has one.
+- **No token in the provider's result**: `Token provider did not return
+  authorization token for destination "<name>"`.
+- **Store reads** that fail are logged and treated as absent; **store writes**
+  that fail propagate.
 
 ```typescript
-Error: Service key file not found for destination "TRIAL".
-Please create file: /path/to/TRIAL.json
-Searched in:
-  - /path1
-  - /path2
+import { ValidationError } from '@mcp-abap-adt/auth-providers';
+
+try {
+  await broker.getToken('TRIAL');
+} catch (error) {
+  if (error instanceof ValidationError) {
+    // error.missingFields names what the provider config lacks
+  }
+  throw error;
+}
 ```
 
-**Solution**: Create service key file `TRIAL.json` in one of the searched paths.
+## Secrets
 
-#### 3. Invalid Service Key
+The broker writes the token (or session cookies) and the refresh token to the
+session store, never the client secret: credentials from the service key stay
+there. A session holding credentials of its own keeps them; only its refresh
+token is updated. `mcp-auth`, `mcp-sso` and `npm run generate-env` do write the
+secret into the file they produce, on purpose: that file is a self-contained
+session read with no service key beside it.
 
-```typescript
-Error: Invalid service key for destination "TRIAL".
-Missing required UAA fields: url, clientid, clientsecret
-```
-
-**Solution**: Ensure service key has valid `uaa` object with all required fields.
-
-#### 4. Missing SAP URL
-
-```typescript
-Error: Service key for destination "TRIAL" does not contain SAP URL.
-Expected field: url, abap.url, or sap_url
-```
-
-**Solution**: Ensure service key has `url`, `abap.url`, or `sap_url` field.
+The ABAP session stores return a refresh token stored without credentials
+through `loadSession()`, which the broker reads. `XsuaaSessionStore`
+(auth-stores 1.2.2) returns it only together with a client secret, so an XSUAA
+session whose credentials are in the service key logs in again after a
+restart.
 
 ## Logging
 
-The package uses a configurable logger that respects the `DEBUG_AUTH_LOG` environment variable.
-
-### Log Levels
-
-- **Info**: Always visible (errors, manual URLs)
-- **Debug**: Only visible when `DEBUG_AUTH_LOG=true`
-
-### Custom Logger
-
-You can inject a custom logger into `AuthBroker`:
-
-```typescript
-import { AuthBroker, ILogger, AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-broker';
-
-class MyLogger implements ILogger {
-  info(message: string): void {
-    // Custom info logging
-  }
-  debug(message: string): void {
-    // Custom debug logging
-  }
-  error(message: string): void {
-    // Custom error logging
-  }
-  // ... other methods
-}
-
-const logger = new MyLogger();
-const broker = new AuthBroker({
-  serviceKeyStore: new AbapServiceKeyStore(),
-  sessionStore: new AbapSessionStore(),
-}, undefined, logger);
-```
+Pass an `ILogger` as the constructor's second argument (for instance
+`DefaultLogger` from `@mcp-abap-adt/logger`). The broker logs its
+initialization, each provider build (whether credentials, a refresh token and
+a stored token were there), each saved token (type, grant, expiry, whether a
+refresh token came back) and store read failures. It never logs any part of a
+token or secret.
 
 ## Best Practices
 
-1. **Error Handling**: Always wrap token requests in try/catch blocks
-2. **Cache Management**: Clear cache when tokens are manually updated
-3. **Storage Selection**: Choose appropriate storage based on security requirements:
-   - Use `AbapSessionStore`, `XsuaaSessionStore`, or `BtpSessionStore` if you need persistence across restarts
-   - Use `SafeAbapSessionStore`, `SafeXsuaaSessionStore`, or `SafeBtpSessionStore` if you want secure in-memory storage (data lost after restart)
-4. **Security**: Never commit `.env` or `.json` files to version control
-5. **File Permissions**: Set appropriate file permissions for sensitive files
-6. **Multiple Destinations**: Use separate broker instances or clear cache between destinations
-7. **Logging**: Use `DEBUG_AUTH_LOG=true` only when debugging - production should use default (minimal logging)
-8. **Explicit Stores**: Always explicitly create stores - don't rely on defaults if you need specific behavior
-
-## Performance Considerations
-
-1. **Caching**: Tokens are cached in memory - subsequent calls are fast
-2. **Validation**: Tokens are validated before returning from cache
-3. **Refresh**: Refresh only happens when token is expired or invalid
-4. **Browser Auth**: Browser authentication is only used when no refresh token exists
+1. **Pass a factory** when the stores hold the credentials, so the provider is
+   seeded with the stored refresh token and token instead of logging in again.
+2. **Headless**: give the provider a refusing strategy and catch your own error.
+3. **On 401**: call `refreshToken()`, not `getToken()`.
+4. **Storage**: use `AbapSessionStore`/`XsuaaSessionStore` for persistence
+   across restarts, `SafeAbapSessionStore`/`SafeXsuaaSessionStore` to keep
+   tokens in memory only.
+5. **Never commit** `.env` or service key `.json` files.
 
 ## Next Steps
 

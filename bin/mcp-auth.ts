@@ -45,6 +45,7 @@ import {
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
+import { refreshableProvider } from './refreshableProvider';
 
 /**
  * A person completes this login at a browser; the provider's own default
@@ -778,7 +779,7 @@ async function main() {
     const sessionStore =
       options.authType === 'xsuaa'
         ? new XsuaaSessionStore(tempSessionDir, brokerServiceUrl)
-        : new AbapSessionStore(tempSessionDir);
+        : new AbapSessionStore(tempSessionDir, undefined, actualServiceUrl);
 
     const sessionAuthConfig =
       await sessionStore.getAuthorizationConfig(destination);
@@ -836,35 +837,46 @@ async function main() {
       console.log(`📍 Redirect URI: ${redirectUri}`);
     }
 
-    const tokenProvider = options.credential
-      ? new ClientCredentialsProvider({
-          uaaUrl: authConfig.uaaUrl,
-          clientId: authConfig.uaaClientId,
-          clientSecret: authConfig.uaaClientSecret,
-        })
-      : new AuthorizationCodeProvider({
-          uaaUrl: authConfig.uaaUrl,
-          clientId: authConfig.uaaClientId,
-          clientSecret: authConfig.uaaClientSecret,
-          refreshToken: authConfig.refreshToken,
-          // Passing `options.redirectPort` (not the resolved `redirectPort`
-          // above) so an omitted --redirect-port lets the strategy bind its
-          // own default rather than this CLI pinning a number it doesn't own.
-          authorization: browserCallbackStrategy({
-            browser: options.browser,
-            port: options.redirectPort,
-            timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+    // TODO(auth-providers 4.2.0): pass the provider itself; its own
+    // refreshTokens() replaces the refreshableProvider adapter.
+    const tokenProvider = refreshableProvider((refresh) =>
+      options.credential
+        ? new ClientCredentialsProvider({
+            uaaUrl: authConfig.uaaUrl,
+            clientId: authConfig.uaaClientId,
+            clientSecret: authConfig.uaaClientSecret,
+          })
+        : new AuthorizationCodeProvider({
+            uaaUrl: authConfig.uaaUrl,
+            clientId: authConfig.uaaClientId,
+            clientSecret: authConfig.uaaClientSecret,
+            refreshToken: refresh?.refreshToken ?? authConfig.refreshToken,
+            // Passing `options.redirectPort` (not the resolved `redirectPort`
+            // above) so an omitted --redirect-port lets the strategy bind its
+            // own default rather than this CLI pinning a number it doesn't own.
+            authorization: browserCallbackStrategy({
+              browser: options.browser,
+              port: options.redirectPort,
+              timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+            }),
           }),
-        });
-
-    const broker = new AuthBroker(
-      {
-        sessionStore,
-        serviceKeyStore: serviceKeyStore || undefined,
-        tokenProvider,
-      },
-      options.browser,
     );
+
+    // The output file is a self-contained session: whoever reads it refreshes
+    // the token with the UAA credentials it carries, and has no service key.
+    // So this CLI writes the credentials into its temporary session itself —
+    // its own decision about its own output. The broker no longer copies the
+    // client secret into a session store, and without these the refresh token
+    // the login obtains would not be readable back below.
+    if (!sessionAuthConfig) {
+      await sessionStore.setAuthorizationConfig(destination, authConfig);
+    }
+
+    const broker = new AuthBroker({
+      sessionStore,
+      serviceKeyStore: serviceKeyStore || undefined,
+      provider: tokenProvider,
+    });
 
     console.log(`🔐 Getting token for destination "${destination}"...`);
     const token = await broker.getToken(destination);

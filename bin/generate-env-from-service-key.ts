@@ -28,6 +28,7 @@ import {
 import * as fs from 'fs';
 import * as path from 'path';
 import { AuthBroker } from '../src/AuthBroker';
+import { refreshableProvider } from './refreshableProvider';
 
 /**
  * A person completes this login at a browser; the provider's own default
@@ -100,9 +101,12 @@ async function main() {
         // No serviceUrl in the key: the placeholder stands.
       }
     }
+    const abapServiceUrl = isXsuaa
+      ? undefined
+      : (await serviceKeyStore.getConnectionConfig(destination))?.serviceUrl;
     const sessionStore = isXsuaa
       ? new XsuaaSessionStore(sessionDir, xsuaaServiceUrl)
-      : new AbapSessionStore(sessionDir);
+      : new AbapSessionStore(sessionDir, undefined, abapServiceUrl);
 
     const authConfig =
       await serviceKeyStore.getAuthorizationConfig(destination);
@@ -110,36 +114,49 @@ async function main() {
       throw new Error(`Missing authorization config for ${destination}`);
     }
 
-    // Create token provider
-    const tokenProvider = isXsuaa
-      ? new ClientCredentialsProvider({
-          uaaUrl: authConfig.uaaUrl,
-          clientId: authConfig.uaaClientId,
-          clientSecret: authConfig.uaaClientSecret,
-        })
-      : new AuthorizationCodeProvider({
-          uaaUrl: authConfig.uaaUrl,
-          clientId: authConfig.uaaClientId,
-          clientSecret: authConfig.uaaClientSecret,
-          // No port override: this script has no `--redirect-port` flag, so
-          // the callback port is entirely the strategy's own choice.
-          authorization: browserCallbackStrategy({
-            browser: 'system',
-            timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
-          }),
-        });
+    // The session file this script writes is read on its own later, with no
+    // service key beside it, and refreshing needs the UAA credentials; so the
+    // script puts them there itself. The broker no longer copies the client
+    // secret into a session store.
+    const sessionAuth = await sessionStore.getAuthorizationConfig(destination);
+    if (!sessionAuth) {
+      await sessionStore.setAuthorizationConfig(destination, authConfig);
+    }
 
-    // Create AuthBroker
-    // For ABAP, use 'system' browser (will open browser for auth)
-    // For XSUAA, browser doesn't matter (uses client_credentials)
-    const broker = new AuthBroker(
-      {
-        serviceKeyStore,
-        sessionStore,
-        tokenProvider,
+    // The factory form: the broker seeds each provider with what the stores
+    // hold — the UAA credentials, the stored refresh token and access token.
+    // TODO(auth-providers 4.2.0): return the provider itself; its own
+    // refreshTokens() replaces the refreshableProvider adapter.
+    const broker = new AuthBroker({
+      serviceKeyStore,
+      sessionStore,
+      provider: (_destination, auth, conn) => {
+        if (!auth) {
+          throw new Error(`Missing authorization config for ${destination}`);
+        }
+        return refreshableProvider((refresh) =>
+          isXsuaa
+            ? new ClientCredentialsProvider({
+                uaaUrl: auth.uaaUrl,
+                clientId: auth.uaaClientId,
+                clientSecret: auth.uaaClientSecret,
+              })
+            : new AuthorizationCodeProvider({
+                uaaUrl: auth.uaaUrl,
+                clientId: auth.uaaClientId,
+                clientSecret: auth.uaaClientSecret,
+                accessToken: refresh ? undefined : conn.authorizationToken,
+                refreshToken: refresh?.refreshToken ?? auth.refreshToken,
+                // No port override: this script has no `--redirect-port`
+                // flag, so the callback port is the strategy's own choice.
+                authorization: browserCallbackStrategy({
+                  browser: 'system',
+                  timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+                }),
+              }),
+        );
       },
-      isXsuaa ? 'none' : 'system',
-    );
+    });
 
     console.log(`🔐 Getting token for destination "${destination}"...`);
     if (isXsuaa) {

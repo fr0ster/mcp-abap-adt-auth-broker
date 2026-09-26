@@ -12,58 +12,62 @@ Supported authentication styles:
 
 ## Core Principles
 
-- **Interface-only communication**: The broker only talks to `ISessionStore`, `IServiceKeyStore`, and `ITokenProvider` interfaces.
+- **Interface-only communication**: The broker only talks to `ISessionStore`, `IServiceKeyStore`, and `IRefreshableTokenProvider` interfaces.
 - **Dependency inversion**: Implementations live in `@mcp-abap-adt/auth-stores` and `@mcp-abap-adt/auth-providers`.
-- **Stateful providers**: Providers own token lifecycle (refresh/relogin) and return fresh tokens via `getTokens()`.
+- **The provider decides**: Providers own the token lifecycle — whether the cached token is still good, refresh, re-login — and how a login is conducted (their authorization strategy). The broker does not repeat or override any of it.
 
 ## Core Components
 
 ### AuthBroker
 
-`AuthBroker` orchestrates token retrieval and persistence:
-- Loads session data and service URLs from stores.
-- Validates existing tokens if the provider supports `validateToken`.
-- Requests new tokens via `tokenProvider.getTokens()` and persists results to the session store.
-- Supports `allowBrowserAuth` to disable interactive flows in headless environments.
+`AuthBroker` orchestrates, nothing more:
+- Resolves `serviceUrl` (session, else service key), the UAA credentials (session, else service key) and the stored token and refresh token.
+- Builds the provider on first use when given a factory, seeded with the above, and reuses it per destination; uses an instance as given.
+- Asks the provider once — `getTokens()` for `getToken()`, `refreshTokens()` for `refreshToken()` — with no retry and no fallback.
+- Persists the result by type (session cookies for SAML, bearer token otherwise; the refresh token when present) and returns the token.
 
 ### Stores
 
 Stores provide configuration data:
-- `ISessionStore` exposes stored tokens and connection info (`IConnectionConfig`).
+- `ISessionStore` exposes stored tokens and connection info (`IConnectionConfig`), and the refresh token.
 - `IServiceKeyStore` exposes authorization config (`IAuthorizationConfig`) and connection config.
 
-Concrete stores live in `@mcp-abap-adt/auth-stores` (ABAP, BTP, XSUAA, safe in-memory variants).
+Concrete stores live in `@mcp-abap-adt/auth-stores` (ABAP, XSUAA, safe in-memory variants).
 
 ### Providers
 
-Providers live in `@mcp-abap-adt/auth-providers` and implement `ITokenProvider`:
+Providers live in `@mcp-abap-adt/auth-providers` and implement `IRefreshableTokenProvider` (from 4.2.0):
 - `AuthorizationCodeProvider` for ABAP/BTP (authorization_code + refresh token).
 - `ClientCredentialsProvider` for XSUAA (client_credentials).
+- The OIDC and SAML providers built by `SsoProviderFactory`.
 
-Providers are configured at construction time and manage refresh/re-auth internally. The broker simply calls `getTokens()`.
+`getTokens()` answers the cache while valid, else refreshes, else logs in. `refreshTokens()` always obtains a new token (decision 39 in `@mcp-abap-adt/interfaces`' DECISIONS.md: a forced refresh is its own interface, not a flag).
 
-## Authentication Flow (getToken)
+## Authentication Flow
 
-1. **Step 0 - Initialize**
-   - If the session has no token and no auth config, the broker loads auth config from `serviceKeyStore` and calls `tokenProvider.getTokens()`.
-   - Tokens are persisted to the session store.
+**`getToken(destination)`**
+1. Resolve `serviceUrl`; without one, fail before asking the provider.
+2. Build (factory, first call for the destination) or reuse the provider. The factory receives the credentials with the stored refresh token, and the connection config with the stored token.
+3. `provider.getTokens()`.
+4. Persist: `sessionCookies` when `tokenType` is `'saml'`, else `authorizationToken`; the refresh token when the result carries one.
+5. Return the token.
 
-2. **Step 1 - Request Tokens via Provider**
-   - Broker always calls `tokenProvider.getTokens()`.
-   - Provider handles token lifecycle internally (validation, refresh, login).
-   - If session auth config exists, use it; on failure, fall back to service key auth config.
-   - If browser auth is disabled and a refresh token is not available, the broker throws `BROWSER_AUTH_REQUIRED`.
+**`refreshToken(destination)`** is the same with `provider.refreshTokens()` — a new token, never the cached one — and backs `ITokenRefresher.refreshToken()` from `createTokenRefresher()`.
 
-**Important**: Broker always delegates to provider - provider decides whether to return cached token, refresh, or perform login. Consumer doesn't need to know about token issues.
+**Headless processes** configure the provider with an authorization strategy that refuses and catch the error it throws; there is no broker switch for it.
+
+## Secrets
+
+The broker writes tokens and the refresh token to the session store, never the client secret; credentials from the service key stay there. A session with credentials of its own keeps them and only its refresh token changes. The broker logs no part of any token.
 
 ## Error Handling
 
-- Store errors are handled defensively with fallbacks (session → service key).
-- Provider errors are surfaced with actionable messages (validation, browser auth, network).
-- Critical persistence errors (unable to save tokens) fail fast.
+- Provider errors propagate unchanged (class, `code`, `missingFields`, `cause`).
+- Store reads that fail are logged and treated as absent; whatever needed the value fails with its own message.
+- Store writes that fail propagate.
 
 ## Responsibilities Split
 
 - **AuthBroker**: orchestration and persistence.
 - **Stores**: reading/writing config and tokens.
-- **Providers**: OAuth flows, refresh logic, token validation.
+- **Providers**: token lifecycle, OAuth/SAML flows, how a login is conducted.

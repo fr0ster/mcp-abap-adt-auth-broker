@@ -19,13 +19,88 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
   so `AuthBroker` logged every refresh token in full, at `info`, on each token
   request, persist and session check; `mcp-auth` printed the first 50
   characters of the access and refresh tokens it wrote, which is the whole of
-  a refresh token. Both now say `<redacted, N chars>`. auth-providers 4.1.2
+  a refresh token. The broker now logs no token at all (only whether there is
+  one), and `mcp-auth` says `<redacted, N chars>`. auth-providers 4.1.2
   closed the same leak in its own `formatToken`, and the range now requires
   it. **Anyone who shipped broker logs at `info` or `debug`, or kept
   `mcp-auth` output, should treat the refresh tokens in them as exposed and
   revoke them.**
 
 ### Changed
+
+- **BREAKING: `AuthBroker` orchestrates, the provider decides.** The broker
+  resolves what the stores hold for a destination, hands it to the provider,
+  calls it once and writes the answer back. The Step 0 / session / service-key
+  branches that repeated the provider's own refresh-then-login logic — each
+  calling the same `getTokens()` — are gone, and so is the retry of a failed
+  call.
+  - **Constructor:** `new AuthBroker({ sessionStore, serviceKeyStore?, provider }, logger?)`.
+    `tokenProvider` is now `provider`, typed `IRefreshableTokenProvider` (from
+    `@mcp-abap-adt/interfaces-auth` 2.1.0), or a factory
+    `(destination, authConfig, connConfig) => IRefreshableTokenProvider`. The
+    factory is called once per destination and seeded with what the stores
+    hold: the UAA credentials (the session's, else the service key's) with the
+    stored refresh token, and the connection config with `serviceUrl` and the
+    stored token. An instance is used as given, for every destination.
+  - **`allowBrowserAuth` and the `browser` argument are removed**, and with them
+    the `BROWSER_AUTH_REQUIRED` error. `browser` was never read, and how a
+    login is conducted is the provider's authorization strategy.
+  - **`refreshToken(destination)` forces a new token.** It called `getToken()`,
+    which returned the provider's cached token — the one the server had just
+    refused — breaking `ITokenRefresher`'s "always obtains new token" and
+    risking a 401 loop. It now calls the provider's `refreshTokens()`, and so
+    does `createTokenRefresher(destination).refreshToken()`.
+  - **Provider errors propagate unchanged.** They were rewrapped into a plain
+    `Error`, losing `code`, `missingFields`, `cause` and the class itself
+    (`instanceof ValidationError` was false).
+  - **The client secret is no longer copied into the session store.** After a
+    login from a service key the broker wrote the service key's
+    `uaaClientSecret` into the session (`SAP_UAA_CLIENT_SECRET` /
+    `XSUAA_UAA_CLIENT_SECRET` in the `.env`). It now writes the token and the
+    refresh token only; credentials a session already holds are left as they
+    are. `mcp-auth`, `mcp-sso` and `generate-env` still write the secret into
+    the file they produce, deliberately: that file is a self-contained session
+    read with no service key beside it.
+  - **The session store's `loadSession` and `saveSession` are used**, both part
+    of `ISessionStore`: `loadSession` to read a refresh token stored without
+    credentials, `saveSession` to store one. The constructor checks for them.
+  - **Removed:** `src/utils/formatting` (`formatToken`,
+    `formatExpirationDate`): the broker logs no token, so there is nothing to
+    format.
+
+  **Migrating from 2.2.0:**
+  1. Rename `tokenProvider` to `provider` and drop the second constructor
+     argument: `new AuthBroker(config, 'system', logger)` becomes
+     `new AuthBroker(config, logger)`.
+  2. The provider must implement `IRefreshableTokenProvider`, i.e. have
+     `refreshTokens()`. `@mcp-abap-adt/auth-providers` 4.2.0 providers do; a
+     provider of your own must add it (a new token, never the cached one).
+  3. Instead of `allowBrowserAuth: false`, give the provider an authorization
+     strategy that refuses: `authorization: { authorize: async () => { throw new LoginRequiredError(); } }`,
+     and catch your own error — the broker hands it back unchanged. Do not wait
+     for `BrowserAuthError`: auth-providers exports it but throws it nowhere
+     (4.1.x), and a timed-out browser login is a plain `Error`.
+  4. Catch provider errors by class or `code` (`ValidationError`,
+     `RefreshError`, `AssertionValidationError`, network `ECONNREFUSED` …),
+     not by the old `Token provider … error for <destination>` messages.
+  5. If a consumer read the client secret back from a session the broker had
+     written, read it from the service key store instead — or put it into the
+     session yourself.
+  6. To have the broker seed a provider from the stores, pass a factory rather
+     than an instance.
+  Node.js 22 or 24 and the SAML trust options (below) are required too.
+
+  **Known gap:** `XsuaaSessionStore` and `SafeXsuaaSessionStore` (auth-stores
+  1.2.2) return no authorization config — and so no refresh token — for a
+  session without a client secret. With credentials from the service key, an
+  XSUAA session therefore keeps its refresh token on disk, but a new process
+  cannot read it back and logs in again. The ABAP stores return it through
+  `loadSession()`, which the broker reads.
+
+- **`@mcp-abap-adt/interfaces-auth@^2.1.0`** (was `^2.0.1` on this branch,
+  `^1.2.0` in 2.2.0), for `IRefreshableTokenProvider`; **`@mcp-abap-adt/auth-stores@^1.2.2`** (was
+  `^1.2.0` in 2.2.0), whose stores stop logging token characters — the same
+  leak as under *Security*; no store API changed.
 
 - **BREAKING: Node.js 22 or 24** — `engines: "^22 || ^24"` (was `>=18.2.0`),
   following `@mcp-abap-adt/auth-providers` 3.0.0, which requires it: the
@@ -59,13 +134,11 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
   were never imported. `AuthorizationCodeProvider` and
   `ClientCredentialsProvider`, which `mcp-auth` builds, are unchanged.
 
-- **`@mcp-abap-adt/interfaces-auth@^2.0.1`** (was `^1.2.0`). Its one break,
+- **`@mcp-abap-adt/interfaces-auth` 2.x** (was `^1.2.0`). Its one break,
   `AssertionContext.expectedInResponseTo` becoming optional, concerns
   `IAssertionValidator` implementers; nothing here implements one.
 - **`@mcp-abap-adt/interfaces-auth-sap@^1.0.1`** (was `^1.0.0`), the release
   that accepts `interfaces-auth` 2, so an install carries one copy of it.
-- **`@mcp-abap-adt/auth-stores@^1.2.1`** (was `^1.2.0`), on the same
-  interface versions; no store API changed.
 
 ### Added
 

@@ -6,6 +6,7 @@
 
 // Import interfaces from shared package
 import type {
+  IRefreshableTokenProvider,
   ITokenProvider,
   ITokenProviderOptions,
   ITokenResult,
@@ -19,6 +20,7 @@ import type {
 export type {
   IAuthorizationConfig,
   IConnectionConfig,
+  IRefreshableTokenProvider,
   ITokenProvider,
   ITokenResult,
 };
