@@ -686,6 +686,22 @@ redirect URI with a specific port at your identity provider, pass `--redirect-po
 A login is given 5 minutes to complete (this is a person switching to a browser and signing in
 by hand, not an unattended caller).
 
+**SAML options (`saml2-pure`, `saml2-bearer`):**
+`mcp-auth` hands these subcommands to `mcp-sso` with every argument unchanged, so the SAML options
+are `mcp-sso`'s (see *CLI: mcp-sso* and *SAML assertion validation* below) and its exit code is
+`mcp-auth`'s. The ones a run needs:
+
+| Option | What it is |
+|---|---|
+| `--idp-metadata <url\|path>` | The identity provider's SAML metadata; fills `--idp-cert`, `--idp-entity-id` and `--idp-sso-url`. For SAP Cloud Identity Services: `https://<tenant>.accounts.ondemand.com/saml2/metadata`. |
+| `--idp-cert <path>`, `--idp-entity-id <id>` | The same trust, stated instead of read. |
+| `--idp-initiated` | The identity provider starts the login. `saml2-bearer` against XSUAA needs it. |
+| `--sp-entity-id`, `--acs-url` | The `Audience` and `Recipient`. For `saml2-bearer` with `--service-key`, read from `<uaa.url>/saml/metadata`. |
+| `--assertion <base64>`, `--assertion-flow <flow>` | A `SAMLResponse` obtained elsewhere, or how to obtain one. |
+| `--authn-request-id <id>` | The request an `--assertion` answers, when `mcp-sso` did not send it. |
+
+`saml2-bearer` still requires `--dev`: it has not been run against a live XSUAA with a SAML trust.
+
 **Examples:**
 ```bash
 # Auth code (default via service key)

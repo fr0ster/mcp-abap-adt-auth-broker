@@ -147,6 +147,42 @@ function showHelp(): void {
     '                          Must match XSUAA redirect-uris config.',
   );
   console.log('');
+  console.log(
+    'SAML (saml2-pure, saml2-bearer; passed to mcp-sso, see mcp-sso --help for all):',
+  );
+  console.log(
+    '  --idp-metadata <url|path>  IdP SAML metadata (https or file): certificate, entityID, SSO URL',
+  );
+  console.log(
+    '                             e.g. https://<ias-tenant>.accounts.ondemand.com/saml2/metadata',
+  );
+  console.log(
+    '  --idp-cert <path>          IdP signing certificate (PEM or DER); repeat for key rotation',
+  );
+  console.log(
+    '  --idp-entity-id <id>       IdP entityID; the Issuer the assertion must name',
+  );
+  console.log(
+    '  --idp-sso-url <url>        IdP SSO endpoint (read from --idp-metadata when not given)',
+  );
+  console.log(
+    '  --idp-initiated            The IdP starts the login; required for saml2-bearer against XSUAA',
+  );
+  console.log(
+    '  --authn-request-id <id>    AuthnRequest ID an --assertion answers, when sent elsewhere',
+  );
+  console.log(
+    '  --sp-entity-id <id>        SP entityID, the Audience (saml2-bearer: read from XSUAA metadata)',
+  );
+  console.log(
+    '  --acs-url <url>            The Recipient (saml2-bearer: read from XSUAA metadata)',
+  );
+  console.log(
+    '  --saml-metadata <path>     XSUAA SP metadata file; with --service-key <uaa.url>/saml/metadata is read',
+  );
+  console.log('  --assertion <base64>       A SAMLResponse obtained elsewhere');
+  console.log('  --assertion-flow <flow>    browser|manual|assertion');
+  console.log('');
   console.log('  --version, -v          Show version number');
   console.log('  --help, -h             Show this help message');
   console.log('');
