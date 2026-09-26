@@ -20,11 +20,15 @@
  *   # OIDC token exchange
  *   mcp-sso oidc --flow token_exchange --issuer https://issuer --client-id my-client --subject-token <token> --output ./sso.env --type xsuaa
  *
- *   # SAML bearer flow
- *   mcp-sso bearer --idp-sso-url https://idp/sso --sp-entity-id my-sp --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
+ *   # SAML bearer flow with a service key: the Audience, Recipient and token alias come from
+ *   # <uaa.url>/saml/metadata, the IdP's trust from its metadata
+ *   mcp-sso bearer --service-key ./service-key.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa
+ *
+ *   # SAML bearer flow, everything stated (IdP-initiated assertion, as UAA/XSUAA require)
+ *   mcp-sso bearer --idp-sso-url https://idp/sso --sp-entity-id <uaa-entity-id> --acs-url <uaa-bearer-acs> --idp-cert ./idp-signing.pem --idp-entity-id https://idp/metadata --idp-initiated --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
  *
  *   # SAML pure flow (cookie)
- *   mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --assertion <base64> --cookie "SAP_SESSION=..." --output ./sso.env --type abap
+ *   mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp-signing.pem --idp-entity-id https://idp/metadata --cookie "SAP_SESSION=..." --output ./sso.env --type abap
  */
 
 import * as fs from 'fs';
@@ -34,7 +38,10 @@ import * as path from 'path';
 const distPath = path.resolve(__dirname, '..', 'index.js');
 const { AuthBroker } = require(distPath);
 
-import { SsoProviderFactory } from '@mcp-abap-adt/auth-providers';
+import {
+  type SsoProviderConfig,
+  SsoProviderFactory,
+} from '@mcp-abap-adt/auth-providers';
 import {
   AbapServiceKeyStore,
   AbapSessionStore,
@@ -48,8 +55,11 @@ import {
   buildProviderConfig,
   type McpSsoOptions,
   normalizeProviderConfig,
+  parseSamlTrustArg,
   readManualInput,
 } from './mcpSsoConfig';
+import { applySamlMetadata } from './samlMetadata';
+import { createWorkDir } from './workDir';
 
 function getVersion(): string {
   try {
@@ -150,22 +160,59 @@ function showHelp(): void {
   console.log('');
   console.log('SAML Options:');
   console.log('  --idp-sso-url <url>        IdP SSO URL');
-  console.log('  --sp-entity-id <id>        SP Entity ID');
   console.log(
-    '  --acs-url <url>            ACS URL (default: http://localhost:<port>/callback)',
+    '  --sp-entity-id <id>        SP Entity ID; also the Audience the assertion must name',
   );
   console.log(
-    '  --saml-metadata <path>     SAML metadata XML (to resolve token alias)',
+    '  --acs-url <url>            ACS URL; the Recipient the assertion must name (default: http://localhost:<port>/callback)',
+  );
+  console.log(
+    '  --idp-cert <path>          IdP signing certificate file (PEM or DER); repeat for key rotation',
+  );
+  console.log(
+    '  --idp-entity-id <id>       IdP entityID; the Issuer the assertion must name',
+  );
+  console.log(
+    '  --idp-metadata <url|path>  IdP SAML metadata (https or file): fills --idp-cert, --idp-entity-id',
+  );
+  console.log(
+    '                             and --idp-sso-url where not given, e.g. https://<ias>/saml2/metadata',
+  );
+  console.log(
+    '  --idp-initiated            The IdP starts the login; no AuthnRequest is sent (required for bearer',
+  );
+  console.log(
+    '                             against UAA/XSUAA). Use with --assertion or --assertion-flow manual',
+  );
+  console.log(
+    '  --authn-request-id <id>    AuthnRequest ID an --assertion answers (SP-initiated, request sent elsewhere)',
+  );
+  console.log(
+    '  --saml-metadata <path>     XSUAA SP metadata; bearer reads it for the token alias, --acs-url and',
+  );
+  console.log(
+    '                             --sp-entity-id. With --service-key, <uaa.url>/saml/metadata is read instead',
   );
   console.log('  --relay-state <value>      RelayState (optional)');
   console.log(
-    '  --assertion-flow <flow>    browser|manual|assertion (default: browser)',
+    '  --assertion-flow <flow>    browser|manual|assertion (default: browser; manual with --idp-initiated)',
   );
   console.log('  --assertion <base64>       SAMLResponse (base64)');
   console.log('  --cookie <value>           Session cookies (for pure SAML)');
   console.log(
     '  --token-endpoint <url>     Token endpoint for SAML bearer exchange',
   );
+  console.log('');
+  console.log(
+    '  Every SAML assertion is validated before use. Both SAML flows require --idp-cert',
+  );
+  console.log(
+    '  and --idp-entity-id, or --idp-metadata (or idpCertificates/idpEntityId in --config). An --assertion',
+  );
+  console.log(
+    '  also needs --idp-initiated or --authn-request-id; the browser and manual flows',
+  );
+  console.log('  send their own request unless --idp-initiated is given.');
   console.log('');
   console.log('  --version, -v              Show version number');
   console.log('  --help, -h                 Show this help message');
@@ -277,6 +324,7 @@ function parseArgs(): McpSsoOptions | null {
   let cookie: string | undefined;
   let uaaUrl: string | undefined;
   let samlMetadataPath: string | undefined;
+  const samlTrust: Partial<McpSsoOptions> = {};
 
   const firstArg = args[0];
   if (firstArg && !firstArg.startsWith('-')) {
@@ -488,6 +536,7 @@ function parseArgs(): McpSsoOptions | null {
         i++;
         break;
       default:
+        i += parseSamlTrustArg(samlTrust, arg, next);
         break;
     }
   }
@@ -532,14 +581,8 @@ function parseArgs(): McpSsoOptions | null {
     cookie,
     uaaUrl,
     samlMetadataPath,
+    ...samlTrust,
   };
-}
-
-function resolveSamlTokenAlias(metadataXml: string): string | undefined {
-  const regex =
-    /<md:AssertionConsumerService[^>]*Location="([^"]*\/oauth\/token\/alias\/[^"]+)"/i;
-  const match = metadataXml.match(regex);
-  return match?.[1];
 }
 
 async function main() {
@@ -647,6 +690,10 @@ async function main() {
   // --config wasn't given.
   applyFileConfig(options, providerConfigFromFile);
 
+  // The user's own --token-endpoint, before a service key sets the plain
+  // /oauth/token, which a saml2-bearer grant must not use.
+  const explicitTokenEndpoint = options.tokenEndpoint;
+
   if (options.serviceKeyPath) {
     const resolvedServiceKeyPath = path.resolve(options.serviceKeyPath);
     const serviceKeyDir = path.dirname(resolvedServiceKeyPath);
@@ -678,19 +725,17 @@ async function main() {
     }
   }
 
-  if (options.samlMetadataPath) {
-    const resolvedMetadataPath = path.resolve(options.samlMetadataPath);
-    if (!fs.existsSync(resolvedMetadataPath)) {
-      console.error(`❌ SAML metadata file not found: ${resolvedMetadataPath}`);
-      process.exit(1);
-    }
-    const metadataXml = fs.readFileSync(resolvedMetadataPath, 'utf8');
-    const aliasUrl = resolveSamlTokenAlias(metadataXml);
-    if (!aliasUrl) {
-      console.error('❌ SAML metadata does not contain token alias endpoint.');
-      process.exit(1);
-    }
-    options.tokenEndpoint = aliasUrl;
+  // What the SAML metadata states and the caller did not: the identity
+  // provider's trust from --idp-metadata, and for saml2-bearer the Audience,
+  // Recipient and token endpoint from XSUAA's own metadata (--saml-metadata,
+  // else <uaa.url>/saml/metadata from the service key).
+  try {
+    await applySamlMetadata(options, explicitTokenEndpoint);
+  } catch (error) {
+    console.error(
+      `❌ SAML metadata: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
   }
 
   if (options.protocol === 'oidc' && options.flow === 'password') {
@@ -724,10 +769,8 @@ async function main() {
     }
   }
 
-  const tempSessionDir = path.join(path.dirname(resolvedOutputPath), '.tmp');
-  if (!fs.existsSync(tempSessionDir)) {
-    fs.mkdirSync(tempSessionDir, { recursive: true });
-  }
+  // Removed on any exit, error and signal included: it holds the secret.
+  const tempSessionDir = createWorkDir('mcp-sso');
 
   if (resolvedEnvPath && fs.existsSync(resolvedEnvPath)) {
     const tempEnvPath = path.join(tempSessionDir, `${destination}.env`);
@@ -798,29 +841,25 @@ async function main() {
     });
   }
 
-  const providerConfig = buildProviderConfig(
-    options,
-    existingAuth,
-    existingConn,
+  const withLogger = (config: SsoProviderConfig): SsoProviderConfig =>
+    (config as any).config
+      ? ({
+          ...config,
+          config: {
+            ...(config as any).config,
+            logger: (config as any).config?.logger ?? logger,
+          },
+        } as SsoProviderConfig)
+      : config;
+
+  const tokenProvider = SsoProviderFactory.create(
+    withLogger(buildProviderConfig(options, existingAuth, existingConn)),
   );
-
-  const providerConfigWithLogger = (providerConfig as any).config
-    ? {
-        ...providerConfig,
-        config: {
-          ...(providerConfig as any).config,
-          logger: (providerConfig as any).config?.logger ?? logger,
-        },
-      }
-    : providerConfig;
-
-  const tokenProvider = SsoProviderFactory.create(providerConfigWithLogger);
   const broker = new AuthBroker(
     {
       sessionStore,
-      tokenProvider,
+      provider: tokenProvider,
     },
-    options.browser,
     logger,
   );
 
@@ -909,12 +948,6 @@ async function main() {
       'utf8',
     );
     console.log(`✅ JSON file created: ${resolvedOutputPath}`);
-  }
-
-  try {
-    fs.rmSync(tempSessionDir, { recursive: true, force: true });
-  } catch {
-    // ignore cleanup errors
   }
 }
 

@@ -1,16 +1,24 @@
 # @mcp-abap-adt/auth-broker
 [![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/StandWithUkraine.svg)](https://stand-with-ukraine.pp.ua)
 
-JWT authentication broker for MCP ABAP ADT server. Manages authentication tokens based on destination headers, automatically loading tokens from `.env` files and refreshing them using service keys when needed.
+A per-destination token broker for SAP BTP and ABAP systems. For a destination — a name, such as
+`TRIAL` — it reads the session and the service key from the stores it is given, hands them to
+a token provider, and saves what the provider returns back to the session: a JWT or, for SAML,
+session cookies, with the refresh token. It decides nothing about tokens itself: whether the
+cached token is still good, when to refresh and when to log in is the provider's call
+(`@mcp-abap-adt/auth-providers`), and where sessions live is the stores' (`@mcp-abap-adt/auth-stores`).
+
+It also ships two CLIs that write session files: `mcp-auth` (service key → session,
+authorization code or client credentials) and `mcp-sso` (OIDC and SAML single sign-on).
 
 ## Features
 
-- 🔐 **Destination-based Authentication**: Load tokens based on `x-mcp-destination` header
-- 📁 **Environment File Support**: Automatically loads tokens from `{destination}.env` files
-- 🔄 **Automatic Token Refresh**: Refreshes expired tokens using service keys from `{destination}.json` files
-- ✅ **Token Validation**: Validates tokens via provider (if `validateToken` is implemented)
-- 💾 **Token Caching**: In-memory caching for improved performance
-- 🔧 **Configurable Base Path**: Customize where `.env` and `.json` files are stored
+- 🎯 **Per destination**: one provider per destination name, built by a factory or given once
+- 🔄 **Provider-driven token lifecycle**: The provider decides whether its cached token is still good, refreshes it, or logs in; the broker persists what it returns
+- ⚡ **Forced refresh**: `refreshToken()` obtains a new token even when the cached one looks valid — for a caller holding a 401
+- 🧾 **JWT or SAML cookies**: what the provider returns is saved as a token or as session cookies
+- 🔑 **No secrets copied**: The client secret stays in the service key; the session store gets tokens only
+- 🧰 **CLIs**: `mcp-auth` and `mcp-sso` produce `.env`/JSON session files, SAML trust read from metadata
 
 ## Installation
 
@@ -18,102 +26,103 @@ JWT authentication broker for MCP ABAP ADT server. Manages authentication tokens
 npm install @mcp-abap-adt/auth-broker
 ```
 
+Requires Node.js 22 or 24 (`engines: "^22 || ^24"`), the versions SAP BTP's Cloud Foundry
+Node.js buildpack offers.
+
 ## Usage
 
-### Basic Usage (Provider Required)
+### Basic Usage
 
-AuthBroker requires a token provider configured for the destination:
+The broker takes a session store, an optional service key store, and a token
+provider implementing `IRefreshableTokenProvider` (from
+`@mcp-abap-adt/interfaces-auth`) — or a factory that builds one per
+destination:
 
 ```typescript
-import { AuthBroker, AbapSessionStore } from '@mcp-abap-adt/auth-broker';
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import {
+  AbapServiceKeyStore,
+  AbapSessionStore,
+} from '@mcp-abap-adt/auth-stores';
 import {
   AuthorizationCodeProvider,
   browserCallbackStrategy,
 } from '@mcp-abap-adt/auth-providers';
 
-const tokenProvider = new AuthorizationCodeProvider({
-  uaaUrl: 'https://...authentication...hana.ondemand.com',
-  clientId: '...',
-  clientSecret: '...',
-  authorization: browserCallbackStrategy({ browser: 'system' }),
-});
-
-const broker = new AuthBroker({
-  sessionStore: new AbapSessionStore('/path/to/destinations'),
-  tokenProvider,
-});
+const broker = new AuthBroker(
+  {
+    sessionStore: new AbapSessionStore('/path/to/sessions'),
+    serviceKeyStore: new AbapServiceKeyStore('/path/to/keys'), // optional
+    // Called once per destination, seeded with what the stores hold.
+    provider: (destination, authConfig, connConfig) => {
+      if (!authConfig) throw new Error(`No UAA credentials for ${destination}`);
+      return new AuthorizationCodeProvider({
+        uaaUrl: authConfig.uaaUrl,
+        clientId: authConfig.uaaClientId,
+        clientSecret: authConfig.uaaClientSecret,
+        refreshToken: authConfig.refreshToken, // stored by an earlier login
+        accessToken: connConfig.authorizationToken, // reused while valid
+        authorization: browserCallbackStrategy({ browser: 'system' }),
+      });
+    },
+  },
+  logger, // optional ILogger
+);
 
 const token = await broker.getToken('TRIAL');
 ```
 
-### Full Configuration (All Dependencies)
+The factory receives:
 
-For maximum flexibility, provide all three dependencies:
+- `authConfig` — the UAA credentials: the session's own when it holds them,
+  else the service key's; carrying the refresh token the session stored.
+  `null` when no store has credentials (a SAML flow needs none).
+- `connConfig` — the session's connection config, with `serviceUrl` resolved
+  (from the session, else the service key) and the token stored last.
 
-```typescript
-import {
-  AuthBroker,
-  AbapServiceKeyStore,
-  AbapSessionStore,
-} from '@mcp-abap-adt/auth-broker';
-import {
-  AuthorizationCodeProvider,
-  browserCallbackStrategy,
-} from '@mcp-abap-adt/auth-providers';
-
-const broker = new AuthBroker({
-  sessionStore: new AbapSessionStore('/path/to/destinations'),
-  serviceKeyStore: new AbapServiceKeyStore('/path/to/destinations'), // optional
-  tokenProvider: new AuthorizationCodeProvider({
-    uaaUrl: 'https://...authentication...hana.ondemand.com',
-    clientId: '...',
-    clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system' }),
-  }),
-}, 'chrome', logger);
-
-// Disable browser authentication for headless/stdio environments (e.g., MCP with Cline)
-const brokerNoBrowser = new AuthBroker({
-  sessionStore: new AbapSessionStore('/path/to/destinations'),
-  serviceKeyStore: new AbapServiceKeyStore('/path/to/destinations'),
-  tokenProvider: new AuthorizationCodeProvider({
-    uaaUrl: 'https://...authentication...hana.ondemand.com',
-    clientId: '...',
-    clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'none' }),
-  }),
-  allowBrowserAuth: false, // Throws BROWSER_AUTH_REQUIRED if browser auth needed
-}, 'chrome', logger);
-```
-
-### Session + Service Key (For Initialization)
-
-If you need to initialize sessions from service keys, create the provider from service key auth config:
+A provider instance can be passed instead of a factory; it is then used as
+given, for every destination, and the broker seeds it with nothing:
 
 ```typescript
 const broker = new AuthBroker({
-  sessionStore: new AbapSessionStore('/path/to/destinations'),
-  serviceKeyStore: new AbapServiceKeyStore('/path/to/destinations'),
-  tokenProvider: new AuthorizationCodeProvider({
-    uaaUrl: 'https://...authentication...hana.ondemand.com',
-    clientId: '...',
-    clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system' }),
-  }),
+  sessionStore: new AbapSessionStore('/path/to/sessions'),
+  provider: new AuthorizationCodeProvider({ uaaUrl, clientId, clientSecret }),
 });
 ```
 
-### In-Memory Session Store
+> `AuthorizationCodeProvider` and the other `@mcp-abap-adt/auth-providers`
+> providers implement `IRefreshableTokenProvider` from auth-providers 4.2.0.
 
-For testing or temporary sessions:
+### Headless Processes (No Browser)
+
+Whether a login may open a browser is the provider's authorization strategy,
+not a broker option. A process nobody is watching (an MCP server on stdio, a
+CI job) gives the provider a strategy that refuses, and catches its own error —
+the broker hands it back unchanged:
 
 ```typescript
-import { AuthBroker, SafeAbapSessionStore } from '@mcp-abap-adt/auth-broker';
+class LoginRequiredError extends Error {}
 
-const broker = new AuthBroker({
-  sessionStore: new SafeAbapSessionStore(), // In-memory, data lost after restart
+const provider = new AuthorizationCodeProvider({
+  uaaUrl, clientId, clientSecret, refreshToken,
+  authorization: {
+    authorize: async () => {
+      throw new LoginRequiredError('Run mcp-auth to log in');
+    },
+  },
 });
+
+try {
+  await broker.getToken('TRIAL');
+} catch (error) {
+  if (error instanceof LoginRequiredError) {
+    // No usable token or refresh token: a person has to log in.
+  }
+}
 ```
+
+A cached token that is still valid, or a refresh token the UAA accepts, never
+reaches the strategy.
 
 ### Custom Browser Auth Port
 
@@ -126,26 +135,25 @@ proxies typically use (e.g. `3001`/`3333`). Pass `port` to avoid conflicts
 with a specific redirect URI registered at the identity provider:
 
 ```typescript
-const broker = new AuthBroker({
-  sessionStore: new AbapSessionStore('/path/to/destinations'),
-  serviceKeyStore: new AbapServiceKeyStore('/path/to/destinations'),
-  tokenProvider: new AuthorizationCodeProvider({
-    uaaUrl: 'https://...authentication...hana.ondemand.com',
-    clientId: '...',
-    clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system', port: 4001 }),
-  }),
-}, 'chrome');
+new AuthorizationCodeProvider({
+  uaaUrl, clientId, clientSecret,
+  authorization: browserCallbackStrategy({ browser: 'system', port: 4001 }),
+});
 ```
 
 ### Getting Tokens
 
 ```typescript
+// The provider's current token: cached while valid, else refreshed or logged in.
 const token = await broker.getToken('TRIAL');
 
-// Force refresh token
+// A new token, never the cached one — after the server refused the token (401).
 const newToken = await broker.refreshToken('TRIAL');
 ```
+
+Both write the result to the session store: a SAML result as session cookies,
+anything else as the bearer token, and the refresh token when the result has
+one.
 
 ### Creating Token Refresher for DI
 
@@ -159,7 +167,7 @@ import { JwtAbapConnection } from '@mcp-abap-adt/connection';
 const broker = new AuthBroker({
   sessionStore: mySessionStore,
   serviceKeyStore: myServiceKeyStore,
-  tokenProvider: myTokenProvider,
+  provider: myProviderFactory,
 });
 
 // Create token refresher for specific destination
@@ -169,8 +177,8 @@ const tokenRefresher = broker.createTokenRefresher('TRIAL');
 const connection = new JwtAbapConnection(config, tokenRefresher);
 
 // Token refresher methods:
-// - getToken(): Returns cached token if valid, otherwise refreshes
-// - refreshToken(): Forces token refresh and saves to session store
+// - getToken(): the provider's current token (broker.getToken)
+// - refreshToken(): a new token, never the cached one (broker.refreshToken)
 ```
 
 **Benefits of Token Refresher:**
@@ -178,6 +186,28 @@ const connection = new JwtAbapConnection(config, tokenRefresher);
 - 🧩 **Dependency Injection**: Clean separation of concerns
 - 💾 **Automatic Persistence**: Tokens saved to session store after refresh
 - 🎯 **Destination-Scoped**: Each refresher is bound to specific destination
+
+## Migrating from 2.2.0
+
+1. `tokenProvider` is now `provider`, and the `browser` argument is gone:
+   `new AuthBroker({ sessionStore, serviceKeyStore, tokenProvider }, 'system', logger)`
+   becomes `new AuthBroker({ sessionStore, serviceKeyStore, provider }, logger)`.
+2. The provider must implement `IRefreshableTokenProvider` (`refreshTokens()`,
+   a new token, never the cached one) — `@mcp-abap-adt/auth-providers` 4.2.0
+   providers do. Pass a factory instead of an instance to have the broker seed
+   it with the stored refresh token and token.
+3. `allowBrowserAuth: false` and `BROWSER_AUTH_REQUIRED` are gone: give the
+   provider an authorization strategy that refuses and catch your own error
+   (see *Headless Processes*). A browser login that fails — timeout, the
+   identity provider's refusal, a busy callback port — is auth-providers'
+   `BrowserAuthError` (from 4.2.0).
+4. Provider errors arrive unchanged: match on the class or `code`, not on the
+   old `Token provider … error for <destination>` messages.
+5. The broker no longer writes the client secret into the session store. Read
+   it from the service key store if you relied on finding it in the session.
+6. `refreshToken()` now forces a new token; it used to return `getToken()`'s.
+7. Node.js 22 or 24; SAML runs need the IdP trust (see *Migrating `mcp-sso`
+   SAML runs from 2.2.0*).
 
 ## Configuration
 
@@ -222,28 +252,17 @@ const connection = new JwtAbapConnection(config, tokenRefresher);
 
 When logging is enabled (via `DEBUG_BROKER=true` or `DEBUG_AUTH_BROKER=true`), the broker provides detailed structured logging:
 
-**What is logged:**
-- **Broker initialization**: Configuration details, stores, token provider, browser settings
-- **Token retrieval**: Session state checks, token presence, refresh token availability
-- **Token operations**: Token requests via provider, received tokens with expiration information
-- **Token persistence**: Saving tokens to session with formatted token values and expiration dates
-- **Error context**: Detailed error information with file paths, error codes, missing fields
+**What is logged:** broker initialization (which stores, instance or factory),
+provider builds (whether credentials, a refresh token and a stored token were
+there), and each token saved (token type, grant, whether a refresh token came
+back, expiry). Store read failures are logged as warnings.
 
-**Logging Features:**
-- **Token Formatting**: Tokens are logged in truncated format (first 25 and last 25 characters, skipping middle) for security and readability
-- **Date Formatting**: Expiration dates are logged in readable format (e.g., "2025-12-25 19:21:27 UTC") instead of raw timestamps
-- **Structured Logging**: Uses `DefaultLogger` from `@mcp-abap-adt/logger` for proper formatting with icons and level prefixes
-- **Log Levels**: Controlled via `LOG_LEVEL` or `AUTH_LOG_LEVEL` environment variable (error, warn, info, debug)
+**What is never logged:** any part of a token, refresh token or secret — not a
+prefix, not a suffix. A log line says whether a token is there, never what it is.
 
 Example output with `DEBUG_BROKER=true LOG_LEVEL=info`:
 ```
-[INFO] ℹ️ [AUTH-BROKER] Broker initialized: hasServiceKeyStore(true), hasSessionStore(true), hasTokenProvider(true), browser(system), allowBrowserAuth(true)
-[INFO] ℹ️ [AUTH-BROKER] Getting token for destination: TRIAL
-[INFO] ℹ️ [AUTH-BROKER] Session check for TRIAL: hasToken(true), hasAuthConfig(true), hasServiceUrl(true), serviceUrl(https://...abap...), authorizationToken(eyJ0eXAiOiJKV1QiLCJqaWQiO...Q5ti7aYmEzItIDuLp7axNYo6w), hasRefreshToken(true)
-[INFO] ℹ️ [AUTH-BROKER] Requesting tokens for TRIAL via session
-[INFO] ℹ️ [AUTH-BROKER] Tokens received for TRIAL: authorizationToken(eyJ0eXAiOiJKV1QiLCJqaWQiO...Q5ti7aYmEzItIDuLp7axNYo6w), hasRefreshToken(true), authType(authorization_code), expiresIn(43199), expiresAt(2025-12-26 20:15:30 UTC)
-[INFO] ℹ️ [AUTH-BROKER] Saving tokens to session for TRIAL: serviceUrl(https://...abap...), authorizationToken(eyJ0eXAiOiJKV1QiLCJqaWQiO...Q5ti7aYmEzItIDuLp7axNYo6w), hasRefreshToken(true), expiresAt(2025-12-26 20:15:30 UTC)
-[INFO] ℹ️ [AUTH-BROKER] Token retrieved for TRIAL (via session): authorizationToken(eyJ0eXAiOiJKV1QiLCJqaWQiO...Q5ti7aYmEzItIDuLp7axNYo6w)
+[INFO] ℹ️ [AUTH-BROKER] [AuthBroker] Token saved for TRIAL: tokenType(jwt), authType(authorization_code), hasRefreshToken(true), expiresAt(2026-09-26T20:15:30.000Z)
 ```
 
 **Note**: Logging only works when a logger is explicitly provided to the broker constructor. The broker will not output anything to console if no logger is passed.
@@ -370,22 +389,25 @@ The `@mcp-abap-adt/auth-broker` package defines **interfaces** and provides **or
 
 #### What AuthBroker Does
 
-- **Orchestrates authentication flows**: Coordinates token retrieval, validation, and refresh using provided stores and providers
-- **Manages token lifecycle**: Handles token caching, validation, and automatic refresh
-- **Works with interfaces only**: Uses `IServiceKeyStore`, `ISessionStore`, and `ITokenProvider` interfaces without knowing concrete implementations
-- **Delegates to providers**: Calls `tokenProvider.getTokens()` to obtain tokens
-- **Delegates to stores**: Saves tokens and connection configuration to `sessionStore`
+- **Resolves what the stores hold**: the service URL, the UAA credentials, the stored token and refresh token
+- **Builds or reuses the provider**: a factory is called once per destination, seeded with the above
+- **Asks the provider once**: `getTokens()` for `getToken()`, `refreshTokens()` for `refreshToken()` — no retries, no fallbacks
+- **Persists the answer**: token or session cookies, and the refresh token, to `sessionStore`
+- **Works with interfaces only**: `IServiceKeyStore`, `ISessionStore`, `IRefreshableTokenProvider`
 
 #### What AuthBroker Does NOT Do
 
 - **Does NOT implement storage**: File I/O, parsing, and storage logic are handled by concrete store implementations from `@mcp-abap-adt/auth-stores`
 - **Does NOT implement token acquisition**: OAuth2 flows, refresh token logic, and client credentials are handled by concrete provider implementations from `@mcp-abap-adt/auth-providers`
+- **Does NOT judge the token**: whether a cached token is still valid, and whether to refresh or log in, is the provider's decision
+- **Does NOT decide how a login is conducted**: browser, headless or pasted code is the provider's authorization strategy
+- **Does NOT copy secrets**: the client secret stays in the service key store
 
 ### Consumer Responsibilities
 
 The **consumer** (application using `AuthBroker`) is responsible for:
 
-1. **Selecting appropriate implementations**: Choose the correct `IServiceKeyStore`, `ISessionStore`, and `ITokenProvider` implementations based on the use case:
+1. **Selecting appropriate implementations**: Choose the correct `IServiceKeyStore`, `ISessionStore`, and `IRefreshableTokenProvider` implementations based on the use case:
    - **ABAP systems**: Use `AbapServiceKeyStore`, `AbapSessionStore` (or `SafeAbapSessionStore`), and `AuthorizationCodeProvider`
    - **BTP systems**: Use `AbapServiceKeyStore`, `BtpSessionStore` (or `SafeBtpSessionStore`), and `AuthorizationCodeProvider`
    - **XSUAA services**: Use `XsuaaServiceKeyStore`, `XsuaaSessionStore` (or `SafeXsuaaSessionStore`), and `ClientCredentialsProvider`
@@ -412,19 +434,21 @@ Concrete `ISessionStore` implementations are responsible for:
 
 ### Provider Responsibilities
 
-Concrete `ITokenProvider` implementations are responsible for:
+Concrete `IRefreshableTokenProvider` implementations are responsible for:
 
 - **Obtaining tokens**: Using OAuth2 flows, refresh tokens, or client credentials to obtain JWT tokens
-- **Managing token lifecycle**: Caching, validating, refreshing, and re-authenticating as needed
+- **Managing token lifecycle**: Caching, validating, refreshing, and re-authenticating as needed (`getTokens()`)
+- **Forcing a new token**: `refreshTokens()` — never the cached one
+- **Reporting failures with typed errors**, which the broker passes on unchanged
 
 ### Design Principles
 
 1. **Interface-Only Communication** (Core Principle): All interactions with external dependencies happen **ONLY through interfaces**. The code knows **NOTHING beyond what is defined in the interfaces** (see [Core Development Principle](#core-development-principle) above)
-2. **Dependency Inversion Principle (DIP)**: `AuthBroker` depends on abstractions (`IServiceKeyStore`, `ISessionStore`, `ITokenProvider`), not concrete implementations
+2. **Dependency Inversion Principle (DIP)**: `AuthBroker` depends on abstractions (`IServiceKeyStore`, `ISessionStore`, `IRefreshableTokenProvider`), not concrete implementations
 3. **Single Responsibility**: Each component has a single, well-defined responsibility:
-   - `AuthBroker`: Orchestration and token lifecycle management
+   - `AuthBroker`: Orchestration — resolving, asking, persisting
    - `ISessionStore`: Session data storage and retrieval
-   - `ITokenProvider`: Token acquisition
+   - `IRefreshableTokenProvider`: Token acquisition and lifecycle
    - `IServiceKeyStore`: Service key storage and retrieval
 4. **Interface Segregation**: Interfaces are focused and minimal, containing only what's necessary for their specific purpose
 5. **Open/Closed Principle**: New store and provider implementations can be added without modifying `AuthBroker`
@@ -440,138 +464,89 @@ new AuthBroker(
   config: {
     sessionStore: ISessionStore;        // required
     serviceKeyStore?: IServiceKeyStore; // optional
-    tokenProvider: ITokenProvider;      // required
-    allowBrowserAuth?: boolean;         // optional
-  }, 
-  browser?: string, 
-  logger?: ILogger
+    provider:                           // required
+      | IRefreshableTokenProvider
+      | ((
+          destination: string,
+          authConfig: IAuthorizationConfig | null,
+          connConfig: IConnectionConfig,
+        ) => IRefreshableTokenProvider);
+  },
+  logger?: ILogger,
 )
 ```
 
 **Parameters:**
-- `config` - Configuration object:
-  - `sessionStore` - **Required** - Store for session data. Must contain initial session with `serviceUrl`
-  - `serviceKeyStore` - **Optional** - Store for service keys. Only needed for initializing sessions from service keys
-  - `tokenProvider` - **Required** - Token provider for token acquisition and refresh
-  - `allowBrowserAuth` - **Optional** - When `false`, throws `BROWSER_AUTH_REQUIRED` instead of launching browser auth
-- `browser` - Optional browser name for authentication (`chrome`, `edge`, `firefox`, `system`, `headless`, `none`). Default: `system`
-  - Use `'headless'` for SSH/remote sessions - logs URL and waits for manual callback
-  - Use `'none'` for automated tests - logs URL and rejects immediately
-  - For XSUAA, browser is not used (client_credentials grant type) - use `'none'`
-- `logger` - Optional logger instance. If not provided, uses no-op logger
-
-**When to Provide Each Dependency:**
-
-- **`sessionStore` (required)**: Always required. Must contain initial session with `serviceUrl`
-- **`serviceKeyStore` (optional)**: 
-  - Required if you need to initialize sessions from service keys (Step 0)
-  - Not needed if session already contains authorization config and tokens
-- **`tokenProvider` (required)**:
-  - Used for all token acquisition and refresh flows
-  - Must be configured with the destination's auth parameters (e.g., UAA credentials)
+- `config.sessionStore` - **Required** - Where tokens and the refresh token are kept. Its `serviceUrl`, or the service key's, is required.
+- `config.serviceKeyStore` - **Optional** - UAA credentials and the service URL.
+- `config.provider` - **Required** - A provider instance, used for every destination, or a factory (`TokenProviderFactory`), called once per destination and seeded with what the stores hold (see *Basic Usage*).
+- `logger` - Optional logger. If not provided, nothing is logged.
 
 **Available Implementations:**
-- **ABAP**: `AbapServiceKeyStore(directory, defaultServiceUrl?, logger?)`, `AbapSessionStore(directory, defaultServiceUrl?, logger?)`, `SafeAbapSessionStore(defaultServiceUrl?, logger?)`, `AuthorizationCodeProvider(...)`
+- **ABAP**: `AbapServiceKeyStore(directory, logger?)`, `AbapSessionStore(directory, logger?, defaultServiceUrl?)`, `SafeAbapSessionStore(logger?, defaultServiceUrl?)`, `AuthorizationCodeProvider(...)`
 - **XSUAA** (reduced scope): `XsuaaServiceKeyStore(directory, logger?)`, `XsuaaSessionStore(directory, defaultServiceUrl, logger?)`, `SafeXsuaaSessionStore(defaultServiceUrl, logger?)`, `ClientCredentialsProvider(...)`
-- **BTP** (full scope for ABAP): `AbapServiceKeyStore(directory, defaultServiceUrl?, logger?)`, `BtpSessionStore(directory, defaultServiceUrl, logger?)`, `SafeBtpSessionStore(defaultServiceUrl, logger?)`, `AuthorizationCodeProvider(...)`
 
 #### Methods
 
 ##### `getToken(destination: string): Promise<string>`
 
-Gets authentication token for destination. Implements a three-step flow:
-
-**Step 0: Initialize Session with Token (if needed)**
-- Checks if session has `authorizationToken` and authorization config
-- If both are missing and `serviceKeyStore` is available:
-  - Loads authorization config from service key
-  - Uses `tokenProvider.getTokens()` to obtain tokens
-  - Persists tokens to session
-- Otherwise → proceeds to Step 1
-
-**Step 1: Token Refresh / Re-Auth**
-- If session has authorization config:
-  - Uses `tokenProvider.getTokens()` to refresh or re-authenticate
-  - Persists tokens to session
-  - Returns new token
-- If that fails (or no session auth config) and `serviceKeyStore` is available:
-  - Loads authorization config from service key
-  - Uses `tokenProvider.getTokens()` to obtain tokens
-  - Persists tokens to session
-- If all failed → throws error
-
-**Important Notes:**
-- All authentication is handled by the injected provider (authorization_code or client_credentials).
-- `tokenProvider` is required for all token acquisition and refresh flows.
-- **Broker always calls `provider.getTokens()`** - provider handles token lifecycle internally (validation, refresh, login). Consumer doesn't need to know about token issues.
-- Provider decides whether to return cached token, refresh, or perform login based on token state.
-- **Store errors are handled gracefully**: If service key files are missing or malformed, the broker logs the error and continues with fallback mechanisms (session store data or provider-based auth)
-
-##### Error Handling
-
-The broker implements comprehensive error handling for all external operations, treating all injected dependencies as untrusted:
-
-```typescript
-import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
-
-try {
-  const token = await broker.getToken('TRIAL');
-} catch (error: any) {
-  // Broker handles errors internally where possible, but critical errors propagate
-  console.error('Failed to get token:', error.message);
-}
-```
-
-**Error Categories** (handled by broker with graceful degradation):
-
-**1. SessionStore Errors** (reading session files):
-- `STORE_ERROR_CODES.FILE_NOT_FOUND` - Session file missing (logged, tries serviceKeyStore fallback)
-- `STORE_ERROR_CODES.PARSE_ERROR` - Corrupted session file (logged with file path, tries fallback)
-- Write failures when saving tokens (logged and thrown - critical)
-
-**2. ServiceKeyStore Errors** (reading service key files):
-- `STORE_ERROR_CODES.FILE_NOT_FOUND` - Service key file missing (logged, continues with session data)
-- `STORE_ERROR_CODES.PARSE_ERROR` - Invalid JSON in service key (logged with file path and cause)
-- `STORE_ERROR_CODES.INVALID_CONFIG` - Missing required fields (logged with missing field names)
-- `STORE_ERROR_CODES.STORAGE_ERROR` - Permission/write errors (logged)
-
-**3. TokenProvider Errors** (network operations):
-- Network errors: `ECONNREFUSED`, `ETIMEDOUT`, `ENOTFOUND` (logged, throws with descriptive message)
-- `VALIDATION_ERROR` - Missing required auth fields (logged with field names, throws)
-- `BROWSER_AUTH_ERROR` - Browser authentication failed or cancelled (logged, throws)
-- `REFRESH_ERROR` - Token refresh failed at UAA server (logged, throws)
-
-**4. Browser Auth Disabled Errors** (when `allowBrowserAuth: false`):
-- `BROWSER_AUTH_REQUIRED` - Browser authentication is required but disabled. Thrown when:
-  - **Step 0**: No token and no UAA credentials in session, service key exists but browser auth needed
-  - **Step 2b**: Refresh token expired/invalid and browser auth needed for new token
-  - Error includes `destination` property for context
-  - Use case: Non-interactive environments (MCP stdio, Cline) where browser cannot open
-
-**Defensive Design Principles:**
-- **All external operations wrapped in try-catch**: Files may be missing/corrupted, network may fail
-- **Graceful degradation**: Store errors trigger fallback mechanisms (serviceKey → session → provider)
-- **Detailed error context**: Logs include file paths, error codes, missing fields for debugging
-- **Fail-fast for critical errors**: Write failures and provider errors throw immediately (cannot recover)
-- **No assumptions about injected dependencies**: All stores/providers treated as potentially unreliable
-
-Example error scenarios handled:
-- Session file deleted mid-operation → uses service key
-- Service key has invalid JSON → logs parse error, uses session data
-- Network timeout during token refresh → logs timeout, throws descriptive error
-- File permission denied → logs error with file path, throws
+1. Resolves the destination's `serviceUrl` (session, else service key; an error if neither has one).
+2. Builds the provider on first use (factory form), seeded with the credentials, the stored refresh token and the stored token — or uses the instance.
+3. Calls `provider.getTokens()` once. The provider answers from its cache, refreshes, or logs in.
+4. Persists the result: `sessionCookies` for `tokenType: 'saml'`, else `authorizationToken`; the refresh token when the result has one.
+5. Returns the token.
 
 ##### `refreshToken(destination: string): Promise<string>`
 
-Force refresh token for destination. Calls `getToken()` to run the full refresh flow and persist updated tokens.
+The same, with `provider.refreshTokens()`: a new token, never the cached one —
+for a caller whose token the server has just refused.
 
-##### `clearCache(destination: string): void`
+##### `getAuthorizationConfig(destination)` / `getConnectionConfig(destination)`
 
-Clear cached token for specific destination.
+The session's configuration, else the service key's, else `null`.
 
-##### `clearAllCache(): void`
+##### `createTokenRefresher(destination): ITokenRefresher`
 
-Clear all cached tokens.
+`getToken()` and `refreshToken()` bound to one destination, for injection into a connection.
+
+##### Error Handling
+
+- **Provider errors propagate unchanged** — the same object, with its class,
+  `code`, `missingFields` and `cause`: auth-providers' `ValidationError`,
+  `RefreshError`, `AssertionValidationError`, network errors (`ECONNREFUSED`,
+  `ETIMEDOUT`, `ENOTFOUND`), and whatever your authorization strategy throws.
+  The broker does not retry a failed call.
+- **Store reads do not stop the flow**: a missing (`FILE_NOT_FOUND`, logged at
+  debug) or unreadable entry (logged as a warning) is treated as absent, and
+  whatever needed it fails later with its own message — for instance the
+  missing `serviceUrl`.
+- **Store writes propagate**: a token that cannot be saved is an error.
+- **A provider result without a token** is an error.
+
+```typescript
+import { ValidationError } from '@mcp-abap-adt/auth-providers';
+
+try {
+  const token = await broker.getToken('TRIAL');
+} catch (error) {
+  if (error instanceof ValidationError) {
+    logger.error(`Missing: ${error.missingFields?.join(', ')}`);
+  }
+  throw error;
+}
+```
+
+#### Secrets in the Session Store
+
+The broker writes the token (or session cookies) and the refresh token to the
+session store — never the client secret. When the credentials come from the
+service key they stay there. A session that already holds its own credentials
+(written by you, or by `mcp-auth`/`mcp-sso`, whose output is a self-contained
+session file) keeps them, and only its refresh token is updated.
+
+With credentials in the service key, the stores return the stored refresh
+token through `loadSession()`, which the broker reads to seed the next
+process's provider — the XSUAA stores too, from auth-stores 1.2.3.
 
 ### Token Providers
 
@@ -597,61 +572,25 @@ The package uses the `ITokenProvider` interface for token acquisition. Provider 
 **Example Usage:**
 
 ```typescript
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
-  AuthBroker,
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
-  AbapServiceKeyStore,
-  BtpSessionStore
-} from '@mcp-abap-adt/auth-broker';
-import {
-  ClientCredentialsProvider,
-  AuthorizationCodeProvider,
-  browserCallbackStrategy,
-} from '@mcp-abap-adt/auth-providers';
+} from '@mcp-abap-adt/auth-stores';
+import { ClientCredentialsProvider } from '@mcp-abap-adt/auth-providers';
 
-// XSUAA authentication
+// XSUAA, client_credentials: credentials from the service key
 const xsuaaBroker = new AuthBroker({
   sessionStore: new XsuaaSessionStore('/path/to/sessions', 'https://mcp.example.com'),
-  tokenProvider: new ClientCredentialsProvider({
-    uaaUrl: 'https://auth.example.com',
-    clientId: '...',
-    clientSecret: '...',
-  }),
-});
-
-// XSUAA authentication - with service key initialization
-const xsuaaBrokerWithServiceKey = new AuthBroker({
-  sessionStore: new XsuaaSessionStore('/path/to/sessions', 'https://mcp.example.com'),
   serviceKeyStore: new XsuaaServiceKeyStore('/path/to/keys'),
-  tokenProvider: new ClientCredentialsProvider({
-    uaaUrl: 'https://auth.example.com',
-    clientId: '...',
-    clientSecret: '...',
-  }),
-}, 'none');
-
-// BTP authentication
-const btpBroker = new AuthBroker({
-  sessionStore: new BtpSessionStore('/path/to/sessions', 'https://abap.example.com'),
-  tokenProvider: new AuthorizationCodeProvider({
-    uaaUrl: 'https://auth.example.com',
-    clientId: '...',
-    clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system' }),
-  }),
-});
-
-// BTP authentication - with service key and provider (for browser auth)
-const btpBrokerFull = new AuthBroker({
-  sessionStore: new BtpSessionStore('/path/to/sessions', 'https://abap.example.com'),
-  serviceKeyStore: new AbapServiceKeyStore('/path/to/keys'),
-  tokenProvider: new AuthorizationCodeProvider({
-    uaaUrl: 'https://auth.example.com',
-    clientId: '...',
-    clientSecret: '...',
-    authorization: browserCallbackStrategy({ browser: 'system' }),
-  }),
+  provider: (destination, authConfig) => {
+    if (!authConfig) throw new Error(`No UAA credentials for ${destination}`);
+    return new ClientCredentialsProvider({
+      uaaUrl: authConfig.uaaUrl,
+      clientId: authConfig.uaaClientId,
+      clientSecret: authConfig.uaaClientSecret,
+    });
+  },
 });
 ```
 
@@ -683,6 +622,22 @@ redirect URI with a specific port at your identity provider, pass `--redirect-po
 A login is given 5 minutes to complete (this is a person switching to a browser and signing in
 by hand, not an unattended caller).
 
+**SAML options (`saml2-pure`, `saml2-bearer`):**
+`mcp-auth` hands these subcommands to `mcp-sso` with every argument unchanged, so the SAML options
+are `mcp-sso`'s (see *CLI: mcp-sso* and *SAML assertion validation* below) and its exit code is
+`mcp-auth`'s. The ones a run needs:
+
+| Option | What it is |
+|---|---|
+| `--idp-metadata <url\|path>` | The identity provider's SAML metadata; fills `--idp-cert`, `--idp-entity-id` and `--idp-sso-url`. For SAP Cloud Identity Services: `https://<tenant>.accounts.ondemand.com/saml2/metadata`. |
+| `--idp-cert <path>`, `--idp-entity-id <id>` | The same trust, stated instead of read. |
+| `--idp-initiated` | The identity provider starts the login. `saml2-bearer` against XSUAA needs it. |
+| `--sp-entity-id`, `--acs-url` | The `Audience` and `Recipient`. For `saml2-bearer` with `--service-key`, read from `<uaa.url>/saml/metadata`. |
+| `--assertion <base64>`, `--assertion-flow <flow>` | A `SAMLResponse` obtained elsewhere, or how to obtain one. |
+| `--authn-request-id <id>` | The request an `--assertion` answers, when `mcp-sso` did not send it. |
+
+`saml2-bearer` still requires `--dev`: it has not been run against a live XSUAA with a SAML trust.
+
 **Examples:**
 ```bash
 # Auth code (default via service key)
@@ -691,11 +646,11 @@ mcp-auth auth-code --service-key ./abap.json --output ./abap.env --type abap
 # OIDC SSO (device flow example)
 mcp-auth oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
 
-# SAML2 pure (cookie)
-mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --output ./saml.env --type abap
+# SAML2 pure (cookie); the SAML flags are mcp-sso's, see "SAML assertion validation" below
+mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --output ./saml.env --type abap
 
 # SAML2 bearer (in progress, requires --dev)
-mcp-auth saml2-bearer --dev --service-key ./mcp.json --assertion <base64> --output ./sso.env --type xsuaa
+mcp-auth saml2-bearer --dev --service-key ./mcp.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa
 
 # ABAP: authorization_code (default, opens browser)
 mcp-auth --service-key ./abap.json --output ./abap.env --type abap
@@ -753,18 +708,62 @@ mcp-sso oidc --flow password --token-endpoint https://issuer/oauth/token --clien
 # OIDC token exchange
 mcp-sso oidc --flow token_exchange --issuer https://issuer --client-id my-client --subject-token <token> --output ./sso.env --type xsuaa
 
-# SAML bearer flow (assertion -> token)
-mcp-sso bearer --idp-sso-url https://idp/sso --sp-entity-id my-sp --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
+# SAML bearer flow against XSUAA with a service key: the Audience, Recipient and token alias
+# come from <uaa.url>/saml/metadata, the IdP's trust from its own metadata
+mcp-sso bearer --service-key ./service-key.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa
 
-# SAML pure flow (cookie)
-mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --assertion <base64> --cookie "SAP_SESSION=..." --output ./sso.env --type abap
+# The same, every value stated (IdP-initiated assertion -> token)
+mcp-sso bearer --idp-sso-url https://idp/sso --sp-entity-id <uaa-entity-id> --acs-url <uaa-bearer-acs> --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --idp-initiated --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
+
+# SAML pure flow (cookie; SP-initiated browser login, the request is sent by mcp-sso)
+mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --cookie "SAP_SESSION=..." --output ./sso.env --type abap
 ```
 
-**SAML token alias (XSUAA):**
-If your IdP requires the token alias endpoint, pass SAML metadata XML:
+**SAML assertion validation:**
+Both SAML flows validate every assertion before using it — signature, issuer, audience,
+recipient, time window, request ID and replay (done by `@mcp-abap-adt/auth-providers` 4; see its
+README, *SAML assertion validation*). The provider will not even be constructed without the
+trust it checks against, and `mcp-sso` invents none of it — it is stated, or read from SAML
+metadata:
+
+| Option | `--config` field | What it is |
+|---|---|---|
+| `--idp-cert <path>` (repeatable) | `idpCertificates` (string or list, inline PEM or base64 DER) | The identity provider's signing certificate(s). A file may be PEM (one or several certificates) or binary DER. Repeat the flag, or list several, to trust both keys during a rotation. |
+| `--idp-entity-id <id>` | `idpEntityId` | The identity provider's `entityID` — the `Issuer` its assertions carry. |
+| `--idp-metadata <url\|path>` | `idpMetadata` | The identity provider's SAML metadata (for SAP Cloud Identity Services `https://<tenant>.accounts.ondemand.com/saml2/metadata`). Fills the two rows above and `--idp-sso-url` where not given: signing keys and keys without `use`, never encryption keys. An https URL or a file; plain http only for loopback. Federation metadata (an `EntitiesDescriptor` of several entities) works too: entity ID, keys and SSO URL all come from the same identity provider, which `--idp-entity-id` names when there are several — without it such a run stops and lists them. |
+| `--sp-entity-id <id>` | `spEntityId` | Already required; it is now also the `Audience` the assertion must name. For bearer against UAA/XSUAA, the `entityID` in their SAML metadata. |
+| `--acs-url <url>` | `acsUrl` | The `Recipient` the assertion must name. For bearer against UAA/XSUAA, the token endpoint's bearer ACS; the default `http://localhost:<port>/callback` fits only a login delivered to this CLI. |
+| `--idp-initiated` | `idpInitiated` (`true`/`false`) | The identity provider starts the login and no AuthnRequest is sent, so the assertion must carry no `InResponseTo`. |
+| `--authn-request-id <id>` | `authnRequestId` | The AuthnRequest ID an `--assertion` answers, when the request was sent by something other than `mcp-sso`. |
+
+A `--idp-cert` on the command line replaces the file's `idpCertificates` rather than adding to
+them, so a certificate retired on the command line is not still trusted from the file.
+
+Which request setting a run needs:
+
+- **Browser or manual login, SP-initiated** (`--assertion-flow browser`, the default, or
+  `manual`): nothing — `mcp-sso` builds the AuthnRequest and knows its ID.
+- **`--assertion <base64>`** from an SP-initiated login sent elsewhere: `--authn-request-id`.
+- **IdP-initiated** — required for `bearer` against UAA or XSUAA, whose saml2-bearer grant refuses
+  an assertion carrying `InResponseTo`: `--idp-initiated`, with `--assertion`, or with
+  `--assertion-flow manual` (the default under `--idp-initiated`), which asks you to start the
+  login at the identity provider and paste the `SAMLResponse` it posts. `--idp-initiated` with
+  `--assertion-flow browser` is refused, since there is no request URL to open.
+
+`--idp-initiated` together with `--authn-request-id`, a missing certificate or entity ID, or an
+assertion that fails a check is reported by `auth-providers` itself (`ValidationError` or
+`AssertionValidationError`), with the field or the check it refused.
+
+**XSUAA's side of a bearer run:**
+None of `--sp-entity-id`, `--acs-url` and the bearer token endpoint is in an XSUAA service key, but
+XSUAA publishes all three in its SAML metadata: its `entityID` is the `Audience`, and its
+`/oauth/token/alias/<alias>` endpoint is both the `Recipient` and where the assertion is exchanged.
+With `--service-key`, `bearer` reads `<uaa.url>/saml/metadata` and fills whichever of them was not
+given. Without network access to it, pass the file (from *Security > Trust Configuration >
+Download SAML Metadata* in the subaccount):
 
 ```bash
-mcp-sso bearer --saml-metadata ./saml-sp.xml --assertion <base64> --service-key ./service-key.json --output ./sso.env --type xsuaa
+mcp-sso bearer --saml-metadata ./saml-sp.xml --idp-sso-url https://idp/sso --sp-entity-id <uaa-entity-id> --acs-url <uaa-bearer-acs> --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --idp-initiated --assertion <base64> --service-key ./service-key.json --output ./sso.env --type xsuaa
 ```
 
 ### Local Keycloak (OIDC + SAML Tests)
@@ -818,6 +817,40 @@ are, and `authorizationCode`/`assertionFlow` are honored the same way `--code`/`
 are. A file that sets `authorizationCodeProvider`, `assertionProvider`, or `manualInput` — all
 functions, which JSON cannot express — is refused with an error naming the CLI flag to use
 instead, rather than having the field silently dropped.
+
+A SAML config file carries the trust inline:
+
+```json
+{
+  "protocol": "saml2",
+  "flow": "bearer",
+  "idpSsoUrl": "https://idp.example/sso",
+  "spEntityId": "https://uaa.example/entity",
+  "acsUrl": "https://uaa.example/oauth/token/alias/example",
+  "idpEntityId": "https://idp.example/metadata",
+  "idpCertificates": ["MIIC...base64 DER from the IdP metadata's <X509Certificate>..."],
+  "idpInitiated": true,
+  "assertionFlow": "manual"
+}
+```
+
+#### Migrating `mcp-sso` SAML runs from 2.2.0
+
+2.2.0 used `@mcp-abap-adt/auth-providers` 2.x, which trusted any SAML payload it was handed.
+With 4.x every `mcp-sso` SAML run (`bearer`, `saml2 --flow pure`, and `mcp-auth saml2-pure` /
+`saml2-bearer`, which call it) fails before login until you add:
+
+1. `--idp-metadata <url|path>`, or `--idp-cert <path>` and `--idp-entity-id <id>` (or
+   `idpCertificates` and `idpEntityId` in `--config`) — without them the provider refuses to
+   construct.
+2. The real `--sp-entity-id` (the `Audience`) and, unless the assertion is delivered to this CLI's
+   own callback, the `--acs-url` it names as `Recipient`. For `bearer` with `--service-key` both
+   are read from XSUAA's metadata.
+3. For `bearer` against UAA or XSUAA: `--idp-initiated`, with `--assertion` or
+   `--assertion-flow manual`. For any other `--assertion` from an SP-initiated login:
+   `--authn-request-id`.
+
+Node.js 22 or 24 is required.
 
 ### Utility Script
 

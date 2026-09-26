@@ -45,6 +45,7 @@ import {
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
+import { createWorkDir } from './workDir';
 
 /**
  * A person completes this login at a browser; the provider's own default
@@ -147,6 +148,42 @@ function showHelp(): void {
     '                          Must match XSUAA redirect-uris config.',
   );
   console.log('');
+  console.log(
+    'SAML (saml2-pure, saml2-bearer; passed to mcp-sso, see mcp-sso --help for all):',
+  );
+  console.log(
+    '  --idp-metadata <url|path>  IdP SAML metadata (https or file): certificate, entityID, SSO URL',
+  );
+  console.log(
+    '                             e.g. https://<ias-tenant>.accounts.ondemand.com/saml2/metadata',
+  );
+  console.log(
+    '  --idp-cert <path>          IdP signing certificate (PEM or DER); repeat for key rotation',
+  );
+  console.log(
+    '  --idp-entity-id <id>       IdP entityID; the Issuer the assertion must name',
+  );
+  console.log(
+    '  --idp-sso-url <url>        IdP SSO endpoint (read from --idp-metadata when not given)',
+  );
+  console.log(
+    '  --idp-initiated            The IdP starts the login; required for saml2-bearer against XSUAA',
+  );
+  console.log(
+    '  --authn-request-id <id>    AuthnRequest ID an --assertion answers, when sent elsewhere',
+  );
+  console.log(
+    '  --sp-entity-id <id>        SP entityID, the Audience (saml2-bearer: read from XSUAA metadata)',
+  );
+  console.log(
+    '  --acs-url <url>            The Recipient (saml2-bearer: read from XSUAA metadata)',
+  );
+  console.log(
+    '  --saml-metadata <path>     XSUAA SP metadata file; with --service-key <uaa.url>/saml/metadata is read',
+  );
+  console.log('  --assertion <base64>       A SAMLResponse obtained elsewhere');
+  console.log('  --assertion-flow <flow>    browser|manual|assertion');
+  console.log('');
   console.log('  --version, -v          Show version number');
   console.log('  --help, -h             Show this help message');
   console.log('');
@@ -161,14 +198,16 @@ function showHelp(): void {
     '  mcp-auth oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa',
   );
   console.log('');
-  console.log('  # SAML2 pure (cookies)');
   console.log(
-    '  mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --output ./saml.env --type abap',
+    '  # SAML2 pure (cookies); every assertion is validated: see mcp-sso --help',
+  );
+  console.log(
+    '  mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp.pem --idp-entity-id https://idp/metadata --output ./saml.env --type abap',
   );
   console.log('');
   console.log('  # SAML2 bearer (in progress, requires --dev)');
   console.log(
-    '  mcp-auth saml2-bearer --dev --service-key ./service-key.json --assertion <base64> --output ./sso.env --type xsuaa',
+    '  mcp-auth saml2-bearer --dev --service-key ./service-key.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa',
   );
   console.log('');
   console.log('  # XSUAA with authorization_code (default, opens browser)');
@@ -250,8 +289,9 @@ function showHelp(): void {
   );
 }
 
-function parseArgs(args: string[] = process.argv.slice(2)): McpAuthOptions | null {
-
+function parseArgs(
+  args: string[] = process.argv.slice(2),
+): McpAuthOptions | null {
   // Handle --version and --help first
   if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
     showHelp();
@@ -504,6 +544,13 @@ function runMcpSso(args: string[]): void {
   process.exit(result.status ?? 1);
 }
 
+/** The run's private working directory, created on first use and removed on any exit. */
+let runWorkDir: string | undefined;
+function workDir(): string {
+  runWorkDir ??= createWorkDir('mcp-auth');
+  return runWorkDir;
+}
+
 async function main() {
   const rawArgs = process.argv.slice(2);
   const subcommand = rawArgs[0];
@@ -634,8 +681,7 @@ async function main() {
         >;
 
         // Create temp file with unwrapped content to make it compatible with standard stores
-        const tempDir = path.join(path.dirname(resolvedOutputPath), '.tmp');
-        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+        const tempDir = workDir();
         const tempKeyPath = path.join(tempDir, `${destination}.json`);
         fs.writeFileSync(tempKeyPath, JSON.stringify(effectiveJson, null, 2));
 
@@ -711,10 +757,7 @@ async function main() {
     }
 
     // Create temporary session store (work off a temp copy of env file)
-    const tempSessionDir = path.join(path.dirname(resolvedOutputPath), '.tmp');
-    if (!fs.existsSync(tempSessionDir)) {
-      fs.mkdirSync(tempSessionDir, { recursive: true });
-    }
+    const tempSessionDir = workDir();
     if (envExists && resolvedEnvPath) {
       const tempEnvPath = path.join(tempSessionDir, `${destination}.env`);
       fs.copyFileSync(resolvedEnvPath, tempEnvPath);
@@ -739,7 +782,7 @@ async function main() {
     const sessionStore =
       options.authType === 'xsuaa'
         ? new XsuaaSessionStore(tempSessionDir, brokerServiceUrl)
-        : new AbapSessionStore(tempSessionDir);
+        : new AbapSessionStore(tempSessionDir, undefined, actualServiceUrl);
 
     const sessionAuthConfig =
       await sessionStore.getAuthorizationConfig(destination);
@@ -818,20 +861,33 @@ async function main() {
           }),
         });
 
-    const broker = new AuthBroker(
-      {
-        sessionStore,
-        serviceKeyStore: serviceKeyStore || undefined,
-        tokenProvider,
-      },
-      options.browser,
-    );
+    // The output file is a self-contained session: whoever reads it refreshes
+    // the token with the UAA credentials it carries, and has no service key.
+    // So this CLI writes the credentials into its temporary session itself —
+    // its own decision about its own output. The broker no longer copies the
+    // client secret into a session store, and without these the refresh token
+    // the login obtains would not be readable back below.
+    if (!sessionAuthConfig) {
+      await sessionStore.setAuthorizationConfig(destination, authConfig);
+    }
+
+    const broker = new AuthBroker({
+      sessionStore,
+      serviceKeyStore: serviceKeyStore || undefined,
+      provider: tokenProvider,
+    });
 
     console.log(`🔐 Getting token for destination "${destination}"...`);
     const token = await broker.getToken(destination);
     console.log(`✅ Token obtained successfully`);
 
     const connConfig = await sessionStore.getConnectionConfig(destination);
+    // What the login left in the session, not what was known before it:
+    // `authConfig` came from the service key, which holds no refresh token,
+    // and the refresh token the login obtained went into the session store.
+    // Writing `authConfig` dropped it with the temporary session directory.
+    const savedAuthConfig =
+      (await sessionStore.getAuthorizationConfig(destination)) ?? authConfig;
 
     if (!token) {
       throw new Error(
@@ -852,11 +908,11 @@ async function main() {
         resolvedOutputPath,
         options.authType,
         token,
-        authConfig?.refreshToken,
+        savedAuthConfig?.refreshToken,
         finalServiceUrl,
-        authConfig?.uaaUrl,
-        authConfig?.uaaClientId,
-        authConfig?.uaaClientSecret,
+        savedAuthConfig?.uaaUrl,
+        savedAuthConfig?.uaaClientId,
+        savedAuthConfig?.uaaClientSecret,
       );
 
       console.log(`✅ .env file created: ${resolvedOutputPath}`);
@@ -870,11 +926,11 @@ async function main() {
           );
         }
         console.log(
-          `   - ${ABAP_CONNECTION_VARS.AUTHORIZATION_TOKEN}=${token.substring(0, 50)}...`,
+          `   - ${ABAP_CONNECTION_VARS.AUTHORIZATION_TOKEN}=<redacted, ${token.length} chars>`,
         );
-        if (authConfig?.refreshToken) {
+        if (savedAuthConfig?.refreshToken) {
           console.log(
-            `   - ${ABAP_AUTHORIZATION_VARS.REFRESH_TOKEN}=${authConfig.refreshToken.substring(0, 50)}...`,
+            `   - ${ABAP_AUTHORIZATION_VARS.REFRESH_TOKEN}=<redacted, ${savedAuthConfig.refreshToken.length} chars>`,
           );
         }
       } else {
@@ -882,11 +938,11 @@ async function main() {
           console.log(`   - XSUAA_MCP_URL=${finalServiceUrl}`);
         }
         console.log(
-          `   - ${XSUAA_CONNECTION_VARS.AUTHORIZATION_TOKEN}=${token.substring(0, 50)}...`,
+          `   - ${XSUAA_CONNECTION_VARS.AUTHORIZATION_TOKEN}=<redacted, ${token.length} chars>`,
         );
-        if (authConfig?.refreshToken) {
+        if (savedAuthConfig?.refreshToken) {
           console.log(
-            `   - ${XSUAA_AUTHORIZATION_VARS.REFRESH_TOKEN}=${authConfig.refreshToken.substring(0, 50)}...`,
+            `   - ${XSUAA_AUTHORIZATION_VARS.REFRESH_TOKEN}=<redacted, ${savedAuthConfig.refreshToken.length} chars>`,
           );
         }
       }
@@ -894,31 +950,24 @@ async function main() {
       writeJsonFile(
         resolvedOutputPath,
         token,
-        authConfig?.refreshToken,
+        savedAuthConfig?.refreshToken,
         finalServiceUrl,
-        authConfig?.uaaUrl,
-        authConfig?.uaaClientId,
-        authConfig?.uaaClientSecret,
+        savedAuthConfig?.uaaUrl,
+        savedAuthConfig?.uaaClientId,
+        savedAuthConfig?.uaaClientSecret,
       );
 
       console.log(`✅ JSON file created: ${resolvedOutputPath}`);
       console.log(`📋 Output contains:`);
-      console.log(`   - accessToken: ${token.substring(0, 50)}...`);
-      if (authConfig?.refreshToken) {
+      console.log(`   - accessToken: <redacted, ${token.length} chars>`);
+      if (savedAuthConfig?.refreshToken) {
         console.log(
-          `   - refreshToken: ${authConfig.refreshToken.substring(0, 50)}...`,
+          `   - refreshToken: <redacted, ${savedAuthConfig.refreshToken.length} chars>`,
         );
       }
       if (finalServiceUrl) {
         console.log(`   - serviceUrl: ${finalServiceUrl}`);
       }
-    }
-
-    // Cleanup temp directory
-    try {
-      fs.rmSync(tempSessionDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
     }
 
     // Exit explicitly to close any open handles (e.g., OAuth callback server)

@@ -31,7 +31,12 @@
       "attributes": {
         "saml_force_post_binding": "false",
         "saml_name_id_format": "username",
-        "saml_idp_initiated_sso_url_name": "mcp-sso-saml"
+        "saml_idp_initiated_sso_url_name": "mcp-sso-saml",
+        "saml.server.signature": "true",
+        "saml.assertion.signature": "true",
+        "saml.signature.algorithm": "RSA_SHA256",
+        "saml.client.signature": "false",
+        "saml_assertion_consumer_url_post": "http://localhost:3002/acs"
       },
       "redirectUris": [
         "http://localhost:3002/acs"
@@ -50,7 +55,10 @@
           "value": "demo",
           "temporary": false
         }
-      ]
+      ],
+      "firstName": "Demo",
+      "lastName": "User",
+      "email": "demo@example.com"
     }
   ]
 }

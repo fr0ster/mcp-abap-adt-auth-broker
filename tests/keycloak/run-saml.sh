@@ -53,7 +53,10 @@ node "$ROOT_DIR/dist/bin/mcp-sso.js" \
   --flow pure \
   --idp-sso-url http://localhost:8080/realms/mcp-sso/protocol/saml \
   --sp-entity-id mcp-sso-saml \
+  --acs-url http://localhost:3002/acs \
   --assertion "$SAML_RESPONSE" \
+  --idp-metadata http://localhost:8080/realms/mcp-sso/protocol/saml/descriptor \
+  --authn-request-id "$(cat /tmp/keycloak-saml-request-id.txt)" \
   --assertion-flow assertion \
   --output /tmp/keycloak-saml.env \
   --type abap \

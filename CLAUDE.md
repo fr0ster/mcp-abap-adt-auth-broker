@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is `@mcp-abap-adt/auth-broker`, a JWT authentication broker for MCP ABAP ADT. It manages OAuth2 tokens for SAP BTP/ABAP systems, supporting both XSUAA and ABAP authentication types.
+This is `@mcp-abap-adt/auth-broker`, a per-destination token broker for SAP BTP/ABAP systems. For a destination name it reads the session and service key from injected stores, gets tokens from an injected `IRefreshableTokenProvider` (or a factory building one per destination), and persists the result — a JWT or SAML session cookies, with the refresh token. Token lifecycle decisions are the provider's (`@mcp-abap-adt/auth-providers`); storage is the stores' (`@mcp-abap-adt/auth-stores`). It also ships the `mcp-auth` and `mcp-sso` CLIs. XSUAA and ABAP authentication types are both supported.
 
 ## Build and Development Commands
 

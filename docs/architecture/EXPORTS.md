@@ -9,12 +9,20 @@ Main orchestrator for token retrieval and refresh.
 
 **Export**:
 ```typescript
-export { AuthBroker, type AuthBrokerConfig } from './AuthBroker';
+export {
+  AuthBroker,
+  type AuthBrokerConfig,
+  type TokenProviderFactory,
+} from './AuthBroker';
 ```
+
+**Constructor**: `new AuthBroker({ sessionStore, serviceKeyStore?, provider }, logger?)`, where
+`provider` is an `IRefreshableTokenProvider` or a `TokenProviderFactory`
+`(destination, authConfig, connConfig) => IRefreshableTokenProvider`.
 
 **Key methods**:
 - `getToken(destination: string): Promise<string>`
-- `refreshToken(destination: string): Promise<string>`
+- `refreshToken(destination: string): Promise<string>` — a forced refresh (`provider.refreshTokens()`)
 - `getAuthorizationConfig(destination: string): Promise<IAuthorizationConfig | null>`
 - `getConnectionConfig(destination: string): Promise<IConnectionConfig | null>`
 - `createTokenRefresher(destination: string): ITokenRefresher`
@@ -38,21 +46,27 @@ export type { IConfig } from './types';
 
 ### Provider Interface
 
-`ITokenProvider` is the contract for token acquisition.
+`IRefreshableTokenProvider` is what the broker requires; `ITokenProvider` is its base.
 
 ```typescript
 export type {
+  IRefreshableTokenProvider,
   ITokenProvider,
   ITokenResult,
   TokenProviderOptions,
 } from './providers';
 ```
 
-**ITokenProvider shape** (from `@mcp-abap-adt/interfaces-auth`):
+**Shapes** (from `@mcp-abap-adt/interfaces-auth` 2.1.0):
 ```typescript
 export interface ITokenProvider {
   getTokens(): Promise<ITokenResult>;
   validateToken?(token: string, serviceUrl?: string): Promise<boolean>;
+}
+
+export interface IRefreshableTokenProvider extends ITokenProvider {
+  /** A new token, never the cached one. */
+  refreshTokens(): Promise<ITokenResult>;
 }
 ```
 
@@ -76,7 +90,7 @@ Concrete implementations are **not** in this package:
 flowchart TD
   AB[AuthBroker] --> SS[ISessionStore]
   AB --> SK[IServiceKeyStore]
-  AB --> TP[ITokenProvider]
+  AB --> TP[IRefreshableTokenProvider]
   SS --> IConn[IConnectionConfig]
   SS --> IAuth[IAuthorizationConfig]
   SK --> IConn

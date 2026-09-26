@@ -1,25 +1,28 @@
 /**
- * Main AuthBroker class for managing JWT tokens based on destinations
+ * AuthBroker: tokens for a destination, from a provider, kept in a session store.
+ *
+ * The broker orchestrates and nothing more. It resolves what the stores know
+ * about a destination, hands it to the provider, asks the provider for a token
+ * and writes the answer back. Whether a token is still valid, whether to use the
+ * refresh token or log in, and how a login is conducted (browser, headless,
+ * pasted code) are the provider's decisions — made by its strategy — and the
+ * broker does not repeat or override any of them.
  */
 
 import type {
+  IRefreshableTokenProvider,
   ITokenRefresher,
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import type { ITokenProvider } from './providers';
 import type {
   IAuthorizationConfig,
   IConnectionConfig,
   IServiceKeyStore,
   ISessionStore,
 } from './stores/interfaces';
-import { formatExpirationDate, formatToken } from './utils/formatting';
 
-/**
- * No-op logger implementation for default fallback when logger is not provided
- */
 const noOpLogger: ILogger = {
   info: () => {},
   error: () => {},
@@ -28,925 +31,405 @@ const noOpLogger: ILogger = {
 };
 
 /**
- * Type for errors with code property
+ * Builds the provider for one destination, from what the stores hold for it.
+ *
+ * - `authConfig`: the UAA credentials — from the session when it holds them,
+ *   else from the service key — with the refresh token the session stored, or
+ *   `null` when neither store has credentials (a SAML flow needs none).
+ * - `connConfig`: the session's connection config, with `serviceUrl` resolved
+ *   and the last token the session stored, so the provider can reuse it while
+ *   it is valid.
+ *
+ * Called once per destination; the broker keeps the provider it returns.
  */
-type ErrorWithCode = Error & {
-  code: string;
-  message?: string;
-  filePath?: string;
-  missingFields?: string[];
-  destination?: string;
-};
+export type TokenProviderFactory = (
+  destination: string,
+  authConfig: IAuthorizationConfig | null,
+  connConfig: IConnectionConfig,
+) => IRefreshableTokenProvider;
 
 /**
- * Helper function to check if error has a code property
+ * Configuration object for the AuthBroker constructor
  */
-// biome-ignore lint/suspicious/noExplicitAny: Helper function needs to accept any error type
-function hasErrorCode(error: any): error is ErrorWithCode {
-  return (
-    error !== null &&
-    typeof error === 'object' &&
-    'code' in error &&
-    typeof (error as { code: unknown }).code === 'string'
-  );
+export interface AuthBrokerConfig {
+  /** Session store (required) — where tokens and the refresh token are kept */
+  sessionStore: ISessionStore;
+  /** Service key store (optional) — UAA credentials and the service URL */
+  serviceKeyStore?: IServiceKeyStore;
+  /**
+   * The token provider, or a factory building one per destination.
+   *
+   * An instance is used as given, for every destination. A factory is seeded
+   * with what the stores hold for the destination (see `TokenProviderFactory`).
+   */
+  provider: IRefreshableTokenProvider | TokenProviderFactory;
 }
 
-/**
- * Helper function to get error message safely
- */
-// biome-ignore lint/suspicious/noExplicitAny: Helper function needs to accept any error type
-function getErrorMessage(error: any): string {
+function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * Whether an error represents a failed *interactive* browser login (the user
- * did not complete the OAuth flow / it timed out), as opposed to a transient or
- * configuration error. Such failures must not be retried via a second
- * provider.getTokens() — that would start a duplicate browser login on the same
- * redirect port and mask the real cause with a "Port in use" error.
- */
-function isInteractiveAuthFailure(error: unknown): boolean {
-  if (hasErrorCode(error) && error.code === 'BROWSER_AUTH_ERROR') {
-    return true;
+function errorCode(error: unknown): string | undefined {
+  if (error !== null && typeof error === 'object' && 'code' in error) {
+    const code = (error as { code: unknown }).code;
+    return typeof code === 'string' ? code : undefined;
   }
-  const message = getErrorMessage(error);
-  return /authentication timeout|browser authentication|already in use/i.test(
-    message,
-  );
+  return undefined;
 }
 
 /**
- * Configuration object for AuthBroker constructor
- */
-export interface AuthBrokerConfig {
-  /** Session store (required) - stores and retrieves session data */
-  sessionStore: ISessionStore;
-  /** Service key store (optional) - stores and retrieves service keys */
-  serviceKeyStore?: IServiceKeyStore;
-  /** Token provider (required) - handles token refresh and authentication flows through browser-based authorization (e.g., XSUAA provider) */
-  tokenProvider: ITokenProvider;
-  /**
-   * Allow browser-based authentication (optional, default: true)
-   * When false, getToken() will throw BROWSER_AUTH_REQUIRED error instead of blocking on browser auth.
-   * Use this for headless/non-interactive environments (e.g., MCP stdio transport).
-   */
-  allowBrowserAuth?: boolean;
-}
-
-/**
- * AuthBroker manages JWT authentication tokens for destinations
+ * AuthBroker manages authentication tokens for destinations
  */
 export class AuthBroker {
-  private browser: string | undefined;
-  private logger: ILogger;
-  private serviceKeyStore: IServiceKeyStore | undefined;
-  private sessionStore: ISessionStore;
-  private tokenProvider: ITokenProvider;
-  private allowBrowserAuth: boolean;
+  private readonly logger: ILogger;
+  private readonly serviceKeyStore: IServiceKeyStore | undefined;
+  private readonly sessionStore: ISessionStore;
+  private readonly provider: IRefreshableTokenProvider | TokenProviderFactory;
+  private readonly providers = new Map<string, IRefreshableTokenProvider>();
 
   /**
-   * Create a new AuthBroker instance
-   * @param config Configuration object with stores and token provider
-   *               - sessionStore: Store for session data (required)
-   *               - serviceKeyStore: Store for service keys (optional)
-   *               - tokenProvider: Token provider implementing ITokenProvider interface (required) - handles browser-based authorization
-   * @param browser Optional browser name for authentication (chrome, edge, firefox, system, headless, none).
-   *                Default: 'system' (system default browser).
-   *                Use 'headless' for SSH/remote sessions - logs URL and waits for manual callback.
-   *                Use 'none' for automated tests - logs URL and rejects immediately.
-   * @param logger Optional logger instance implementing ILogger interface. If not provided, uses no-op logger.
+   * @param config Stores and the provider (instance or factory)
+   * @param logger Optional logger. Nothing the broker logs contains a token.
    */
-  constructor(config: AuthBrokerConfig, browser?: string, logger?: ILogger) {
-    // Validate that config is provided
+  constructor(config: AuthBrokerConfig, logger?: ILogger) {
     if (!config) {
       throw new Error('AuthBroker: config parameter is required');
     }
-
-    // Validate required sessionStore
-    if (!config.sessionStore) {
+    const { sessionStore, serviceKeyStore, provider } = config;
+    if (!sessionStore) {
       throw new Error('AuthBroker: sessionStore is required');
     }
-
-    // Validate required tokenProvider
-    if (!config.tokenProvider) {
-      throw new Error('AuthBroker: tokenProvider is required');
+    if (!provider) {
+      throw new Error('AuthBroker: provider is required');
     }
-
-    // Validate that stores and provider are correctly instantiated (have required methods)
-    const sessionStore = config.sessionStore;
-    const tokenProvider = config.tokenProvider;
-    const serviceKeyStore = config.serviceKeyStore;
-
-    // Check sessionStore methods
-    if (typeof sessionStore.getAuthorizationConfig !== 'function') {
-      throw new Error(
-        'AuthBroker: sessionStore.getAuthorizationConfig must be a function',
-      );
+    for (const method of [
+      'getAuthorizationConfig',
+      'getConnectionConfig',
+      'setAuthorizationConfig',
+      'setConnectionConfig',
+      'loadSession',
+      'saveSession',
+    ] as const) {
+      if (typeof sessionStore[method] !== 'function') {
+        throw new Error(
+          `AuthBroker: sessionStore.${method} must be a function`,
+        );
+      }
     }
-    if (typeof sessionStore.getConnectionConfig !== 'function') {
-      throw new Error(
-        'AuthBroker: sessionStore.getConnectionConfig must be a function',
-      );
+    if (typeof provider !== 'function') {
+      if (typeof provider.getTokens !== 'function') {
+        throw new Error('AuthBroker: provider.getTokens must be a function');
+      }
+      if (typeof provider.refreshTokens !== 'function') {
+        throw new Error(
+          'AuthBroker: provider.refreshTokens must be a function',
+        );
+      }
     }
-    if (typeof sessionStore.setAuthorizationConfig !== 'function') {
-      throw new Error(
-        'AuthBroker: sessionStore.setAuthorizationConfig must be a function',
-      );
-    }
-    if (typeof sessionStore.setConnectionConfig !== 'function') {
-      throw new Error(
-        'AuthBroker: sessionStore.setConnectionConfig must be a function',
-      );
-    }
-
-    // Check tokenProvider methods (required)
-    if (typeof tokenProvider.getTokens !== 'function') {
-      throw new Error('AuthBroker: tokenProvider.getTokens must be a function');
-    }
-    // validateToken is optional, so we don't check it
-
-    // Check serviceKeyStore methods (if provided)
     if (serviceKeyStore) {
-      if (typeof serviceKeyStore.getServiceKey !== 'function') {
-        throw new Error(
-          'AuthBroker: serviceKeyStore.getServiceKey must be a function',
-        );
-      }
-      if (typeof serviceKeyStore.getAuthorizationConfig !== 'function') {
-        throw new Error(
-          'AuthBroker: serviceKeyStore.getAuthorizationConfig must be a function',
-        );
-      }
-      if (typeof serviceKeyStore.getConnectionConfig !== 'function') {
-        throw new Error(
-          'AuthBroker: serviceKeyStore.getConnectionConfig must be a function',
-        );
+      for (const method of [
+        'getServiceKey',
+        'getAuthorizationConfig',
+        'getConnectionConfig',
+      ] as const) {
+        if (typeof serviceKeyStore[method] !== 'function') {
+          throw new Error(
+            `AuthBroker: serviceKeyStore.${method} must be a function`,
+          );
+        }
       }
     }
 
-    this.serviceKeyStore = serviceKeyStore;
     this.sessionStore = sessionStore;
-    this.tokenProvider = tokenProvider;
-    this.browser = browser || 'system';
-    this.logger = logger || noOpLogger;
-    this.allowBrowserAuth = config.allowBrowserAuth ?? true;
-
-    // Log successful initialization
-    const hasServiceKeyStore = !!this.serviceKeyStore;
-    this.logger?.info('[AuthBroker] Broker initialized', {
-      hasServiceKeyStore,
-      hasSessionStore: true,
-      hasTokenProvider: true,
-      browser: this.browser,
-      allowBrowserAuth: this.allowBrowserAuth,
+    this.serviceKeyStore = serviceKeyStore;
+    this.provider = provider;
+    this.logger = logger ?? noOpLogger;
+    this.logger.debug('[AuthBroker] Broker initialized', {
+      hasServiceKeyStore: !!serviceKeyStore,
+      providerForm: typeof provider === 'function' ? 'factory' : 'instance',
     });
   }
 
   /**
-   * Load session data (connection and authorization configs)
+   * A token for the destination: the provider's current one, which it refreshes
+   * or obtains by login when it judges the cached one unusable.
+   *
+   * The result is written to the session store. Errors from the provider
+   * (its typed errors included) propagate unchanged.
    */
-  private async loadSessionData(destination: string): Promise<{
-    connConfig: IConnectionConfig | null;
-    authConfig: IAuthorizationConfig | null;
-  }> {
-    let connConfig: IConnectionConfig | null = null;
-    let authConfig: IAuthorizationConfig | null = null;
-
-    try {
-      connConfig = await this.sessionStore.getConnectionConfig(destination);
-    } catch (error: any) {
-      if (hasErrorCode(error)) {
-        if (error.code === STORE_ERROR_CODES.FILE_NOT_FOUND) {
-          this.logger?.debug(
-            `Session file not found for ${destination}: ${error.filePath || 'unknown path'}`,
-          );
-        } else if (error.code === STORE_ERROR_CODES.PARSE_ERROR) {
-          this.logger?.warn(
-            `Failed to parse session file for ${destination}: ${error.filePath || 'unknown path'} - ${getErrorMessage(error)}`,
-          );
-        } else {
-          this.logger?.warn(
-            `Failed to get connection config from session store for ${destination}: ${getErrorMessage(error)}`,
-          );
-        }
-      } else {
-        this.logger?.warn(
-          `Failed to get connection config from session store for ${destination}: ${getErrorMessage(error)}`,
-        );
-      }
-    }
-
-    try {
-      authConfig = await this.sessionStore.getAuthorizationConfig(destination);
-    } catch (error: any) {
-      if (hasErrorCode(error)) {
-        if (error.code === STORE_ERROR_CODES.FILE_NOT_FOUND) {
-          this.logger?.debug(
-            `Session file not found for ${destination}: ${error.filePath || 'unknown path'}`,
-          );
-        } else if (error.code === STORE_ERROR_CODES.PARSE_ERROR) {
-          this.logger?.warn(
-            `Failed to parse session file for ${destination}: ${error.filePath || 'unknown path'} - ${getErrorMessage(error)}`,
-          );
-        } else {
-          this.logger?.warn(
-            `Failed to get authorization config from session store for ${destination}: ${getErrorMessage(error)}`,
-          );
-        }
-      } else {
-        this.logger?.warn(
-          `Failed to get authorization config from session store for ${destination}: ${getErrorMessage(error)}`,
-        );
-      }
-    }
-
-    return { connConfig, authConfig };
+  async getToken(destination: string): Promise<string> {
+    return this.obtain(destination, 'getTokens');
   }
 
   /**
-   * Get serviceUrl from session or service key store
+   * A new token for the destination, never the cached one — for a caller whose
+   * token the server has just refused. Calls the provider's `refreshTokens()`,
+   * writes the result to the session store and returns it.
    */
-  private async getServiceUrl(
+  async refreshToken(destination: string): Promise<string> {
+    return this.obtain(destination, 'refreshTokens');
+  }
+
+  private async obtain(
+    destination: string,
+    method: 'getTokens' | 'refreshTokens',
+  ): Promise<string> {
+    const connConfig = await this.read(
+      destination,
+      'session connection config',
+      () => this.sessionStore.getConnectionConfig(destination),
+    );
+    const serviceUrl = await this.resolveServiceUrl(destination, connConfig);
+    const provider = await this.providerFor(
+      destination,
+      serviceUrl,
+      connConfig,
+    );
+
+    this.logger.debug(`[AuthBroker] ${method} for ${destination}`);
+    const result = await provider[method]();
+    if (!result?.authorizationToken) {
+      throw new Error(
+        `Token provider did not return authorization token for destination "${destination}"`,
+      );
+    }
+    await this.persist(destination, serviceUrl, connConfig, result);
+    return result.authorizationToken;
+  }
+
+  private async providerFor(
+    destination: string,
+    serviceUrl: string,
+    connConfig: IConnectionConfig | null,
+  ): Promise<IRefreshableTokenProvider> {
+    if (typeof this.provider !== 'function') {
+      return this.provider;
+    }
+    const existing = this.providers.get(destination);
+    if (existing) {
+      return existing;
+    }
+    const authConfig = await this.resolveAuthorizationConfig(destination);
+    const built = this.provider(destination, authConfig, {
+      ...(connConfig ?? {}),
+      serviceUrl,
+    });
+    this.providers.set(destination, built);
+    this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
+      hasCredentials: !!authConfig,
+      hasRefreshToken: !!authConfig?.refreshToken,
+      hasStoredToken: !!(
+        connConfig?.authorizationToken || connConfig?.sessionCookies
+      ),
+    });
+    return built;
+  }
+
+  /**
+   * The credentials the provider is built with: the session's own when it holds
+   * them, else the service key's, carrying the refresh token the session
+   * stored. The session keeps a refresh token without credentials when the
+   * credentials came from the service key, since the broker does not copy the
+   * client secret into it; `loadSession` is where such a token is read.
+   */
+  private async resolveAuthorizationConfig(
+    destination: string,
+  ): Promise<IAuthorizationConfig | null> {
+    const sessionAuth = await this.read(
+      destination,
+      'session authorization config',
+      () => this.sessionStore.getAuthorizationConfig(destination),
+    );
+    if (sessionAuth) {
+      return sessionAuth;
+    }
+    const session = await this.read(destination, 'session', () =>
+      this.sessionStore.loadSession(destination),
+    );
+    const storedRefreshToken =
+      typeof session?.refreshToken === 'string'
+        ? session.refreshToken
+        : undefined;
+    const serviceKeyStore = this.serviceKeyStore;
+    const keyAuth = serviceKeyStore
+      ? await this.read(destination, 'service key authorization config', () =>
+          serviceKeyStore.getAuthorizationConfig(destination),
+        )
+      : null;
+    if (!keyAuth) {
+      return null;
+    }
+    return {
+      ...keyAuth,
+      refreshToken: storedRefreshToken ?? keyAuth.refreshToken,
+    };
+  }
+
+  private async resolveServiceUrl(
     destination: string,
     connConfig: IConnectionConfig | null,
   ): Promise<string> {
     let serviceUrl = connConfig?.serviceUrl;
-
-    if (!serviceUrl && this.serviceKeyStore) {
-      try {
-        const serviceKeyConnConfig =
-          await this.serviceKeyStore.getConnectionConfig(destination);
-        serviceUrl = serviceKeyConnConfig?.serviceUrl;
-        if (serviceUrl) {
-          this.logger?.debug(
-            `serviceUrl not in session for ${destination}, found in serviceKeyStore`,
-          );
-        }
-      } catch (error: any) {
-        if (hasErrorCode(error)) {
-          if (error.code === STORE_ERROR_CODES.FILE_NOT_FOUND) {
-            this.logger?.debug(
-              `Service key file not found for ${destination}: ${error.filePath || 'unknown path'}`,
-            );
-          } else if (error.code === STORE_ERROR_CODES.PARSE_ERROR) {
-            this.logger?.warn(
-              `Failed to parse service key for ${destination}: ${error.filePath || 'unknown path'} - ${getErrorMessage(error)}`,
-            );
-          } else {
-            this.logger?.warn(
-              `Failed to get serviceUrl from service key store for ${destination}: ${getErrorMessage(error)}`,
-            );
-          }
-        } else {
-          this.logger?.warn(
-            `Failed to get serviceUrl from service key store for ${destination}: ${getErrorMessage(error)}`,
-          );
-        }
-      }
-    }
-
-    if (!serviceUrl) {
-      this.logger?.error(
-        `Session for destination "${destination}" is missing required field 'serviceUrl'. SessionStore must contain initial session with serviceUrl${this.serviceKeyStore ? ' or serviceKeyStore must contain serviceUrl' : ''}.`,
+    const serviceKeyStore = this.serviceKeyStore;
+    if (!serviceUrl && serviceKeyStore) {
+      const keyConn = await this.read(
+        destination,
+        'service key connection config',
+        () => serviceKeyStore.getConnectionConfig(destination),
       );
+      serviceUrl = keyConn?.serviceUrl;
+    }
+    if (!serviceUrl) {
       throw new Error(
         `Session for destination "${destination}" is missing required field 'serviceUrl'. ` +
           `SessionStore must contain initial session with serviceUrl${this.serviceKeyStore ? ' or serviceKeyStore must contain serviceUrl' : ''}.`,
       );
     }
-
     return serviceUrl;
   }
 
   /**
-   * Get UAA credentials from session or service key
+   * Writes the result by its type: a SAML result is session cookies, anything
+   * else a bearer token. The refresh token is written only when the result has
+   * one, so a provider that returns none does not erase the stored one.
+   *
+   * `ITokenResult.expiresAt` has no field in `IConnectionConfig` to go to; the
+   * provider seeded with the stored token reads the expiry from the JWT itself.
    */
-  private async getAuthorizationConfigFromServiceKey(
-    destination: string,
-  ): Promise<IAuthorizationConfig> {
-    if (!this.serviceKeyStore) {
-      throw new Error(
-        `Authorization config not found for ${destination}. Session has no auth config and serviceKeyStore is not available.`,
-      );
-    }
-
-    let serviceKeyAuthConfig: IAuthorizationConfig | null = null;
-    try {
-      serviceKeyAuthConfig =
-        await this.serviceKeyStore.getAuthorizationConfig(destination);
-    } catch (error: any) {
-      if (hasErrorCode(error)) {
-        if (error.code === STORE_ERROR_CODES.FILE_NOT_FOUND) {
-          this.logger?.debug(
-            `Service key file not found for ${destination}: ${error.filePath || 'unknown path'}`,
-          );
-        } else if (error.code === STORE_ERROR_CODES.PARSE_ERROR) {
-          this.logger?.warn(
-            `Failed to parse service key for ${destination}: ${error.filePath || 'unknown path'} - ${getErrorMessage(error)}`,
-          );
-        } else {
-          this.logger?.warn(
-            `Failed to get authorization config from service key store for ${destination}: ${getErrorMessage(error)}`,
-          );
-        }
-      } else {
-        this.logger?.warn(
-          `Failed to get authorization config from service key store for ${destination}: ${getErrorMessage(error)}`,
-        );
-      }
-    }
-
-    if (!serviceKeyAuthConfig) {
-      throw new Error(
-        `Authorization config not found for ${destination}. Session has no auth config${this.serviceKeyStore ? ' and serviceKeyStore has no auth config' : ' and serviceKeyStore is not available'}.`,
-      );
-    }
-
-    return serviceKeyAuthConfig;
-  }
-
-  /**
-   * Save token and config to session
-   */
-  private async saveTokenToSession(
-    destination: string,
-    connectionConfig: IConnectionConfig,
-    authorizationConfig: IAuthorizationConfig,
-  ): Promise<void> {
-    try {
-      await this.sessionStore.setConnectionConfig(
-        destination,
-        connectionConfig,
-      );
-    } catch (error: any) {
-      this.logger?.error(
-        `Failed to save connection config to session for ${destination}: ${getErrorMessage(error)}`,
-      );
-      throw new Error(
-        `Failed to save connection config for destination "${destination}": ${getErrorMessage(error)}`,
-      );
-    }
-
-    if (
-      authorizationConfig.uaaUrl &&
-      authorizationConfig.uaaClientId &&
-      authorizationConfig.uaaClientSecret
-    ) {
-      try {
-        await this.sessionStore.setAuthorizationConfig(
-          destination,
-          authorizationConfig,
-        );
-      } catch (error: any) {
-        this.logger?.error(
-          `Failed to save authorization config to session for ${destination}: ${getErrorMessage(error)}`,
-        );
-        throw new Error(
-          `Failed to save authorization config for destination "${destination}": ${getErrorMessage(error)}`,
-        );
-      }
-    } else {
-      this.logger?.debug(
-        `Skipping authorization config save for ${destination}: missing UAA fields`,
-      );
-    }
-  }
-
-  private async requestTokens(
-    destination: string,
-    sourceLabel: string,
-  ): Promise<ITokenResult> {
-    this.logger?.info(
-      `[AuthBroker] Requesting tokens for ${destination} via ${sourceLabel}`,
-    );
-    try {
-      const getTokens = this.tokenProvider.getTokens;
-      if (!getTokens) {
-        throw new Error('AuthBroker: tokenProvider.getTokens is required');
-      }
-      const tokenResult = await getTokens.call(this.tokenProvider);
-      const expiresAt = tokenResult.expiresIn
-        ? Date.now() + tokenResult.expiresIn * 1000
-        : undefined;
-      this.logger?.info(`[AuthBroker] Tokens received for ${destination}`, {
-        authorizationToken: formatToken(tokenResult.authorizationToken),
-        hasRefreshToken: !!tokenResult.refreshToken,
-        refreshToken: formatToken(tokenResult.refreshToken),
-        authType: tokenResult.authType,
-        expiresIn: tokenResult.expiresIn,
-        expiresAt: expiresAt ? formatExpirationDate(expiresAt) : undefined,
-      });
-      return tokenResult;
-    } catch (error: any) {
-      if (hasErrorCode(error)) {
-        if (error.code === 'VALIDATION_ERROR') {
-          throw new Error(
-            `Token provider validation failed for ${destination}: missing ${error.missingFields?.join(', ') || 'required fields'}`,
-          );
-        }
-        if (error.code === 'BROWSER_AUTH_ERROR') {
-          throw new Error(
-            `Token provider browser authentication failed for ${destination}: ${getErrorMessage(error)}`,
-          );
-        }
-        if (
-          error.code === 'ECONNREFUSED' ||
-          error.code === 'ETIMEDOUT' ||
-          error.code === 'ENOTFOUND'
-        ) {
-          throw new Error(
-            `Token provider network error for ${destination}: ${error.code}`,
-          );
-        }
-        if (error.code === 'SERVICE_KEY_ERROR') {
-          throw new Error(
-            `Token provider service key error for ${destination}: ${getErrorMessage(error)}`,
-          );
-        }
-      }
-      throw new Error(
-        `Token provider error for ${destination}: ${getErrorMessage(error)}`,
-      );
-    }
-  }
-
-  private async persistTokenResult(
+  private async persist(
     destination: string,
     serviceUrl: string,
-    baseConnConfig: IConnectionConfig | null,
-    authConfig: IAuthorizationConfig,
-    tokenResult: ITokenResult,
+    connConfig: IConnectionConfig | null,
+    result: ITokenResult,
   ): Promise<void> {
-    const token = tokenResult.authorizationToken;
-    if (!token) {
-      throw new Error(
-        `Token provider did not return authorization token for destination "${destination}"`,
-      );
-    }
-
-    const isSaml = tokenResult.tokenType === 'saml';
-    const connectionConfigWithServiceUrl: IConnectionConfig = {
-      ...baseConnConfig,
+    const isSaml = result.tokenType === 'saml';
+    await this.sessionStore.setConnectionConfig(destination, {
+      ...(connConfig ?? {}),
       serviceUrl,
-      authorizationToken: isSaml ? undefined : token,
-      sessionCookies: isSaml ? token : undefined,
+      authorizationToken: isSaml ? undefined : result.authorizationToken,
+      sessionCookies: isSaml ? result.authorizationToken : undefined,
       authType: isSaml ? 'saml' : 'jwt',
-    };
-
-    const authorizationConfig: IAuthorizationConfig = {
-      ...authConfig,
-      refreshToken: tokenResult.refreshToken ?? authConfig.refreshToken,
-    };
-
-    const expiresAt = tokenResult.expiresIn
-      ? Date.now() + tokenResult.expiresIn * 1000
-      : undefined;
-    this.logger?.info(
-      `[AuthBroker] Saving tokens to session for ${destination}`,
-      {
-        serviceUrl,
-        authorizationToken: formatToken(token),
-        hasRefreshToken: !!authorizationConfig.refreshToken,
-        refreshToken: formatToken(authorizationConfig.refreshToken),
-        expiresIn: tokenResult.expiresIn,
-        expiresAt: expiresAt ? formatExpirationDate(expiresAt) : undefined,
-      },
-    );
-
-    await this.saveTokenToSession(
-      destination,
-      connectionConfigWithServiceUrl,
-      authorizationConfig,
-    );
-  }
-
-  /**
-   * Get authentication token for destination.
-   * Uses tokenProvider for all authentication operations (browser-based authorization).
-   *
-   * **Flow:**
-   * **Step 0: Initialize Session with Token (if needed)**
-   * - Check if session has `authorizationToken` AND UAA credentials
-   * - If both are empty AND serviceKeyStore is available:
-   *   - Get UAA credentials from service key
-   *   - Use tokenProvider for browser-based authentication
-   *   - Save token and refresh token to session
-   *
-   * **Step 1: Token Validation**
-   * - If token exists in session, validate it (if provider supports validation)
-   * - If valid → return token
-   * - If invalid or no token → continue to refresh
-   *
-   * **Step 2: Refresh Token Flow**
-   * - Check if refresh token exists in session
-   * - If refresh token exists:
-   *   - Use tokenProvider to refresh token (browser-based or refresh grant)
-   *   - Save new token to session
-   *   - Return new token
-   * - Otherwise → proceed to Step 3
-   *
-   * **Step 3: New Token Flow**
-   * - Get UAA credentials from session or service key
-   * - Use tokenProvider for browser-based authentication
-   * - Save new token to session
-   * - Return new token
-   *
-   * **Important Notes:**
-   * - All authentication is handled by tokenProvider (e.g., XSUAA provider)
-   * - Provider uses browser-based authorization to ensure proper role assignment
-   * - Direct UAA HTTP requests are not used to avoid role assignment issues
-   *
-   * @param destination Destination name (e.g., "TRIAL")
-   * @returns Promise that resolves to JWT token string
-   * @throws Error if session initialization fails or authentication failed
-   */
-  async getToken(destination: string): Promise<string> {
-    this.logger?.info(
-      `[AuthBroker] Getting token for destination: ${destination}`,
-    );
-
-    // Load session data
-    const { connConfig, authConfig } = await this.loadSessionData(destination);
-
-    // Get serviceUrl (required)
-    const serviceUrl = await this.getServiceUrl(destination, connConfig);
-
-    // Check if we have token or UAA credentials
-    const sessionToken =
-      connConfig?.authorizationToken || connConfig?.sessionCookies;
-    const hasToken = !!sessionToken;
-    const hasAuthConfig = !!authConfig;
-
-    this.logger?.info(`[AuthBroker] Session check for ${destination}`, {
-      hasToken,
-      hasAuthConfig,
-      hasServiceUrl: !!serviceUrl,
-      serviceUrl,
-      authorizationToken: formatToken(
-        connConfig?.authorizationToken || connConfig?.sessionCookies,
-      ),
-      hasRefreshToken: !!authConfig?.refreshToken,
-      refreshToken: formatToken(authConfig?.refreshToken),
     });
 
-    // Step 0: Initialize Session with Token (if needed)
-    if (!hasToken && !hasAuthConfig) {
-      if (!this.allowBrowserAuth) {
-        const error = new Error(
-          `Browser authentication required for destination "${destination}" but allowBrowserAuth is disabled. Either enable browser auth or provide a valid session with token.`,
-        ) as Error & { code: string; destination: string };
-        error.code = 'BROWSER_AUTH_REQUIRED';
-        error.destination = destination;
-        this.logger?.error(
-          `Step 0: Browser auth required but disabled for ${destination}`,
-        );
-        throw error;
-      }
-
-      const serviceKeyAuthConfig =
-        await this.getAuthorizationConfigFromServiceKey(destination);
-      const tokenResult = await this.requestTokens(destination, 'serviceKey');
-      await this.persistTokenResult(
+    if (result.refreshToken) {
+      const sessionAuth = await this.read(
         destination,
-        serviceUrl,
-        connConfig,
-        serviceKeyAuthConfig,
-        tokenResult,
+        'session authorization config',
+        () => this.sessionStore.getAuthorizationConfig(destination),
       );
-
-      this.logger?.info(
-        `[AuthBroker] Token retrieved for ${destination} (initialized from service key)`,
-        {
-          authorizationToken: formatToken(tokenResult.authorizationToken),
-        },
-      );
-
-      return tokenResult.authorizationToken;
-    }
-
-    // Step 1: Request tokens via provider (provider handles token lifecycle internally)
-    // Broker always calls provider.getTokens() - provider decides whether to return cached token,
-    // refresh, or perform login. Consumer doesn't need to know about token issues.
-    this.logger?.debug(
-      `Step 1: Requesting tokens via provider for ${destination}`,
-    );
-
-    let lastError: Error | null = null;
-    if (authConfig) {
-      if (!this.allowBrowserAuth && !authConfig.refreshToken) {
-        const error = new Error(
-          `Browser authentication required for destination "${destination}" but allowBrowserAuth is disabled. Session has no refresh token.`,
-        ) as Error & { code: string; destination: string };
-        error.code = 'BROWSER_AUTH_REQUIRED';
-        error.destination = destination;
-        this.logger?.error(
-          `Step 2: Browser auth required but disabled for ${destination}`,
+      if (sessionAuth) {
+        // The session holds its own credentials: only the refresh token changes.
+        await this.sessionStore.setAuthorizationConfig(destination, {
+          ...sessionAuth,
+          refreshToken: result.refreshToken,
+        });
+      } else {
+        // The credentials live in the service key and stay there. The session
+        // gets the refresh token alone — never the client secret.
+        const session = await this.read(destination, 'session', () =>
+          this.sessionStore.loadSession(destination),
         );
-        throw error;
-      }
-      try {
-        const tokenResult = await this.requestTokens(destination, 'session');
-        await this.persistTokenResult(
-          destination,
-          serviceUrl,
-          connConfig,
-          authConfig,
-          tokenResult,
-        );
-        this.logger?.info(
-          `[AuthBroker] Token retrieved for ${destination} (via session)`,
-          {
-            authorizationToken: formatToken(tokenResult.authorizationToken),
-          },
-        );
-        return tokenResult.authorizationToken;
-      } catch (error: any) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-        this.logger?.debug(
-          `Step 2: Token request via session failed for ${destination}: ${getErrorMessage(error)}, trying service key`,
-        );
+        await this.sessionStore.saveSession(destination, {
+          ...(session ?? {}),
+          serviceUrl: session?.serviceUrl ?? serviceUrl,
+          refreshToken: result.refreshToken,
+        });
       }
     }
 
-    if (!this.allowBrowserAuth) {
-      const error = new Error(
-        `Browser authentication required for destination "${destination}" but allowBrowserAuth is disabled. Token refresh via session failed and browser auth is not allowed. Either enable browser auth or ensure a valid refresh token exists in session.`,
-      ) as Error & { code: string; destination: string };
-      error.code = 'BROWSER_AUTH_REQUIRED';
-      error.destination = destination;
-      this.logger?.error(
-        `Step 2: Browser auth required but disabled for ${destination}`,
-      );
-      throw error;
-    }
-
-    if (!this.serviceKeyStore) {
-      const tokenType = (this.tokenProvider as any)?.tokenType;
-      if (tokenType === 'saml') {
-        const tokenResult = await this.requestTokens(destination, 'session');
-        await this.persistTokenResult(
-          destination,
-          serviceUrl,
-          connConfig,
-          authConfig || ({} as IAuthorizationConfig),
-          tokenResult,
-        );
-        this.logger?.info(
-          `[AuthBroker] Token retrieved for ${destination} (SAML without auth config)`,
-          {
-            authorizationToken: formatToken(tokenResult.authorizationToken),
-          },
-        );
-        return tokenResult.authorizationToken;
-      }
-      if (lastError) {
-        throw lastError;
-      }
-      throw new Error(
-        `Authorization config not found for ${destination}. Session has no auth config and serviceKeyStore is not available.`,
-      );
-    }
-
-    // If the session attempt already performed an *interactive* browser login
-    // and it failed (the user didn't complete it / it timed out), the serviceKey
-    // strategy would call the SAME provider.getTokens() again and start a
-    // duplicate browser login on the same redirect port — surfacing a misleading
-    // "Port in use" instead of the real cause. Don't retry interactive failures;
-    // propagate the original error. Transient/non-interactive session failures
-    // still fall through to the serviceKey attempt below.
-    if (lastError && isInteractiveAuthFailure(lastError)) {
-      this.logger?.debug(
-        `Step 2: session login failed interactively for ${destination}; not retrying via service key (${getErrorMessage(lastError)})`,
-      );
-      throw lastError;
-    }
-
-    const serviceKeyAuthConfig =
-      await this.getAuthorizationConfigFromServiceKey(destination);
-    const tokenResult = await this.requestTokens(destination, 'serviceKey');
-    await this.persistTokenResult(
-      destination,
-      serviceUrl,
-      connConfig,
-      serviceKeyAuthConfig,
-      tokenResult,
-    );
-
-    this.logger?.info(
-      `[AuthBroker] Token retrieved for ${destination} (fallback to service key)`,
-      {
-        authorizationToken: formatToken(tokenResult.authorizationToken),
-      },
-    );
-
-    return tokenResult.authorizationToken;
+    this.logger.info(`[AuthBroker] Token saved for ${destination}`, {
+      tokenType: result.tokenType ?? 'jwt',
+      authType: result.authType,
+      hasRefreshToken: !!result.refreshToken,
+      expiresAt: result.expiresAt
+        ? new Date(result.expiresAt).toISOString()
+        : undefined,
+      expiresIn: result.expiresIn,
+    });
   }
 
   /**
-   * Force refresh token for destination.
-   * Uses refresh token from session if available, otherwise uses UAA credentials from session or service key.
-   * @param destination Destination name (e.g., "TRIAL")
-   * @returns Promise that resolves to new JWT token string
+   * A store read that does not stop the flow: a missing or unreadable entry is
+   * logged and answered as absent, and whatever needed it fails with its own
+   * message later.
    */
-  async refreshToken(destination: string): Promise<string> {
-    this.logger?.debug(
-      `Force refreshing token for destination: ${destination}`,
-    );
-
-    // Call getToken to trigger full refresh flow
-    return this.getToken(destination);
+  private async read<T>(
+    destination: string,
+    what: string,
+    fn: () => Promise<T | null>,
+  ): Promise<T | null> {
+    try {
+      return await fn();
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === STORE_ERROR_CODES.FILE_NOT_FOUND) {
+        this.logger.debug(`No ${what} for ${destination}: file not found`);
+      } else {
+        this.logger.warn(
+          `Failed to read ${what} for ${destination}: ${errorMessage(error)}`,
+        );
+      }
+      return null;
+    }
   }
 
   /**
-   * Get authorization configuration for destination
-   * @param destination Destination name (e.g., "TRIAL")
-   * @returns Promise that resolves to IAuthorizationConfig or null if not found
+   * Authorization configuration for the destination: the session's, else the
+   * service key's, else null.
    */
   async getAuthorizationConfig(
     destination: string,
   ): Promise<IAuthorizationConfig | null> {
-    this.logger?.debug(`Getting authorization config for ${destination}`);
-
-    // Try session store first (has tokens)
-    this.logger?.debug(
-      `Checking session store for authorization config: ${destination}`,
+    const sessionAuth = await this.read(
+      destination,
+      'session authorization config',
+      () => this.sessionStore.getAuthorizationConfig(destination),
     );
-    let sessionAuthConfig: IAuthorizationConfig | null = null;
-    try {
-      sessionAuthConfig =
-        await this.sessionStore.getAuthorizationConfig(destination);
-    } catch (error: any) {
-      this.logger?.warn(
-        `Failed to get authorization config from session store for ${destination}: ${getErrorMessage(error)}`,
-      );
+    if (sessionAuth) {
+      return sessionAuth;
     }
-    if (sessionAuthConfig) {
-      this.logger?.debug(
-        `Authorization config from session for ${destination}: hasUaaUrl(${!!sessionAuthConfig.uaaUrl}), hasRefreshToken(${!!sessionAuthConfig.refreshToken})`,
-      );
-      return sessionAuthConfig;
+    const serviceKeyStore = this.serviceKeyStore;
+    if (!serviceKeyStore) {
+      return null;
     }
-
-    // Fall back to service key store (has UAA credentials) if available
-    if (this.serviceKeyStore) {
-      this.logger?.debug(
-        `Checking service key store for authorization config: ${destination}`,
-      );
-      let serviceKeyAuthConfig: IAuthorizationConfig | null = null;
-      try {
-        serviceKeyAuthConfig =
-          await this.serviceKeyStore.getAuthorizationConfig(destination);
-      } catch (error: any) {
-        // Handle typed store errors
-        if (hasErrorCode(error)) {
-          if (error.code === STORE_ERROR_CODES.FILE_NOT_FOUND) {
-            this.logger?.debug(
-              `Service key file not found for ${destination}: ${error.filePath || 'unknown path'}`,
-            );
-          } else if (error.code === STORE_ERROR_CODES.PARSE_ERROR) {
-            this.logger?.warn(
-              `Failed to parse service key for ${destination}: ${error.filePath || 'unknown path'} - ${getErrorMessage(error)}`,
-            );
-          } else {
-            this.logger?.warn(
-              `Failed to get authorization config from service key store for ${destination}: ${getErrorMessage(error)}`,
-            );
-          }
-        } else {
-          this.logger?.warn(
-            `Failed to get authorization config from service key store for ${destination}: ${getErrorMessage(error)}`,
-          );
-        }
-      }
-      if (serviceKeyAuthConfig) {
-        this.logger?.debug(
-          `Authorization config from service key for ${destination}: hasUaaUrl(${!!serviceKeyAuthConfig.uaaUrl})`,
-        );
-        return serviceKeyAuthConfig;
-      }
-    } else {
-      this.logger?.debug(`Service key store not available for ${destination}`);
-    }
-
-    this.logger?.debug(`No authorization config found for ${destination}`);
-    return null;
+    return this.read(destination, 'service key authorization config', () =>
+      serviceKeyStore.getAuthorizationConfig(destination),
+    );
   }
 
   /**
-   * Get connection configuration for destination
-   * @param destination Destination name (e.g., "TRIAL")
-   * @returns Promise that resolves to IConnectionConfig or null if not found
+   * Connection configuration for the destination: the session's, else the
+   * service key's (which has URLs but no token), else null.
    */
   async getConnectionConfig(
     destination: string,
   ): Promise<IConnectionConfig | null> {
-    this.logger?.debug(`Getting connection config for ${destination}`);
-
-    // Try session store first (has tokens and URLs)
-    let sessionConnConfig: IConnectionConfig | null = null;
-    try {
-      sessionConnConfig =
-        await this.sessionStore.getConnectionConfig(destination);
-    } catch (error: any) {
-      this.logger?.warn(
-        `Failed to get connection config from session store for ${destination}: ${getErrorMessage(error)}`,
-      );
+    const sessionConn = await this.read(
+      destination,
+      'session connection config',
+      () => this.sessionStore.getConnectionConfig(destination),
+    );
+    if (sessionConn) {
+      return sessionConn;
     }
-    if (sessionConnConfig) {
-      const tokenLength =
-        (
-          sessionConnConfig.authorizationToken ||
-          sessionConnConfig.sessionCookies
-        )?.length || 0;
-      const formattedToken = formatToken(
-        sessionConnConfig.authorizationToken ||
-          sessionConnConfig.sessionCookies,
-      );
-      this.logger?.debug(
-        `Connection config from session for ${destination}: token(${tokenLength} chars${formattedToken ? `, ${formattedToken}` : ''}), serviceUrl(${sessionConnConfig.serviceUrl ? 'yes' : 'no'})`,
-      );
-      return sessionConnConfig;
+    const serviceKeyStore = this.serviceKeyStore;
+    if (!serviceKeyStore) {
+      return null;
     }
-
-    // Fall back to service key store (has URLs but no tokens) if available
-    if (this.serviceKeyStore) {
-      let serviceKeyConnConfig: IConnectionConfig | null = null;
-      try {
-        serviceKeyConnConfig =
-          await this.serviceKeyStore.getConnectionConfig(destination);
-      } catch (error: any) {
-        // Handle typed store errors
-        if (hasErrorCode(error)) {
-          if (error.code === STORE_ERROR_CODES.FILE_NOT_FOUND) {
-            this.logger?.debug(
-              `Service key file not found for ${destination}: ${error.filePath || 'unknown path'}`,
-            );
-          } else if (error.code === STORE_ERROR_CODES.PARSE_ERROR) {
-            this.logger?.warn(
-              `Failed to parse service key for ${destination}: ${error.filePath || 'unknown path'} - ${getErrorMessage(error)}`,
-            );
-          } else {
-            this.logger?.warn(
-              `Failed to get connection config from service key store for ${destination}: ${getErrorMessage(error)}`,
-            );
-          }
-        } else {
-          this.logger?.warn(
-            `Failed to get connection config from service key store for ${destination}: ${getErrorMessage(error)}`,
-          );
-        }
-      }
-      if (serviceKeyConnConfig) {
-        this.logger?.debug(
-          `Connection config from service key for ${destination}: serviceUrl(${serviceKeyConnConfig.serviceUrl ? 'yes' : 'no'}), token(none)`,
-        );
-        return serviceKeyConnConfig;
-      }
-    } else {
-      this.logger?.debug(`Service key store not available for ${destination}`);
-    }
-
-    this.logger?.debug(`No connection config found for ${destination}`);
-    return null;
+    return this.read(destination, 'service key connection config', () =>
+      serviceKeyStore.getConnectionConfig(destination),
+    );
   }
 
   /**
-   * Create a token refresher for a specific destination.
-   *
-   * The token refresher is designed to be injected into JwtAbapConnection via DI,
-   * allowing the connection to handle token refresh transparently without knowing
-   * about authentication internals.
-   *
-   * **Usage:**
-   * ```typescript
-   * const broker = new AuthBroker(config);
-   * const tokenRefresher = broker.createTokenRefresher('TRIAL');
-   * const connection = new JwtAbapConnection(config, tokenRefresher);
-   * ```
-   *
-   * @param destination Destination name (e.g., "TRIAL")
-   * @returns ITokenRefresher implementation for the given destination
+   * An `ITokenRefresher` for one destination, for injection into a connection:
+   * `getToken()` is the broker's `getToken`, `refreshToken()` its forced
+   * `refreshToken`.
    */
   createTokenRefresher(destination: string): ITokenRefresher {
-    const broker = this;
-
     return {
-      /**
-       * Get current valid token.
-       * Returns cached token if valid, otherwise refreshes and returns new token.
-       */
-      async getToken(): Promise<string> {
-        return broker.getToken(destination);
-      },
-
-      /**
-       * Force refresh token and save to session store.
-       * Always performs refresh, ignoring cached token validity.
-       */
-      async refreshToken(): Promise<string> {
-        return broker.refreshToken(destination);
-      },
+      getToken: () => this.getToken(destination),
+      refreshToken: () => this.refreshToken(destination),
     };
   }
 }

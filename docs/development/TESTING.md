@@ -30,7 +30,7 @@ Tests use Jest with the following configuration (`jest.config.js`):
 ### Test Environment
 
 Tests require:
-- Node.js >= 18.0.0
+- Node.js 22 or 24
 - YAML configuration file: `tests/test-config.yaml` (see `tests/test-config.yaml.template`)
   - `auth_broker.paths.service_keys_dir` - Directory for service key files
   - `auth_broker.paths.sessions_dir` - Directory for session files

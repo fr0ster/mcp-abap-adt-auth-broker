@@ -4,7 +4,7 @@ This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` pa
 
 ## Prerequisites
 
-- **Node.js**: Version 18.0.0 or higher
+- **Node.js**: Version 22 or 24 (`engines: "^22 || ^24"`; the versions SAP BTP Cloud Foundry offers)
 - **npm**: Version 7.0.0 or higher (comes with Node.js)
 - **SAP BTP Account**: For obtaining service keys (if using browser authentication)
 
@@ -69,11 +69,14 @@ By default, files are searched in the current working directory:
 
 You can specify custom search paths:
 
-**Option 1: Constructor Parameter**
-```typescript
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+**Option 1: Store Constructor**
 
-const broker = new AuthBroker(['/path/to/destinations', '/another/path']);
+Where files live is the stores' concern (`@mcp-abap-adt/auth-stores`), not the broker's:
+```typescript
+import { AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-stores';
+
+const serviceKeyStore = new AbapServiceKeyStore('/path/to/keys');
+const sessionStore = new AbapSessionStore('/path/to/sessions');
 ```
 
 **Option 2: Environment Variable**
@@ -114,8 +117,21 @@ Files are searched in the following order (highest to lowest priority):
 3. **Use in Code**:
    ```typescript
    import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+   import { AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-stores';
+   import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
 
-   const broker = new AuthBroker();
+   const broker = new AuthBroker({
+     serviceKeyStore: new AbapServiceKeyStore(process.cwd()),
+     sessionStore: new AbapSessionStore(process.cwd()),
+     provider: (destination, authConfig, connConfig) =>
+       new AuthorizationCodeProvider({
+         uaaUrl: authConfig!.uaaUrl,
+         clientId: authConfig!.uaaClientId,
+         clientSecret: authConfig!.uaaClientSecret,
+         refreshToken: authConfig!.refreshToken,
+         accessToken: connConfig.authorizationToken,
+       }),
+   });
    const token = await broker.getToken('TRIAL');
    ```
 

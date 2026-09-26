@@ -82,10 +82,20 @@ node dist/bin/mcp-sso.js \
   --flow pure \
   --idp-sso-url http://localhost:8080/realms/mcp-sso/protocol/saml \
   --sp-entity-id mcp-sso-saml \
+  --acs-url http://localhost:3002/acs \
+  --idp-metadata http://localhost:8080/realms/mcp-sso/protocol/saml/descriptor \
+  --authn-request-id <ID of the AuthnRequest saml-sp.js built> \
   --assertion <base64> \
   --output /tmp/keycloak-saml.env \
   --type abap
 ```
+
+`mcp-sso` validates the assertion (auth-providers 4). `--idp-metadata` reads the realm's
+signing certificate and entityID from its SAML descriptor — the realm's key is generated when
+Keycloak imports the realm, so it cannot be checked in — and `--authn-request-id` is the `ID` of
+the request `saml-sp.js` built (it records it in `/tmp/keycloak-saml-request-id.txt`), since
+`mcp-sso` did not send it. `run-tests.sh` logs in IdP-initiated instead and passes
+`--idp-initiated`; the realm names `http://localhost:3002/acs` as that login's ACS.
 
 ## Automated (No Manual Codes)
 

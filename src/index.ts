@@ -1,6 +1,7 @@
 /**
  * @mcp-abap-adt/auth-broker
- * JWT authentication broker for MCP ABAP ADT server
+ * Per-destination token broker: sessions and service keys from stores,
+ * tokens from an injected provider, results persisted.
  */
 
 // Three contract types re-exported for convenience, each from the package that
@@ -8,9 +9,14 @@
 export type { ITokenRefresher } from '@mcp-abap-adt/interfaces-auth';
 export type { AuthType } from '@mcp-abap-adt/interfaces-auth-sap';
 export type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-export { AuthBroker, type AuthBrokerConfig } from './AuthBroker';
+export {
+  AuthBroker,
+  type AuthBrokerConfig,
+  type TokenProviderFactory,
+} from './AuthBroker';
 // Token provider interface
 export type {
+  IRefreshableTokenProvider,
   ITokenProvider,
   ITokenResult,
   TokenProviderOptions,

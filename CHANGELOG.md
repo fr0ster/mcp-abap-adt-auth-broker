@@ -9,6 +9,220 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
+## [Unreleased]
+
+## [3.0.0] - 2026-09-26
+
+### Security
+
+- **No token reaches a log line or the terminal.** `formatToken` returned a
+  token of 50 characters or fewer whole, and a longer one's first and last 25
+  characters. UAA and XSUAA refresh tokens are opaque and about 34 characters,
+  so `AuthBroker` logged every refresh token in full, at `info`, on each token
+  request, persist and session check; `mcp-auth` printed the first 50
+  characters of the access and refresh tokens it wrote, which is the whole of
+  a refresh token. The broker now logs no token at all (only whether there is
+  one), and `mcp-auth` says `<redacted, N chars>`. auth-providers 4.1.2
+  closed the same leak in its own `formatToken`, and the range now requires
+  it. **Anyone who shipped broker logs at `info` or `debug`, or kept
+  `mcp-auth` output, should treat the refresh tokens in them as exposed and
+  revoke them.**
+
+### Changed
+
+- **BREAKING: `AuthBroker` orchestrates, the provider decides.** The broker
+  resolves what the stores hold for a destination, hands it to the provider,
+  calls it once and writes the answer back. The Step 0 / session / service-key
+  branches that repeated the provider's own refresh-then-login logic — each
+  calling the same `getTokens()` — are gone, and so is the retry of a failed
+  call.
+  - **Constructor:** `new AuthBroker({ sessionStore, serviceKeyStore?, provider }, logger?)`.
+    `tokenProvider` is now `provider`, typed `IRefreshableTokenProvider` (from
+    `@mcp-abap-adt/interfaces-auth` 2.1.0), or a factory
+    `(destination, authConfig, connConfig) => IRefreshableTokenProvider`. The
+    factory is called once per destination and seeded with what the stores
+    hold: the UAA credentials (the session's, else the service key's) with the
+    stored refresh token, and the connection config with `serviceUrl` and the
+    stored token. An instance is used as given, for every destination.
+  - **`allowBrowserAuth` and the `browser` argument are removed**, and with them
+    the `BROWSER_AUTH_REQUIRED` error. `browser` was never read, and how a
+    login is conducted is the provider's authorization strategy.
+  - **`refreshToken(destination)` forces a new token.** It called `getToken()`,
+    which returned the provider's cached token — the one the server had just
+    refused — breaking `ITokenRefresher`'s "always obtains new token" and
+    risking a 401 loop. It now calls the provider's `refreshTokens()`, and so
+    does `createTokenRefresher(destination).refreshToken()`.
+  - **Provider errors propagate unchanged.** They were rewrapped into a plain
+    `Error`, losing `code`, `missingFields`, `cause` and the class itself
+    (`instanceof ValidationError` was false).
+  - **The client secret is no longer copied into the session store.** After a
+    login from a service key the broker wrote the service key's
+    `uaaClientSecret` into the session (`SAP_UAA_CLIENT_SECRET` /
+    `XSUAA_UAA_CLIENT_SECRET` in the `.env`). It now writes the token and the
+    refresh token only; credentials a session already holds are left as they
+    are. `mcp-auth`, `mcp-sso` and `generate-env` still write the secret into
+    the file they produce, deliberately: that file is a self-contained session
+    read with no service key beside it.
+  - **The session store's `loadSession` and `saveSession` are used**, both part
+    of `ISessionStore`: `loadSession` to read a refresh token stored without
+    credentials, `saveSession` to store one. The constructor checks for them.
+  - **Removed:** `src/utils/formatting` (`formatToken`,
+    `formatExpirationDate`): the broker logs no token, so there is nothing to
+    format.
+
+  **Migrating from 2.2.0:**
+  1. Rename `tokenProvider` to `provider` and drop the second constructor
+     argument: `new AuthBroker(config, 'system', logger)` becomes
+     `new AuthBroker(config, logger)`.
+  2. The provider must implement `IRefreshableTokenProvider`, i.e. have
+     `refreshTokens()`. `@mcp-abap-adt/auth-providers` 4.2.0 providers do; a
+     provider of your own must add it (a new token, never the cached one).
+  3. Instead of `allowBrowserAuth: false`, give the provider an authorization
+     strategy that refuses: `authorization: { authorize: async () => { throw new LoginRequiredError(); } }`,
+     and catch your own error — the broker hands it back unchanged. A browser
+     login that fails (timeout, the identity provider's refusal, a busy
+     callback port, a browser that would not open) is auth-providers'
+     `BrowserAuthError` from 4.2.0; before that it was a plain `Error`.
+  4. Catch provider errors by class or `code` (`ValidationError`,
+     `BrowserAuthError`, `AssertionValidationError`, network `ECONNREFUSED` …),
+     not by the old `Token provider … error for <destination>` messages.
+  5. If a consumer read the client secret back from a session the broker had
+     written, read it from the service key store instead — or put it into the
+     session yourself.
+  6. To have the broker seed a provider from the stores, pass a factory rather
+     than an instance.
+  Node.js 22 or 24 and the SAML trust options (below) are required too.
+
+- **`@mcp-abap-adt/interfaces-auth@^2.1.0`** (was `^2.0.1` on this branch,
+  `^1.2.0` in 2.2.0), for `IRefreshableTokenProvider`; **`@mcp-abap-adt/auth-stores@^1.2.3`** (was
+  `^1.2.0` in 2.2.0): 1.2.2 stops logging token characters — the same leak as
+  under *Security* — and 1.2.3 lets an XSUAA session without a client secret
+  keep its refresh token, which is what a session this broker writes now is.
+  No store API changed.
+
+- **BREAKING: Node.js 22 or 24** — `engines: "^22 || ^24"` (was `>=18.2.0`),
+  following `@mcp-abap-adt/auth-providers` 3.0.0, which requires it: the
+  versions SAP BTP's Cloud Foundry Node.js buildpack offers.
+
+- **BREAKING for `mcp-sso` SAML users: `@mcp-abap-adt/auth-providers@^4.2.0`**
+  (was `^2.2.0`). From 4.0.0 both SAML providers validate every assertion —
+  signature, issuer, audience, recipient, time window, request ID, replay —
+  and refuse to construct without the trust to check it against. Every
+  `mcp-sso bearer`, `mcp-sso saml2 --flow pure`, `mcp-auth saml2-pure` and
+  `mcp-auth saml2-bearer` run that worked with 2.2.0 now fails before login
+  with auth-providers' `ValidationError`
+  (`missing idpCertificates, idpEntityId`), and nothing in TypeScript said so,
+  since the new fields are optional.
+
+  **Migrating:** add `--idp-cert <path>` and `--idp-entity-id <id>` (or
+  `idpCertificates`/`idpEntityId` in `--config`); give the real
+  `--sp-entity-id`, now the `Audience`, and the `--acs-url` the assertion names
+  as `Recipient`; for `bearer` against UAA or XSUAA add `--idp-initiated`,
+  since both refuse an assertion carrying `InResponseTo`; for any other
+  `--assertion` from a request `mcp-sso` did not send, add
+  `--authn-request-id`. The README's *Migrating `mcp-sso` SAML runs from
+  2.2.0* has the details.
+
+  Also from auth-providers 3.0.0: `Saml2BearerProvider` sends one
+  base64url-encoded Assertion, as RFC 7522 requires, instead of the whole
+  `SAMLResponse`, which UAA answered with 401. The rest of what 3.x and 4.x
+  changed does not reach this package: `DeviceFlowProvider` was never used
+  (`mcp-sso oidc --flow device` builds `OidcDeviceFlowProvider`), and
+  `buildSamlAuthorizationUrl`, `getSamlAssertion` and `parseSamlNotOnOrAfter`
+  were never imported. `AuthorizationCodeProvider` and
+  `ClientCredentialsProvider`, which `mcp-auth` builds, are unchanged.
+
+- **`@mcp-abap-adt/interfaces-auth` 2.x** (was `^1.2.0`). Its one break,
+  `AssertionContext.expectedInResponseTo` becoming optional, concerns
+  `IAssertionValidator` implementers; nothing here implements one.
+- **`@mcp-abap-adt/interfaces-auth-sap@^1.0.1`** (was `^1.0.0`), the release
+  that accepts `interfaces-auth` 2, so an install carries one copy of it.
+
+### Added
+
+- **SAML metadata instead of hand-copied values.**
+  - `--idp-metadata <url|path>` / `idpMetadata`: the identity provider's SAML
+    metadata — for SAP Cloud Identity Services
+    `https://<tenant>.accounts.ondemand.com/saml2/metadata` — fills
+    `--idp-cert`, `--idp-entity-id` and `--idp-sso-url` where they were not
+    given. Signing keys and keys without `use` are trusted, encryption keys
+    never.
+  - `saml2-bearer` with `--service-key` reads XSUAA's own
+    `<uaa.url>/saml/metadata` for the `Audience` (`--sp-entity-id`), the
+    `Recipient` (`--acs-url`) and the token endpoint — all three the
+    `/oauth/token/alias/<alias>` endpoint and the entityID it publishes, none
+    of them in the service key. `--saml-metadata <file>` still works, and now
+    fills the same three.
+  - An explicit option always wins, and trust is replaced, never widened: a
+    `--idp-cert` means no certificate from the metadata is trusted beside it.
+  - Federation metadata — an `EntitiesDescriptor` holding several entities —
+    is read per entity: the entityID, keys and SSO URL all come from the one
+    identity provider. With several, `--idp-entity-id` names it, and without
+    it the run stops listing them; a named entity the metadata does not
+    describe is refused rather than filled from another one. The same holds
+    for the service provider's metadata and `--sp-entity-id`.
+    Metadata carries the certificates assertions are verified against, so a
+    URL must be https (plain http only for loopback, i.e. a local test IdP).
+
+  A bearer run against XSUAA is now
+  `mcp-sso bearer --service-key ./key.json --idp-metadata https://<tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated …`.
+
+- **`mcp-sso` SAML trust options**, passed into both the `bearer` and the
+  `pure` provider config:
+  - `--idp-cert <path>`, repeatable for key rotation: a PEM file (one
+    certificate or several) or a binary DER file. `idpCertificates` in
+    `--config` carries them inline (a string or a list, PEM or base64 DER); a
+    `--idp-cert` replaces the file's list rather than adding to it.
+  - `--idp-entity-id <id>` / `idpEntityId`: the `Issuer` the assertion must
+    name.
+  - `--idp-initiated` / `idpInitiated`: no AuthnRequest is sent. With it,
+    `mcp-sso` never asks auth-providers for an authorization URL, which it
+    refuses for an IdP-initiated login: the default assertion flow becomes
+    `manual` (start the login at the identity provider, paste the
+    `SAMLResponse`), `--assertion` works as before, and
+    `--assertion-flow browser` is refused, having no URL to open.
+  - `--authn-request-id <id>` / `authnRequestId`: the request an
+    `--assertion` answers, when `mcp-sso` did not send it.
+
+  Missing trust material is passed on as missing: auth-providers' own
+  `ValidationError` names it. `mcp-sso --help` says what a SAML run requires.
+
+### Fixed
+
+- **The CLIs' temporary session no longer outlives a failed login.** `mcp-auth`
+  and `mcp-sso` kept their temporary session store — which holds the client
+  secret — in `.tmp` beside the output file, the user's sessions folder, and
+  removed it only on success: a failed or interrupted login left the secret
+  there, and two runs at once shared one directory that each removed on exit.
+  Each run now gets a private directory under the OS temp dir (mode 0700),
+  removed on any exit, error and `SIGINT`/`SIGTERM`/`SIGHUP` included.
+  Measured: after a refused login (exit 1) and after `SIGTERM` (exit 143) the
+  directory is gone, and no `.tmp` appears beside the output.
+- **`mcp-auth` writes the refresh token the login obtained.** It wrote the
+  output from the authorization config it read *before* the login — the
+  service key's, which holds no refresh token — while the refresh token XSUAA
+  returned went into a temporary session store that was then deleted. Every
+  `mcp-auth` session file came out without `SAP_REFRESH_TOKEN`, so the next
+  expiry meant another browser login. Measured on the trial: the same login
+  now writes a 34-character refresh token.
+- **A closed stdin is a failure, not a success.** A prompt for a pasted
+  `SAMLResponse`, passcode or cookie waited on a promise that never settled
+  when stdin was closed; the event loop drained and `mcp-sso` exited 0 having
+  written nothing, which a script reads as success. It now fails, naming the
+  prompt.
+- **`generate-env` constructs its XSUAA session store with a service URL.**
+  `XsuaaSessionStore` requires one since auth-stores 1.x and the script passed
+  none; it now takes the service key's, or the placeholder `mcp-auth` uses.
+
+### Tests
+
+- The Keycloak fixtures run the SAML pure flow end to end with validation:
+  the realm signs its responses and names `http://localhost:3002/acs` as the
+  IdP-initiated ACS, the `demo` user has the profile Keycloak 24 requires, and
+  `run-tests.sh` / `run-saml.sh` pass `--idp-metadata` (and
+  `--authn-request-id` for the SP-initiated login, whose ID `saml-sp.js` now
+  records).
+
 ## [2.2.0] - 2026-09-24
 
 ### Changed
