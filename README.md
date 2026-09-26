@@ -520,7 +520,11 @@ The session's configuration, else the service key's, else `null`.
   `null`, or fails with `FILE_NOT_FOUND` (logged at debug), means "nothing
   here", and the broker goes on to the next source. Any other store failure —
   a service key that is not valid JSON, a file the process may not read — is
-  thrown unchanged, before the provider is asked. (The session stores of
+  thrown unchanged. A failure in the reads that come before the token (the
+  session's connection config, the service key) stops the call before the
+  provider is asked; one in the reads that save it (the session's
+  authorization config, the session) arrives after the provider answered and
+  the new token was written. (The session stores of
   auth-stores answer an unreadable session file with `null` themselves, so it
   reads as absent before the broker sees it.)
 - **Store writes propagate**: a token that cannot be saved is an error.

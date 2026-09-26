@@ -21,8 +21,10 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
   not read, surfaced only as its consequence: "Session for destination … is
   missing required field 'serviceUrl'", which sends users to create a file
   that already exists. Absence is still `null` or `FILE_NOT_FOUND`, and the
-  flow goes on to the next source; anything else is thrown unchanged, before
-  the provider is asked.
+  flow goes on to the next source; anything else is thrown unchanged — before
+  the provider is asked when it comes from the reads that precede the token,
+  and after the provider answered and the token was written when it comes
+  from the reads that save the refresh token.
 
   Measured on auth-stores 1.2.3: the service key stores throw on an invalid or
   unreadable file (`Invalid JSON in file …`, `EACCES`), so this change is what
