@@ -871,6 +871,12 @@ async function main() {
     console.log(`✅ Token obtained successfully`);
 
     const connConfig = await sessionStore.getConnectionConfig(destination);
+    // What the login left in the session, not what was known before it:
+    // `authConfig` came from the service key, which holds no refresh token,
+    // and the refresh token the login obtained went into the session store.
+    // Writing `authConfig` dropped it with the temporary session directory.
+    const savedAuthConfig =
+      (await sessionStore.getAuthorizationConfig(destination)) ?? authConfig;
 
     if (!token) {
       throw new Error(
@@ -891,11 +897,11 @@ async function main() {
         resolvedOutputPath,
         options.authType,
         token,
-        authConfig?.refreshToken,
+        savedAuthConfig?.refreshToken,
         finalServiceUrl,
-        authConfig?.uaaUrl,
-        authConfig?.uaaClientId,
-        authConfig?.uaaClientSecret,
+        savedAuthConfig?.uaaUrl,
+        savedAuthConfig?.uaaClientId,
+        savedAuthConfig?.uaaClientSecret,
       );
 
       console.log(`✅ .env file created: ${resolvedOutputPath}`);
@@ -911,9 +917,9 @@ async function main() {
         console.log(
           `   - ${ABAP_CONNECTION_VARS.AUTHORIZATION_TOKEN}=<redacted, ${token.length} chars>`,
         );
-        if (authConfig?.refreshToken) {
+        if (savedAuthConfig?.refreshToken) {
           console.log(
-            `   - ${ABAP_AUTHORIZATION_VARS.REFRESH_TOKEN}=<redacted, ${authConfig.refreshToken.length} chars>`,
+            `   - ${ABAP_AUTHORIZATION_VARS.REFRESH_TOKEN}=<redacted, ${savedAuthConfig.refreshToken.length} chars>`,
           );
         }
       } else {
@@ -923,9 +929,9 @@ async function main() {
         console.log(
           `   - ${XSUAA_CONNECTION_VARS.AUTHORIZATION_TOKEN}=<redacted, ${token.length} chars>`,
         );
-        if (authConfig?.refreshToken) {
+        if (savedAuthConfig?.refreshToken) {
           console.log(
-            `   - ${XSUAA_AUTHORIZATION_VARS.REFRESH_TOKEN}=<redacted, ${authConfig.refreshToken.length} chars>`,
+            `   - ${XSUAA_AUTHORIZATION_VARS.REFRESH_TOKEN}=<redacted, ${savedAuthConfig.refreshToken.length} chars>`,
           );
         }
       }
@@ -933,19 +939,19 @@ async function main() {
       writeJsonFile(
         resolvedOutputPath,
         token,
-        authConfig?.refreshToken,
+        savedAuthConfig?.refreshToken,
         finalServiceUrl,
-        authConfig?.uaaUrl,
-        authConfig?.uaaClientId,
-        authConfig?.uaaClientSecret,
+        savedAuthConfig?.uaaUrl,
+        savedAuthConfig?.uaaClientId,
+        savedAuthConfig?.uaaClientSecret,
       );
 
       console.log(`✅ JSON file created: ${resolvedOutputPath}`);
       console.log(`📋 Output contains:`);
       console.log(`   - accessToken: <redacted, ${token.length} chars>`);
-      if (authConfig?.refreshToken) {
+      if (savedAuthConfig?.refreshToken) {
         console.log(
-          `   - refreshToken: <redacted, ${authConfig.refreshToken.length} chars>`,
+          `   - refreshToken: <redacted, ${savedAuthConfig.refreshToken.length} chars>`,
         );
       }
       if (finalServiceUrl) {

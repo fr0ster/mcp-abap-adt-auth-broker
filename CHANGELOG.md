@@ -112,6 +112,13 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ### Fixed
 
+- **`mcp-auth` writes the refresh token the login obtained.** It wrote the
+  output from the authorization config it read *before* the login — the
+  service key's, which holds no refresh token — while the refresh token XSUAA
+  returned went into a temporary session store that was then deleted. Every
+  `mcp-auth` session file came out without `SAP_REFRESH_TOKEN`, so the next
+  expiry meant another browser login. Measured on the trial: the same login
+  now writes a 34-character refresh token.
 - **A closed stdin is a failure, not a success.** A prompt for a pasted
   `SAMLResponse`, passcode or cookie waited on a promise that never settled
   when stdin was closed; the event loop drained and `mcp-sso` exited 0 having
