@@ -11,6 +11,8 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-26
+
 ### Security
 
 - **No token reaches a log line or the terminal.** `formatToken` returned a
