@@ -376,7 +376,7 @@ const tokens = await Promise.all(
 ## Error Handling
 
 - **Provider errors propagate unchanged** — the same object, with its class,
-  `code`, `missingFields` and `cause`: `ValidationError`, `RefreshError`,
+  `code`, `missingFields` and `cause`: `ValidationError`, `BrowserAuthError`,
   `AssertionValidationError` from `@mcp-abap-adt/auth-providers`, network
   errors (`ECONNREFUSED`, `ETIMEDOUT`, `ENOTFOUND`), and whatever the
   authorization strategy throws. The broker does not retry.
