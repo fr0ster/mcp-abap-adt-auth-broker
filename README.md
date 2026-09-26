@@ -198,8 +198,9 @@ const connection = new JwtAbapConnection(config, tokenRefresher);
    it with the stored refresh token and token.
 3. `allowBrowserAuth: false` and `BROWSER_AUTH_REQUIRED` are gone: give the
    provider an authorization strategy that refuses and catch your own error
-   (see *Headless Processes*). auth-providers exports `BrowserAuthError` but
-   does not throw it; do not wait for it.
+   (see *Headless Processes*). A browser login that fails — timeout, the
+   identity provider's refusal, a busy callback port — is auth-providers'
+   `BrowserAuthError` (from 4.2.0).
 4. Provider errors arrive unchanged: match on the class or `code`, not on the
    old `Token provider … error for <destination>` messages.
 5. The broker no longer writes the client secret into the session store. Read
@@ -543,11 +544,9 @@ service key they stay there. A session that already holds its own credentials
 (written by you, or by `mcp-auth`/`mcp-sso`, whose output is a self-contained
 session file) keeps them, and only its refresh token is updated.
 
-With credentials in the service key, the ABAP stores return the stored refresh
+With credentials in the service key, the stores return the stored refresh
 token through `loadSession()`, which the broker reads to seed the next
-process's provider. `XsuaaSessionStore` (auth-stores 1.2.2) returns it only
-together with a client secret, so such an XSUAA session logs in again after a
-restart.
+process's provider — the XSUAA stores too, from auth-stores 1.2.3.
 
 ### Token Providers
 

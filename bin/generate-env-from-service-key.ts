@@ -28,7 +28,6 @@ import {
 import * as fs from 'fs';
 import * as path from 'path';
 import { AuthBroker } from '../src/AuthBroker';
-import { refreshableProvider } from './refreshableProvider';
 
 /**
  * A person completes this login at a browser; the provider's own default
@@ -125,8 +124,6 @@ async function main() {
 
     // The factory form: the broker seeds each provider with what the stores
     // hold — the UAA credentials, the stored refresh token and access token.
-    // TODO(auth-providers 4.2.0): return the provider itself; its own
-    // refreshTokens() replaces the refreshableProvider adapter.
     const broker = new AuthBroker({
       serviceKeyStore,
       sessionStore,
@@ -134,27 +131,25 @@ async function main() {
         if (!auth) {
           throw new Error(`Missing authorization config for ${destination}`);
         }
-        return refreshableProvider((refresh) =>
-          isXsuaa
-            ? new ClientCredentialsProvider({
-                uaaUrl: auth.uaaUrl,
-                clientId: auth.uaaClientId,
-                clientSecret: auth.uaaClientSecret,
-              })
-            : new AuthorizationCodeProvider({
-                uaaUrl: auth.uaaUrl,
-                clientId: auth.uaaClientId,
-                clientSecret: auth.uaaClientSecret,
-                accessToken: refresh ? undefined : conn.authorizationToken,
-                refreshToken: refresh?.refreshToken ?? auth.refreshToken,
-                // No port override: this script has no `--redirect-port`
-                // flag, so the callback port is the strategy's own choice.
-                authorization: browserCallbackStrategy({
-                  browser: 'system',
-                  timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
-                }),
+        return isXsuaa
+          ? new ClientCredentialsProvider({
+              uaaUrl: auth.uaaUrl,
+              clientId: auth.uaaClientId,
+              clientSecret: auth.uaaClientSecret,
+            })
+          : new AuthorizationCodeProvider({
+              uaaUrl: auth.uaaUrl,
+              clientId: auth.uaaClientId,
+              clientSecret: auth.uaaClientSecret,
+              accessToken: conn.authorizationToken,
+              refreshToken: auth.refreshToken,
+              // No port override: this script has no `--redirect-port`
+              // flag, so the callback port is the strategy's own choice.
+              authorization: browserCallbackStrategy({
+                browser: 'system',
+                timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
               }),
-        );
+            });
       },
     });
 

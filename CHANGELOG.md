@@ -77,11 +77,12 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
      provider of your own must add it (a new token, never the cached one).
   3. Instead of `allowBrowserAuth: false`, give the provider an authorization
      strategy that refuses: `authorization: { authorize: async () => { throw new LoginRequiredError(); } }`,
-     and catch your own error — the broker hands it back unchanged. Do not wait
-     for `BrowserAuthError`: auth-providers exports it but throws it nowhere
-     (4.1.x), and a timed-out browser login is a plain `Error`.
+     and catch your own error — the broker hands it back unchanged. A browser
+     login that fails (timeout, the identity provider's refusal, a busy
+     callback port, a browser that would not open) is auth-providers'
+     `BrowserAuthError` from 4.2.0; before that it was a plain `Error`.
   4. Catch provider errors by class or `code` (`ValidationError`,
-     `RefreshError`, `AssertionValidationError`, network `ECONNREFUSED` …),
+     `BrowserAuthError`, `AssertionValidationError`, network `ECONNREFUSED` …),
      not by the old `Token provider … error for <destination>` messages.
   5. If a consumer read the client secret back from a session the broker had
      written, read it from the service key store instead — or put it into the
@@ -90,23 +91,18 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
      than an instance.
   Node.js 22 or 24 and the SAML trust options (below) are required too.
 
-  **Known gap:** `XsuaaSessionStore` and `SafeXsuaaSessionStore` (auth-stores
-  1.2.2) return no authorization config — and so no refresh token — for a
-  session without a client secret. With credentials from the service key, an
-  XSUAA session therefore keeps its refresh token on disk, but a new process
-  cannot read it back and logs in again. The ABAP stores return it through
-  `loadSession()`, which the broker reads.
-
 - **`@mcp-abap-adt/interfaces-auth@^2.1.0`** (was `^2.0.1` on this branch,
-  `^1.2.0` in 2.2.0), for `IRefreshableTokenProvider`; **`@mcp-abap-adt/auth-stores@^1.2.2`** (was
-  `^1.2.0` in 2.2.0), whose stores stop logging token characters — the same
-  leak as under *Security*; no store API changed.
+  `^1.2.0` in 2.2.0), for `IRefreshableTokenProvider`; **`@mcp-abap-adt/auth-stores@^1.2.3`** (was
+  `^1.2.0` in 2.2.0): 1.2.2 stops logging token characters — the same leak as
+  under *Security* — and 1.2.3 lets an XSUAA session without a client secret
+  keep its refresh token, which is what a session this broker writes now is.
+  No store API changed.
 
 - **BREAKING: Node.js 22 or 24** — `engines: "^22 || ^24"` (was `>=18.2.0`),
   following `@mcp-abap-adt/auth-providers` 3.0.0, which requires it: the
   versions SAP BTP's Cloud Foundry Node.js buildpack offers.
 
-- **BREAKING for `mcp-sso` SAML users: `@mcp-abap-adt/auth-providers@^4.1.2`**
+- **BREAKING for `mcp-sso` SAML users: `@mcp-abap-adt/auth-providers@^4.2.0`**
   (was `^2.2.0`). From 4.0.0 both SAML providers validate every assertion —
   signature, issuer, audience, recipient, time window, request ID, replay —
   and refuse to construct without the trust to check it against. Every

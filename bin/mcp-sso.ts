@@ -58,7 +58,6 @@ import {
   parseSamlTrustArg,
   readManualInput,
 } from './mcpSsoConfig';
-import { refreshableProvider } from './refreshableProvider';
 import { applySamlMetadata } from './samlMetadata';
 
 function getVersion(): string {
@@ -854,25 +853,8 @@ async function main() {
         } as SsoProviderConfig)
       : config;
 
-  // TODO(auth-providers 4.2.0): pass SsoProviderFactory.create(...) itself,
-  // once the factory is typed as returning IRefreshableTokenProvider; the
-  // refreshableProvider adapter goes then.
-  const tokenProvider = refreshableProvider((refresh) =>
-    SsoProviderFactory.create(
-      withLogger(
-        buildProviderConfig(
-          options,
-          refresh
-            ? {
-                refreshToken:
-                  refresh.refreshToken ?? existingAuth?.refreshToken,
-              }
-            : existingAuth,
-          // A forced refresh must not be handed the token it replaces.
-          refresh ? null : existingConn,
-        ),
-      ),
-    ),
+  const tokenProvider = SsoProviderFactory.create(
+    withLogger(buildProviderConfig(options, existingAuth, existingConn)),
   );
   const broker = new AuthBroker(
     {

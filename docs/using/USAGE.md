@@ -409,11 +409,9 @@ token is updated. `mcp-auth`, `mcp-sso` and `npm run generate-env` do write the
 secret into the file they produce, on purpose: that file is a self-contained
 session read with no service key beside it.
 
-The ABAP session stores return a refresh token stored without credentials
-through `loadSession()`, which the broker reads. `XsuaaSessionStore`
-(auth-stores 1.2.2) returns it only together with a client secret, so an XSUAA
-session whose credentials are in the service key logs in again after a
-restart.
+The session stores return a refresh token stored without credentials through
+`loadSession()`, which the broker reads — the XSUAA stores from auth-stores
+1.2.3.
 
 ## Logging
 

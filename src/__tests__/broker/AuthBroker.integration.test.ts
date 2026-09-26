@@ -22,7 +22,6 @@ import {
   AbapServiceKeyStore,
   SafeAbapSessionStore,
 } from '@mcp-abap-adt/auth-stores';
-import { refreshableProvider } from '../../../bin/refreshableProvider';
 import { AuthBroker } from '../../AuthBroker';
 import {
   getAbapDestination,
@@ -41,26 +40,9 @@ import { createTestLogger } from '../helpers/testLogger';
 // so a real login timeout surfaces its own message instead of Jest's.
 const INTERACTIVE_LOGIN_TIMEOUT_MS = 290_000;
 
-/**
- * An AuthorizationCodeProvider the broker accepts.
- *
- * TODO(auth-providers 4.2.0): `new AuthorizationCodeProvider(config)` itself —
- * it implements refreshTokens() there, and this helper goes.
- */
+/** An AuthorizationCodeProvider: since auth-providers 4.2.0 it refreshes on request itself. */
 function authorizationCodeProvider(config: AuthorizationCodeProviderConfig) {
-  const first = new AuthorizationCodeProvider(config);
-  const provider = refreshableProvider((refresh) =>
-    refresh
-      ? authorizationCodeProvider({
-          ...config,
-          accessToken: undefined,
-          refreshToken: refresh.refreshToken ?? config.refreshToken,
-        })
-      : first,
-  );
-  return Object.assign(provider, {
-    validateToken: (token: string) => first.validateToken(token),
-  });
+  return new AuthorizationCodeProvider(config);
 }
 
 /** What a headless process's strategy throws instead of opening a browser. */
