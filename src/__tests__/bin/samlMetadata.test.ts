@@ -123,14 +123,17 @@ describe('applySamlMetadata', () => {
   });
 
   it('never overrides what was stated, and never widens trust', async () => {
+    // The stated entity IDs are ones the documents describe; what differs is
+    // everything else, and none of it may be replaced.
     const options: SamlMetadataTarget = {
       protocol: 'saml2',
       flow: 'bearer',
       uaaUrl: UAA_URL,
       idpMetadata: IAS_URL,
-      idpEntityId: 'https://stated.example',
+      idpEntityId: 'https://ias-tenant.accounts.example.com',
       idpCertificateFiles: ['./stated.pem'],
-      spEntityId: 'stated-sp',
+      idpSsoUrl: 'https://stated.example/sso',
+      spEntityId: UAA_URL,
       acsUrl: 'https://stated.example/acs',
     };
 
@@ -140,11 +143,29 @@ describe('applySamlMetadata', () => {
       loaderFor({ [IAS_URL]: IAS, [`${UAA_URL}/saml/metadata`]: XSUAA }),
     );
 
-    expect(options.idpEntityId).toBe('https://stated.example');
     expect(options.idpCertificates).toBeUndefined();
-    expect(options.spEntityId).toBe('stated-sp');
+    expect(options.idpSsoUrl).toBe('https://stated.example/sso');
     expect(options.acsUrl).toBe('https://stated.example/acs');
     expect(options.tokenEndpoint).toBe('https://stated.example/token');
+  });
+
+  it('refuses metadata that does not describe the stated identity provider', async () => {
+    // Taking the SSO URL or keys of an entity other than the one named would
+    // trust someone nobody named.
+    await expect(
+      applySamlMetadata(
+        {
+          protocol: 'saml2',
+          flow: 'pure',
+          idpMetadata: IAS_URL,
+          idpEntityId: 'https://stated.example',
+        },
+        undefined,
+        loaderFor({ [IAS_URL]: IAS }),
+      ),
+    ).rejects.toThrow(
+      /no identity provider with entityID "https:\/\/stated\.example"/,
+    );
   });
 
   it('reads a --saml-metadata file before the service key', async () => {
@@ -204,5 +225,75 @@ describe('--idp-metadata', () => {
     const target = {};
     expect(parseSamlTrustArg(target, '--idp-metadata', IAS_URL)).toBe(1);
     expect(target).toEqual({ idpMetadata: IAS_URL });
+  });
+});
+
+describe('federation metadata (an EntitiesDescriptor of several entities)', () => {
+  const idp = (id: string, cert: string) =>
+    `<md:EntityDescriptor entityID="${id}"><md:IDPSSODescriptor><md:KeyDescriptor use="signing"><ds:X509Certificate>${cert}</ds:X509Certificate></md:KeyDescriptor><md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://${cert}.example/sso"/></md:IDPSSODescriptor></md:EntityDescriptor>`;
+  const sp = (id: string) =>
+    `<md:EntityDescriptor entityID="${id}"><md:SPSSODescriptor><md:AssertionConsumerService Location="https://sp.example/acs"/></md:SPSSODescriptor></md:EntityDescriptor>`;
+  const aggregate = (...entities: string[]) =>
+    `<md:EntitiesDescriptor xmlns:md="m" Name="federation">${entities.join('')}</md:EntitiesDescriptor>`;
+
+  it('takes the entityID of the entity whose keys it takes, not the first in the document', () => {
+    // The first entity is a service provider: its entityID used to be paired
+    // with the identity provider's certificate.
+    const read = readIdpMetadata(
+      aggregate(sp('https://sp.example'), idp('https://idp-a', 'CERTA')),
+    );
+    expect(read).toEqual({
+      entityId: 'https://idp-a',
+      certificates: ['CERTA'],
+      ssoUrl: 'https://CERTA.example/sso',
+    });
+  });
+
+  it('refuses to choose between identity providers nobody named', () => {
+    expect(() =>
+      readIdpMetadata(
+        aggregate(idp('https://idp-a', 'CERTA'), idp('https://idp-b', 'CERTB')),
+      ),
+    ).toThrow(/2 identity providers.*--idp-entity-id.*idp-a.*idp-b/);
+  });
+
+  it('reads the identity provider --idp-entity-id names', () => {
+    const read = readIdpMetadata(
+      aggregate(idp('https://idp-a', 'CERTA'), idp('https://idp-b', 'CERTB')),
+      'https://idp-b',
+    );
+    expect(read.entityId).toBe('https://idp-b');
+    expect(read.certificates).toEqual(['CERTB']);
+  });
+
+  it('refuses an entityID the metadata does not describe', () => {
+    expect(() =>
+      readIdpMetadata(
+        aggregate(idp('https://idp-a', 'CERTA')),
+        'https://other',
+      ),
+    ).toThrow(/no identity provider with entityID "https:\/\/other"/);
+  });
+
+  it('fills idpEntityId from the chosen entity through applySamlMetadata', async () => {
+    const options: SamlMetadataTarget = {
+      protocol: 'saml2',
+      flow: 'pure',
+      idpMetadata: 'fed.xml',
+      idpEntityId: 'https://idp-b',
+    };
+    await applySamlMetadata(
+      options,
+      undefined,
+      loaderFor({
+        'fed.xml': aggregate(
+          sp('https://sp.example'),
+          idp('https://idp-a', 'CERTA'),
+          idp('https://idp-b', 'CERTB'),
+        ),
+      }),
+    );
+    expect(options.idpCertificates).toEqual(['CERTB']);
+    expect(options.idpSsoUrl).toBe('https://CERTB.example/sso');
   });
 });

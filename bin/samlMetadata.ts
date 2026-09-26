@@ -56,9 +56,28 @@ function attribute(tag: string, name: string): string | undefined {
   return tag.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1];
 }
 
-function entityIdOf(xml: string): string | undefined {
-  const tag = xml.match(/<(?:[\w-]+:)?EntityDescriptor\b[^>]*>/)?.[0];
-  return tag ? attribute(tag, 'entityID') : undefined;
+/** One `EntityDescriptor`: its entityID and its inner XML. */
+interface Entity {
+  entityId?: string;
+  body: string;
+}
+
+/**
+ * Every `EntityDescriptor` in the document, whether it is the root or one of
+ * many inside an `EntitiesDescriptor` (federation metadata). An entity's
+ * entityID, keys and endpoints are read from the same element — taking the
+ * first entityID in the document paired one entity's ID with another's
+ * certificate.
+ */
+function entitiesOf(xml: string): Entity[] {
+  return [
+    ...xml.matchAll(
+      /<(?:[\w-]+:)?EntityDescriptor\b([^>]*)>([\s\S]*?)<\/(?:[\w-]+:)?EntityDescriptor>/g,
+    ),
+  ].map(([, attributes, body]) => ({
+    entityId: attribute(attributes, 'entityID'),
+    body,
+  }));
 }
 
 /** The inner XML of the first `<prefix:name>` element, whatever the prefix. */
@@ -70,13 +89,64 @@ function section(xml: string, name: string): string | undefined {
   )?.[1];
 }
 
-export function readIdpMetadata(xml: string): IdpMetadata {
-  const descriptor = section(xml, 'IDPSSODescriptor');
-  if (descriptor === undefined) {
+/**
+ * The one entity the caller means. With a wanted entityID, the entity with
+ * it; without one, the only candidate — several are a question only the
+ * caller can answer, and picking the first would trust an identity provider
+ * nobody named.
+ */
+function chooseEntity(
+  candidates: Entity[],
+  wanted: string | undefined,
+  role: string,
+  flag: string,
+): Entity {
+  if (wanted !== undefined) {
+    const match = candidates.find((entity) => entity.entityId === wanted);
+    if (!match) {
+      throw new Error(
+        `the metadata has no ${role} with entityID ${JSON.stringify(wanted)}; it has: ${
+          candidates
+            .map((entity) => JSON.stringify(entity.entityId))
+            .join(', ') || 'none'
+        }`,
+      );
+    }
+    return match;
+  }
+  if (candidates.length === 0) {
+    throw new Error(`the metadata describes no ${role}`);
+  }
+  if (candidates.length > 1) {
+    throw new Error(
+      `the metadata describes ${candidates.length} ${role}s; name the one to use with ${flag}: ${candidates
+        .map((entity) => JSON.stringify(entity.entityId))
+        .join(', ')}`,
+    );
+  }
+  return candidates[0];
+}
+
+/**
+ * The identity provider in `xml`: the one whose entityID is `entityId`, or the
+ * only one there is.
+ */
+export function readIdpMetadata(xml: string, entityId?: string): IdpMetadata {
+  const candidates = entitiesOf(xml).filter(
+    (entity) => section(entity.body, 'IDPSSODescriptor') !== undefined,
+  );
+  if (candidates.length === 0) {
     throw new Error(
       'the metadata has no IDPSSODescriptor: not an identity provider',
     );
   }
+  const entity = chooseEntity(
+    candidates,
+    entityId,
+    'identity provider',
+    '--idp-entity-id',
+  );
+  const descriptor = section(entity.body, 'IDPSSODescriptor') ?? '';
 
   const certificates: string[] = [];
   const keyDescriptors = descriptor.matchAll(
@@ -102,16 +172,32 @@ export function readIdpMetadata(xml: string): IdpMetadata {
     ssoServices.find((s) => s.binding.endsWith(':HTTP-Redirect'))?.location ??
     ssoServices.find((s) => s.binding.endsWith(':HTTP-POST'))?.location;
 
-  return { entityId: entityIdOf(xml), certificates, ssoUrl };
+  return { entityId: entity.entityId, certificates, ssoUrl };
 }
 
-export function readSpMetadata(xml: string): SpMetadata {
-  const bearerAcsUrl = [
-    ...xml.matchAll(/<(?:[\w-]+:)?AssertionConsumerService\b[^>]*>/g),
-  ]
+/** The bearer ACS of an entity: the one at `/oauth/token/alias/…`. */
+function bearerAcsOf(body: string): string | undefined {
+  return [...body.matchAll(/<(?:[\w-]+:)?AssertionConsumerService\b[^>]*>/g)]
     .map(([tag]) => attribute(tag, 'Location'))
     .find((location) => location?.includes('/oauth/token/alias/'));
-  return { entityId: entityIdOf(xml), bearerAcsUrl };
+}
+
+/**
+ * The XSUAA service provider in `xml`: the entity publishing a bearer ACS,
+ * `spEntityId`'s when several do.
+ */
+export function readSpMetadata(xml: string, spEntityId?: string): SpMetadata {
+  const candidates = entitiesOf(xml).filter((entity) =>
+    bearerAcsOf(entity.body),
+  );
+  if (candidates.length === 0) return {};
+  const entity = chooseEntity(
+    candidates,
+    spEntityId,
+    'XSUAA service provider',
+    '--sp-entity-id',
+  );
+  return { entityId: entity.entityId, bearerAcsUrl: bearerAcsOf(entity.body) };
 }
 
 /** The fields `applySamlMetadata` may fill. */
@@ -147,7 +233,10 @@ export async function applySamlMetadata(
   if (options.protocol !== 'saml2') return;
 
   if (options.idpMetadata) {
-    const idp = readIdpMetadata(await load(options.idpMetadata));
+    const idp = readIdpMetadata(
+      await load(options.idpMetadata),
+      options.idpEntityId,
+    );
     options.idpEntityId ??= idp.entityId;
     options.idpSsoUrl ??= idp.ssoUrl;
     if (
@@ -169,7 +258,7 @@ export async function applySamlMetadata(
       : undefined);
   if (!spSource) return;
 
-  const sp = readSpMetadata(await load(spSource));
+  const sp = readSpMetadata(await load(spSource), options.spEntityId);
   if (!sp.bearerAcsUrl) {
     throw new Error(
       `${spSource} names no /oauth/token/alias/ endpoint: not an XSUAA service provider's metadata`,
