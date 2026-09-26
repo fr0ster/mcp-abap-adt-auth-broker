@@ -63,7 +63,7 @@ The broker writes tokens and the refresh token to the session store, never the c
 ## Error Handling
 
 - Provider errors propagate unchanged (class, `code`, `missingFields`, `cause`).
-- Store reads that fail are logged and treated as absent; whatever needed the value fails with its own message.
+- Store reads: `null` or `FILE_NOT_FOUND` is absence and the broker goes on to the next source; any other store failure is thrown unchanged — before the provider is asked when it happens in the reads that come before the token, after the provider answered and the token was written when it happens in the reads `persist()` makes to save the refresh token.
 - Store writes that fail propagate.
 
 ## Responsibilities Split

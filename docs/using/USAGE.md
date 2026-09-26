@@ -376,7 +376,7 @@ const tokens = await Promise.all(
 ## Error Handling
 
 - **Provider errors propagate unchanged** — the same object, with its class,
-  `code`, `missingFields` and `cause`: `ValidationError`, `RefreshError`,
+  `code`, `missingFields` and `cause`: `ValidationError`, `BrowserAuthError`,
   `AssertionValidationError` from `@mcp-abap-adt/auth-providers`, network
   errors (`ECONNREFUSED`, `ETIMEDOUT`, `ENOTFOUND`), and whatever the
   authorization strategy throws. The broker does not retry.
@@ -384,8 +384,9 @@ const tokens = await Promise.all(
   field 'serviceUrl'` — neither the session nor the service key has one.
 - **No token in the provider's result**: `Token provider did not return
   authorization token for destination "<name>"`.
-- **Store reads** that fail are logged and treated as absent; **store writes**
-  that fail propagate.
+- **Store reads**: `null` or `FILE_NOT_FOUND` means absent and the broker tries
+  the next source; any other store failure (an invalid or unreadable service
+  key, for instance) is thrown unchanged. **Store writes** that fail propagate.
 
 ```typescript
 import { ValidationError } from '@mcp-abap-adt/auth-providers';
