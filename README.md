@@ -513,13 +513,16 @@ The session's configuration, else the service key's, else `null`.
 
 - **Provider errors propagate unchanged** — the same object, with its class,
   `code`, `missingFields` and `cause`: auth-providers' `ValidationError`,
-  `RefreshError`, `AssertionValidationError`, network errors (`ECONNREFUSED`,
+  `BrowserAuthError`, `AssertionValidationError`, network errors (`ECONNREFUSED`,
   `ETIMEDOUT`, `ENOTFOUND`), and whatever your authorization strategy throws.
   The broker does not retry a failed call.
-- **Store reads do not stop the flow**: a missing (`FILE_NOT_FOUND`, logged at
-  debug) or unreadable entry (logged as a warning) is treated as absent, and
-  whatever needed it fails later with its own message — for instance the
-  missing `serviceUrl`.
+- **Store reads: absence is an answer, a failure is not.** A store that answers
+  `null`, or fails with `FILE_NOT_FOUND` (logged at debug), means "nothing
+  here", and the broker goes on to the next source. Any other store failure —
+  a service key that is not valid JSON, a file the process may not read — is
+  thrown unchanged, before the provider is asked. (The session stores of
+  auth-stores answer an unreadable session file with `null` themselves, so it
+  reads as absent before the broker sees it.)
 - **Store writes propagate**: a token that cannot be saved is an error.
 - **A provider result without a token** is an error.
 
