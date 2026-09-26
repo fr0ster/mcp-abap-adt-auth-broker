@@ -181,6 +181,15 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ### Fixed
 
+- **The CLIs' temporary session no longer outlives a failed login.** `mcp-auth`
+  and `mcp-sso` kept their temporary session store — which holds the client
+  secret — in `.tmp` beside the output file, the user's sessions folder, and
+  removed it only on success: a failed or interrupted login left the secret
+  there, and two runs at once shared one directory that each removed on exit.
+  Each run now gets a private directory under the OS temp dir (mode 0700),
+  removed on any exit, error and `SIGINT`/`SIGTERM`/`SIGHUP` included.
+  Measured: after a refused login (exit 1) and after `SIGTERM` (exit 143) the
+  directory is gone, and no `.tmp` appears beside the output.
 - **`mcp-auth` writes the refresh token the login obtained.** It wrote the
   output from the authorization config it read *before* the login — the
   service key's, which holds no refresh token — while the refresh token XSUAA

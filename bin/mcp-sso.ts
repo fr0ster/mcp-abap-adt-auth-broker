@@ -59,6 +59,7 @@ import {
   readManualInput,
 } from './mcpSsoConfig';
 import { applySamlMetadata } from './samlMetadata';
+import { createWorkDir } from './workDir';
 
 function getVersion(): string {
   try {
@@ -768,10 +769,8 @@ async function main() {
     }
   }
 
-  const tempSessionDir = path.join(path.dirname(resolvedOutputPath), '.tmp');
-  if (!fs.existsSync(tempSessionDir)) {
-    fs.mkdirSync(tempSessionDir, { recursive: true });
-  }
+  // Removed on any exit, error and signal included: it holds the secret.
+  const tempSessionDir = createWorkDir('mcp-sso');
 
   if (resolvedEnvPath && fs.existsSync(resolvedEnvPath)) {
     const tempEnvPath = path.join(tempSessionDir, `${destination}.env`);
@@ -949,12 +948,6 @@ async function main() {
       'utf8',
     );
     console.log(`✅ JSON file created: ${resolvedOutputPath}`);
-  }
-
-  try {
-    fs.rmSync(tempSessionDir, { recursive: true, force: true });
-  } catch {
-    // ignore cleanup errors
   }
 }
 

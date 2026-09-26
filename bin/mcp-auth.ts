@@ -45,6 +45,7 @@ import {
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
+import { createWorkDir } from './workDir';
 
 /**
  * A person completes this login at a browser; the provider's own default
@@ -543,6 +544,13 @@ function runMcpSso(args: string[]): void {
   process.exit(result.status ?? 1);
 }
 
+/** The run's private working directory, created on first use and removed on any exit. */
+let runWorkDir: string | undefined;
+function workDir(): string {
+  runWorkDir ??= createWorkDir('mcp-auth');
+  return runWorkDir;
+}
+
 async function main() {
   const rawArgs = process.argv.slice(2);
   const subcommand = rawArgs[0];
@@ -673,8 +681,7 @@ async function main() {
         >;
 
         // Create temp file with unwrapped content to make it compatible with standard stores
-        const tempDir = path.join(path.dirname(resolvedOutputPath), '.tmp');
-        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+        const tempDir = workDir();
         const tempKeyPath = path.join(tempDir, `${destination}.json`);
         fs.writeFileSync(tempKeyPath, JSON.stringify(effectiveJson, null, 2));
 
@@ -750,10 +757,7 @@ async function main() {
     }
 
     // Create temporary session store (work off a temp copy of env file)
-    const tempSessionDir = path.join(path.dirname(resolvedOutputPath), '.tmp');
-    if (!fs.existsSync(tempSessionDir)) {
-      fs.mkdirSync(tempSessionDir, { recursive: true });
-    }
+    const tempSessionDir = workDir();
     if (envExists && resolvedEnvPath) {
       const tempEnvPath = path.join(tempSessionDir, `${destination}.env`);
       fs.copyFileSync(resolvedEnvPath, tempEnvPath);
@@ -964,13 +968,6 @@ async function main() {
       if (finalServiceUrl) {
         console.log(`   - serviceUrl: ${finalServiceUrl}`);
       }
-    }
-
-    // Cleanup temp directory
-    try {
-      fs.rmSync(tempSessionDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
     }
 
     // Exit explicitly to close any open handles (e.g., OAuth callback server)
