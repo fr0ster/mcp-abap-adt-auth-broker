@@ -155,6 +155,12 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
     fills the same three.
   - An explicit option always wins, and trust is replaced, never widened: a
     `--idp-cert` means no certificate from the metadata is trusted beside it.
+  - Federation metadata — an `EntitiesDescriptor` holding several entities —
+    is read per entity: the entityID, keys and SSO URL all come from the one
+    identity provider. With several, `--idp-entity-id` names it, and without
+    it the run stops listing them; a named entity the metadata does not
+    describe is refused rather than filled from another one. The same holds
+    for the service provider's metadata and `--sp-entity-id`.
     Metadata carries the certificates assertions are verified against, so a
     URL must be https (plain http only for loopback, i.e. a local test IdP).
 
