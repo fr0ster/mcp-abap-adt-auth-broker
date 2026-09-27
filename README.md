@@ -26,8 +26,9 @@ authorization code or client credentials) and `mcp-sso` (OIDC and SAML single si
 npm install @mcp-abap-adt/auth-broker
 ```
 
-Requires Node.js 22 or 24 (`engines: "^22 || ^24"`), the versions SAP BTP's Cloud Foundry
-Node.js buildpack offers.
+Requires Node.js 22, 24 or 26 (`engines: "^22 || ^24 || ^26"`): 22 and 24 are
+the versions SAP BTP's Cloud Foundry Node.js buildpack offers, and 26 is
+supported as well.
 
 ## Usage
 
@@ -206,7 +207,7 @@ const connection = new JwtAbapConnection(config, tokenRefresher);
 5. The broker no longer writes the client secret into the session store. Read
    it from the service key store if you relied on finding it in the session.
 6. `refreshToken()` now forces a new token; it used to return `getToken()`'s.
-7. Node.js 22 or 24; SAML runs need the IdP trust (see *Migrating `mcp-sso`
+7. Node.js 22, 24 or 26; SAML runs need the IdP trust (see *Migrating `mcp-sso`
    SAML runs from 2.2.0*).
 
 ## Configuration
@@ -857,7 +858,7 @@ With 4.x every `mcp-sso` SAML run (`bearer`, `saml2 --flow pure`, and `mcp-auth 
    `--assertion-flow manual`. For any other `--assertion` from an SP-initiated login:
    `--authn-request-id`.
 
-Node.js 22 or 24 is required.
+Node.js 22, 24 or 26 is required.
 
 ### Utility Script
 
