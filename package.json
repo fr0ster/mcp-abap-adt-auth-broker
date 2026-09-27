@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/auth-broker",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "description": "Per-destination token broker for SAP BTP and ABAP: sessions and service keys from stores, tokens from an injected provider, results persisted - plus the mcp-auth and mcp-sso CLIs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -64,7 +64,7 @@
     "mcp-sso": "./dist/bin/mcp-sso.js"
   },
   "engines": {
-    "node": "^22 || ^24"
+    "node": "^22 || ^24 || ^26"
   },
   "dependencies": {
     "@mcp-abap-adt/auth-providers": "^4.2.0",
