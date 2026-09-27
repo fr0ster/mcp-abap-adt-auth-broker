@@ -9,7 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
 
-## [Unreleased]
+## [3.0.4] - 2026-09-28
+
+### Fixed
+
+- **`mcp-sso` did not start from an installed package.** It imports
+  `@mcp-abap-adt/logger`, which was only a dev dependency, so every command —
+  `--version` and `help` included — died with `Cannot find module
+  '@mcp-abap-adt/logger'`. It worked in this repository, where dev dependencies
+  are installed. `@mcp-abap-adt/logger` is now a runtime dependency. `mcp-auth`
+  was not affected. Found by installing the 3.0.3 tarball into an empty
+  directory and running each bin.
 
 ### Tests
 
