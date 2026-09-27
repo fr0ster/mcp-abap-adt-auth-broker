@@ -4,7 +4,8 @@ Minimal CAP service for testing XSUAA auth flows used by `mcp-sso`.
 
 ## What’s Included
 
-- CAP Node.js app with a simple OData service
+- CAP Node.js app with a simple OData service (`@sap/cds` 10, which needs
+  Node.js 22 or later)
 - XSUAA config with enabled grant types (auth code + SAML bearer)
 - MTA deployment files
 
