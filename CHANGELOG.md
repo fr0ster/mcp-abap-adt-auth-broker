@@ -11,6 +11,12 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+## [3.0.3] - 2026-09-27
+
+### Added
+
+- **`help` and `version` as commands** for `mcp-auth` and `mcp-sso`: `help` / `--help` / `-h` and `version` / `--version` / `-v` — the same set in every CLI of the family, each answering before anything starts or connects. Both answered "Unknown command".
+
 ## [3.0.2] - 2026-09-27
 
 ### Changed

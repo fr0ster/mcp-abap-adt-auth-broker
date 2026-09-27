@@ -214,8 +214,8 @@ function showHelp(): void {
   );
   console.log('  send their own request unless --idp-initiated is given.');
   console.log('');
-  console.log('  --version, -v              Show version number');
-  console.log('  --help, -h                 Show this help message');
+  console.log('  version, --version, -v     Show version number');
+  console.log('  help, --help, -h           Show this help message');
 }
 
 function parseScopes(value?: string): string[] | undefined {
@@ -275,12 +275,21 @@ function createCliLogger(prefix: string = 'SSO'): ILogger {
 function parseArgs(): McpSsoOptions | null {
   let args = process.argv.slice(2);
 
-  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+  if (
+    args.length === 0 ||
+    args[0] === 'help' ||
+    args.includes('--help') ||
+    args.includes('-h')
+  ) {
     showHelp();
     process.exit(0);
   }
 
-  if (args.includes('--version') || args.includes('-v')) {
+  if (
+    args[0] === 'version' ||
+    args.includes('--version') ||
+    args.includes('-v')
+  ) {
     console.log(getVersion());
     process.exit(0);
   }

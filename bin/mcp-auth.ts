@@ -184,8 +184,8 @@ function showHelp(): void {
   console.log('  --assertion <base64>       A SAMLResponse obtained elsewhere');
   console.log('  --assertion-flow <flow>    browser|manual|assertion');
   console.log('');
-  console.log('  --version, -v          Show version number');
-  console.log('  --help, -h             Show this help message');
+  console.log('  version, --version, -v Show version number');
+  console.log('  help, --help, -h       Show this help message');
   console.log('');
   console.log('Examples:');
   console.log('  # Auth code (default flow via service key)');
@@ -293,12 +293,21 @@ function parseArgs(
   args: string[] = process.argv.slice(2),
 ): McpAuthOptions | null {
   // Handle --version and --help first
-  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+  if (
+    args.length === 0 ||
+    args[0] === 'help' ||
+    args.includes('--help') ||
+    args.includes('-h')
+  ) {
     showHelp();
     process.exit(0);
   }
 
-  if (args.includes('--version') || args.includes('-v')) {
+  if (
+    args[0] === 'version' ||
+    args.includes('--version') ||
+    args.includes('-v')
+  ) {
     console.log(getVersion());
     process.exit(0);
   }
@@ -553,6 +562,16 @@ function workDir(): string {
 
 async function main() {
   const rawArgs = process.argv.slice(2);
+  // `help` and `version` as commands, like every CLI in the family; they answer
+  // before any subcommand is dispatched.
+  if (rawArgs[0] === 'help') {
+    showHelp();
+    process.exit(0);
+  }
+  if (rawArgs[0] === 'version') {
+    console.log(getVersion());
+    process.exit(0);
+  }
   const subcommand = rawArgs[0];
   const hasSubcommand =
     subcommand && !subcommand.startsWith('-') && subcommand.length > 0;
