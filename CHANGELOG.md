@@ -11,6 +11,14 @@ Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the co
 
 ## [Unreleased]
 
+### Tests
+
+- **`tests/sso-demo` moves to CAP 10**: `@sap/cds` `^10`, `@sap/cds-dk` `^10`,
+  `@cap-js/sqlite` `^3`. `npm audit` there goes from 12 findings (2 critical,
+  6 high) to 0: they sat in copies nested under `@sap/cds-dk` 9, which no
+  update inside 9.x could reach. `cds build --production` builds the service as
+  before. The demo is not part of the published package.
+
 ## [3.0.3] - 2026-09-27
 
 ### Added

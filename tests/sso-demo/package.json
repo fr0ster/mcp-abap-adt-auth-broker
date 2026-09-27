@@ -2,12 +2,12 @@
   "name": "sso-demo",
   "version": "1.0.0",
   "dependencies": {
-    "@sap/cds": "^9",
+    "@sap/cds": "^10",
     "@sap/xssec": "^4"
   },
   "devDependencies": {
-    "@cap-js/sqlite": "^2",
-    "@sap/cds-dk": "^9"
+    "@cap-js/sqlite": "^3",
+    "@sap/cds-dk": "^10"
   },
   "scripts": {
     "start": "cds-serve",
