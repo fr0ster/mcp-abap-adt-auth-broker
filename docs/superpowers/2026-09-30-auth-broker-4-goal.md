@@ -42,17 +42,20 @@ afterwards; and the token API behaves as in 3.x.
 - **No implicit defaults** (auth-providers 5, rule 7): every collaborator a
   provider needs — the interactive strategy, the device-code presenter, the
   SAML validator and replay store, the SNC locator and probes — is supplied
-  explicitly. The CLIs (`mcp-auth`, `mcp-sso`, `generate-env-from-service-key`)
-  stop relying on 4.x defaults: the device-code presenter, the SAML
-  `assertionValidator` in place of `idpCertificates`, the manual strategy's
-  `read(prompt, signal)`.
+  explicitly.
+- **The commands move to `@mcp-abap-adt/auth-broker-cli`.** `mcp-auth`,
+  `mcp-sso` and `generate-env-from-service-key` leave this package, which
+  becomes the library alone (no `bin`). The CLI package depends on this one
+  and on `@mcp-abap-adt/auth-stores`, and stops relying on auth-providers
+  4.x defaults: the device-code presenter, the SAML `assertionValidator` in
+  place of `idpCertificates`, the manual strategy's `read(prompt, signal)`.
+  The library's API is unaffected; only the install command for the CLIs
+  changes.
 - **Dependencies:** `@mcp-abap-adt/auth-providers` ^5.0.1,
   `@mcp-abap-adt/interfaces-auth` ^3.0.0, `@mcp-abap-adt/interfaces-auth-sap`
-  ^1.1.0, `@mcp-abap-adt/auth-stores` ^2.0.0. auth-stores stays a runtime
-  dependency: the CLIs this package ships (`mcp-auth`, `mcp-sso`, in `bin`)
-  import its file stores at run time, and a clean install without it would
-  fail them with `MODULE_NOT_FOUND`. `src/` never imports it (hold 0); moving
-  the CLIs into a package of their own is not part of this release.
+  ^1.1.0. `@mcp-abap-adt/auth-stores` leaves the runtime dependencies with
+  the commands: the library never imports it (hold 0); its tests may use it
+  as a dev dependency.
 - **The session's `authType` is not overwritten.** `persist()` writes `jwt` or
   `saml` over whatever the session said; a `basic` or `snc` destination must
   stay what it is.
@@ -119,6 +122,12 @@ that builds its own.
     refused, so the broker always declares it.
 4. **This package, 4.0.0** — in this PR: goal → review → spec → review → plan →
    review → implementation → external review → merge → release. ← now
+4a. `@mcp-abap-adt/auth-broker-cli` 1.0.0 — the commands from 3.x, on broker
+    4 and auth-stores 2; released right after 4.0.0, so there is no gap in
+    which neither package ships `mcp-auth`. Its check installs the packed
+    tarball into an empty directory and runs each bin (3.0.4 shipped a bin
+    that died on `MODULE_NOT_FOUND`).
 5. `mcp-abap-adt` — the provider from the broker into the connector; the
    per-auth-type construction and the broker 3.x call removed. Live check:
    basic over HTTP and RFC, a token destination, SNC over RFC — one code path.
+   Its docs install `@mcp-abap-adt/auth-broker-cli` for `mcp-auth`.
