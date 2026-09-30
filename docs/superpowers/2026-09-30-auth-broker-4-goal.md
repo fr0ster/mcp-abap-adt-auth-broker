@@ -44,7 +44,12 @@ afterwards; and the token API behaves as in 3.x.
   SAML validator and replay store, the SNC locator and probes — is supplied
   explicitly.
 - **The commands move to `@mcp-abap-adt/auth-broker-cli`**, a second package
-  in this repository (decided 2026-09-30). `mcp-auth`,
+  in this repository (decided 2026-09-30). The repository takes the layout of
+  `mcp-abap-adt-interfaces` and `llm-agent` (decided 2026-10-01): a private
+  workspace root, every package under `packages/` —
+  `packages/auth-broker` (the library, still `@mcp-abap-adt/auth-broker`) and
+  `packages/auth-broker-cli` — and `release:publish` publishing the packages
+  that changed, as `mcp-abap-adt-interfaces`' tools do. `mcp-auth`,
   `mcp-sso` and `generate-env-from-service-key` leave this package, which
   becomes the library alone (no `bin`). The CLI package depends on this one
   and on `@mcp-abap-adt/auth-stores`, and stops relying on auth-providers
