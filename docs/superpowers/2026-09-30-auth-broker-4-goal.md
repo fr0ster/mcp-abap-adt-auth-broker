@@ -92,8 +92,13 @@ that builds its own.
    destination should state it.
 3. **Caching.** One provider per destination for the broker's life (as the
    factory path caches today), shared by `getProvider` and the token API?
-4. **Certificates.** `CertificateAuthProvider` needs material (`fromFiles`):
-   in scope, and where its paths come from.
+4. ~~Certificates~~ — decided (2026-09-30): out of scope. `IConnectionConfig`
+   carries no certificate fields, and no system with a certificate mapping is
+   at hand. A later step of its own: the fields in a contract (possibly a
+   more general one than `interfaces-auth-sap` — client-certificate logon is
+   not ABAP-specific), the stores, the broker, and a stand — Keycloak with a
+   test CA, X.509 user logon and mTLS client authentication (RFC 8705).
+   A consumer that needs certificates now passes its own provider factory.
 5. **What the store contract must carry.** `basic` needs `username` /
    `password`, `snc` its four fields, a certificate its material — whether
    `IConnectionConfig` (interfaces-auth-sap 1.1.0) already carries each, and
