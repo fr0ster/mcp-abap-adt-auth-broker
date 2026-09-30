@@ -55,8 +55,8 @@ and `calm` (`mcp-calm-server`). *(inference)* marks what was not verified;
    (which fields), never the content. So a write fails for two reasons only —
    a form the caller got wrong (a broker bug, the same on every call, caught by
    the broker's tests) or the storage itself (disk, permissions, a locked file,
-   an unreachable database) — and neither says the token is bad. auth-providers
-   5.1.0 retries a failed write until it succeeds (§1.3).
+   an unreachable database) — and neither says the token is bad. The broker,
+   which owns every store call, retries a failed write itself (§6).
 
 ## 1. Prerequisites
 
@@ -208,18 +208,6 @@ changes: a constructor is called by whoever knows the class, so its config is
 the class's, not `interfaces-auth`'s. Dependents on `^5.0.1` (connection)
 take it without a release.
 
-**A failed `onTokens` is retried, not forgotten.** Today a failure is logged
-and the result is never handed to `onTokens` again (`BaseTokenProvider.ts:362-375`),
-so a token the store could not write stays unwritten until the next renewal.
-In 5.1.0 the provider keeps that result as pending and, at the start of every
-later moment (`prepare`, `authorize`, `rejected`, `getTokens`,
-`refreshTokens`), hands it to `onTokens` once more before anything else, until
-a call succeeds; a newer result replaces a pending one. The token is used all
-along — a failed write never fails the authentication — and each failure is
-logged by class name, as now. `onTokens` is called again only after it failed,
-so a consumer whose hook succeeds sees exactly 5.0's calls
-(`tokenProviderContract.test.ts:186-198` keep passing).
-
 Neither the broker nor the CLI can be released before these three; §9 gives
 the order.
 
@@ -249,6 +237,7 @@ class AuthBroker {
   createTokenRefresher(destination: string): ITokenRefresher;    // 3.x
   getAuthorizationConfig(destination: string): Promise<IAuthorizationConfig | null>; // 3.x
   getConnectionConfig(destination: string): Promise<IConnectionConfig | null>;       // 3.x
+  flush(): Promise<void>;                                        // new: pending writes, §6
 }
 
 class DestinationConfigError extends Error {
@@ -483,14 +472,34 @@ it belongs to, for `jwt` and `saml` alike; a provider seeded with a stored JWT
 still reads `exp` itself (`src/AuthBroker.ts:292-293`), the stored value
 serving the tokens that carry none — cookies above all.
 
-**A failed write inside `onTokens` does not fail the authentication; it is
-retried until the store takes it** (H3, auth-providers 5.1.0, §1.3). The
-failure is the storage's, not the token's (fact 5), so the connector goes on
-with the token it holds, and every later moment of that provider first hands
-the pending result to the store again. What a provider obtains reaches the
-store as soon as the store can write. The token API reports a failed write to
-its caller, as 3.x did: the broker records it against that result (a
-`WeakMap<ITokenResult, unknown>`, §9).
+**A failed write does not fail the authentication; the broker retries it on
+its own until the store takes it** (H3). The failure is the storage's or a
+broker bug, never the token's (fact 5), so the connector goes on with the token
+it holds. The retry does not wait for the provider to be called again — a
+request may be the process's last:
+
+- the broker's `onTokens` never throws; a failed `persist` leaves the result
+  pending for that destination and schedules another attempt with a growing
+  delay (one second, doubling, capped at one minute) on a timer that is
+  `unref()`ed, so it never keeps a process alive;
+- a newer result for the destination replaces the pending one — only the
+  latest is ever written; attempts for one destination never overlap, and a
+  write from the token API or a later `onTokens` goes through the same queue
+  (§7);
+- each failure is logged by class name (no message: the store holds tokens);
+- **`flush()`** awaits every pending write with one more attempt each and
+  rejects with the failures, by destination, if any remain — the consumer
+  calls it on shutdown (the server on `SIGTERM` and before a stdio transport
+  closes) to know whether its tokens are stored. The CLI calls it before it
+  exits and exits non-zero on a failure.
+
+What a provider obtains reaches the store once the store can write, while the
+process lives; a storage that stays broken until the process ends cannot be
+written by any design, and `flush()` is how the consumer learns of it. The
+token API reports a failed write to its caller, as 3.x did: the broker records
+it against that result (a `WeakMap<ITokenResult, unknown>`, §9) and keeps
+retrying it as above. auth-providers is not changed for this: its best-effort
+`onTokens` (`BaseTokenProvider.ts:362-375`) is exactly what the broker needs.
 
 ## 7. Caching and concurrency (goal open 3)
 
@@ -791,9 +800,12 @@ providers real, token endpoints local):**
   surfaces from `getToken`;
 - a failed write through a connector: a connection 10 connector with the
   provider `getProvider` returned and a session store whose write fails once —
-  the 401 renewal succeeds and the request is resent with the new token; the
-  next request first writes the same result again (no second refresh, no
-  login), and the store then holds that token;
+  the 401 renewal succeeds, the request is resent with the new token, and with
+  no further call to the provider (fake timers) the broker writes the same
+  result again and the store holds it; no second refresh, no login;
+- `flush()`: resolves once pending writes land; rejects naming the destination
+  when the store still fails; a newer result replaces a pending one; the retry
+  timer does not keep the process alive (it is `unref()`ed);
 - caching: concurrent `getProvider` calls build once; a failed build is retried;
   `getProvider` and `getToken` share one provider and one renewal;
 - every row of §9, carried over from today's suite.
@@ -822,7 +834,7 @@ printing why. No configuration framework.
 
 **Load-bearing:** each rule is broken once on purpose (the declared `authType`
 in `persist`, the `basic`/`snc` guard, the H4 branch, the promise cache, the
-the retried write, the pair table) and its test must go red, then
+the broker's own retry of a failed write, the pair table) and its test must go red, then
 restored.
 
 **CLI package:** today's `mcpSsoConfig` / `samlMetadata` / `mcpSsoSamlProviders`
