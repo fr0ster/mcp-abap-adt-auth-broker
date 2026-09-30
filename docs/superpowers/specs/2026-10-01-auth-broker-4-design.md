@@ -51,8 +51,12 @@ and `calm` (`mcp-calm-server`). *(inference)* marks what was not verified;
 5. **`onTokens` is best effort.** `BaseTokenProvider` awaits it after every new
    token and swallows its failure (`auth-providers src/providers/BaseTokenProvider.ts:362-375`);
    3.x `getToken` lets a store failure reach its caller (`src/AuthBroker.ts:186-193`).
-   Best effort cannot meet H3 — a token the store did not take would be used —
-   so auth-providers 5.1.0 adds a strict mode (§1.3), and the broker uses it.
+   A store does not judge a token: it checks the form of what it is given
+   (which fields), never the content. So a write fails for two reasons only —
+   a form the caller got wrong (a broker bug, the same on every call, caught by
+   the broker's tests) or the storage itself (disk, permissions, a locked file,
+   an unreachable database) — and neither says the token is bad. auth-providers
+   5.1.0 retries a failed write until it succeeds (§1.3).
 
 ## 1. Prerequisites
 
@@ -204,23 +208,17 @@ changes: a constructor is called by whoever knows the class, so its config is
 the class's, not `interfaces-auth`'s. Dependents on `^5.0.1` (connection)
 take it without a release.
 
-**`onTokensFailure?: 'log' | 'refuse'`** on `TokenProviderHooks`, beside
-`onTokens`. `'log'` is what 5.0 does and stays what an absent option means, so
-no consumer changes behaviour (`BaseTokenProvider.ts:362-375`,
-`tokenProviderContract.test.ts:198` keep passing). `'refuse'`: a new token is
-used only once `onTokens` has taken it —
-- when `onTokens` fails, the provider does not present the new token; the
-  moment that obtained it (`prepare`, `authorize`, `rejected`) answers Oops
-  with fixed wording ("the new credential could not be stored", no message of
-  the failure — rule 2), and `getTokens` / `refreshTokens` reject;
-- the provider keeps that result as pending — not discarded, since a rotated
-  refresh token spent to get it cannot be spent again — and every later call
-  first hands the pending result to `onTokens` once more; only when that
-  succeeds does the provider present it;
-- the credential presented before stays unused as well: the provider presents
-  nothing until the store has taken the new one.
-The broker passes `'refuse'` explicitly (H2). Changing `onTokens`' own
-semantics instead would be a major (6.0.0) and a release of connection.
+**A failed `onTokens` is retried, not forgotten.** Today a failure is logged
+and the result is never handed to `onTokens` again (`BaseTokenProvider.ts:362-375`),
+so a token the store could not write stays unwritten until the next renewal.
+In 5.1.0 the provider keeps that result as pending and, at the start of every
+later moment (`prepare`, `authorize`, `rejected`, `getTokens`,
+`refreshTokens`), hands it to `onTokens` once more before anything else, until
+a call succeeds; a newer result replaces a pending one. The token is used all
+along — a failed write never fails the authentication — and each failure is
+logged by class name, as now. `onTokens` is called again only after it failed,
+so a consumer whose hook succeeds sees exactly 5.0's calls
+(`tokenProviderContract.test.ts:186-198` keep passing).
 
 Neither the broker nor the CLI can be released before these three; §9 gives
 the order.
@@ -485,14 +483,14 @@ it belongs to, for `jwt` and `saml` alike; a provider seeded with a stored JWT
 still reads `exp` itself (`src/AuthBroker.ts:292-293`), the stored value
 serving the tokens that carry none — cookies above all.
 
-**A failed write inside `onTokens` fails the renewal** (H3). The broker builds
-every token provider with `onTokensFailure: 'refuse'` (§1.3): a token the store
-did not take is never used — the connector's `prepare()`, request or
-`rejected()` answers Oops "the new credential could not be stored", the request
-fails, and the next attempt first retries the write of the same result before
-anything is sent. So after any request the connector sent with a renewed token,
-the store holds that token. The token API sees the same failure as a rejected
-`getTokens()` / `refreshTokens()` and lets it reach the caller, as 3.x did.
+**A failed write inside `onTokens` does not fail the authentication; it is
+retried until the store takes it** (H3, auth-providers 5.1.0, §1.3). The
+failure is the storage's, not the token's (fact 5), so the connector goes on
+with the token it holds, and every later moment of that provider first hands
+the pending result to the store again. What a provider obtains reaches the
+store as soon as the store can write. The token API reports a failed write to
+its caller, as 3.x did: the broker records it against that result (a
+`WeakMap<ITokenResult, unknown>`, §9).
 
 ## 7. Caching and concurrency (goal open 3)
 
@@ -551,10 +549,10 @@ Certificates are out of scope (goal, open 4): no field is added for them.
 
 **Where the token API writes.** With a consumer `provider`, exactly as 3.x:
 `persist` after every `getTokens()` / `refreshTokens()`, cache hits included.
-With a provider the broker built, `onTokens` has written every new token, so the
-token API writes nothing itself; a failed write rejects `getTokens()` /
-`refreshTokens()` (§6), so a store failure still reaches the caller. A cache
-hit is the token the session already holds or one `onTokens` wrote.
+With a provider the broker built, `onTokens` writes every new token, so the
+token API writes nothing itself; if the write of the result it received
+failed, the token API throws that failure (§6) — a store failure still reaches
+the caller — while the provider keeps retrying the write.
 
 **Design decision — a `basic` or `snc` destination has no token API.** The goal
 says the session's `authType` is not overwritten; 3.x asked the provider and
@@ -793,10 +791,9 @@ providers real, token endpoints local):**
   surfaces from `getToken`;
 - a failed write through a connector: a connection 10 connector with the
   provider `getProvider` returned and a session store whose write fails once —
-  a 401 renewal answers Oops, the request fails and nothing is sent with the
-  unstored token; the next request retries the write of the same result
-  (no second refresh, no login), succeeds, and the store holds the token that
-  request carried;
+  the 401 renewal succeeds and the request is resent with the new token; the
+  next request first writes the same result again (no second refresh, no
+  login), and the store then holds that token;
 - caching: concurrent `getProvider` calls build once; a failed build is retried;
   `getProvider` and `getToken` share one provider and one renewal;
 - every row of §9, carried over from today's suite.
@@ -825,7 +822,7 @@ printing why. No configuration framework.
 
 **Load-bearing:** each rule is broken once on purpose (the declared `authType`
 in `persist`, the `basic`/`snc` guard, the H4 branch, the promise cache, the
-`onTokensFailure: 'refuse'` on the providers the broker builds, the pair table) and its test must go red, then
+the retried write, the pair table) and its test must go red, then
 restored.
 
 **CLI package:** today's `mcpSsoConfig` / `samlMetadata` / `mcpSsoSamlProviders`
