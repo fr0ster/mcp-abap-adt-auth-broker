@@ -109,12 +109,11 @@ that builds its own.
 1. ~~`interfaces-auth` 3.0.0, `interfaces-auth-sap` 1.1.0~~ — released.
 2. ~~`@mcp-abap-adt/auth-providers` 5.0.1~~ — released.
 3. ~~`@mcp-abap-adt/connection` 10.0.2~~ — released.
-3a. `@mcp-abap-adt/auth-stores` on `interfaces-auth` ^3.0.0 and
-    `interfaces-auth-sap` ^1.1.0 — its own PR and release first: a store still
-    on the 2.x contracts beside a broker on 3.x puts two copies of the
-    contract packages in a consumer, whose types do not mix. Whether the file
-    stores also read and write the fields 1.1.0 added (`authType: 'snc'`,
-    `sncPartnerName`, `sncQop`, `sncLib`, `sncMyName`) is decided there.
+3a. ~~`@mcp-abap-adt/auth-stores` 2.0.0~~ — released: on `interfaces-auth`
+    ^3.0.0 and `interfaces-auth-sap` ^1.1.0; the ABAP session stores keep
+    `authType` (`SAP_AUTH_TYPE`), read and write the SNC fields, and hold one
+    credential per session — a config carrying two without `authType` is
+    refused, so the broker always declares it.
 4. **This package, 4.0.0** — in this PR: goal → review → spec → review → plan →
    review → implementation → external review → merge → release. ← now
 5. `mcp-abap-adt` — the provider from the broker into the connector; the
