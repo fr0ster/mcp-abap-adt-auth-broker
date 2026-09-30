@@ -48,7 +48,8 @@ afterwards; and the token API behaves as in 3.x.
   `read(prompt, signal)`.
 - **Dependencies:** `@mcp-abap-adt/auth-providers` ^5.0.1,
   `@mcp-abap-adt/interfaces-auth` ^3.0.0, `@mcp-abap-adt/interfaces-auth-sap`
-  ^1.1.0.
+  ^1.1.0. `@mcp-abap-adt/auth-stores` leaves the runtime dependencies: `src/`
+  never imports it; only the CLIs and the tests use its file stores.
 - **The session's `authType` is not overwritten.** `persist()` writes `jwt` or
   `saml` over whatever the session said; a `basic` or `snc` destination must
   stay what it is.
@@ -60,6 +61,14 @@ that builds its own.
 
 ## Holds throughout
 
+0. **The broker speaks the store contracts, never a storage.** A destination is
+   a name the stores resolve — a service key, a session, anything a store
+   holds. The broker reads and writes only through `ISessionStore` /
+   `IServiceKeyStore` (`@mcp-abap-adt/interfaces-auth-sap`), so any
+   implementation serves: files, memory, a database, a message log.
+   `@mcp-abap-adt/auth-stores` is the file implementation shipped beside it,
+   not something the broker knows. What `getProvider` needs and the contract
+   cannot carry is added to `interfaces-auth-sap`, not to a store.
 1. **The destination's configuration states the provider; nothing is
    inferred** — not from the host, not from the shape of a service key.
 2. **No implicit defaults.** The broker passes every collaborator explicitly;
@@ -85,14 +94,22 @@ that builds its own.
    factory path caches today), shared by `getProvider` and the token API?
 4. **Certificates.** `CertificateAuthProvider` needs material (`fromFiles`):
    in scope, and where its paths come from.
-5. **`auth-stores`.** It still depends on interfaces-auth ^2; whether it needs a
-   release first, or its types are unchanged for what the broker uses.
+5. **What the store contract must carry.** `basic` needs `username` /
+   `password`, `snc` its four fields, a certificate its material — whether
+   `IConnectionConfig` (interfaces-auth-sap 1.1.0) already carries each, and
+   what a store must accept back when a provider renews.
 
 ## Path
 
 1. ~~`interfaces-auth` 3.0.0, `interfaces-auth-sap` 1.1.0~~ — released.
 2. ~~`@mcp-abap-adt/auth-providers` 5.0.1~~ — released.
 3. ~~`@mcp-abap-adt/connection` 10.0.2~~ — released.
+3a. `@mcp-abap-adt/auth-stores` on `interfaces-auth` ^3.0.0 and
+    `interfaces-auth-sap` ^1.1.0 — its own PR and release first: a store still
+    on the 2.x contracts beside a broker on 3.x puts two copies of the
+    contract packages in a consumer, whose types do not mix. Whether the file
+    stores also read and write the fields 1.1.0 added (`authType: 'snc'`,
+    `sncPartnerName`, `sncQop`, `sncLib`, `sncMyName`) is decided there.
 4. **This package, 4.0.0** — in this PR: goal → review → spec → review → plan →
    review → implementation → external review → merge → release. ← now
 5. `mcp-abap-adt` — the provider from the broker into the connector; the
