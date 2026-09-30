@@ -349,8 +349,16 @@ broker's H1 depends on it):**
   This is the store stating its own format — a UAA service key and an XSUAA
   session hold nothing but OAuth credentials and tokens — not a guess between
   alternatives; the broker still reads only `authType`.
+- **A `jwt` session with no token yet** — a destination seeded before its
+  first login — is kept by both ABAP session stores and answered from
+  `getConnectionConfig` with its `authType` and `serviceUrl`. Measured on
+  2.0.0 (2026-10-01; `saveSession(d, { serviceUrl, authType: 'jwt', uaaUrl,
+  uaaClientId, uaaClientSecret })`): `AbapSessionStore` writes the file and
+  keeps the authorization config, but `getConnectionConfig` answers `null`;
+  `SafeAbapSessionStore` throws "missing required field". The two stores
+  disagree, and neither lets the broker read what such a destination states.
 
-Both are prerequisites of 4.0.0: §14 G2.
+All three are prerequisites of 4.0.0: §14 G2.
 
 ## 8. The token API keeps 3.x (H5)
 
@@ -656,7 +664,9 @@ the smoke check of §9.
   certificates: the trust fields in a contract, the stores, the broker.
 - **G2 — two prerequisites before step 4.** *3b:* `interfaces-auth-sap` 1.2.0
   (`IConnectionConfig.grantType`). *3c:* `auth-stores` 2.1.0 (`grantType`; the
-  XSUAA session stores and both service key stores state `authType: 'jwt'`).
+  XSUAA session stores and both service key stores state `authType: 'jwt'`;
+  both ABAP session stores keep a `jwt` session with no token yet and answer
+  it from `getConnectionConfig` — §7).
   The goal's dependency line becomes `interfaces-auth-sap ^1.2.0`, and the CLI
   depends on `auth-stores ^2.1.0`.
 - **G3 — H5 has one exception, which the goal already implies.** The token API
