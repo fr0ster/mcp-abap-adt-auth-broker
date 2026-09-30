@@ -165,12 +165,19 @@ stores able to hold what §1.1 adds and state what §3 reads.
    `AbapSessionStore` writes the file and keeps the authorization config, but
    `getConnectionConfig` answers `null`; `SafeAbapSessionStore` throws "missing
    required field". The two stores disagree, and neither lets the broker read
-   what such a destination states. The XSUAA session stores behave the same
-   way for a tokenless session *(inference — not measured)*.
+   what such a destination states. The XSUAA session stores are stricter:
+   `XsuaaSessionStore` and `SafeXsuaaSessionStore` both throw "missing
+   required field" on it (measured, same date and call); and for a session
+   they do keep, both answer `getConnectionConfig` with `authType` undefined
+   (measured) — item 3.
 5. **A public client** — an `IAuthorizationConfig` with `uaaClientSecret: ''`
    — is kept and returned as such. Today `mcp-sso` writes `__public__` and
-   strips the line from its output (`bin/mcp-sso.ts:836-850`, `:911-920`);
-   what the stores then answer for that file is not verified *(inference: `null`)*.
+   strips the line from its output (`bin/mcp-sso.ts:836-850`, `:911-920`).
+   **Measured on 2.0.0** (2026-10-01; `saveSession` of a `jwt` session with a
+   token and `uaaClientSecret: ''`): all four session stores (`AbapSessionStore`,
+   `SafeAbapSessionStore`, `XsuaaSessionStore`, `SafeXsuaaSessionStore`) keep
+   the token but answer `getAuthorizationConfig` with `null`, so a public
+   client's destination cannot renew.
 
 Neither the broker nor the CLI can be released before these two; §9 gives the
 order.
