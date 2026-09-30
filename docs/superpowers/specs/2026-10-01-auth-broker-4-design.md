@@ -54,7 +54,7 @@ and `calm` (`mcp-calm-server`). *(inference)* marks what was not verified;
 
 ## 1. Prerequisites
 
-Two releases precede 4.0.0. Neither changes a contract in a breaking way.
+Three releases precede 4.0.0. None changes a contract in a breaking way.
 
 ### 1.1 `@mcp-abap-adt/interfaces-auth-sap` 1.2.0 (minor, additive)
 
@@ -124,6 +124,12 @@ interface IConnectionConfig {
 - **Scopes:** one field. `token_exchange` takes a single `scope` string
   (`auth-providers OidcTokenExchangeProvider.ts` config); the broker passes
   `oidcScopes.join(' ')`.
+- **`expiresAt?: number`** (epoch ms) — when the stored credential stops
+  being valid, as the provider reported it (`ITokenResult.expiresAt`). A JWT
+  carries its own `exp`; cookies do not, and a token provider treats a
+  credential without `expiresAt` as expired (`auth-providers
+  BaseTokenProvider.ts:96`, `:253`), so without this field stored cookies
+  could never be reused.
 - The doc comment on `authType` says a store states it for every destination
   that holds a credential or a grant.
 
@@ -178,9 +184,26 @@ stores able to hold what §1.1 adds and state what §3 reads.
    `SafeAbapSessionStore`, `XsuaaSessionStore`, `SafeXsuaaSessionStore`) keep
    the token but answer `getAuthorizationConfig` with `null`, so a public
    client's destination cannot renew.
+6. **`expiresAt`** is kept with the credential it belongs to — a field of the
+   `jwt` and `saml` credentials — written, updated and cleared with it under
+   the one-credential rules of 2.0.0.
 
-Neither the broker nor the CLI can be released before these two; §9 gives the
-order.
+### 1.3 `@mcp-abap-adt/auth-providers` 5.1.0 (minor, additive)
+
+`Saml2PureProviderConfig` takes the stored credential as the other token
+providers take theirs (`AuthorizationCodeProvider`, `UaaPasscodeProvider`, the
+four OIDC providers and `Saml2BearerProvider` have `accessToken?` /
+`refreshToken?`; `Saml2PureProvider.ts:30-35` has neither): `accessToken?` —
+the cookies, which this provider already answers as its `authorizationToken`
+(`Saml2PureProvider.ts:93`) — `refreshToken?`, and `expiresAt?`, since cookies
+carry no expiry of their own. The token providers whose token is a JWT take
+`expiresAt?` as well, used only when the token has no `exp`. No contract
+changes: a constructor is called by whoever knows the class, so its config is
+the class's, not `interfaces-auth`'s. Dependents on `^5.0.1` (connection)
+take it without a release.
+
+Neither the broker nor the CLI can be released before these three; §9 gives
+the order.
 
 ## 2. The public surface
 
@@ -304,7 +327,7 @@ All classes are auth-providers 5.0.1. "Seed" is the stored `authorizationToken`
 | `jwt` / `password` | `OidcPasswordProvider` | client; `username`, `password`; `oidcIssuerUrl`, `oidcTokenEndpoint`, `oidcScopes`; seed | — |
 | `jwt` / `token_exchange` | `OidcTokenExchangeProvider` | client; `oidcSubjectToken`, `oidcSubjectTokenType`, `oidcAudience`, `oidcActorToken`, `oidcActorTokenType`, `oidcScopes` (joined), `oidcIssuerUrl`, `oidcTokenEndpoint`; seed | — |
 | `jwt` / `none` | `TokenAuthProvider.fixed(authorizationToken)` | `authorizationToken` | — |
-| `saml` / `saml2_pure` | `Saml2PureProvider` | `samlIdpSsoUrl`, `samlSpEntityId`, `samlAcsUrl`, `samlRelayState`, `samlIdpEntityId`, `samlIdpInitiated`; the validator's `samlIdpCertificates`, `samlClockSkewMs` | `authorization(d, 'saml2_pure')`, `samlCookies(d)`, `assertionReplayStore(d)` |
+| `saml` / `saml2_pure` | `Saml2PureProvider` | `samlIdpSsoUrl`, `samlSpEntityId`, `samlAcsUrl`, `samlRelayState`, `samlIdpEntityId`, `samlIdpInitiated`; the validator's `samlIdpCertificates`, `samlClockSkewMs`; seed (`sessionCookies` as `accessToken`, `expiresAt`) | `authorization(d, 'saml2_pure')`, `samlCookies(d)`, `assertionReplayStore(d)` |
 | `saml` / `saml2_bearer` | `Saml2BearerProvider` | the same SAML fields; `samlTokenUrl`; client (`uaaUrl`, `uaaClientId`, `uaaClientSecret`); seed | `authorization(d, 'saml2_bearer')`, `assertionReplayStore(d)` |
 | `saml` / `none` | `new SamlAuthProvider(sessionCookies)` | `sessionCookies` | — |
 
@@ -320,10 +343,11 @@ All classes are auth-providers 5.0.1. "Seed" is the stored `authorizationToken`
   `buildProviderConfig` seeds OIDC and bearer (`:712-728`); `mcp-sso`'s strategy
   choices (callback, manual paste, static assertion, IdP-initiated paste)
   become what the consumer's function returns.
-- **`saml2_pure` is not seeded** — `Saml2PureProviderConfig` has no field for
-  stored cookies (`Saml2PureProvider.ts:30-35`), and `mcp-sso` does not seed it
-  either. A new broker for such a destination logs in again at its first
-  `prepare()`; the cookies it obtains are persisted (§6).
+- **`saml2_pure` is seeded like the rest** (auth-providers 5.1.0, §1.3): the
+  stored cookies as `accessToken` with the stored `expiresAt`, so a new broker
+  reuses them until they expire and logs in again only then; the cookies it
+  obtains are persisted with their `expiresAt` (§6). "Seed" in this table
+  always includes `expiresAt` when the store holds one.
 - `snc` composes every collaborator explicitly through the named recipe
   (auth-providers rule 7 allows a static factory for "a named, common recipe");
   `sncLib` from the store is the locator's explicit candidate.
@@ -436,8 +460,10 @@ before the connector resends.
    or `snc`. A provider the broker built cannot reach that — those destinations
    get providers that obtain nothing — so the check guards the token API (§9).
 
-`ITokenResult.expiresAt` still has no field to go to; a provider seeded with a
-stored JWT reads `exp` itself (`src/AuthBroker.ts:292-293`).
+`ITokenResult.expiresAt` is written as `expiresAt` (§1.1) with the credential
+it belongs to, for `jwt` and `saml` alike; a provider seeded with a stored JWT
+still reads `exp` itself (`src/AuthBroker.ts:292-293`), the stored value
+serving the tokens that carry none — cookies above all.
 
 **A failed write inside `onTokens`** is logged by the provider by class name
 and does not fail the authentication (fact 5): a connector keeps working with a
@@ -575,7 +601,7 @@ the key's URL (fact 1).
   path, §9) — its browser, port and timeout flags are its own.
 
 **Dependencies:** `@mcp-abap-adt/auth-broker` ^4.0.0, `@mcp-abap-adt/auth-stores`
-^2.1.0, `@mcp-abap-adt/auth-providers` ^5.0.1, `@mcp-abap-adt/interfaces-auth`
+^2.1.0, `@mcp-abap-adt/auth-providers` ^5.1.0, `@mcp-abap-adt/interfaces-auth`
 ^3.0.0, `@mcp-abap-adt/interfaces-auth-sap` ^1.2.0, `@mcp-abap-adt/interfaces-utils`
 ^1.1.0, `@mcp-abap-adt/logger` (a runtime dependency, `CHANGELOG.md` 3.0.4).
 
@@ -590,7 +616,7 @@ cannot reach it. Same check as the server's
 (`server src/__tests__/unit/binSmoke.test.ts`), which exists because 3.0.3
 shipped a bin that died on `MODULE_NOT_FOUND`.
 
-**Release order.** `interfaces-auth-sap` 1.2.0, then `auth-stores` 2.1.0 (§1).
+**Release order.** `interfaces-auth-sap` 1.2.0, then `auth-stores` 2.1.0 and `auth-providers` 5.1.0 (§1; the last depends on neither).
 Then one `release:publish` run here publishes `auth-broker` 4.0.0 and
 `auth-broker-cli` 1.0.0 in workspace order, so no registry state has 3.x's
 `mcp-auth` gone without the CLI package present.
@@ -681,7 +707,7 @@ tools/                     publish-changed.js, test-publish-changed.js (copied; 
 1. **No `bin`.** `mcp-auth` and `mcp-sso` are in `@mcp-abap-adt/auth-broker-cli`.
 2. **Contracts:** `@mcp-abap-adt/interfaces-auth` ^3.0.0,
    `@mcp-abap-adt/interfaces-auth-sap` ^1.2.0, `@mcp-abap-adt/auth-providers`
-   ^5.0.1. Types from `interfaces-auth` 2.x no longer mix.
+   ^5.1.0. Types from `interfaces-auth` 2.x no longer mix.
 3. **`@mcp-abap-adt/auth-stores` is no longer a dependency** (H0); a consumer
    that imported it without declaring it must declare it.
 4. **The token API refuses a destination stated `basic` or `snc`** (§9).
