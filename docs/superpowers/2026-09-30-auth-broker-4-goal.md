@@ -1,0 +1,100 @@
+# auth-broker 4.0.0 — goal and path
+
+**Status:** draft goal, for review in this PR. The spec and then the plan come
+next, in this PR. This file is the anchor: it says what they are for, and what
+neither may trade away. If the spec or the plan needs to depart from anything
+under *Holds throughout*, this file changes first — explicitly, in review.
+
+## Goal
+
+`@mcp-abap-adt/auth-broker` 4.0.0 hands a process **the credential for a
+destination, ready to use**: `getProvider(destination)` returns an
+`IAuthProvider` (`@mcp-abap-adt/interfaces-auth` 3.0.0) that a
+`@mcp-abap-adt/connection` 10 connector takes as it is — basic, a token
+provider, SNC — already paired with the stores, so whatever the provider
+obtains or renews is kept, whoever triggered it.
+
+The token API stays for consumers that want a token and nothing else
+(`getToken`, `refreshToken`, `createTokenRefresher` — `mcp-calm-*`).
+
+**Success:** the server builds its connector from `getProvider(destination)`
+with no per-auth-type code of its own, for a basic destination, a token
+destination and an SNC destination; a token the provider renews inside the
+connector (on a 401, through `rejected()`) is found in the session store
+afterwards; and the token API behaves as in 3.x.
+
+## What changes
+
+- **`getProvider(destination): IAuthProvider`.** The broker builds the provider
+  the destination's configuration states (`IConnectionConfig.authType`:
+  `basic`, `jwt`, `saml`, `snc` — `@mcp-abap-adt/interfaces-auth-sap` 1.1.0),
+  from the stores it already reads:
+  - `basic` → `BasicAuthProvider(username, password)`;
+  - `jwt` (a token destination) → a token provider seeded from the session and
+    the service key, as today's factories do;
+  - `saml` → the SAML providers (cookies or bearer), as `mcp-sso` configures them;
+  - `snc` → `SncLogonProvider` from `sncPartnerName`, `sncQop`, `sncLib`,
+    `sncMyName`.
+- **Persistence moves to the provider's `onTokens`.** The broker wires each
+  token provider it hands out to the session store, so a renewal the
+  connector triggers (`prepare()`, `rejected()`) is written back — not only a
+  token obtained through `getToken`.
+- **No implicit defaults** (auth-providers 5, rule 7): every collaborator a
+  provider needs — the interactive strategy, the device-code presenter, the
+  SAML validator and replay store, the SNC locator and probes — is supplied
+  explicitly. The CLIs (`mcp-auth`, `mcp-sso`, `generate-env-from-service-key`)
+  stop relying on 4.x defaults: the device-code presenter, the SAML
+  `assertionValidator` in place of `idpCertificates`, the manual strategy's
+  `read(prompt, signal)`.
+- **Dependencies:** `@mcp-abap-adt/auth-providers` ^5.0.1,
+  `@mcp-abap-adt/interfaces-auth` ^3.0.0, `@mcp-abap-adt/interfaces-auth-sap`
+  ^1.1.0.
+- **The session's `authType` is not overwritten.** `persist()` writes `jwt` or
+  `saml` over whatever the session said; a `basic` or `snc` destination must
+  stay what it is.
+
+**Stays:** the stores and their contracts (`ISessionStore`, `IServiceKeyStore`);
+the rule that a client secret is never copied into the session; the token API
+and `createTokenRefresher`; injecting a provider or a factory, for a consumer
+that builds its own.
+
+## Holds throughout
+
+1. **The destination's configuration states the provider; nothing is
+   inferred** — not from the host, not from the shape of a service key.
+2. **No implicit defaults.** The broker passes every collaborator explicitly;
+   where one must come from the consumer (an interactive strategy), the
+   consumer supplies it.
+3. **What a provider obtains or renews reaches the session store**, whether the
+   broker, the connector or the provider itself triggered it.
+4. **The broker stores no secret it was not given to store**; a client secret
+   never lands in the session.
+5. **The token API keeps its 3.x behaviour** for the consumers that use it.
+6. **Measured:** a basic, a token and an SNC destination, through a connection
+   10 connector, on real systems (SNC on Windows).
+
+## Open, for the spec
+
+1. **Where the interactive strategy comes from.** `getProvider` for a token
+   destination may need to log in: a strategy per call, per broker, or per
+   destination — and what a headless process (the server) passes.
+2. **Which provider for a token destination.** Today's factories choose between
+   authorization code and client credentials from the service key; the
+   destination should state it.
+3. **Caching.** One provider per destination for the broker's life (as the
+   factory path caches today), shared by `getProvider` and the token API?
+4. **Certificates.** `CertificateAuthProvider` needs material (`fromFiles`):
+   in scope, and where its paths come from.
+5. **`auth-stores`.** It still depends on interfaces-auth ^2; whether it needs a
+   release first, or its types are unchanged for what the broker uses.
+
+## Path
+
+1. ~~`interfaces-auth` 3.0.0, `interfaces-auth-sap` 1.1.0~~ — released.
+2. ~~`@mcp-abap-adt/auth-providers` 5.0.1~~ — released.
+3. ~~`@mcp-abap-adt/connection` 10.0.2~~ — released.
+4. **This package, 4.0.0** — in this PR: goal → review → spec → review → plan →
+   review → implementation → external review → merge → release. ← now
+5. `mcp-abap-adt` — the provider from the broker into the connector; the
+   per-auth-type construction and the broker 3.x call removed. Live check:
+   basic over HTTP and RFC, a token destination, SNC over RFC — one code path.
