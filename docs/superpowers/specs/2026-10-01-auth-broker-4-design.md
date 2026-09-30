@@ -841,7 +841,7 @@ writes (§10 table); `readManualInput` honours the abort; the smoke check.
 | no implicit defaults: strategy, presenter, SAML validator and replay store, SNC locator and probes explicit | §5 (strategies, presenter, cookie function, replay store), §4.1 (validator composed from data + replay store; SNC recipe) |
 | the commands move to `@mcp-abap-adt/auth-broker-cli`; the interfaces layout; `release:publish` | §10, §11 |
 | the CLI on explicit collaborators: presenter, `assertionValidator`, `read(prompt, signal)` | §10 |
-| dependencies: auth-providers ^5.0.1, interfaces-auth ^3.0.0, interfaces-auth-sap; auth-stores only as a dev dependency of the library | §12 item 2 (interfaces-auth-sap ^1.2.0, the release §1.1 adds), §11 `check-graph` |
+| dependencies: auth-providers ^5.0.1, interfaces-auth ^3.0.0, interfaces-auth-sap; auth-stores only as a dev dependency of the library | §12 item 2 (auth-providers ^5.1.0 and interfaces-auth-sap ^1.2.0, the releases §1.3 and §1.1 add), §11 `check-graph` |
 | the session's `authType` is not overwritten | §6 item 1 and 3, §9 |
 | *Stays:* the stores and their contracts; no client secret in the session; the token API and `createTokenRefresher`; injecting a provider or a factory | §1 (contracts extended, not changed), §6 item 2, §9, §4.3 |
 
