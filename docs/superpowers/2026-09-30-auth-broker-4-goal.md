@@ -48,8 +48,11 @@ afterwards; and the token API behaves as in 3.x.
   `read(prompt, signal)`.
 - **Dependencies:** `@mcp-abap-adt/auth-providers` ^5.0.1,
   `@mcp-abap-adt/interfaces-auth` ^3.0.0, `@mcp-abap-adt/interfaces-auth-sap`
-  ^1.1.0. `@mcp-abap-adt/auth-stores` leaves the runtime dependencies: `src/`
-  never imports it; only the CLIs and the tests use its file stores.
+  ^1.1.0, `@mcp-abap-adt/auth-stores` ^2.0.0. auth-stores stays a runtime
+  dependency: the CLIs this package ships (`mcp-auth`, `mcp-sso`, in `bin`)
+  import its file stores at run time, and a clean install without it would
+  fail them with `MODULE_NOT_FOUND`. `src/` never imports it (hold 0); moving
+  the CLIs into a package of their own is not part of this release.
 - **The session's `authType` is not overwritten.** `persist()` writes `jwt` or
   `saml` over whatever the session said; a `basic` or `snc` destination must
   stay what it is.
