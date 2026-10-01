@@ -688,13 +688,17 @@ dependency on `auth-broker` `^4.0.0` alone does not decide it.
   and `expiresAt?`. Renewing the cookies without the user is a later step of
   its own (spec §15): measure which mechanism the system and the IdP support
   (`IsPassive`, ECP, `MYSAPSSO2`), then implement it.
-- **D5 — decided 2026-10-01: the auth-providers stand, extended where it falls
-  short** (step 4d). The broker's OIDC and SAML grants run against the stand
-  (Keycloak, UAA in Docker), gated on `UAA_URL` / `KEYCLOAK_URL`. 4d first
-  checks which grants the stand's committed realm and UAA configuration
-  serve; a grant it does not serve gets its client added to the stand (in
-  auth-providers' `tests/stand/`, its own PR before 4d) rather than going
-  untested. The local-endpoint unit tests of 4c/4d cover every row regardless.
+- **D5 — decided 2026-10-01, revised the same day: the broker's own stand**
+  (steps 4c and 4d). Not the auth-providers stand: the broker's tests must
+  not depend on another repository. `tests/stand/` here, copied whole from
+  auth-providers' `tests/stand/` (compose, scripts, committed realm, UAA
+  configuration and test IdP key, a CI job), built in 4c, where the UAA
+  grants first need it, and extended in 4d for OIDC and SAML. `saml2_pure` is
+  proven with UAA as the SP that turns the SAMLResponse into a session cookie
+  (spec §13); SAP ICF's own SAML handling stays unmeasured — no system at hand
+  accepts SAML from a test IdP. The CLI's interactive Keycloak stand
+  (`packages/auth-broker-cli/tests/keycloak`) is weighed against this one in
+  step 5. The local-endpoint unit tests of 4c/4d cover every row regardless.
 - **D6 — decided 2026-10-01: yes, a file-backed key store only (step 1, used by steps 5 and 8) — where a destination's means live
   when there is no SAP service key, and where a service key's grant is
   stated.** An auth-stores question, not the broker's: the broker takes any
@@ -811,7 +815,7 @@ plan's first version):
 - auth-providers' `interfaces-auth-sap` range (D3).
 - §1.3 — `refreshToken?` on `Saml2PureProviderConfig`, unused by a provider
   with no refresh grant (D4).
-- §13 — reusing the auth-providers stand (D5).
+- §13 — the broker's own stand (D5).
 
 ## Checklist: goal and spec → step
 

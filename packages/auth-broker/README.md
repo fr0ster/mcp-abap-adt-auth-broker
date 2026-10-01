@@ -18,6 +18,7 @@ globally for them.
 
 ## Features
 
+- 🔌 **A credential for a connector**: `getProvider(destination)` builds the `IAuthProvider` the destination states — basic, SNC, or a credential handed over — from the service key store's means and the session store's secret
 - 🎯 **Per destination**: one provider per destination name, built by a factory or given once
 - 🔄 **Provider-driven token lifecycle**: The provider decides whether its cached token is still good, refreshes it, or logs in; the broker persists what it returns
 - ⚡ **Forced refresh**: `refreshToken()` obtains a new token even when the cached one looks valid — for a caller holding a 401
@@ -102,6 +103,70 @@ const broker = new AuthBroker({
 > providers implement `IRefreshableTokenProvider` (from `@mcp-abap-adt/interfaces-auth`
 > 3.0.0) as of auth-providers 5.1.0. Since auth-providers 5 the interactive ones
 > take their `authorization` strategy explicitly — none is built for you.
+
+### A Provider for a Connector: `getProvider`
+
+`getProvider(destination)` returns the `IAuthProvider` (from
+`@mcp-abap-adt/interfaces-auth` 3) that a `@mcp-abap-adt/connection` 10
+connector takes as it is. The destination states which provider it gets; the
+broker reads two stores, each for one role:
+
+- **the means** — `authType`, `grantType`, basic's user and password, the SNC
+  fields, `serviceUrl`, the client — from the **service key store**
+  (`getConnectionConfig`), and only from there;
+- **the secret** — the token or session cookies, `expiresAt`, the refresh
+  token — from the **session store** (`loadSession`), and only from there.
+
+Means a session store happens to answer are not read, and neither is a token
+or cookies a key store happens to answer. Nothing is inferred: the
+destination's `authType` (and `grantType`, for `jwt` and `saml`) decides the
+provider, never which other fields are present.
+
+```typescript
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+
+const broker = new AuthBroker({
+  serviceKeyStore: myKeyStore, // the means — required by getProvider
+  sessionStore: mySessionStore, // the secret
+  // no `provider`: that option is the token API's source, not getProvider's
+});
+
+const provider = await broker.getProvider('DEV'); // an IAuthProvider
+// const connection = createAbapConnection({ url, provider }, logger) …
+```
+
+| `authType` / `grantType` | Provider (auth-providers 5.1) | Read from the key store | Read from the session store |
+|---|---|---|---|
+| `basic` (no grant read) | `new BasicAuthProvider(username, password)` | `username`, `password` | nothing |
+| `snc` (no grant read) | `SncLogonProvider.forSecureLoginClient({ partnerName, qop, sncLib, myName, logger })` | `sncPartnerName` (required); `sncQop`, `sncLib`, `sncMyName` when set | nothing |
+| `jwt` / `none` | `TokenAuthProvider.fixed(authorizationToken)` | `authType`, `grantType` | `authorizationToken` (required) |
+| `saml` / `none` | `new SamlAuthProvider(sessionCookies)` | `authType`, `grantType` | `sessionCookies` (required) |
+
+`none` is how a handed-over credential is stated: the key store says
+`grantType: 'none'`, and the token or cookies live in the session. The SNC
+row takes the contract's own defaults when a field is absent — the library is
+discovered (`SNC_LIB_64`, `SNC_LIB`, the Secure Login Client's install path)
+when `sncLib` is, the user's SNC name comes from the credential when
+`sncMyName` is, and `qop` is the provider's `'9'` when `sncQop` is.
+
+The allowed pairs are `jwt` with `authorization_code`, `client_credentials`,
+`passcode`, `oidc_authorization_code`, `device_code`, `password`,
+`token_exchange` or `none`, and `saml` with `saml2_pure`, `saml2_bearer` or
+`none`. A pair outside them is a `DestinationConfigError` naming `grantType`.
+The token grants are allowed pairs whose providers this version does not
+build yet: `getProvider` throws a plain `Error` for them.
+
+**One provider per destination** for the broker's life: concurrent first calls
+share one build, and a build that threw is tried again on the next call. A
+destination rewritten from outside is picked up by a new broker.
+
+**Nothing is written.** None of these providers obtains anything, so
+`getProvider` writes to neither store; the key store contract has no write
+method at all.
+
+**A destination that lacks what its type needs** is a `DestinationConfigError`
+(see *Error Handling*), thrown by `getProvider` before any provider exists —
+never a provider built only to refuse in `prepare()`.
 
 ### Headless Processes (No Browser)
 
@@ -473,23 +538,31 @@ Concrete `IRefreshableTokenProvider` implementations are responsible for:
 new AuthBroker(
   config: {
     sessionStore: ISessionStore;        // required
-    serviceKeyStore?: IServiceKeyStore; // optional
-    provider:                           // required
+    serviceKeyStore?: IServiceKeyStore; // getProvider needs it
+    provider?:                          // the token API needs it
       | IRefreshableTokenProvider
       | ((
           destination: string,
           authConfig: IAuthorizationConfig | null,
           connConfig: IConnectionConfig,
         ) => IRefreshableTokenProvider);
+    // Collaborators, each a function of the destination (declared; no
+    // destination getProvider builds in this version uses one yet):
+    authorization?: (destination: string, grant: StrategyGrant) => IAuthorizationStrategy<string>;
+    oidcAuthorization?: (destination: string) => IAuthorizationStrategy<OidcCallbackResult>;
+    deviceCodePresenter?: (destination: string) => IDeviceCodePresenter;
+    samlCookies?: (destination: string) => (samlResponse: string) => Promise<string>;
+    assertionReplayStore?: (destination: string) => IAssertionReplayStore;
   },
   logger?: ILogger,
 )
 ```
 
 **Parameters:**
-- `config.sessionStore` - **Required** - Where tokens and the refresh token are kept. Its `serviceUrl`, or the service key's, is required.
-- `config.serviceKeyStore` - **Optional** - UAA credentials and the service URL.
-- `config.provider` - **Required** - A provider instance, used for every destination, or a factory (`TokenProviderFactory`), called once per destination and seeded with what the stores hold (see *Basic Usage*).
+- `config.sessionStore` - **Required** - The session secret: the token or cookies, `expiresAt`, the refresh token. For the token API, its `serviceUrl`, or the service key's, is required.
+- `config.serviceKeyStore` - The means: `authType`, `grantType`, the client, basic's user and password, the SNC fields, `serviceUrl`. **Required by `getProvider`**, which has no other source of means.
+- `config.provider` - The token API's source (`getToken`, `refreshToken`, `createTokenRefresher`): a provider instance, used for every destination, or a factory (`TokenProviderFactory`), called once per destination and seeded with what the stores hold (see *Basic Usage*). Not used by `getProvider`. Without it, the token API throws `DestinationConfigError` naming `provider`.
+- The collaborator options — the interactive strategies, the device-code presenter, the SAML cookie function and replay store — are declared for the token grants; each will be required only by the grants that use it, and the broker supplies no default.
 - `logger` - Optional logger. If not provided, nothing is logged.
 
 **Available Implementations:**
@@ -497,6 +570,14 @@ new AuthBroker(
 - **XSUAA** (reduced scope): `XsuaaServiceKeyStore(directory, logger?)`, `XsuaaSessionStore(directory, defaultServiceUrl, logger?)`, `SafeXsuaaSessionStore(defaultServiceUrl, logger?)`, `ClientCredentialsProvider(...)`
 
 #### Methods
+
+##### `getProvider(destination: string): Promise<IAuthProvider>`
+
+The `IAuthProvider` the destination states, built from the key store's means
+and the session store's secret (see *A Provider for a Connector*). Cached per
+destination; a failed build is retried on the next call. Throws
+`DestinationConfigError` for a destination that lacks what its type needs, and
+passes a store failure other than absence on as the store raised it.
 
 ##### `getToken(destination: string): Promise<string>`
 
@@ -513,13 +594,47 @@ for a caller whose token the server has just refused.
 
 ##### `getAuthorizationConfig(destination)` / `getConnectionConfig(destination)`
 
-The session's configuration, else the service key's, else `null`.
+The two stores composed, each for its role:
+
+- `getConnectionConfig` — the service key store's means with the session's
+  secret (`authorizationToken`, `sessionCookies`, `expiresAt`) laid over them;
+  `null` when neither store holds anything.
+- `getAuthorizationConfig` — the service key store's client (`uaaUrl`,
+  `uaaClientId`, `uaaClientSecret`) with the session's refresh token; `null`
+  when the key store has no client.
+
+Means a session store answers (a client, a URL, an `authType`) are not read,
+nor a secret a key store answers. Up to 3.1.0 both answered the session's
+configuration whole, and the key's only when the session had none.
 
 ##### `createTokenRefresher(destination): ITokenRefresher`
 
 `getToken()` and `refreshToken()` bound to one destination, for injection into a connection.
 
 ##### Error Handling
+
+- **`DestinationConfigError`** — a destination that lacks what its type needs.
+  `getProvider` throws it before any provider is asked; the token API throws
+  it when there is no `provider` option. It carries `code:
+  'DESTINATION_CONFIG'`, `destination`, `missingFields` — field or option
+  names only. When a provider's constructor refused (an `sncQop` outside `1`,
+  `2`, `3`, `8`, `9`), the store field is named and the provider's own error
+  is not kept — its message quotes the value. **No stored value
+  reaches it**: not a password, not a token, not an `authType` that is none of
+  the four. Thrown for:
+
+  | Case | `missingFields` |
+  |---|---|
+  | no `serviceKeyStore` option (`getProvider`) | `serviceKeyStore` |
+  | no `provider` option (token API) | `provider` |
+  | the key store has no means for the destination — whatever the session holds | `authType` |
+  | no `authType`, `''`, or one that is not `basic`, `jwt`, `saml`, `snc` | `authType` |
+  | `jwt` / `saml` without `grantType`, `''`, or a pair outside the table | `grantType` |
+  | `basic` without user or password (`''` counts as missing) | `username`, `password` — each that is missing |
+  | `snc` without `sncPartnerName` | `sncPartnerName` |
+  | `snc` whose settings the provider refuses | the store field, e.g. `sncQop` |
+  | `jwt` / `none` without a token in the session | `authorizationToken` |
+  | `saml` / `none` without cookies in the session | `sessionCookies` |
 
 - **Provider errors propagate unchanged** — the same object, with its class,
   `code`, `missingFields` and `cause`: auth-providers' `ValidationError`,
@@ -541,7 +656,17 @@ The session's configuration, else the service key's, else `null`.
 - **A provider result without a token** is an error.
 
 ```typescript
+import { DestinationConfigError } from '@mcp-abap-adt/auth-broker';
 import { ValidationError } from '@mcp-abap-adt/auth-providers';
+
+try {
+  const provider = await broker.getProvider('TRIAL');
+} catch (error) {
+  if (error instanceof DestinationConfigError) {
+    logger.error(`${error.destination} lacks: ${error.missingFields.join(', ')}`);
+  }
+  throw error;
+}
 
 try {
   const token = await broker.getToken('TRIAL');

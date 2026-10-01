@@ -1,5 +1,11 @@
 /**
- * AuthBroker: tokens for a destination, from a provider, kept in a session store.
+ * AuthBroker: the credential for a destination, and tokens for one.
+ *
+ * `getProvider` builds the `IAuthProvider` a destination states, from the
+ * means its service key store holds and the secret its session store holds.
+ * The token API (`getToken`, `refreshToken`, `createTokenRefresher`) asks a
+ * provider the consumer gives it and keeps what it answers in the session
+ * store.
  *
  * The broker orchestrates and nothing more. It resolves what the stores know
  * about a destination, hands it to the provider, asks the provider for a token
@@ -10,12 +16,27 @@
  */
 
 import type {
+  IDeviceCodePresenter,
+  OidcCallbackResult,
+} from '@mcp-abap-adt/auth-providers';
+import type {
+  IAssertionReplayStore,
+  IAuthorizationStrategy,
+  IAuthProvider,
   IRefreshableTokenProvider,
   ITokenRefresher,
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { DestinationConfigError } from './DestinationConfigError';
+import {
+  basicProvider,
+  handedOverProvider,
+  sncProvider,
+  statedAuthType,
+  statedGrant,
+} from './destinations';
 import type {
   IAuthorizationConfig,
   IConnectionConfig,
@@ -48,22 +69,69 @@ export type TokenProviderFactory = (
   connConfig: IConnectionConfig,
 ) => IRefreshableTokenProvider;
 
+/** The grants whose provider takes an `IAuthorizationStrategy<string>`. */
+export type StrategyGrant =
+  | 'authorization_code'
+  | 'passcode'
+  | 'saml2_pure'
+  | 'saml2_bearer';
+
 /**
  * Configuration object for the AuthBroker constructor
  */
 export interface AuthBrokerConfig {
-  /** Session store (required) — where tokens and the refresh token are kept */
+  /**
+   * Session store (required) — the session secret: the token or cookies,
+   * `expiresAt`, the refresh token.
+   */
   sessionStore: ISessionStore;
-  /** Service key store (optional) — UAA credentials and the service URL */
+  /**
+   * Service key store — the means: `authType`, `grantType`, the client,
+   * basic's user and password, the SNC fields, `serviceUrl`. `getProvider`
+   * needs it: there is no other source of means.
+   */
   serviceKeyStore?: IServiceKeyStore;
   /**
-   * The token provider, or a factory building one per destination.
+   * The token API's source: the token provider, or a factory building one per
+   * destination. Not used by `getProvider`, which builds what the destination
+   * states.
    *
    * An instance is used as given, for every destination. A factory is seeded
    * with what the stores hold for the destination (see `TokenProviderFactory`).
    */
-  provider: IRefreshableTokenProvider | TokenProviderFactory;
+  provider?: IRefreshableTokenProvider | TokenProviderFactory;
+
+  // Collaborators — each a function of the destination, called once when that
+  // destination's provider is built, each required only by the grants that
+  // use it. The broker supplies no default and disposes none.
+
+  /** The interactive strategy of the UAA code, passcode and SAML grants. */
+  authorization?: (
+    destination: string,
+    grant: StrategyGrant,
+  ) => IAuthorizationStrategy<string>;
+  /** The interactive strategy of the OIDC authorization code grant. */
+  oidcAuthorization?: (
+    destination: string,
+  ) => IAuthorizationStrategy<OidcCallbackResult>;
+  /** Where the device flow shows the user its code. */
+  deviceCodePresenter?: (destination: string) => IDeviceCodePresenter;
+  /** `saml2_pure`: turns the SAMLResponse into the system's session cookies. */
+  samlCookies?: (
+    destination: string,
+  ) => (samlResponse: string) => Promise<string>;
+  /** The replay store the SAML assertion validators share. */
+  assertionReplayStore?: (destination: string) => IAssertionReplayStore;
 }
+
+/** The session secret's fields on a connection config — never means. */
+const SECRET_FIELDS = [
+  'authorizationToken',
+  'sessionCookies',
+  'expiresAt',
+] as const;
+const isSecretField = (field: string): boolean =>
+  (SECRET_FIELDS as readonly string[]).includes(field);
 
 function errorCode(error: unknown): string | undefined {
   if (error !== null && typeof error === 'object' && 'code' in error) {
@@ -80,8 +148,13 @@ export class AuthBroker {
   private readonly logger: ILogger;
   private readonly serviceKeyStore: IServiceKeyStore | undefined;
   private readonly sessionStore: ISessionStore;
-  private readonly provider: IRefreshableTokenProvider | TokenProviderFactory;
+  private readonly provider:
+    | IRefreshableTokenProvider
+    | TokenProviderFactory
+    | undefined;
   private readonly providers = new Map<string, IRefreshableTokenProvider>();
+  /** getProvider's cache: the promise of the build, set before its first read. */
+  private readonly built = new Map<string, Promise<IAuthProvider>>();
 
   /**
    * @param config Stores and the provider (instance or factory)
@@ -94,9 +167,6 @@ export class AuthBroker {
     const { sessionStore, serviceKeyStore, provider } = config;
     if (!sessionStore) {
       throw new Error('AuthBroker: sessionStore is required');
-    }
-    if (!provider) {
-      throw new Error('AuthBroker: provider is required');
     }
     for (const method of [
       'getAuthorizationConfig',
@@ -112,7 +182,7 @@ export class AuthBroker {
         );
       }
     }
-    if (typeof provider !== 'function') {
+    if (provider && typeof provider !== 'function') {
       if (typeof provider.getTokens !== 'function') {
         throw new Error('AuthBroker: provider.getTokens must be a function');
       }
@@ -198,15 +268,23 @@ export class AuthBroker {
     serviceUrl: string,
     connConfig: IConnectionConfig | null,
   ): Promise<IRefreshableTokenProvider> {
-    if (typeof this.provider !== 'function') {
-      return this.provider;
+    const provider = this.provider;
+    if (typeof provider !== 'function') {
+      if (!provider) {
+        throw new DestinationConfigError(
+          destination,
+          ['provider'],
+          'the token API needs the provider option',
+        );
+      }
+      return provider;
     }
     const existing = this.providers.get(destination);
     if (existing) {
       return existing;
     }
     const authConfig = await this.resolveAuthorizationConfig(destination);
-    const built = this.provider(destination, authConfig, {
+    const built = provider(destination, authConfig, {
       ...(connConfig ?? {}),
       serviceUrl,
     });
@@ -372,51 +450,137 @@ export class AuthBroker {
   }
 
   /**
-   * Authorization configuration for the destination: the session's, else the
-   * service key's, else null.
+   * The destination's client: the service key store's `uaaUrl`, `uaaClientId`
+   * and `uaaClientSecret`, with the refresh token the session stores laid over
+   * them; `null` when the key store has no client. A client a session store
+   * answers is not read, nor a refresh token a key store answers.
    */
   async getAuthorizationConfig(
     destination: string,
   ): Promise<IAuthorizationConfig | null> {
-    const sessionAuth = await this.read(
-      destination,
-      'session authorization config',
-      () => this.sessionStore.getAuthorizationConfig(destination),
-    );
-    if (sessionAuth) {
-      return sessionAuth;
-    }
     const serviceKeyStore = this.serviceKeyStore;
-    if (!serviceKeyStore) {
+    const client = serviceKeyStore
+      ? await this.read(destination, 'service key authorization config', () =>
+          serviceKeyStore.getAuthorizationConfig(destination),
+        )
+      : null;
+    if (!client) {
       return null;
     }
-    return this.read(destination, 'service key authorization config', () =>
-      serviceKeyStore.getAuthorizationConfig(destination),
+    const secret = await this.read(destination, 'session', () =>
+      this.sessionStore.loadSession(destination),
     );
+    const composed: IAuthorizationConfig = {
+      uaaUrl: client.uaaUrl,
+      uaaClientId: client.uaaClientId,
+      uaaClientSecret: client.uaaClientSecret,
+    };
+    if (secret?.refreshToken !== undefined) {
+      composed.refreshToken = secret.refreshToken;
+    }
+    return composed;
   }
 
   /**
-   * Connection configuration for the destination: the session's, else the
-   * service key's (which has URLs but no token), else null.
+   * The destination's connection config: the service key store's means with
+   * the session's secret (`authorizationToken`, `sessionCookies`,
+   * `expiresAt`) laid over them; `null` when neither store holds anything.
+   * Means a session store answers are not read, nor a secret a key store
+   * answers.
    */
   async getConnectionConfig(
     destination: string,
   ): Promise<IConnectionConfig | null> {
-    const sessionConn = await this.read(
-      destination,
-      'session connection config',
-      () => this.sessionStore.getConnectionConfig(destination),
+    const serviceKeyStore = this.serviceKeyStore;
+    const means = serviceKeyStore
+      ? await this.read(destination, 'service key connection config', () =>
+          serviceKeyStore.getConnectionConfig(destination),
+        )
+      : null;
+    const secret = await this.read(destination, 'session', () =>
+      this.sessionStore.loadSession(destination),
     );
-    if (sessionConn) {
-      return sessionConn;
+    const composed: IConnectionConfig = {};
+    for (const [field, value] of Object.entries(means ?? {})) {
+      if (!isSecretField(field) && value !== undefined) {
+        (composed as Record<string, unknown>)[field] = value;
+      }
     }
+    for (const field of SECRET_FIELDS) {
+      const value = secret?.[field];
+      if (value !== undefined) {
+        (composed as Record<string, unknown>)[field] = value;
+      }
+    }
+    return Object.keys(composed).length > 0 ? composed : null;
+  }
+
+  /**
+   * The credential for the destination, ready for a connector: the provider
+   * its configuration states (`authType`, and `grantType` for `jwt` / `saml`),
+   * built from the means the service key store holds and the secret the
+   * session store holds.
+   *
+   * One provider per destination for the broker's life: concurrent first calls
+   * share one build, and a build that threw is tried again on the next call.
+   *
+   * @throws DestinationConfigError when the destination lacks what its type
+   *   needs — naming the fields or options, never a value.
+   */
+  getProvider(destination: string): Promise<IAuthProvider> {
+    const cached = this.built.get(destination);
+    if (cached) {
+      return cached;
+    }
+    // Deferred by one tick, so the promise is in the cache before the build
+    // reads anything.
+    const build = Promise.resolve().then(() => this.build(destination));
+    this.built.set(destination, build);
+    build.catch(() => {
+      if (this.built.get(destination) === build) {
+        this.built.delete(destination);
+      }
+    });
+    return build;
+  }
+
+  private async build(destination: string): Promise<IAuthProvider> {
     const serviceKeyStore = this.serviceKeyStore;
     if (!serviceKeyStore) {
-      return null;
+      throw new DestinationConfigError(
+        destination,
+        ['serviceKeyStore'],
+        'getProvider reads the means from a service key store, and none was given',
+      );
     }
-    return this.read(destination, 'service key connection config', () =>
+    const means = await this.read(destination, 'means', () =>
       serviceKeyStore.getConnectionConfig(destination),
     );
+    const authType = statedAuthType(destination, means);
+    // statedAuthType refuses a destination without means.
+    const stated = means as IConnectionConfig;
+
+    let provider: IAuthProvider;
+    if (authType === 'basic') {
+      provider = basicProvider(destination, stated);
+    } else if (authType === 'snc') {
+      provider = sncProvider(destination, stated, this.logger);
+    } else {
+      const grant = statedGrant(destination, authType, stated);
+      if (grant !== 'none') {
+        throw new Error(
+          `Destination "${destination}": getProvider does not build the ${authType} / ${grant} provider in this version`,
+        );
+      }
+      const secret = await this.read(destination, 'session', () =>
+        this.sessionStore.loadSession(destination),
+      );
+      provider = handedOverProvider(destination, authType, secret);
+    }
+    this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
+      authType,
+    });
+    return provider;
   }
 
   /**

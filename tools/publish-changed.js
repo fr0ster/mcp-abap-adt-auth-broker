@@ -87,6 +87,24 @@ const sleep = (ms) =>
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 
+// npm itself, started without a shell: on Windows `npm` is a .cmd shim, which
+// Node does not start without one. Under `npm run`, npm names its own entry
+// point (and tools/test-publish-changed.js names its fake there); run directly,
+// Windows' npm ships beside node.exe.
+const NPM_CLI = /npm-cli\.js$/.test(process.env.npm_execpath ?? '')
+  ? process.env.npm_execpath
+  : process.platform === 'win32'
+    ? path.join(
+        path.dirname(process.execPath),
+        'node_modules',
+        'npm',
+        'bin',
+        'npm-cli.js',
+      )
+    : undefined;
+const npm = (args) =>
+  NPM_CLI ? [process.execPath, [NPM_CLI, ...args]] : ['npm', args];
+
 /** Captured output; for commands whose result this script reads. */
 const capture = (cmd, args, options = {}) =>
   execFileSync(cmd, args, {
@@ -115,7 +133,7 @@ function registryJson(name, field) {
     // --prefer-online: npm's metadata cache answered a just-published version
     // with the previous one, which is indistinguishable from a failed publish.
     return JSON.parse(
-      capture('npm', ['view', name, field, '--json', '--prefer-online']),
+      capture(...npm(['view', name, field, '--json', '--prefer-online'])),
     );
   } catch (error) {
     const text = `${error.stdout ?? ''}${error.stderr ?? ''}`;
@@ -317,7 +335,7 @@ if (pending.length > 1)
 
 console.log('\nRunning npm run check once for the whole release.\n');
 try {
-  interactive('npm', ['run', 'check']);
+  interactive(...npm(['run', 'check']));
 } catch {
   fail('npm run check failed. Nothing was published.');
 }
@@ -372,7 +390,7 @@ for (const p of pending) {
     // stays in each package.json as the net for a publish by hand.
     const args = ['publish', '--workspace', p.name, '--ignore-scripts'];
     if (NPM_TAG !== null) args.push('--tag', NPM_TAG);
-    interactive('npm', args);
+    interactive(...npm(args));
   } catch {
     entry.refused = true;
   }

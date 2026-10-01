@@ -40,9 +40,10 @@
     "access": "public"
   },
   "scripts": {
-    "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.build.tsbuildinfo",
+    "clean": "node -e \"for (const p of ['dist', 'tsconfig.tsbuildinfo', 'tsconfig.build.tsbuildinfo']) require('fs').rmSync(p, { recursive: true, force: true })\"",
     "build": "tsc -b tsconfig.build.json",
-    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
+    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:live": "cross-env NODE_OPTIONS=--experimental-vm-modules jest -c jest.live.config.js",
     "test:check": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run --prefix ../.. check"
   },
@@ -50,16 +51,18 @@
     "node": "^22 || ^24 || ^26"
   },
   "dependencies": {
+    "@mcp-abap-adt/auth-providers": "^5.1.0",
     "@mcp-abap-adt/interfaces-auth": "^3.0.0",
     "@mcp-abap-adt/interfaces-auth-broker": "^1.0.0",
     "@mcp-abap-adt/interfaces-auth-sap": "^2.0.0",
     "@mcp-abap-adt/interfaces-utils": "^1.1.0"
   },
   "devDependencies": {
-    "@mcp-abap-adt/auth-providers": "^5.1.0",
     "@mcp-abap-adt/auth-stores": "^1.2.3",
+    "@mcp-abap-adt/connection": "^10.0.2",
     "@mcp-abap-adt/logger": "^0.4.0",
     "@types/js-yaml": "^4.0.9",
+    "auth-stores-3": "npm:@mcp-abap-adt/auth-stores@^3.0.0",
     "js-yaml": "^4.1.1",
     "pino": "^10.1.0",
     "pino-pretty": "^13.1.3"

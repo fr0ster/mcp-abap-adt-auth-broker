@@ -8,9 +8,10 @@
 //
 // Each case builds a throwaway git repository, copies the script into it (the
 // script takes its root from its own location, so a fixture repo is the only way
-// to run it against anything but this one), and puts a fake `npm` first on PATH.
-// The fake records every argv and answers from a JSON state file. `git` is not
-// shadowed: the guards run for real.
+// to run it against anything but this one), and hands it a fake npm as
+// `npm_execpath` — where the script takes npm's entry point from, the same on
+// every platform. The fake records every argv and answers from a JSON state
+// file. `git` is not shadowed: the guards run for real.
 //
 //   node tools/test-publish-changed.js
 const assert = require('node:assert');
@@ -168,19 +169,17 @@ function fixture(packages) {
  */
 function installFakeNpm(_dir, state) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-changed-npm-'));
-  const bin = path.join(home, 'bin');
-  fs.mkdirSync(bin);
   const statePath = path.join(home, 'npm-state.json');
   const logPath = path.join(home, 'npm-log.jsonl');
   fs.writeFileSync(statePath, JSON.stringify(state));
   fs.writeFileSync(logPath, '');
 
+  // Named as npm's own entry point, which is what the script accepts from
+  // npm_execpath; it runs it with its own Node.
+  const bin = path.join(home, 'npm-cli.js');
   fs.writeFileSync(
-    path.join(bin, 'npm'),
-    // process.execPath, not `env node`: the runner and the fake npm must be the
-    // same Node, and PATH here is deliberately rewritten.
-    `#!${process.execPath}
-const fs = require('node:fs');
+    bin,
+    `const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + '\\n');
 const statePath = ${JSON.stringify(statePath)};
@@ -260,7 +259,6 @@ process.stderr.write('fake npm: unexpected ' + JSON.stringify(args) + '\\n');
 process.exit(1);
 `,
   );
-  fs.chmodSync(path.join(bin, 'npm'), 0o755);
   return { bin, logPath };
 }
 
@@ -278,7 +276,9 @@ function run(dir, bin, args = []) {
         // which blinds the dirty-tree guard. Isolating only the fixture setup
         // left that half exposed.
         ...gitEnv(),
-        PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+        // Replaces the npm_execpath `npm run check:publish` passes down, which
+        // names the real npm.
+        npm_execpath: bin,
         PUBLISH_POLL_ATTEMPTS: '3',
         PUBLISH_POLL_MS: '1',
       },

@@ -14,8 +14,10 @@ export type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 export {
   AuthBroker,
   type AuthBrokerConfig,
+  type StrategyGrant,
   type TokenProviderFactory,
 } from './AuthBroker';
+export { DestinationConfigError } from './DestinationConfigError';
 // Token provider interface
 export type {
   IRefreshableTokenProvider,

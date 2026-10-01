@@ -38,6 +38,7 @@ npm test -w @mcp-abap-adt/auth-broker-cli
 - Coordinates between session stores, service key stores, and token providers
 - Implements a multi-step token acquisition flow: validate cached token -> refresh token -> browser-based OAuth
 - Creates `ITokenRefresher` instances for dependency injection into consuming services
+- `getProvider(destination)` builds the `IAuthProvider` the destination states (`authType`, and `grantType` for `jwt`/`saml`) from the service key store's means and the session store's secret — never one from the other's fields, never inferred from which fields are present. Built so far: `basic`, `snc`, `jwt`/`none`, `saml`/`none` (`src/destinations.ts`); a destination lacking what its type needs is `DestinationConfigError` (`src/DestinationConfigError.ts`: names, never values). The build's promise is cached per destination, set before the first read, dropped on a throw
 
 **Stores** (interfaces from `@mcp-abap-adt/interfaces-auth-broker`, implementations in `@mcp-abap-adt/auth-stores` — which the library's runtime never imports; only its tests and the CLI do):
 - `ISessionStore` - Stores session data (tokens, connection config) in `.env` files
@@ -49,7 +50,7 @@ npm test -w @mcp-abap-adt/auth-broker-cli
 
 ### Package Dependencies
 
-The contracts come from the packages that declare them — `@mcp-abap-adt/interfaces-auth` 3 (tokens, `STORE_ERROR_CODES`), `-auth-broker` 1 (the store contracts: `IConfig`, `IConnectionConfig`, `ISessionStore`, `IServiceKeyStore`), `-auth-sap` 2 (`IAuthorizationConfig`, `AuthType` — the only two that stayed there) and `-utils` (`ILogger`). The library's tests and the CLI use `auth-providers` 5.1 and still `auth-stores` 1.2.3: its 3.0.0 session stores refuse the means the 3.x broker and the CLI write into a session, so the library's tests move to it with the broker's persistence (plan step 4e) and the CLI with its destination store (step 5). **Not `@mcp-abap-adt/interfaces`**: that facade is deleted as of its 52.0.0, npm serves 51.0.0 to whoever is pinned to it, and nothing further ships there. Some of those types are re-exported here for convenience, each from the package that declares it. Store and provider implementations are in separate packages:
+The contracts come from the packages that declare them — `@mcp-abap-adt/interfaces-auth` 3 (tokens, `STORE_ERROR_CODES`), `-auth-broker` 1 (the store contracts: `IConfig`, `IConnectionConfig`, `ISessionStore`, `IServiceKeyStore`), `-auth-sap` 2 (`IAuthorizationConfig`, `AuthType` — the only two that stayed there) and `-utils` (`ILogger`). The library depends on `auth-providers` 5.1 at runtime (`getProvider` constructs its classes); the CLI uses it too and still `auth-stores` 1.2.3: its 3.0.0 session stores refuse the means the 3.x broker and the CLI write into a session, so the library's tests move to it with the broker's persistence (plan step 4e) and the CLI with its destination store (step 5). **Not `@mcp-abap-adt/interfaces`**: that facade is deleted as of its 52.0.0, npm serves 51.0.0 to whoever is pinned to it, and nothing further ships there. Some of those types are re-exported here for convenience, each from the package that declares it. Store and provider implementations are in separate packages:
 - `@mcp-abap-adt/auth-stores` - ABAP and XSUAA store implementations
 - `@mcp-abap-adt/auth-providers` - Token provider implementations
 
@@ -64,7 +65,8 @@ mcp-auth --service-key ./key.json --output ./abap.env --type abap --credential
 ## Testing
 
 Tests live in each package's `src/__tests__/` (see `docs/development/TESTING.md`):
-- Library: `AuthBroker.test.ts` needs nothing; `AuthBroker.integration.test.ts` reads real service keys and sessions only when `packages/auth-broker/tests/test-config.yaml` exists (from the template beside it) — without it every case returns at once.
+- Library: `AuthBroker.test.ts` and `getProvider.test.ts` need nothing (stores are in-memory fakes of the contract, providers real; the SNC case writes a header-only library fixture of the host's architecture to a temp directory); `AuthBroker.integration.test.ts` reads real service keys and sessions only when `packages/auth-broker/tests/test-config.yaml` exists (from the template beside it) — without it every case returns at once.
+- Library, live: `src/__tests__/live/getProvider.live.test.ts`, run only by `npm run test:live` (`jest.live.config.js`; `jest.config.js` ignores `__tests__/live/`). `basic` over HTTP and RFC, `snc` over RFC through connection 10; each case reads only the `AUTH_BROKER_LIVE_*` variables it names and skips with the reason on stderr where they, the platform (SNC: Windows/macOS) or the RFC addon are missing — no configuration file. It reads the means with auth-stores 3's `EnvDestinationStore` through the dev alias `auth-stores-3` (the other suites stay on 1.2.3 until 4e, D7).
 - CLI: `mcpSsoConfig`, `mcpSsoSamlProviders`, `samlMetadata` — need nothing. The Keycloak and CAP stands under `packages/auth-broker-cli/tests/` are interactive, by hand only.
 - Tests run sequentially (`maxWorkers: 1`) to ensure proper file state.
 
