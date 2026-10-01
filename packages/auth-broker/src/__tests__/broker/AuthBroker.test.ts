@@ -16,6 +16,7 @@ import type {
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthBroker, type TokenProviderFactory } from '../../AuthBroker';
+import { DestinationConfigError } from '../../DestinationConfigError';
 import type {
   IAuthorizationConfig,
   IConnectionConfig,
@@ -126,7 +127,7 @@ describe('AuthBroker', () => {
       ).toThrow('provider.refreshTokens must be a function');
     });
 
-    it('refuses a missing session store or provider', () => {
+    it('refuses a missing session store', () => {
       expect(
         () =>
           new AuthBroker({
@@ -134,13 +135,29 @@ describe('AuthBroker', () => {
             provider: mockProvider(),
           }),
       ).toThrow('sessionStore is required');
+    });
+
+    it('takes no provider: getProvider needs none', () => {
       expect(
-        () =>
-          new AuthBroker({
-            sessionStore: mockSessionStore(),
-            provider: undefined as unknown as IRefreshableTokenProvider,
-          }),
-      ).toThrow('provider is required');
+        () => new AuthBroker({ sessionStore: mockSessionStore() }),
+      ).not.toThrow();
+    });
+
+    it('without a provider, the token API names the provider option', async () => {
+      const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL });
+      const broker = new AuthBroker({ sessionStore });
+
+      for (const call of [
+        () => broker.getToken('DEST'),
+        () => broker.refreshToken('DEST'),
+      ]) {
+        const error = await call().catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(DestinationConfigError);
+        expect((error as DestinationConfigError).missingFields).toEqual([
+          'provider',
+        ]);
+      }
+      expect(everythingWritten(sessionStore)).toBe('[[],[],[]]');
     });
 
     it('refuses a service key store missing a method', () => {
@@ -568,59 +585,131 @@ describe('AuthBroker', () => {
       await expect(broker.getToken('DEST')).rejects.toBe(denied);
     });
 
-    it('getAuthorizationConfig: session first, then service key, then null', async () => {
-      const sessionAuth = { ...KEY_AUTH, uaaClientId: 'session' };
-      const withSession = new AuthBroker({
-        sessionStore: mockSessionStore(null, sessionAuth),
-        serviceKeyStore: mockServiceKeyStore(),
-        provider: mockProvider(),
+    it("getAuthorizationConfig: the key store's client with the session's refresh token, never the session's client", async () => {
+      const sessionStore = mockSessionStore(
+        null,
+        { ...KEY_AUTH, uaaClientId: 'session-client' },
+        {
+          uaaUrl: 'https://session-uaa',
+          uaaClientId: 'session-client',
+          uaaClientSecret: 'session-secret',
+          refreshToken: 'session-refresh',
+        },
+      );
+      const withBoth = new AuthBroker({
+        sessionStore,
+        serviceKeyStore: mockServiceKeyStore({
+          ...KEY_AUTH,
+          refreshToken: 'key-refresh',
+        }),
       });
       const withKey = new AuthBroker({
         sessionStore: mockSessionStore(),
-        serviceKeyStore: mockServiceKeyStore(),
-        provider: mockProvider(),
+        serviceKeyStore: mockServiceKeyStore({
+          ...KEY_AUTH,
+          refreshToken: 'key-refresh',
+        }),
       });
-      const withNothing = new AuthBroker({
-        sessionStore: mockSessionStore(),
-        provider: mockProvider(),
-      });
+      const withSessionOnly = new AuthBroker({ sessionStore });
 
-      await expect(withSession.getAuthorizationConfig('D')).resolves.toBe(
-        sessionAuth,
-      );
+      await expect(withBoth.getAuthorizationConfig('D')).resolves.toEqual({
+        ...KEY_AUTH,
+        refreshToken: 'session-refresh',
+      });
       await expect(withKey.getAuthorizationConfig('D')).resolves.toEqual(
         KEY_AUTH,
       );
-      await expect(withNothing.getAuthorizationConfig('D')).resolves.toBeNull();
+      await expect(
+        withSessionOnly.getAuthorizationConfig('D'),
+      ).resolves.toBeNull();
     });
 
-    it('getConnectionConfig: session first, then service key, then null', async () => {
-      const sessionConn = {
+    it("getConnectionConfig: the key store's means with the session's secret laid over them", async () => {
+      const session = {
         serviceUrl: 'https://session',
-        authorizationToken: 't',
+        authType: 'basic' as const,
+        username: 'session-user',
+        authorizationToken: 'session-token',
+        sessionCookies: 'session=cookie',
+        expiresAt: 1234,
+        refreshToken: 'session-refresh',
       };
-      const withSession = new AuthBroker({
-        sessionStore: mockSessionStore(sessionConn),
-        serviceKeyStore: mockServiceKeyStore(),
-        provider: mockProvider(),
+      const keyConn: IConnectionConfig = {
+        serviceUrl: SERVICE_URL,
+        authType: 'jwt',
+        grantType: 'none',
+        sapClient: '100',
+        authorizationToken: 'key-token',
+        sessionCookies: 'key=cookie',
+        expiresAt: 99,
+      };
+      const withBoth = new AuthBroker({
+        sessionStore: mockSessionStore(session, null, session),
+        serviceKeyStore: mockServiceKeyStore(KEY_AUTH, keyConn),
       });
       const withKey = new AuthBroker({
         sessionStore: mockSessionStore(),
-        serviceKeyStore: mockServiceKeyStore(),
-        provider: mockProvider(),
+        serviceKeyStore: mockServiceKeyStore(KEY_AUTH, keyConn),
+      });
+      const withSessionOnly = new AuthBroker({
+        sessionStore: mockSessionStore(session, null, session),
       });
       const withNothing = new AuthBroker({
         sessionStore: mockSessionStore(),
-        provider: mockProvider(),
+        serviceKeyStore: mockServiceKeyStore(null, null),
       });
 
-      await expect(withSession.getConnectionConfig('D')).resolves.toBe(
-        sessionConn,
-      );
+      await expect(withBoth.getConnectionConfig('D')).resolves.toEqual({
+        serviceUrl: SERVICE_URL,
+        authType: 'jwt',
+        grantType: 'none',
+        sapClient: '100',
+        authorizationToken: 'session-token',
+        sessionCookies: 'session=cookie',
+        expiresAt: 1234,
+      });
       await expect(withKey.getConnectionConfig('D')).resolves.toEqual({
         serviceUrl: SERVICE_URL,
+        authType: 'jwt',
+        grantType: 'none',
+        sapClient: '100',
+      });
+      await expect(withSessionOnly.getConnectionConfig('D')).resolves.toEqual({
+        authorizationToken: 'session-token',
+        sessionCookies: 'session=cookie',
+        expiresAt: 1234,
       });
       await expect(withNothing.getConnectionConfig('D')).resolves.toBeNull();
+    });
+
+    it('getConnectionConfig / getAuthorizationConfig keep the absence rule', async () => {
+      const notFound = Object.assign(new Error('no file'), {
+        code: 'FILE_NOT_FOUND',
+      });
+      const denied = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      const absent = mockSessionStore();
+      absent.loadSession.mockRejectedValue(notFound);
+      const broken = mockSessionStore();
+      broken.loadSession.mockRejectedValue(denied);
+      const keys = mockServiceKeyStore();
+
+      const tolerant = new AuthBroker({
+        sessionStore: absent,
+        serviceKeyStore: keys,
+      });
+      await expect(tolerant.getConnectionConfig('D')).resolves.toEqual({
+        serviceUrl: SERVICE_URL,
+      });
+      await expect(tolerant.getAuthorizationConfig('D')).resolves.toEqual(
+        KEY_AUTH,
+      );
+
+      const strict = new AuthBroker({
+        sessionStore: broken,
+        serviceKeyStore: keys,
+      });
+      await expect(strict.getConnectionConfig('D')).rejects.toBe(denied);
+      await expect(strict.getAuthorizationConfig('D')).rejects.toBe(denied);
     });
   });
 
