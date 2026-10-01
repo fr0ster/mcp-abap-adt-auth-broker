@@ -1,4 +1,4 @@
-# auth-broker 4.0.0 and auth-broker-cli 1.0.0 — implementation plan
+# auth-broker 4.0.0 and the auth-broker-cli release on it — implementation plan
 
 **Implements:** `docs/superpowers/specs/2026-10-01-auth-broker-4-design.md` (the
 spec), under `docs/superpowers/2026-09-30-auth-broker-4-goal.md` (the goal). The
@@ -39,6 +39,17 @@ each protects, not their bodies. No step carries a time estimate.
     those shapes are identical in 1.1.0 and 2.0.0.
 - So spec §1.1 is delivered; the spec and the goal now record it (see *Spec
   points*).
+- **The split is released ahead of 4.0.0** (decided by the user 2026-10-01,
+  after step 3): `@mcp-abap-adt/auth-broker` **3.1.0** — no `bin`, the library
+  API unchanged, `axios`, the logger, `auth-stores` and `auth-providers` out of
+  its dependencies — and `@mcp-abap-adt/auth-broker-cli` **1.0.0** — the 3.x
+  commands as they are — depending on `@mcp-abap-adt/auth-broker` `^3.1.0`.
+  Both versions are set in step 3's PR (#34); tags `auth-broker-v3.1.0` and
+  `auth-broker-cli-v1.0.0` on its merge commit, one `release:publish` run,
+  library first. Consequences, carried into the steps below: step 5 becomes a
+  later CLI version (not 1.0.0); step 7 releases `auth-broker` 4.0.0 with that
+  CLI version; the CLI's range on the library is `^3.1.0` until step 7 raises it
+  to `^4.0.0`; R5 no longer holds after the publish.
 - Goal path steps 1–3a (interfaces-auth 3.0.0, auth-providers 5.0.1,
   connection 10.0.2, auth-stores 2.0.0) are released, as the goal says.
 
@@ -248,8 +259,9 @@ existing suites prove it.
      (`interfaces-auth`, `interfaces-auth-sap`, `interfaces-utils` at the 3.x
      ranges); `auth-stores` and `auth-providers` become dev dependencies (tests
      import them); `axios` and `@mcp-abap-adt/logger` leave (spec §12 item 5;
-     the logger is the CLI's). Version stays `3.0.4`, CHANGELOG `[Unreleased]`
-     records the removals.
+     the logger is the CLI's). Version `3.1.0` (decided 2026-10-01; planned
+     as staying `3.0.4`), CHANGELOG `[3.1.0]` records the removals and the
+     migration.
   3. `packages/auth-broker-cli`: `bin/*.ts` as `src/`, compiled to `dist/`,
      `bin` = `mcp-auth`, `mcp-sso`; the bin tests and fixtures, `tests/keycloak`,
      `tests/sso-demo` and their npm scripts; `generate-env` script. Only the
@@ -257,8 +269,8 @@ existing suites prove it.
      from `@mcp-abap-adt/auth-broker` instead of `require`d from a `dist` path
      (`bin/mcp-auth.ts:28-29`, `bin/mcp-sso.ts:38-39`); `getVersion()` reads the
      CLI's manifest. Dependencies: the 3.x set the bins import, plus
-     `@mcp-abap-adt/auth-broker` at the workspace's version. Version `1.0.0`,
-     CHANGELOG `[Unreleased]`, README (the `mcp-auth` / `mcp-sso` sections moved
+     `@mcp-abap-adt/auth-broker` `^3.1.0`. Version `1.0.0`, CHANGELOG
+     `[1.0.0]`, README (the `mcp-auth` / `mcp-sso` sections moved
      from the library README).
   4. `tools/`: `publish-changed.js`, `test-publish-changed.js` (copied, the
      interfaces-facade comments removed), `check-graph.js` (allowlist of §11;
@@ -269,9 +281,14 @@ existing suites prove it.
      *Departures*).
   6. Root README becomes the workspace overview; `CLAUDE.md`, `AGENTS.md`
      describe the layout and the new commands.
-- **Why master stays clearly unreleased:** the library's version is on the
-  registry, so `release:publish` skips it; the CLI's `1.0.0` has no tag, so
-  `release:publish` refuses (`tools/publish-changed.js:246-252` in interfaces).
+- **Released after all (user's decision, 2026-10-01):** the PR sets the library
+  to `3.1.0` and the CLI to `1.0.0` with `@mcp-abap-adt/auth-broker` `^3.1.0`;
+  both CHANGELOGs dated, the library's with the migration (global installs move
+  to the CLI package; a consumer that imported `auth-stores` / `auth-providers`
+  through this package's dependencies declares them). Minor, not major: the
+  library's API is unchanged; only where the commands install from, and the
+  dependencies it pulls in, changed. Until the tags exist `release:publish`
+  refuses for missing tags (`tools/publish-changed.js`).
 - **Tests first:** `check-packed.js` written first and run red against today's
   single package (a bin that `require`s `dist` by path, a library with `bin`);
   `check-graph.js` red on a library `src` file importing `auth-stores` (H0 made a
@@ -287,9 +304,15 @@ existing suites prove it.
 - **Docs:** root README (overview, install commands for both packages), both
   package READMEs, `docs/architecture/ARCHITECTURE.md` (layout),
   `docs/development/TESTING.md` (commands, where suites now live),
-  `docs/installing/INSTALLATION.md` (no change of content yet: the CLI is not
-  published — it says so), `CLAUDE.md`, `AGENTS.md`.
-- **Release:** none.
+  `docs/installing/INSTALLATION.md` (the CLI's install command and the
+  global-install swap), `CLAUDE.md`, `AGENTS.md`.
+- **Release:** `auth-broker` 3.1.0 and `auth-broker-cli` 1.0.0 — on the user's
+  word, merge; tags `auth-broker-v3.1.0`, `auth-broker-cli-v1.0.0` on the merge
+  commit; the user runs `npm run release:publish` (library first). Registry:
+  `npm view @mcp-abap-adt/auth-broker@3.1.0 bin dependencies` (no `bin`, no
+  `auth-stores`), `npm view @mcp-abap-adt/auth-broker-cli@1.0.0 bin dependencies`,
+  then the §10 smoke check against the registry versions in an empty directory.
+  Build and test the tags in the main checkout.
 - **Next depends on:** the merge.
 
 ## Step 4 — `@mcp-abap-adt/auth-broker` 4.0.0, in five PRs
@@ -298,7 +321,8 @@ All in auth-broker, each in its own worktree under `.worktrees/`, branched from
 `main` after the previous merge. Every PR keeps the carried-over §9 suite
 (today's `AuthBroker.test.ts`) green — H5 holds at every merge, not only at the
 end. Master stays clearly unreleased throughout: the library's version stays
-`3.0.4` until step 7, and `[Unreleased]` collects the changes. The gate of every
+`3.1.0` and the CLI's `1.0.0` (both published, so `release:publish` has nothing
+to do) until step 7, and each package's `[Unreleased]` collects the changes. The gate of every
 step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 
 ### 4a — both packages on the new contracts and providers
@@ -320,7 +344,11 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
     `src/stores/interfaces.ts:4` (they name `interfaces-auth-broker` for the store
     contracts, as spec §14 now says).
   - CLI (spec §10, third bullet): `auth-providers` `^5.1.0`, `auth-stores`
-    `^3.0.0`, the contract packages; the device flow gets
+    `^3.0.0`, the contract packages; its range on `@mcp-abap-adt/auth-broker`
+    stays `^3.1.0` (the workspace links the library whatever its range, and
+    `check:packed` installs the packed one) until step 7 sets `^4.0.0` — a
+    published CLI must never accept a library it was not built against, which
+    is why the range moves only in the release that publishes both; the device flow gets
     `consoleDeviceCodePresenter(logger)`; the SAML flows get an
     `assertionValidator` built from the trust the CLI collects
     (`createSignedResponseValidator` for pure, `createSignedAssertionValidator`
@@ -501,7 +529,17 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   *Breaking* item 4 (§12).
 - **Next depends on:** the merge.
 
-## Step 5 — `@mcp-abap-adt/auth-broker-cli` 1.0.0 (spec §10)
+## Step 5 — `@mcp-abap-adt/auth-broker-cli`, the version after 1.0.0 (spec §10)
+
+**Its version** (1.0.0 is the 3.x commands, released with `auth-broker` 3.1.0)
+is decided when this step opens, by the CLI's own surface — the commands, their
+flags, exit codes and the files they write — not by the library's major: a
+**minor** (1.x.0) if every 1.0.0 invocation still runs and writes what a reader
+of 1.0.0's output can read; a **major** (2.0.0) if a flag goes or changes
+meaning, an invocation that worked now fails, or what a consumer reads changes
+incompatibly (the client no longer in the session file, means moved to the key
+store, `--passcode` a different grant are the candidates to weigh). The
+dependency on `auth-broker` `^4.0.0` alone does not decide it.
 
 - **Repository:** auth-broker, worktree `.worktrees/cli-1`, branch
   `feat/cli-destinations` from `main`.
@@ -520,7 +558,7 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   inference H1 forbids); the CLI calls `broker.flush()` before it exits and exits
   non-zero on a failure; `mcp-auth` keeps injecting its own provider (token API
   path). Dependencies as §10 (`auth-broker` at the workspace version, which
-  becomes `^4.0.0` in step 7).
+  stays `^3.1.0` until step 7 sets `^4.0.0`).
 - **Tests first:** one per row of the §10 table — the means each command
   writes read back through the key store, and with the session store as a
   destination `getProvider` builds from (the CLI test builds the provider with
@@ -538,7 +576,7 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 - **Docs:** CLI README (each command's destination, the install command, the
   `flush` exit code), root README, `docs/installing/INSTALLATION.md`
   (`npm i -g @mcp-abap-adt/auth-broker-cli`), `docs/using/USAGE.md`, CLI CHANGELOG
-  1.0.0 draft (the commands shipped in `@mcp-abap-adt/auth-broker` up to 3.0.4).
+  `[Unreleased]` for that version.
 - **Release:** none here — step 7 publishes both packages in one run.
 - **Next depends on:** the merge.
 
@@ -567,12 +605,12 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 - **Next depends on:** all four cases green on their systems, recorded in the
   PR; merged.
 
-## Step 7 — release: `auth-broker` 4.0.0 and `auth-broker-cli` 1.0.0
+## Step 7 — release: `auth-broker` 4.0.0 and the step-5 `auth-broker-cli` version
 
 - **Repository:** auth-broker, worktree `.worktrees/release-4`, branch
   `release/4.0.0`.
-- **What changes:** library version `4.0.0`, CLI `1.0.0` with its dependency
-  `@mcp-abap-adt/auth-broker` `^4.0.0`; both CHANGELOGs dated, the library's with
+- **What changes:** library version `4.0.0`, CLI the version step 5 decided,
+  with its dependency `@mcp-abap-adt/auth-broker` `^4.0.0`; both CHANGELOGs dated, the library's with
   the §12 *Breaking* list and the migration notes (server, calm-server, global
   `mcp-auth` installs, the means/secret split and how a 3.x session file maps
   onto it, 3.x `jwt`/`saml` files needing `grantType`); a final pass over
@@ -582,12 +620,12 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 - **Gate:** step-3 gate, and `npm pack --dry-run` per package listing no
   `docs/superpowers` file.
 - **Release:** on the user's word, merge; tags `auth-broker-v4.0.0` and
-  `auth-broker-cli-v1.0.0` on the merge commit; the user runs
+  `auth-broker-cli-v<that version>` on the merge commit; the user runs
   `npm run release:publish` once — workspace order publishes the library first,
-  so no registry state has 3.x's `mcp-auth` gone without the CLI present
+  so the CLI's `^4.0.0` resolves the moment it is published
   (exit 2 means published, not yet served: re-check). Registry: `npm view
   @mcp-abap-adt/auth-broker@4.0.0 bin dependencies` (no `bin`, no `auth-stores`),
-  `npm view @mcp-abap-adt/auth-broker-cli@1.0.0 bin`, then the smoke check of
+  `npm view @mcp-abap-adt/auth-broker-cli@<that version> bin dependencies`, then the smoke check of
   §10 against the registry versions in an empty directory. Build and test the
   tags in the main checkout.
 
@@ -690,11 +728,12 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   loads the template (`src/__tests__/helpers/configHelpers.ts:110`); whether
   every integration suite then skips is not verified. Step 1's gate checks it
   first.
-- **R5 — publish-changed refuses an untagged unpublished version.** Steps 3–6
-  rely on that refusal to keep the CLI's `1.0.0` from being published early; a
-  `release:publish` run during that time fails for the whole repository. That is
-  intended (nothing should publish before step 7), and the root README says so
-  while it lasts.
+- **R5 — publish-changed refuses an untagged unpublished version.** Planned as
+  the guard that kept the CLI's `1.0.0` unpublished through steps 3–6;
+  superseded 2026-10-01, when the split was released as `auth-broker` 3.1.0 and
+  `auth-broker-cli` 1.0.0 after step 3. It now only refuses between a version
+  bump and its tags; during steps 4–6 both versions are on the registry and
+  `release:publish` has nothing to publish.
 
 ## Spec points found while planning
 

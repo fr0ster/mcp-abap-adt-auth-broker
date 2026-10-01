@@ -17,14 +17,18 @@ The library:
 npm install @mcp-abap-adt/auth-broker
 ```
 
-The commands: **`@mcp-abap-adt/auth-broker-cli` is not published yet** — 1.0.0
-is released together with `@mcp-abap-adt/auth-broker` 4.0.0. Up to 3.0.4 the
-commands shipped in the library package, and that is still where the published
-ones are:
+The commands:
 
 ```bash
-npm install -g @mcp-abap-adt/auth-broker@3.0.4     # today
-npm install -g @mcp-abap-adt/auth-broker-cli       # once 1.0.0 is published
+npm install -g @mcp-abap-adt/auth-broker-cli
+```
+
+Up to 3.0.4 the commands shipped in the library package; from 3.1.0 they are
+`@mcp-abap-adt/auth-broker-cli` (1.0.0 on), which depends on the library
+`^3.1.0`. If you installed the library globally for the commands:
+
+```bash
+npm uninstall -g @mcp-abap-adt/auth-broker && npm i -g @mcp-abap-adt/auth-broker-cli
 ```
 
 Node.js 22, 24 or 26.
@@ -58,7 +62,7 @@ what each needs: [`docs/development/TESTING.md`](docs/development/TESTING.md).
 
 ## Releasing
 
-Each package is tagged `<dir>-v<version>`: `auth-broker-v4.0.0`,
+Each package is tagged `<dir>-v<version>`: `auth-broker-v3.1.0`,
 `auth-broker-cli-v1.0.0`. The `v*` tags are the library's history up to 3.0.4,
 when it was the only package here.
 
@@ -70,9 +74,9 @@ prerelease on `latest`, and moving `latest` backwards. Exit 2 means published
 but not yet served by the registry: wait, then re-check. `--dry-run` prints the
 plan and changes nothing.
 
-**Until 4.0.0 it refuses for the whole repository**: the CLI's 1.0.0 is on
-`main` without its tag, on purpose, so nothing is published before the two
-packages go out together.
+A version with no tag is refused, which is why `release:publish` fails for the
+whole repository between a version bump and its tags: tag the merge commit
+(`auth-broker-v3.1.0`, `auth-broker-cli-v1.0.0`), then publish.
 
 Pushing a tag also runs `.github/workflows/release.yml`, which packs the
 package the tag names and attaches the tarball to a GitHub release.

@@ -154,8 +154,8 @@ Stores use the following environment variables internally (not exported as const
 ## CLI: mcp-auth
 
 The commands in this section and the next are `@mcp-abap-adt/auth-broker-cli`
-(`packages/auth-broker-cli`), not yet published; up to 3.0.4 they shipped in
-`@mcp-abap-adt/auth-broker`, which is where the published ones are. Their
+(`packages/auth-broker-cli`, `npm i -g @mcp-abap-adt/auth-broker-cli`); up to
+3.0.4 they shipped in `@mcp-abap-adt/auth-broker`. Their
 [README](../../packages/auth-broker-cli/README.md) has every option.
 
 Use `mcp-auth` to generate or refresh `.env`/JSON output using AuthBroker + stores.

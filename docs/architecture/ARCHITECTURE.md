@@ -35,7 +35,7 @@ tools/                     check-graph.js, check-packed.js, publish-changed.js,
   `interfaces-auth-broker`, `interfaces-utils`) and `auth-providers` — never
   `auth-stores`; the CLI's, the library, the stores, the providers, the
   contracts and the logger.
-- Releases are tagged per package, `<dir>-v<version>` (`auth-broker-v4.0.0`,
+- Releases are tagged per package, `<dir>-v<version>` (`auth-broker-v3.1.0`,
   `auth-broker-cli-v1.0.0`); `npm run release:publish` publishes exactly the
   versions the registry lacks, and refuses one without its tag.
 

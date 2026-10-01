@@ -10,9 +10,11 @@ cached token is still good, when to refresh and when to log in is the provider's
 
 The `mcp-auth` and `mcp-sso` commands that write session files are in
 [`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md), in the same
-repository. Up to 3.0.4 they shipped in this package; the CLI package is not
-published yet, so until it is, `npm i -g @mcp-abap-adt/auth-broker@3.0.4` is
-where the published commands are.
+repository. Up to 3.0.4 they shipped in this package; from 3.1.0 this package
+has no `bin`. Install the commands with
+`npm i -g @mcp-abap-adt/auth-broker-cli` — after
+`npm uninstall -g @mcp-abap-adt/auth-broker` if you had installed this one
+globally for them.
 
 ## Features
 

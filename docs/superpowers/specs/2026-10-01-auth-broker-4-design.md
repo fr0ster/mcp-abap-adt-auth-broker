@@ -916,9 +916,14 @@ cannot reach it. Same check as the server's
 shipped a bin that died on `MODULE_NOT_FOUND`.
 
 **Release order.** `interfaces-auth-sap` 2.0.0 and `interfaces-auth-broker` 1.0.0 — done, published 2026-10-01 in one run of the interfaces repository's `release:publish`; then `auth-stores` 3.0.0 and `auth-providers` 5.1.0 (§1; the last depends on neither).
-Then one `release:publish` run here publishes `auth-broker` 4.0.0 and
-`auth-broker-cli` 1.0.0 in workspace order, so no registry state has 3.x's
-`mcp-auth` gone without the CLI package present.
+The split itself was released ahead of 4.0.0 (decided 2026-10-01, after plan
+step 3): `auth-broker` 3.1.0 — no `bin`, API unchanged — and `auth-broker-cli`
+1.0.0 — the 3.x commands as they are, depending on `auth-broker` `^3.1.0` — in
+one `release:publish` run, library first, so no registry state has 3.x's
+`mcp-auth` gone without the CLI package present. What this section describes
+beyond the move (the explicit collaborators, the destination writes, `flush()`)
+ships in a later CLI version, released with `auth-broker` 4.0.0 in one run
+here, library first.
 
 ## 11. The repository takes the `mcp-abap-adt-interfaces` layout
 
@@ -1011,7 +1016,8 @@ tools/                     publish-changed.js, test-publish-changed.js (copied; 
 
 **`@mcp-abap-adt/auth-broker` 4.0.0:**
 
-1. **No `bin`.** `mcp-auth` and `mcp-sso` are in `@mcp-abap-adt/auth-broker-cli`.
+1. **No `bin`.** `mcp-auth` and `mcp-sso` are in `@mcp-abap-adt/auth-broker-cli`
+   — already so from 3.1.0 (the split was released ahead, §10 *Release order*).
 2. **Contracts:** `@mcp-abap-adt/interfaces-auth` ^3.0.0,
    `@mcp-abap-adt/interfaces-auth-sap` ^2.0.0, `@mcp-abap-adt/interfaces-auth-broker`
    ^1.0.0, `@mcp-abap-adt/auth-providers` ^5.1.0. Types from `interfaces-auth` 2.x no longer mix.
@@ -1070,8 +1076,9 @@ Additive: `getProvider`, `DestinationConfigError`, the collaborator options,
   auth-stores 3.0.0 it needs a key store for the client the 3.x `mcp-auth`
   wrote into its sessions (§1.2 item 2).
 - **People who `npm i -g @mcp-abap-adt/auth-broker` for `mcp-auth`:**
-  `npm uninstall -g @mcp-abap-adt/auth-broker && npm i -g @mcp-abap-adt/auth-broker-cli`.
-  Commands and flags are the same. A session file written by 3.x carries means
+  `npm uninstall -g @mcp-abap-adt/auth-broker && npm i -g @mcp-abap-adt/auth-broker-cli`
+  — a migration of 3.1.0, where the commands left the library; anyone still on
+  3.0.4 meets it at 4.0.0. Commands and flags are the same. A session file written by 3.x carries means
   and secret together: a consumer that points D6's destination store at the
   same directory has its means read as they are, and a `basic` or `snc` one works
   unchanged; a `jwt` or `saml` one needs `grantType` — run the command that

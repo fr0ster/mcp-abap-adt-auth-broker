@@ -7,14 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-01
+
 ### Added
 
 - **The package.** `mcp-auth` and `mcp-sso`, moved out of
   `@mcp-abap-adt/auth-broker`, where they shipped up to 3.0.4 — its
   [CHANGELOG](../auth-broker/CHANGELOG.md) holds their history. Commands and
-  flags are unchanged. Not published yet: 1.0.0 is released with
-  `@mcp-abap-adt/auth-broker` 4.0.0, and its version has no tag until then, so
-  `npm run release:publish` refuses.
+  flags are unchanged. Released together with `@mcp-abap-adt/auth-broker`
+  3.1.0, the first version without them, which this package depends on
+  (`^3.1.0`). Whoever installed the library globally for the commands:
+  `npm uninstall -g @mcp-abap-adt/auth-broker && npm i -g @mcp-abap-adt/auth-broker-cli`.
 
 ### Changed
 

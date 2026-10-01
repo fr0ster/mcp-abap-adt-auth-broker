@@ -11,6 +11,30 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-10-01
+
+**Why a minor.** The library's API is unchanged: every export, signature and
+behaviour of 3.0.4 stays. What changed is where the commands install from —
+`mcp-auth` and `mcp-sso` are now `@mcp-abap-adt/auth-broker-cli` 1.0.0 — and
+which dependencies this package pulls in. Read the migration below if you
+install this package for its commands, or import `auth-stores` or
+`auth-providers` without declaring them.
+
+### Migration
+
+- **You run `npm i -g @mcp-abap-adt/auth-broker` for `mcp-auth` / `mcp-sso`:**
+  this version has no `bin`. Install the commands from their own package:
+
+  ```bash
+  npm uninstall -g @mcp-abap-adt/auth-broker && npm i -g @mcp-abap-adt/auth-broker-cli
+  ```
+
+  Commands and flags are the same.
+- **Your code imports `@mcp-abap-adt/auth-stores` or
+  `@mcp-abap-adt/auth-providers` and found them only because this package
+  depended on them:** declare them in your own `package.json`. This package no
+  longer installs either.
+
 ### Changed
 
 - **The repository is a workspace** (the `mcp-abap-adt-interfaces` layout): this
@@ -23,15 +47,15 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
 ### Removed
 
 - **`bin`: `mcp-auth` and `mcp-sso`** move to `@mcp-abap-adt/auth-broker-cli`,
-  commands and flags unchanged. Whoever installs this package for the commands
-  installs that one instead, once it is published.
+  commands and flags unchanged (see *Migration*).
 - **`axios`** from the dependencies: nothing imports it.
 - **`@mcp-abap-adt/logger`** from the dependencies: only the commands use it
   at run time; the tests keep it as a dev dependency.
 - **`@mcp-abap-adt/auth-stores` and `@mcp-abap-adt/auth-providers`** from the
   dependencies: the library imports neither, only its tests do (dev
   dependencies now). `tools/check-graph.js` keeps it that way for auth-stores.
-  A consumer that imported either without declaring it must declare it.
+  A consumer that imported either without declaring it must declare it (see
+  *Migration*).
 - **The test helpers from `dist/`**: `dist/__tests__/helpers` shipped in the
   tarball; the build no longer compiles anything under `src/__tests__`.
 - **`CONTRIBUTORS.md` from the tarball**: it stays at the repository root.

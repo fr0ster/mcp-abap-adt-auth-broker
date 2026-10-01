@@ -28,7 +28,7 @@ npm test -w @mcp-abap-adt/auth-broker-cli
 - `check:graph` (`tools/check-graph.js`): runtime files (src outside `__tests__`) import only their package's allowlist, declare it in `dependencies`, and use every dependency; tests import only what the package declares (dependencies or devDependencies). The library never imports `auth-stores`.
 - `check:packed` (`tools/check-packed.js`): the bin smoke check — pack both, install the tarballs into an empty directory, run `mcp-auth`/`mcp-sso` with `--version` (must print the CLI's version) and `help`, load the library (no `bin`). Needs the network.
 - `check:publish` (`tools/test-publish-changed.js`): the release tool against fixture repositories.
-- `release:publish` (`tools/publish-changed.js`): publishes exactly the versions the registry lacks, in workspace order, after one `npm run check`; refuses an untagged version. Tags are `<dir>-v<version>` (`auth-broker-v…`, `auth-broker-cli-v…`); the `v*` tags are the single package's history. Until 4.0.0 it refuses for the whole repository — the CLI's 1.0.0 is untagged on purpose. Never `npm publish` a workspace by hand.
+- `release:publish` (`tools/publish-changed.js`): publishes exactly the versions the registry lacks, in workspace order, after one `npm run check`; refuses an untagged version. Tags are `<dir>-v<version>` (`auth-broker-v…`, `auth-broker-cli-v…`); the `v*` tags are the single package's history. Between a version bump and its tags it refuses for the whole repository: tag the merge commit first. Never `npm publish` a workspace by hand.
 
 ## Architecture
 

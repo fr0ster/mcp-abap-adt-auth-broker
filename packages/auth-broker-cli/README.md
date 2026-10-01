@@ -16,18 +16,16 @@ package; its CHANGELOG holds their history. This package carries them from
 
 ## Installation
 
-**Not published yet.** 1.0.0 is released together with
-`@mcp-abap-adt/auth-broker` 4.0.0. Until then the published commands are in the
-library:
-
-```bash
-npm install -g @mcp-abap-adt/auth-broker@3.0.4
-```
-
-Once 1.0.0 is on npm:
-
 ```bash
 npm install -g @mcp-abap-adt/auth-broker-cli
+```
+
+It depends on `@mcp-abap-adt/auth-broker` `^3.1.0`, the first library version
+without the commands. If you installed the library globally to get them
+(3.0.4 or earlier), swap it for this package:
+
+```bash
+npm uninstall -g @mcp-abap-adt/auth-broker && npm i -g @mcp-abap-adt/auth-broker-cli
 ```
 
 Requires Node.js 22, 24 or 26 (`engines: "^22 || ^24 || ^26"`).
