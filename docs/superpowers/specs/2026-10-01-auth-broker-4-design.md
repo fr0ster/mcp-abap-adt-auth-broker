@@ -6,7 +6,7 @@ fields, store changes and consumer-supplied collaborators the code lacks today
 (§1). Every section names the *Holds throughout* rules it serves (H0–H6); §16
 maps every *What changes* bullet and every hold to where it is met.
 
-**Status:** draft for review in #33.
+**Status:** draft for review in #33; D8 and D9 (2026-10-02) recorded in #37.
 
 **Evidence.** A claim tagged `file:line` was read in the code named. Paths
 without a repository prefix are this repository at `e88c652`; others are
@@ -14,8 +14,11 @@ without a repository prefix are this repository at `e88c652`; others are
 `auth-stores` (2.0.0, `2a7fc4b`), `interfaces` (`interfaces-auth` 3.0.0 /
 `interfaces-auth-sap` 1.1.0, `160a0e6`; `interfaces-auth-broker` 1.0.0 /
 `interfaces-auth-sap` 2.0.0, `6165673`), `server` (`mcp-abap-adt`, `ec208a87`)
-and `calm` (`mcp-calm-server`). *(inference)* marks what was not verified;
-*measured* marks what was run.
+and `calm` (`mcp-calm-server`). Claims added on 2026-10-02 (decisions D8, D9)
+cite `auth-providers` 5.1.0 (`b4b4248`), `auth-stores` 3.0.0 (`a4f4612`),
+`server` 15.1.0 (`a4c48a4c`) and this repository at 4c (#37), each tagged by
+repository. *(inference)* marks what was not verified; *measured* marks what
+was run.
 
 ## 0. What shaped this design
 
@@ -68,10 +71,27 @@ and `calm` (`mcp-calm-server`). *(inference)* marks what was not verified;
    (a service key file, a database, something hand-written; a session folder,
    memory); the broker knows only the contracts. §8 states the split and
    verifies the contract carries it; every section below follows from it.
+7. **The resource URL is not authorization data** (decided by the user,
+   2026-10-02 — plan D8). No UAA token provider reads a `serviceUrl`: their
+   configs take the client and `uaaUrl` only (`auth-providers
+   src/providers/AuthorizationCodeProvider.ts:27-31`,
+   `ClientCredentialsProvider.ts:20-23`, `UaaPasscodeProvider.ts:26-32`;
+   `grep serviceUrl` in the three finds nothing, and `BaseTokenProvider.ts:263`
+   takes it only as an unused argument of `validateToken`). The connector
+   needs the URL; `getProvider` does not. **But a secret is bound to the
+   resource it was obtained for** (decided 2026-10-02 — plan D9): a JWT's
+   audience, cookies' host and path, basic's system — presenting it to another
+   resource is a leak. So the URL is not needed to *build* a provider, and is
+   needed to decide whether a stored secret may *seed* it (§4.5).
 
 ## 1. Prerequisites
 
-Four releases precede 4.0.0: a new contract package, the SAP one without what moved into it, the stores and the providers. The first two are done: `interfaces-auth-sap` 2.0.0 and `interfaces-auth-broker` 1.0.0 were published on 2026-10-01 (tags `interfaces-auth-sap-v2.0.0`, `interfaces-auth-broker-v1.0.0` in `mcp-abap-adt-interfaces`). The split of fact 6 needs no further contract release (§8); it needs `auth-stores` 3.0.0 (§1.2).
+Four releases precede 4.0.0: a new contract package, the SAP one without what moved into it, the stores and the providers. The first two are done: `interfaces-auth-sap` 2.0.0 and `interfaces-auth-broker` 1.0.0 were published on 2026-10-01 (tags `interfaces-auth-sap-v2.0.0`, `interfaces-auth-broker-v1.0.0` in `mcp-abap-adt-interfaces`). The split of fact 6 needs no further contract release (§8); it needs `auth-stores` 3.0.0 (§1.2). `auth-stores` 3.0.0 and `auth-providers` 5.1.0 are released too.
+
+Two more follow 4c (decided 2026-10-02, D8 and D9), before the broker applies
+the binding of §4.5: `interfaces-auth-broker` 1.1.0 (§1.4) — the field that
+carries a secret's resource — and `auth-stores` 3.1.0 (§1.5) — the key stores'
+options and that field in the session stores.
 
 ### 1.1 `@mcp-abap-adt/interfaces-auth-broker` 1.0.0 (new) and `interfaces-auth-sap` 2.0.0 — published 2026-10-01
 
@@ -324,8 +344,102 @@ only as a dev dependency (`^5.0.1`, for its tests); its runtime dependencies
 are `interfaces-auth` ^3.0.0 and `interfaces-auth-sap` ^1.1.0 among others, so
 5.1.0 needs no connection release.
 
+### 1.4 `@mcp-abap-adt/interfaces-auth-broker` 1.1.0 (minor, additive) — decided 2026-10-02
+
+One optional field on `IConnectionConfig`, so `IConfig` — what `loadSession`
+answers and `saveSession` takes (`interfaces-auth-broker src/auth/IConfig.ts:9-10`)
+— carries it beside the secret:
+
+```ts
+interface IConnectionConfig {
+  // … every 1.0.0 field unchanged …
+  /**
+   * The canonical URI of the resource the secret was obtained for. A session
+   * store keeps it with the secret, written and cleared with it; a key store
+   * never answers it. Compared as a string: whoever presents the secret
+   * compares it with the URI of the resource it is about to be presented to,
+   * and uses the secret only when they are equal.
+   */
+  issuedFor?: string;
+}
+```
+
+- **The canonical URI** (decided 2026-10-02, refining D9): scheme and host
+  lower-cased; the port explicit (`443` for `https`, `80` for `http` when the
+  URL has none); the path without a trailing `/` (the root path is empty);
+  and the SAP client as the query parameter `sap-client=<n>` when the
+  destination states one — nothing else (no user info, no other query
+  parameter, no fragment). Example:
+  `https://my-abap.example.com:443/sap/bc/adt?sap-client=100`.
+  - *Why more than the host:* several applications with their own XSUAA live
+    on one BTP host (the path), cookies carry a `Path`, and client 100 and 200
+    on one system are different user stores (the client).
+  - *Why a URI and not a URL field:* it names a resource, not an HTTP
+    endpoint. An RFC system could later be `sap-rfc://host/00?sap-client=100`;
+    nothing stores an RFC secret today, so no RFC form is defined now.
+  - *What it does not do:* the audience of a token (`aud`, scopes) stays the
+    resource's to enforce. Whoever compares parses no token — two strings.
+- **The doc comment says what the field is**; the contract package holds no
+  logic, so the canonicalising function lives in the broker (§4.5), not here.
+- **Minor:** an optional field; every 1.0.0 implementation still satisfies the
+  type. The broker's code that reads the field needs `^1.1.0`.
+
+### 1.5 `@mcp-abap-adt/auth-stores` 3.1.0 (minor) — decided 2026-10-02
+
+1. **The key stores take the means their key cannot state, from whoever
+   builds them** (D8). A SAP service key cannot state a grant (§1.2 item 3),
+   and an XSUAA/BTP key carries only the authorizing service, not the URL of
+   the resource it authorizes for. 2.x took that URL in the *session* store
+   (`new BtpSessionStore(dir, serviceUrl)`, `auth-stores` 2.0.0
+   `src/stores/xsuaa/XsuaaSessionStore.ts:50`); 3.0.0 removed it from the
+   session stores (`auth-stores` 3.0.0 `XsuaaSessionStore.ts:43`) without
+   moving it anywhere. It moves to the key store:
+   - `new AbapServiceKeyStore(dir, { grantType?, log? })` — an ABAP
+     environment key carries the ABAP URL (`abap.url`,
+     `AbapServiceKeyStore.ts:172-178`), so only the grant is an option;
+   - `new XsuaaServiceKeyStore(dir, { serviceUrl?, grantType?, log? })`.
+
+   An option given is what `getConnectionConfig` answers for that field;
+   absent, the 3.0.0 answer is unchanged (no `grantType`; for XSUAA the key's
+   own reading of `serviceUrl`, `XsuaaServiceKeyStore.ts:154-156`, which takes
+   a `url` without `authentication` in it as the resource URL — an inference
+   recorded here, not changed by 3.1.0). Stated by whoever builds the store,
+   so nothing is inferred (H1). Keeping `(dir, log)` working beside the new
+   options object is 3.1.0's to do — a minor must.
+2. **The session stores keep `issuedFor` with the secret** (D9): the ABAP
+   stores under `SAP_ISSUED_FOR`, the XSUAA stores under `XSUAA_ISSUED_FOR`,
+   the in-memory ones as a field. Accepted by `saveSession` beside the four
+   secret fields (3.0.0 refuses any other field, `auth-stores`
+   `src/session/sessionSecret.ts:52-60`, so the broker cannot write it before
+   3.1.0); written with the credential and cleared with it — a new credential
+   written without `issuedFor` clears the old one; answered by `loadSession`
+   only while a credential is held. The store keeps the string; it neither
+   canonicalises nor judges it.
+3. **Legacy files** (written by 2.x or 3.0.0) have no `SAP_ISSUED_FOR`. When
+   the file holds a credential and no `SAP_ISSUED_FOR`, the session store
+   answers as `issuedFor` the file's `SAP_URL`, with `SAP_CLIENT` as
+   `sap-client` when present (the XSUAA stores: `XSUAA_MCP_URL`, `auth-stores`
+   3.0.0 `src/stores/destination/EnvDestinationStore.ts:162-166`; their files
+   hold no client). Why that is the binding and not an inference: the 3.x
+   broker's `persist` wrote `SAP_URL` together with the token
+   (`src/AuthBroker.ts:301-308` at `e88c652`) — it *is* the URL the token was
+   used for. So existing sessions keep working after the upgrade. The broker
+   canonicalises both sides before it compares (§4.5), so the store composes
+   the URI without sharing the broker's function.
+   **Remaining risk, stated:** a legacy shared file whose `SAP_URL` was edited
+   by hand before its first renewal under the binding answers a binding
+   nobody checked — the secret would be presented to the edited URL. The same
+   holds for a file whose token a 3.0.0 store rewrote (it keeps the other
+   lines) after the means had moved elsewhere. The first renewal writes
+   `SAP_ISSUED_FOR`, and from then on the file's `SAP_URL` is not read for it.
+   A legacy XSUAA session written through the server, which passed `''` as
+   the URL (`server src/lib/stores/index.ts:84`, `:172`), has no binding: its
+   secret is not reused and the destination logs in once afresh.
+4. **Version: minor.** Constructor options and an accepted field are
+   additive; no 3.0.0 call changes meaning.
+
 Neither the broker nor the CLI can be released before these three; §9 gives
-the order.
+the order. The binding (§4.5) waits for §1.4 and §1.5.
 
 ## 2. The public surface
 
@@ -456,10 +570,28 @@ src/serviceKey/IServiceKeyStore.ts:17`, `:25-27`, `:35`;
   and reaches the provider as no secret. `client_credentials`, `passcode`,
   `authorization_code` and `saml2_bearer` need `uaaUrl`; the OIDC grants need
   `uaaClientId` and take their endpoints from the `oidc*` fields.
+- **`serviceUrl` and `sapClient` — the resource, not authorization data**
+  (fact 7, D8). No provider is built from them, so `getProvider` requires
+  neither (`src/destinations.ts` `uaaProvider` at 4c names only the client and
+  the `authorization` option). The broker reads them for one thing: the
+  canonical URI of the resource (§1.4), which binds the stored secret (§4.5)
+  and is written with a new one (§6). The connector's URL is the consumer's to
+  take from its key store — the broker hands what the key store answers.
+  **Where the key store gets it — the consumer's store factory, as before**
+  (D8): the server picks the store by the key's format (`server
+  src/lib/stores/index.ts:34-97`, `detectStoreType`). An ABAP environment key
+  carries the ABAP URL; an XSUAA/BTP key carries only the authorizing
+  service, so its resource URL was passed separately — in 2.x to the session
+  store, `new BtpSessionStore(dir, serviceUrl)` — and under auth-stores 3.1.0
+  to the key store: `new XsuaaServiceKeyStore(dir, { serviceUrl, grantType })`,
+  `new AbapServiceKeyStore(dir, { grantType })` (§1.5). The grant likewise: a
+  SAP key cannot state it; whoever builds the store does.
 - **The secret — from the session store only**, through `loadSession`, whose
   `IConfig` carries all four fields (`interfaces-auth-broker
   src/auth/IConfig.ts:9-10`): `authorizationToken` or `sessionCookies`,
-  `expiresAt`, `refreshToken`. Means a session store answers (a 2.x store
+  `expiresAt`, `refreshToken` — and, with 1.1.0, `issuedFor`, the resource the
+  secret was obtained for (§1.4), which decides whether it is used (§4.5).
+  Means a session store answers (a 2.x store
   reading a 3.x file) are not read (§3.2). When there is no session the
   provider is built unseeded and obtains its first secret at `prepare()` by its
   grant (§4.1).
@@ -484,7 +616,9 @@ All classes are auth-providers 5.1.0 (5.0.1 plus the `saml2_pure` seed and the `
    choose the row, and the row's fields and the client are read there.
 2. The **secret** comes from the session store when there is one — the
    *seed*: the stored `authorizationToken` (`accessToken`) or `sessionCookies`,
-   its `expiresAt`, and the refresh token.
+   its `expiresAt`, and the refresh token — **only when it was obtained for
+   this destination's resource** (§4.5); otherwise it is as if there were no
+   session.
 3. **No session** — the provider is built unseeded and logs in at `prepare()`
    by its grant (a client-credentials request, or a login through the
    consumer's collaborator); `onTokens` then writes the first secret (§6).
@@ -564,8 +698,9 @@ only to refuse in `prepare()`.
 
 - Auth-providers rule 1 ("no exception crosses the contract") binds the four
   `IAuthProvider` methods; `getProvider` is the broker's, and the broker
-  already throws on configuration before any provider is asked (3.x: a missing
-  `serviceUrl`, `src/AuthBroker.ts:278-283`).
+  already throws on configuration before any provider is asked (the 3.x token
+  API: a missing `serviceUrl`, `src/AuthBroker.ts:278-283` — kept there, H5,
+  not in `getProvider`, D8).
 - A missing field is a fault no renewal cures. A provider built to refuse would
   be a credential the destination does not have, and the fault would surface at
   the first `connect()` instead of where the server builds its connector at
@@ -580,12 +715,52 @@ other source of means); no means for the destination (the key store answers
 `grantType`, or a pair outside §3.1; a field its row in §4.1 needs (`''`
 counts as missing; `oidcIssuerUrl` or the explicit endpoints satisfy the OIDC
 rows as the providers accept either); a collaborator its row needs (named by
-option, e.g. `deviceCodePresenter`); a token provider's destination without
-`serviceUrl` in its means (the 3.x rule, kept: a connector built from a
-provider with nowhere to connect is the same startup fault). A provider
+option, e.g. `deviceCodePresenter`). **Not** for a destination without
+`serviceUrl` (D8, decided 2026-10-02 — reversing the 3.x rule this section
+kept until then): no provider reads it (fact 7), and where the connector
+connects is the consumer's, from the key store; a token destination without
+one gets its provider, and only its stored secret is not reused (§4.5). A provider
 constructor's own `ValidationError` (an `sncQop` outside `1|2|3|8|9`,
 `SncLogonProvider.ts:90-96`; `idpInitiated` with a request ID) becomes a
 `DestinationConfigError` naming the store field, with the original as `cause`.
+
+### 4.5 A secret is bound to its resource (D9, decided 2026-10-02)
+
+A stored secret seeds a provider only when the session store's `issuedFor`
+equals the canonical URI of this destination's resource:
+
+1. **The resource URI** is computed by the broker from the means —
+   `serviceUrl` and `sapClient` — with one canonicalising function (§1.4:
+   scheme and host lower-cased, explicit port, path without a trailing `/`,
+   `sap-client=<n>` when a client is stated). `sapClient` from the means wins
+   over a `sap-client` already in `serviceUrl`'s query; other query parameters,
+   user info and a fragment are dropped. The function is idempotent, and the
+   broker applies it to **both** sides before comparing, so a store need not
+   canonicalise (§1.5 item 3).
+2. **Equal → seeded** as §4.1 says. **Different, or either side absent** (no
+   `serviceUrl` in the means, no `issuedFor` in the session, a URL that does
+   not parse) → the secret is not used: the provider is built as with no
+   session and logs in afresh by its grant; the new secret is written with the
+   new `issuedFor` (§6), replacing the old one. The refresh token is part of
+   the secret and is discarded with it — a refresh token obtained for one
+   resource is not spent to obtain a token for another.
+3. **The log says only** "secret bound to another resource, discarded", with
+   the destination name — never either URI, never a token.
+4. **The rows it applies to:** every row that takes a seed (§4.1) —
+   `authorization_code`, `passcode`, the OIDC grants, `saml2_pure`,
+   `saml2_bearer`. `client_credentials` reads no session. **Proposed, for the
+   binding step's review (not decided):** the `none` rows apply it too; since
+   their stored credential is the only way in, a mismatch there is the §4.4
+   error naming `issuedFor` (never a value) rather than a silent discard.
+5. **Why the broker and not the provider:** the providers take a seed and
+   know no resource (fact 7); the broker is what pairs a session with a
+   destination's means.
+6. **Not a check of the token:** the token's audience stays the resource's to
+   enforce. The binding stops the broker from *presenting* a secret to a
+   resource it was not obtained for; it does not make a token valid.
+
+Applied in the binding step (plan, after `auth-stores` 3.1.0); until then 4c
+seeds from any stored secret, as before.
 
 ## 5. Collaborators the consumer supplies (H2; goal open 1)
 
@@ -644,7 +819,12 @@ rules:
    (`src/AuthBroker.ts:310-333`). The contract does not say whether
    `saveSession` merges into or replaces a session (`ISessionStore.ts:21-27`);
    writing the complete secret every time makes the result the same either
-   way. `setAuthorizationConfig` is not used: its `IAuthorizationConfig`
+   way. **With the secret, `issuedFor`** (D9, from the binding step): the
+   canonical URI of the resource the provider was built for (§4.5 item 1),
+   computed when the provider is built — the resource the secret will be
+   presented to; absent when the means state no `serviceUrl`. It is not means:
+   it describes the secret, lives in the session store, and is written and
+   cleared with it (§1.5 item 2). `setAuthorizationConfig` is not used: its `IAuthorizationConfig`
    requires the client (`interfaces-auth-sap src/auth/IAuthorizationConfig.ts:7-11`),
    which is means.
 2. **No means is ever written** — not `serviceUrl`, not `authType`, not the
@@ -726,7 +906,7 @@ by `getProvider` and the token API** (when no consumer `provider` is given).
 | Store | Holds | Implementations (the broker knows none) |
 |---|---|---|
 | `IServiceKeyStore` — the **means**: what is used to obtain a session secret | the client (`IAuthorizationConfig`: `uaaUrl`, `uaaClientId`, `uaaClientSecret`); `authType`, `grantType`; the authorization-code data; basic's `username` / `password`; `sncPartnerName`, `sncQop`, `sncLib`, `sncMyName`; the `oidc*` fields; the SAML IdP trust and endpoints (`saml*`); `serviceUrl`, `sapClient`, `language` | a SAP service key file in a folder (§1.2 item 3), the destination store of §1.2 item 4, a database, something hand-written |
-| `ISessionStore` — the **secret** that authorizes within a session | `authorizationToken`, `refreshToken`, `expiresAt`, `sessionCookies` | the session folder (§1.2 items 1–2), memory |
+| `ISessionStore` — the **secret** that authorizes within a session | `authorizationToken`, `refreshToken`, `expiresAt`, `sessionCookies`; from `interfaces-auth-broker` 1.1.0 / `auth-stores` 3.1.0, `issuedFor` — the canonical URI of the resource the secret was obtained for, kept and cleared with it (§1.4, §1.5, §4.5) | the session folder (§1.2 items 1–2), memory |
 
 `basic` and `snc` obtain no separate session secret: their session holds
 nothing. Both stores resolve a destination by its name (§3.3).
@@ -761,7 +941,11 @@ Checked against `interfaces-auth-broker` 1.0.0 (`6165673`) and
   server, never by the broker.
 - **Renewal write-back** needs `saveSession` alone (§6 rule 1).
 
-So no contract release is needed for the split.
+So no contract release is needed for the split. **The binding of a secret to
+its resource is not carried** (D9): no field says which resource a stored
+secret was obtained for, so `interfaces-auth-broker` 1.1.0 adds `issuedFor`
+(§1.4) — H0: what `getProvider` needs and the contract cannot carry goes into
+the contract package.
 
 ### 8.3 Where the contract is thinner than the broker's use — open, for the user
 
@@ -1037,9 +1221,16 @@ tools/                     publish-changed.js, test-publish-changed.js (copied; 
 9. **auth-stores 3.0.0** is what the broker's own tests run against (§1.2); a
    consumer on auth-stores 2.x keeps its session stores answering means, which
    `getProvider` ignores (item 7).
+10. **A stored secret is used only for the resource it was obtained for**
+    (§4.5, D9): a session whose `issuedFor` differs from the destination's
+    canonical resource URI — or is absent, or the means state no `serviceUrl`
+    — is not reused; the provider logs in afresh. Legacy files read `SAP_URL`
+    as `issuedFor` under auth-stores 3.1.0 (§1.5 item 3); a consumer's own
+    session store must keep `issuedFor` for its sessions to be reused.
 
 Additive: `getProvider`, `DestinationConfigError`, the collaborator options,
-`provider` optional.
+`provider` optional. `getProvider` does not require `serviceUrl` (D8): no
+provider reads it; a connector takes its URL from the consumer's key store.
 
 **Migration notes:**
 
@@ -1057,7 +1248,15 @@ Additive: `getProvider`, `DestinationConfigError`, the collaborator options,
   `authType: 'jwt'` and `grantType: 'authorization_code'` — what
   `createTokenProviderForDestination` always chose — as means, through the
   destination store's write method; nothing is written to the session before
-  the first login. A `.env` a user wrote by hand (`--env`) is means, read by
+  the first login. **Its key stores state what a key cannot** (D8, auth-stores
+3.1.0): `detectStoreType` (`server src/lib/stores/index.ts:34-97`) passes
+`{ grantType: 'authorization_code' }` to `AbapServiceKeyStore`, and
+`{ serviceUrl, grantType }` to `XsuaaServiceKeyStore` — the resource URL it
+passed to `BtpSessionStore` in 2.x (today `''`, `:84`, `:172`). Its sessions
+keep working: a legacy file's `SAP_URL` (+ `SAP_CLIENT`) is read as the
+secret's `issuedFor` (§1.5 item 3), so a stored token whose URL is the key's
+is reused, and one whose URL is not is discarded and the user logs in once.
+A `.env` a user wrote by hand (`--env`) is means, read by
   the destination store (§1.2 item 4), and for a `none` destination also holds
   the token, read by `EnvFileSessionStore` as the secret: it must state
   `SAP_GRANT_TYPE` (`none` for a token alone); `getProvider` names it when it
@@ -1117,8 +1316,8 @@ providers real, token endpoints local):**
   the provider `getProvider` returned is in the session store afterwards, and
   what was written is **exactly** the secret — the field set of the
   `saveSession` call is `{ authorizationToken | sessionCookies, expiresAt,
-  refreshToken }`: no client secret (H4), no `serviceUrl`, no `authType`, no
-  grant data; a result without a refresh token carries the stored one forward;
+  refreshToken }` — and, from the binding step, `issuedFor` (§6): no client
+  secret (H4), no `serviceUrl`, no `authType`, no grant data; a result without a refresh token carries the stored one forward;
   a `saml2_bearer` token is written as a token, `saml2_pure` cookies as
   cookies; nothing is written for a `basic` / `snc` destination; `onTokens`'
   write failure surfaces from `getToken`;
@@ -1132,7 +1331,21 @@ providers real, token endpoints local):**
   timer does not keep the process alive (it is `unref()`ed);
 - caching: concurrent `getProvider` calls build once; a failed build is retried;
   `getProvider` and `getToken` share one provider and one renewal;
-- every row of §9, carried over from today's suite.
+- every row of §9, carried over from today's suite;
+- the resource URL (D8, 4c): each UAA row with `serviceUrl` absent or `''`
+  in the means is built and obtains a token — no `DestinationConfigError`;
+- the binding (§4.5, D9, the binding step): a session whose `issuedFor` names
+  another resource is not used — the provider is unseeded and logs in afresh
+  (the endpoint sees a fresh grant, never the stored refresh token), the
+  stored token is never presented (`authorize()` writes the new one), the log
+  line says only "secret bound to another resource, discarded" and contains
+  neither URI nor any part of the secret, and the new secret is written with
+  this destination's `issuedFor`. One case each for a different host, a
+  different path, a different client, `issuedFor` absent, `serviceUrl`
+  absent. Variants that canonicalise equal are seeded: host case, scheme
+  case, an explicit default port against none, a trailing `/`, the client as
+  `sapClient` against `?sap-client=` in the URL. `persist` writes `issuedFor`
+  with every secret, and none when the means state no URL.
 
 **Through `connection` 10** (dev dependency), no SAP system: an
 `AdtCloudConnector` over its HTTP wire against a local server that answers the
@@ -1162,15 +1375,17 @@ printing why. No configuration framework.
 | Case | Where it runs |
 |---|---|
 | `basic` over HTTP and over RFC (`rfcConversationFrom`, needs `@mcp-abap-adt/sap-rfc-lite` and the NW RFC SDK) | an on-premise system |
-| a `jwt` / `authorization_code` destination over HTTP, seeded with a well-formed JWT the system refuses (future `exp`, so the provider trusts it): the first request is a 401, the renewal happens in `rejected()`, and the new token is in the session file afterwards | BTP ABAP environment (trial) |
+| a `jwt` / `authorization_code` destination over HTTP, seeded with a well-formed JWT the system refuses (future `exp`, so the provider trusts it): the first request is a 401, the renewal happens in `rejected()`, and the new token is in the session file afterwards. Its means come from the SAP service key through `AbapServiceKeyStore` with `grantType: 'authorization_code'` (`AUTH_BROKER_LIVE_SERVICE_KEYS_DIR`; a test-only wrapper adds the grant until auth-stores 3.1.0), its session from a temporary copy of the file in `AUTH_BROKER_LIVE_SESSIONS_DIR` | BTP ABAP environment (trial) |
 | `snc` over RFC | Windows or macOS with the SAP Secure Login Client logged on; on Linux the case skips stating that the Secure Login Client exists only there |
 
 **Load-bearing:** each rule is broken once on purpose (`persist` writing one
 means field — `serviceUrl`, then `authType`, then the client secret, one at a
 time; a fallback to means the session answers; the stored refresh token not
 carried forward; the `basic`/`snc` guard; the promise cache; the broker's own
-retry of a failed write; the pair table) and its test must go red, then
-restored.
+retry of a failed write; the pair table; `serviceUrl` required again; the
+binding — seed regardless of `issuedFor`, compare without canonicalising,
+drop the client from the URI, drop the path, each alone) and its test must go
+red, then restored.
 
 **CLI package:** today's `mcpSsoConfig` / `samlMetadata` / `mcpSsoSamlProviders`
 suites move and are adapted to validators and to the destination each command
@@ -1211,10 +1426,10 @@ writes (§10 table); `readManualInput` honours the abort; the smoke check.
 
 | Goal bullet | Met by |
 |---|---|
-| `getProvider(destination): IAuthProvider` taken by a `connection` 10 connector as it is | §2, §4, §13 *Through connection 10* |
+| `getProvider(destination): IAuthProvider` taken by a `connection` 10 connector as it is | §2, §4, §13 *Through connection 10*; the connector's URL from the consumer's key store, not required by `getProvider` (§3.3, §4.4, D8) |
 | built from the configuration the destination states (`authType`) | §3.1, §3.3 (means from the key store), §8.1 |
 | `basic` → `BasicAuthProvider(username, password)` | §4.1 |
-| `jwt` → a token provider seeded from the session and the service key, as today's factories do | §4.1 (every grant today's factories and `mcp-sso` use: UAA code, client credentials, passcode, the four OIDC grants; the service key's means, the session's secret as seed), §3.3 |
+| `jwt` → a token provider seeded from the session and the service key, as today's factories do | §4.1 (every grant today's factories and `mcp-sso` use: UAA code, client credentials, passcode, the four OIDC grants; the service key's means, the session's secret as seed — only when bound to the destination's resource, §4.5), §3.3 |
 | `saml` → the SAML providers (cookies or bearer), as `mcp-sso` configures them | §4.1 (`saml2_pure`, `saml2_bearer`, the validator and `mcp-sso`'s wiring; `none` for cookies handed over), §1.1 |
 | `snc` → `SncLogonProvider` from the four SNC fields | §4.1 |
 | persistence moves to `onTokens`; a renewal the connector triggers is written back | §6 (the secret alone, retried, `flush()`), §13 |
@@ -1229,11 +1444,11 @@ writes (§10 table); `readManualInput` honours the abort; the smoke check.
 
 | Hold | Met by |
 |---|---|
-| H0 the broker speaks only the store contracts | §3.3, §8.2 (every means field reachable through `IServiceKeyStore`, every secret through `ISessionStore`), §1.1, §1.2 (stores implement the split; a 2.x file's mapping is the store's), §3.2, §11 `check-graph` |
-| H1 the configuration states the provider; nothing inferred | §3.1 (`authType` + `grantType` from the key store, no broker-level grant, `none` stated), §3.2 (one source, no fallback by presence), §1.2 item 3 (a SAP key states no grant rather than one inferred) |
+| H0 the broker speaks only the store contracts | §3.3, §8.2 (every means field reachable through `IServiceKeyStore`, every secret through `ISessionStore`; the binding the contract lacked is added to it, `issuedFor`, §1.4), §1.1, §1.2 (stores implement the split; a 2.x file's mapping is the store's), §1.5 (a legacy file's `issuedFor` is the store's reading), §3.2, §11 `check-graph` |
+| H1 the configuration states the provider; nothing inferred | §3.1 (`authType` + `grantType` from the key store, no broker-level grant, `none` stated), §3.2 (one source, no fallback by presence), §1.2 item 3 (a SAP key states no grant rather than one inferred), §1.5 item 1 (the grant and the resource URL stated by whoever builds the key store, D8) |
 | H2 no implicit defaults | §5, §4.1, §4.4 (a missing collaborator is an error, never a default) |
 | H3 what a provider obtains reaches the session store | §6, §4.3, §13 |
-| H4 no secret the broker was not given to store | §6 rule 2 (follows from the split: the broker writes only the session secret, never the read-only key store), §10 (the CLI's own writes of means), §13 |
+| H4 no secret the broker was not given to store | §6 rule 2 (follows from the split: the broker writes only the session secret, never the read-only key store), §10 (the CLI's own writes of means), §13; and no stored secret presented to a resource it was not obtained for — §4.5 (D9), §6 (`issuedFor` written with the secret), §1.5 item 3 (the legacy reading and its stated risk) |
 | H5 the token API keeps its 3.x behaviour | §9 |
 | H6 measured: basic, token, SNC through a connection 10 connector | §13 *Live* |
 
