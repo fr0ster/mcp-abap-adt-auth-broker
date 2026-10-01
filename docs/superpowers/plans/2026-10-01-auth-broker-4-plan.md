@@ -608,33 +608,30 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 
 ## Decisions needed (before the step named)
 
-- **D2 (step 1) — the auth-stores version.** Proposed: **3.0.0**. Session
+- **D2 — decided 2026-10-01: auth-stores 3.0.0** (step 1). Session
   stores refuse means writes 2.0.0 accepted and stop answering means 2.0.0
   answered; the service key stores change their answers (spec §1.2 item 5,
   with the callers that break). The 2.1.0 type-compatibility check is dropped.
   The one way to stay minor would be to keep accepting and answering means in
   the session stores — which is the split not done.
-- **D3 (step 2) — `interfaces-auth-sap` range in auth-providers.** `^2.0.0`
-  (what the task names) or `^1.1.0 || ^2.0.0`. The second is honest — the three
-  types it imports are identical in both — and avoids a second copy of the
-  package in a tree that also holds `connection` 10.0.2, which depends on
-  `^1.1.0`; both are type-only imports, so a second copy costs nothing at run
-  time either. Minor in both cases. Proposed: `^1.1.0 || ^2.0.0`.
+- **D3 — decided 2026-10-01: `interfaces-auth-sap` `^2.0.0` in auth-providers**
+  (step 2), the new line only. The three types it imports are identical in
+  1.1.0 and 2.0.0, so a tree that also holds `connection` 10.0.2 (`^1.1.0`)
+  gets a second, type-only copy of the package — harmless, and gone when
+  connection moves to `^2.0.0` in its next release.
 - **D4 — decided 2026-10-01: no `refreshToken?` on `Saml2PureProviderConfig`**
   (step 2). SAML has no refresh token and the provider has no refresh grant
   (`Saml2PureProvider.ts:103-109`); its seed is `accessToken?` (the cookies)
   and `expiresAt?`. Renewing the cookies without the user is a later step of
   its own (spec §15): measure which mechanism the system and the IdP support
   (`IsPassive`, ECP, `MYSAPSSO2`), then implement it.
-- **D5 (step 4d) — the auth-providers stand.** Spec §13 proposes, as inference,
-  running the broker's OIDC and SAML grants against the auth-providers stand
-  (Keycloak, UAA in Docker), gated on `UAA_URL` / `KEYCLOAK_URL`. Not checked:
-  whether the stand's committed realm and UAA config hold clients for every
-  grant the broker builds. Proposed: 4d adds broker suites gated on those
-  variables for the grants the stand's committed configuration already serves,
-  started from the auth-providers checkout with `npm run stand:up`; a grant it
-  does not serve is named in the PR. The local-endpoint unit tests of 4c/4d cover
-  every row regardless.
+- **D5 — decided 2026-10-01: the auth-providers stand, extended where it falls
+  short** (step 4d). The broker's OIDC and SAML grants run against the stand
+  (Keycloak, UAA in Docker), gated on `UAA_URL` / `KEYCLOAK_URL`. 4d first
+  checks which grants the stand's committed realm and UAA configuration
+  serve; a grant it does not serve gets its client added to the stand (in
+  auth-providers' `tests/stand/`, its own PR before 4d) rather than going
+  untested. The local-endpoint unit tests of 4c/4d cover every row regardless.
 - **D6 — decided 2026-10-01: yes, a file-backed key store only (step 1, used by steps 5 and 8) — where a destination's means live
   when there is no SAP service key, and where a service key's grant is
   stated.** An auth-stores question, not the broker's: the broker takes any
