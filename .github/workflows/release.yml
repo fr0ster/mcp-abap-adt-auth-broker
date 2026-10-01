@@ -49,6 +49,12 @@ jobs:
           fi
           echo "dir=${DIR}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # A semver prerelease (4.1.0-rc.1) is published under the npm tag
+          # `next` by tools/publish-changed.js; its GitHub release says so too.
+          case "${VERSION}" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
 
       - name: Create package
         id: package
@@ -65,7 +71,7 @@ jobs:
           files: ${{ steps.package.outputs.filename }}
           generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.workspace.outputs.prerelease == 'true' }}
           body: |
             ## Installation
 
