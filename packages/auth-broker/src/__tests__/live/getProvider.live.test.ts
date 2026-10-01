@@ -17,7 +17,7 @@
  *                        AUTH_BROKER_LIVE_KEYS_DIR, AUTH_BROKER_LIVE_SNC_DESTINATION,
  *                        and `@mcp-abap-adt/sap-rfc-lite`
  *   - `jwt` / `authorization_code` over HTTP: a BTP ABAP environment (trial),
- *                        AUTH_BROKER_LIVE_KEYS_DIR, AUTH_BROKER_LIVE_JWT_DESTINATION,
+ *                        AUTH_BROKER_LIVE_SERVICE_KEYS_DIR, AUTH_BROKER_LIVE_JWT_DESTINATION,
  *                        AUTH_BROKER_LIVE_SESSIONS_DIR
  *
  * AUTH_BROKER_LIVE_KEYS_DIR is a directory of `<destination>.env` files read by
@@ -27,11 +27,16 @@
  * means (`serviceUrl`, `sapClient`); the RFC system number is derived from the
  * URL's port by connection 10 unless `SAP_SYSNR` is set.
  *
- * The `jwt` case's means (`SAP_AUTH_TYPE=jwt`, `SAP_GRANT_TYPE=authorization_code`,
- * `SAP_URL`, the `SAP_UAA_*` client) are read from the same keys directory. Its
- * session — `<destination>.env` in AUTH_BROKER_LIVE_SESSIONS_DIR, read by
- * auth-stores 3's `AbapSessionStore` — must hold a refresh token from an
- * earlier login. The case copies that file to a temporary directory and never
+ * The `jwt` case's means come from the destination's SAP service key,
+ * `<destination>.json` in AUTH_BROKER_LIVE_SERVICE_KEYS_DIR, read by auth-stores
+ * 3's `AbapServiceKeyStore`: the client (`uaa.*`), the ABAP URL and client. The
+ * grant is stated by whoever builds the store, never read from the key (a SAP
+ * key cannot state one): until auth-stores 3.1.0 gives `AbapServiceKeyStore`
+ * its `grantType` option, `withGrant` below adds it (plan D8). The URL the
+ * connector dials is the key's; `getProvider` needs none (D8). Its session —
+ * `<destination>.env` in AUTH_BROKER_LIVE_SESSIONS_DIR, read by auth-stores 3's
+ * `AbapSessionStore`, which reads a 2.x/3.x file's secret keys only — must hold
+ * a refresh token from an earlier login. The case copies that file to a temporary directory and never
  * writes the original; it seeds the copy with a well-formed JWT the system
  * refuses (an `exp` an hour ahead, so the provider trusts it), and the 401 is
  * renewed by the stored refresh token in `rejected()` — no login, no browser:
@@ -61,10 +66,15 @@ import type {
   IAuthProvider,
   IAuthRejection,
 } from '@mcp-abap-adt/interfaces-auth';
-import type { IConnectionConfig } from '@mcp-abap-adt/interfaces-auth-broker';
+import type {
+  DestinationGrant,
+  IConnectionConfig,
+  IServiceKeyStore,
+} from '@mcp-abap-adt/interfaces-auth-broker';
 // auth-stores 3 under an npm alias, for this file only: the library's other
 // suites stay on auth-stores 1.x until step 4e (plan decision D7).
 import {
+  AbapServiceKeyStore,
   AbapSessionStore,
   EnvDestinationStore,
   SafeAbapSessionStore,
@@ -157,7 +167,7 @@ function sncUnavailable(): string | null {
 
 function jwtUnavailable(): string | null {
   const missing = unset([
-    'AUTH_BROKER_LIVE_KEYS_DIR',
+    'AUTH_BROKER_LIVE_SERVICE_KEYS_DIR',
     'AUTH_BROKER_LIVE_JWT_DESTINATION',
     'AUTH_BROKER_LIVE_SESSIONS_DIR',
   ]);
@@ -338,6 +348,28 @@ function recordingRejections(provider: IAuthProvider): {
   };
 }
 
+/**
+ * UNTIL auth-stores 3.1.0 — replaced in the binding step by
+ * `new AbapServiceKeyStore(dir, { grantType })`. A key store over SAP service
+ * keys whose grant is stated here, by whoever builds it, because a SAP key
+ * cannot state one (spec §1.2 item 3). Everything else is the wrapped store's
+ * answer, unchanged.
+ */
+function withGrant(
+  keys: IServiceKeyStore,
+  grantType: DestinationGrant,
+): IServiceKeyStore {
+  return {
+    getServiceKey: (destination) => keys.getServiceKey(destination),
+    getAuthorizationConfig: (destination) =>
+      keys.getAuthorizationConfig(destination),
+    getConnectionConfig: async (destination) => {
+      const means = await keys.getConnectionConfig(destination);
+      return means ? { ...means, grantType } : null;
+    },
+  };
+}
+
 /** This case renews by refresh: a login would mean a browser, so it is refused. */
 const refuseLogin: IAuthorizationStrategy<string> = {
   authorize: async () => {
@@ -386,8 +418,11 @@ describeWhere(
         refreshToken: stored.refreshToken,
       });
 
-      const keys = new EnvDestinationStore(
-        env.AUTH_BROKER_LIVE_KEYS_DIR as string,
+      const keys = withGrant(
+        new AbapServiceKeyStore(
+          env.AUTH_BROKER_LIVE_SERVICE_KEYS_DIR as string,
+        ),
+        'authorization_code',
       );
       const broker = new AuthBroker({
         serviceKeyStore: keys,
@@ -398,7 +433,7 @@ describeWhere(
         await keys.getConnectionConfig(destination);
       if (!means?.serviceUrl) {
         throw new Error(
-          `destination "${destination}" states no SAP_URL in ${env.AUTH_BROKER_LIVE_KEYS_DIR}`,
+          `the service key of "${destination}" in AUTH_BROKER_LIVE_SERVICE_KEYS_DIR states no ABAP URL`,
         );
       }
       const recorded = recordingRejections(

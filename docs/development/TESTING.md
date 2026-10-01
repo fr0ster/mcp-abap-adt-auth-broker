@@ -167,7 +167,7 @@ Only status codes and response sizes are printed — never a value from the stor
 | `basic` over HTTP | any machine that reaches an on-premise system | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_BASIC_DESTINATION` |
 | `basic` over RFC (`rfcConversationFrom`) | a machine with the SAP NW RFC SDK and `@mcp-abap-adt/sap-rfc-lite` built against it, that reaches the system's RFC gateway | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_RFC_DESTINATION`; optional `SAP_SYSNR` |
 | `snc` over RFC | Windows or macOS with an SNC library installed (the SAP Secure Login Client, logged on), the NW RFC SDK and `sap-rfc-lite` — on Windows or macOS with no SNC library it skips, naming every place it looked | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_SNC_DESTINATION`; optional `SAP_SYSNR` |
-| `jwt` / `authorization_code` over HTTP (`AdtCloudConnector`) | any machine that reaches a BTP ABAP environment (trial), with a session holding a refresh token from an earlier login | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_JWT_DESTINATION`, `AUTH_BROKER_LIVE_SESSIONS_DIR` |
+| `jwt` / `authorization_code` over HTTP (`AdtCloudConnector`) | any machine that reaches a BTP ABAP environment (trial), with a session holding a refresh token from an earlier login | `AUTH_BROKER_LIVE_SERVICE_KEYS_DIR`, `AUTH_BROKER_LIVE_JWT_DESTINATION`, `AUTH_BROKER_LIVE_SESSIONS_DIR` |
 
 **The `jwt` case** seeds the session with a well-formed JWT the system did not
 issue (an `exp` an hour ahead, so the provider trusts it): the first request
@@ -178,16 +178,18 @@ no browser opens — and it never writes the original session file:
 `<destination>.env` in `AUTH_BROKER_LIVE_SESSIONS_DIR` is copied to a
 temporary directory first. Where the server rotates refresh tokens the run
 spends the original's refresh token (not measured for XSUAA); log in again
-afterwards. The destination's means:
+afterwards.
 
-```bash
-SAP_URL=https://<id>.abap.us10.hana.ondemand.com
-SAP_AUTH_TYPE=jwt
-SAP_GRANT_TYPE=authorization_code
-SAP_UAA_URL=https://<subdomain>.authentication.us10.hana.ondemand.com
-SAP_UAA_CLIENT_ID=...
-SAP_UAA_CLIENT_SECRET=...
-```
+The destination's means are its SAP service key — `<destination>.json` in
+`AUTH_BROKER_LIVE_SERVICE_KEYS_DIR`, the key of the ABAP environment instance
+as BTP gives it, read by auth-stores 3's `AbapServiceKeyStore`: the client
+(`uaa.url`, `uaa.clientid`, `uaa.clientsecret`) and the ABAP URL the connector
+dials. A SAP key cannot state a grant, so the grant is stated by whoever
+builds the store: auth-stores 3.1.0 gives `AbapServiceKeyStore` a `grantType`
+option; until then the case wraps the 3.0.0 store in a test-only key store
+that adds `grantType: 'authorization_code'` (`withGrant`, replaced when the
+broker moves to 3.1.0). `getProvider` reads no URL (plan D8): the connector
+takes it from the key.
 
 **The destinations.** `AUTH_BROKER_LIVE_KEYS_DIR` is a directory of
 `<destination>.env` files read by auth-stores 3's `EnvDestinationStore` — the
@@ -246,11 +248,12 @@ npm run test:live -- -t "basic over RFC"
 ```
 
 ```bash
-# jwt / authorization_code against the BTP ABAP environment (trial); its
-# session must hold a refresh token from an earlier login
-AUTH_BROKER_LIVE_KEYS_DIR=~/.config/mcp-abap-adt/sessions \
+# jwt / authorization_code against the BTP ABAP environment (trial): the
+# service key service-keys/<destination>.json, the session
+# sessions/<destination>.env holding a refresh token from an earlier login
+AUTH_BROKER_LIVE_SERVICE_KEYS_DIR=~/.config/mcp-abap-adt/service-keys \
 AUTH_BROKER_LIVE_SESSIONS_DIR=~/.config/mcp-abap-adt/sessions \
-AUTH_BROKER_LIVE_JWT_DESTINATION=<a jwt / authorization_code destination> \
+AUTH_BROKER_LIVE_JWT_DESTINATION=trial \
 npm run test:live -- -t "jwt"
 ```
 
