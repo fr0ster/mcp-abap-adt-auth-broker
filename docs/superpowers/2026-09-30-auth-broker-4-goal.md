@@ -57,9 +57,10 @@ afterwards; and the token API behaves as in 3.x.
   place of `idpCertificates`, the manual strategy's `read(prompt, signal)`.
   The library's API is unaffected; only the install command for the CLIs
   changes.
-- **Dependencies:** `@mcp-abap-adt/auth-providers` ^5.0.1,
+- **Dependencies:** `@mcp-abap-adt/auth-providers` ^5.1.0,
   `@mcp-abap-adt/interfaces-auth` ^3.0.0, `@mcp-abap-adt/interfaces-auth-sap`
-  ^1.1.0. `@mcp-abap-adt/auth-stores` leaves the runtime dependencies with
+  ^2.0.0, `@mcp-abap-adt/interfaces-auth-broker` ^1.0.0 (the store contract,
+  split out of `interfaces-auth-sap` — decided 2026-10-01). `@mcp-abap-adt/auth-stores` leaves the runtime dependencies with
   the commands: the library never imports it (hold 0); its tests may use it
   as a dev dependency.
 - **The session's `authType` is not overwritten.** `persist()` writes `jwt` or
@@ -76,11 +77,12 @@ that builds its own.
 0. **The broker speaks the store contracts, never a storage.** A destination is
    a name the stores resolve — a service key, a session, anything a store
    holds. The broker reads and writes only through `ISessionStore` /
-   `IServiceKeyStore` (`@mcp-abap-adt/interfaces-auth-sap`), so any
+   `IServiceKeyStore` (`@mcp-abap-adt/interfaces-auth-broker` — moved out of
+   `interfaces-auth-sap`, decided 2026-10-01), so any
    implementation serves: files, memory, a database, a message log.
    `@mcp-abap-adt/auth-stores` is the file implementation shipped beside it,
    not something the broker knows. What `getProvider` needs and the contract
-   cannot carry is added to `interfaces-auth-sap`, not to a store.
+   cannot carry is added to that contract package, not to a store.
 1. **The destination's configuration states the provider; nothing is
    inferred** — not from the host, not from the shape of a service key.
 2. **No implicit defaults.** The broker passes every collaborator explicitly;

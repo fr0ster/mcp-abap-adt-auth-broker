@@ -60,13 +60,29 @@ and `calm` (`mcp-calm-server`). *(inference)* marks what was not verified;
 
 ## 1. Prerequisites
 
-Three releases precede 4.0.0. None changes a contract in a breaking way.
+Four releases precede 4.0.0: a new contract package, the SAP one without what moved into it, the stores and the providers.
 
-### 1.1 `@mcp-abap-adt/interfaces-auth-sap` 1.2.0 (minor, additive)
+### 1.1 `@mcp-abap-adt/interfaces-auth-broker` 1.0.0 (new) and `interfaces-auth-sap` 2.0.0
 
-A new type and optional fields on `IConnectionConfig` — flat, as the SNC fields
-of 1.1.0 are, so a store updates them field by field under its existing rules.
-All are destination data; none is a function.
+**The split (decided 2026-10-01).** `interfaces-auth-sap` 1.1.0 holds two
+subjects: the SAP system and BTP (`ISapConfig`, `SapAuthType`, XSUAA,
+`ICertificateMaterialLoader`, the UAA client `IAuthorizationConfig`, the header
+validation types), which providers, connection and adt-clients use; and the
+destination with its storage (`IConnectionConfig`, `IConfig`, `ISessionStore`,
+`IServiceKeyStore`, `ITokenProviderResult`), which only the stores, the broker
+and the server use. The second group is the broker's port — the broker states
+what it needs from a destination and the stores implement it — so it moves to
+a package named for it, `@mcp-abap-adt/interfaces-auth-broker` 1.0.0, which
+depends on `interfaces-auth-sap` for `IAuthorizationConfig`.
+`interfaces-auth-sap` 2.0.0 is the first group alone (removing exports is a
+major; no re-export, decision 34). Nobody else moves: auth-providers takes
+`IAuthorizationConfig` and `ISapConfig`, connection and adt-clients
+`ISapConfig`, all of which stay.
+
+`interfaces-auth-broker` 1.0.0 carries `IConnectionConfig` with a new type and
+these optional fields — flat, as the SNC fields of 1.1.0 are, so a store
+updates them field by field under its existing rules. All are destination
+data; none is a function.
 
 ```ts
 /** How a destination obtains a new credential. Stated by the destination (H1). */
@@ -631,7 +647,7 @@ the key's URL (fact 1).
 
 **Dependencies:** `@mcp-abap-adt/auth-broker` ^4.0.0, `@mcp-abap-adt/auth-stores`
 ^2.1.0, `@mcp-abap-adt/auth-providers` ^5.1.0, `@mcp-abap-adt/interfaces-auth`
-^3.0.0, `@mcp-abap-adt/interfaces-auth-sap` ^1.2.0, `@mcp-abap-adt/interfaces-utils`
+^3.0.0, `@mcp-abap-adt/interfaces-auth-sap` ^2.0.0, `@mcp-abap-adt/interfaces-auth-broker` ^1.0.0, `@mcp-abap-adt/interfaces-utils`
 ^1.1.0, `@mcp-abap-adt/logger` (a runtime dependency, `CHANGELOG.md` 3.0.4).
 
 **The bin smoke check** (`tools/check-packed.js`, part of `npm run check`, §11):
@@ -645,7 +661,7 @@ cannot reach it. Same check as the server's
 (`server src/__tests__/unit/binSmoke.test.ts`), which exists because 3.0.3
 shipped a bin that died on `MODULE_NOT_FOUND`.
 
-**Release order.** `interfaces-auth-sap` 1.2.0, then `auth-stores` 2.1.0 and `auth-providers` 5.1.0 (§1; the last depends on neither).
+**Release order.** `interfaces-auth-sap` 2.0.0 and `interfaces-auth-broker` 1.0.0 (one run of the interfaces repository's `release:publish`), then `auth-stores` 2.1.0 and `auth-providers` 5.1.0 (§1; the last depends on neither).
 Then one `release:publish` run here publishes `auth-broker` 4.0.0 and
 `auth-broker-cli` 1.0.0 in workspace order, so no registry state has 3.x's
 `mcp-auth` gone without the CLI package present.
@@ -704,7 +720,7 @@ tools/                     publish-changed.js, test-publish-changed.js (copied; 
   real session files when configured, and a release gate must not reach a real
   system unasked.
 - `check-graph.js` allowlist: `auth-broker` → `interfaces-auth`,
-  `interfaces-auth-sap`, `interfaces-utils`, `auth-providers`;
+  `interfaces-auth-sap`, `interfaces-auth-broker`, `interfaces-utils`, `auth-providers`;
   `auth-broker-cli` → the §10 list. H0's "the library never imports
   auth-stores" becomes a check.
 - Tags from here on: `auth-broker-v4.0.0`, `auth-broker-cli-v1.0.0`; the `v*`
@@ -735,8 +751,8 @@ tools/                     publish-changed.js, test-publish-changed.js (copied; 
 
 1. **No `bin`.** `mcp-auth` and `mcp-sso` are in `@mcp-abap-adt/auth-broker-cli`.
 2. **Contracts:** `@mcp-abap-adt/interfaces-auth` ^3.0.0,
-   `@mcp-abap-adt/interfaces-auth-sap` ^1.2.0, `@mcp-abap-adt/auth-providers`
-   ^5.1.0. Types from `interfaces-auth` 2.x no longer mix.
+   `@mcp-abap-adt/interfaces-auth-sap` ^2.0.0, `@mcp-abap-adt/interfaces-auth-broker`
+   ^1.0.0, `@mcp-abap-adt/auth-providers` ^5.1.0. Types from `interfaces-auth` 2.x no longer mix.
 3. **`@mcp-abap-adt/auth-stores` is no longer a dependency** (H0); a consumer
    that imported it without declaring it must declare it.
 4. **The token API refuses a destination stated `basic` or `snc`** (§9).
@@ -878,7 +894,7 @@ writes (§10 table); `readManualInput` honours the abort; the smoke check.
 | no implicit defaults: strategy, presenter, SAML validator and replay store, SNC locator and probes explicit | §5 (strategies, presenter, cookie function, replay store), §4.1 (validator composed from data + replay store; SNC recipe) |
 | the commands move to `@mcp-abap-adt/auth-broker-cli`; the interfaces layout; `release:publish` | §10, §11 |
 | the CLI on explicit collaborators: presenter, `assertionValidator`, `read(prompt, signal)` | §10 |
-| dependencies: auth-providers ^5.0.1, interfaces-auth ^3.0.0, interfaces-auth-sap; auth-stores only as a dev dependency of the library | §12 item 2 (auth-providers ^5.1.0 and interfaces-auth-sap ^1.2.0, the releases §1.3 and §1.1 add), §11 `check-graph` |
+| dependencies: auth-providers ^5.0.1, interfaces-auth ^3.0.0, interfaces-auth-sap; auth-stores only as a dev dependency of the library | §12 item 2 (auth-providers ^5.1.0, interfaces-auth-sap ^2.0.0 and interfaces-auth-broker ^1.0.0, the releases §1.3 and §1.1 add), §11 `check-graph` |
 | the session's `authType` is not overwritten | §6 item 1 and 3, §9 |
 | *Stays:* the stores and their contracts; no client secret in the session; the token API and `createTokenRefresher`; injecting a provider or a factory | §1 (contracts extended, not changed), §6 item 2, §9, §4.3 |
 
@@ -886,7 +902,7 @@ writes (§10 table); `readManualInput` honours the abort; the smoke check.
 
 | Hold | Met by |
 |---|---|
-| H0 the broker speaks only the store contracts | §3.3, §1.1 (everything `getProvider` needs is added to `interfaces-auth-sap`), §1.2 (stores implement it), §11 `check-graph` |
+| H0 the broker speaks only the store contracts | §3.3, §1.1 (everything `getProvider` needs is added to the store contract, `interfaces-auth-broker`), §1.2 (stores implement it), §11 `check-graph` |
 | H1 the configuration states the provider; nothing inferred | §3.1 (`authType` + `grantType`, no broker-level grant, `none` stated), §3.2 |
 | H2 no implicit defaults | §5, §4.1, §4.4 (a missing collaborator is an error, never a default) |
 | H3 what a provider obtains reaches the session store | §6, §4.3, §13 |
