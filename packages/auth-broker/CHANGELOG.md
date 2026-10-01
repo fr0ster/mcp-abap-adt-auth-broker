@@ -35,7 +35,9 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   seeded from the session — the token, the refresh token and `expiresAt` —
   and without a session log in at `prepare()`; `client_credentials` takes the
   client alone. `uaaClientSecret: ''` is a public client, which `passcode`
-  takes as no secret. Each row needs `serviceUrl` in the means.
+  takes as no secret. No row needs `serviceUrl`: the resource URL is not
+  authorization data — no token provider reads it — so the connector takes it
+  from the key store, and `getProvider` neither requires nor passes it.
 - **The `authorization` option is used**: `(destination, grant) =>
   IAuthorizationStrategy<string>`, the interactive half of
   `authorization_code` and `passcode` (for `passcode` the strategy is handed
@@ -64,7 +66,7 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   no `serviceKeyStore` option, no means, no or an unknown `authType`, a
   `jwt`/`saml` destination without a `grantType` or with a pair outside the
   table, a missing field of its row (`''` counts as missing; for the UAA
-  grants `serviceUrl`, `uaaUrl`, `uaaClientId`, and `uaaClientSecret` for
+  grants `uaaUrl`, `uaaClientId`, and `uaaClientSecret` for
   `authorization_code` / `client_credentials`), a missing collaborator option
   (`authorization`), or a provider
   constructor's own `ValidationError` (an `sncQop` outside `1|2|3|8|9`, named

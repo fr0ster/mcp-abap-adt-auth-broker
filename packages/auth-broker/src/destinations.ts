@@ -220,8 +220,6 @@ export function isUaaGrant(grant: DestinationGrant): grant is UaaGrant {
 export interface UaaRow {
   destination: string;
   grant: UaaGrant;
-  /** The means: `serviceUrl` is read here. */
-  means: IConnectionConfig;
   /** The client, from the key store's `getAuthorizationConfig`. */
   client: IAuthorizationConfig | null;
   /** The session secret — the seed; `null` when there is no session. */
@@ -244,14 +242,14 @@ export interface UaaRow {
  * session (not for `client_credentials`, whose row takes the client alone).
  *
  * Every field and option the row lacks is named in one error, before the
- * consumer's `authorization` is called. `uaaClientSecret: ''` is a public
+ * consumer's `authorization` is called. `serviceUrl` is not among them: the
+ * providers read the client and `uaaUrl` only (plan D8). `uaaClientSecret: ''` is a public
  * client: `passcode` takes it as no secret; the other two rows' providers
  * require a secret, so for them `''` is missing.
  */
 export function uaaProvider(row: UaaRow): IAuthProvider {
-  const { destination, grant, means, client, secret } = row;
+  const { destination, grant, client, secret } = row;
   const lacking: string[] = [];
-  if (!present(means.serviceUrl)) lacking.push('serviceUrl');
   if (!present(client?.uaaUrl)) lacking.push('uaaUrl');
   if (!present(client?.uaaClientId)) lacking.push('uaaClientId');
   if (grant !== 'passcode' && !present(client?.uaaClientSecret)) {

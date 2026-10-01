@@ -137,11 +137,15 @@ const trial = await broker.getProvider('TRIAL'); // AuthorizationCodeProvider, s
 |---|---|---|
 | `basic` | `BasicAuthProvider` | `username`, `password` in the key store |
 | `snc` | `SncLogonProvider.forSecureLoginClient` | `sncPartnerName` in the key store; `sncQop`, `sncLib`, `sncMyName` when set (absent: `qop` `'9'`, the library discovered, the name from the credential) |
-| `jwt` / `authorization_code` | `AuthorizationCodeProvider` | `serviceUrl`, `uaaUrl`, `uaaClientId`, `uaaClientSecret` in the key store; the `authorization` option; seeded from the session (token, refresh token, `expiresAt`) when there is one |
-| `jwt` / `client_credentials` | `ClientCredentialsProvider` | `serviceUrl`, `uaaUrl`, `uaaClientId`, `uaaClientSecret` in the key store; not seeded |
-| `jwt` / `passcode` | `UaaPasscodeProvider` | `serviceUrl`, `uaaUrl`, `uaaClientId` (`uaaClientSecret` `''` is a public client) in the key store; the `authorization` option, handed `<uaaUrl>/passcode`; seeded like `authorization_code` |
+| `jwt` / `authorization_code` | `AuthorizationCodeProvider` | `uaaUrl`, `uaaClientId`, `uaaClientSecret` in the key store; the `authorization` option; seeded from the session (token, refresh token, `expiresAt`) when there is one |
+| `jwt` / `client_credentials` | `ClientCredentialsProvider` | `uaaUrl`, `uaaClientId`, `uaaClientSecret` in the key store; not seeded |
+| `jwt` / `passcode` | `UaaPasscodeProvider` | `uaaUrl`, `uaaClientId` (`uaaClientSecret` `''` is a public client) in the key store; the `authorization` option, handed `<uaaUrl>/passcode`; seeded like `authorization_code` |
 | `jwt` / `none` | `TokenAuthProvider.fixed` | `authorizationToken` in the session store |
 | `saml` / `none` | `SamlAuthProvider` | `sessionCookies` in the session store |
+
+No row needs `serviceUrl`: it is where the connector connects, not
+authorization data, and no token provider reads it. Take the connector's URL
+from your key store's `getConnectionConfig`.
 
 The OIDC grants (`jwt` with `oidc_authorization_code`, `device_code`,
 `password`, `token_exchange`) and the SAML grants (`saml` with `saml2_pure`,

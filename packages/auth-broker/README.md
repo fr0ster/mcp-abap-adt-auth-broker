@@ -140,11 +140,17 @@ const provider = await broker.getProvider('DEV'); // an IAuthProvider
 |---|---|---|---|
 | `basic` (no grant read) | `new BasicAuthProvider(username, password)` | `username`, `password` | nothing |
 | `snc` (no grant read) | `SncLogonProvider.forSecureLoginClient({ partnerName, qop, sncLib, myName, logger })` | `sncPartnerName` (required); `sncQop`, `sncLib`, `sncMyName` when set | nothing |
-| `jwt` / `authorization_code` | `AuthorizationCodeProvider` | `serviceUrl`; the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` | the seed: `authorizationToken`, `refreshToken`, `expiresAt` |
-| `jwt` / `client_credentials` | `ClientCredentialsProvider` | `serviceUrl`; the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` | nothing (the row takes the client alone) |
-| `jwt` / `passcode` | `UaaPasscodeProvider` | `serviceUrl`; the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = a public client) | the seed: `authorizationToken`, `refreshToken`, `expiresAt` |
+| `jwt` / `authorization_code` | `AuthorizationCodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` | the seed: `authorizationToken`, `refreshToken`, `expiresAt` |
+| `jwt` / `client_credentials` | `ClientCredentialsProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` | nothing (the row takes the client alone) |
+| `jwt` / `passcode` | `UaaPasscodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = a public client) | the seed: `authorizationToken`, `refreshToken`, `expiresAt` |
 | `jwt` / `none` | `TokenAuthProvider.fixed(authorizationToken)` | `authType`, `grantType` | `authorizationToken` (required) |
 | `saml` / `none` | `new SamlAuthProvider(sessionCookies)` | `authType`, `grantType` | `sessionCookies` (required) |
+
+**No row reads `serviceUrl`.** The URL of the system is where the connector
+connects, not authorization data: no token provider reads it — a UAA grant
+needs the client and `uaaUrl` — so `getProvider` neither requires nor passes
+it. Give the connector its URL from your key store (`getConnectionConfig`),
+as the key store answers it.
 
 `none` is how a handed-over credential is stated: the key store says
 `grantType: 'none'`, and the token or cookies live in the session. The SNC
@@ -717,7 +723,6 @@ configuration whole, and the key's only when the session had none.
   | `snc` whose settings the provider refuses | the store field, e.g. `sncQop` |
   | `jwt` / `none` without a token in the session | `authorizationToken` |
   | `saml` / `none` without cookies in the session | `sessionCookies` |
-  | a UAA grant without `serviceUrl` in the means | `serviceUrl` |
   | a UAA grant without its client in the key store (`''` counts as missing) | `uaaUrl`, `uaaClientId`, and `uaaClientSecret` for `authorization_code` / `client_credentials` — each that is missing |
   | `authorization_code` / `passcode` without the `authorization` option | `authorization` |
 

@@ -404,24 +404,46 @@ describe('getProvider — the UAA grants', () => {
     },
   );
 
+  // Plan D8: the resource URL is not authorization data. No UAA provider
+  // reads it — the client and uaaUrl are all a grant needs — so a destination
+  // whose means state no serviceUrl still gets its provider, and it obtains a
+  // token. The connector needs the URL; the consumer takes it from its key
+  // store.
+  describe('the resource URL is not authorization data (D8)', () => {
+    it.each(
+      (
+        ['authorization_code', 'client_credentials', 'passcode'] as const
+      ).flatMap((grant) => [
+        [grant, 'absent', undefined],
+        [grant, '""', ''],
+      ]) as [UaaGrant, string, string | undefined][],
+    )(
+      '%s with serviceUrl %s in the means is built and obtains a token',
+      async (grant, _label, serviceUrl) => {
+        const conn = means(grant);
+        if (serviceUrl === undefined) delete conn.serviceUrl;
+        else conn.serviceUrl = serviceUrl;
+        const { broker, held } = brokerFor(grant, { conn });
+
+        const provider = await broker.getProvider(D);
+        expect(await provider.prepare()).toEqual({ ok: true });
+
+        expect(endpoint.requests.map((r) => r.grantType)).toEqual([
+          grant === 'passcode' ? 'password' : grant,
+        ]);
+        expect(await bearer(provider)).toBe(endpoint.issued[0]);
+        await broker.flush();
+        expect(held()?.authorizationToken).toBe(endpoint.issued[0]);
+      },
+    );
+  });
+
   describe('DestinationConfigError', () => {
     const grants: UaaGrant[] = [
       'authorization_code',
       'client_credentials',
       'passcode',
     ];
-
-    it.each(grants)(
-      '%s without serviceUrl in the means names serviceUrl',
-      async (grant) => {
-        const { broker, authorization } = brokerFor(grant, {
-          conn: means(grant, { serviceUrl: '' }),
-        });
-        const error = await refusal(broker.getProvider(D));
-        expect(error.missingFields).toEqual(['serviceUrl']);
-        expect(authorization).not.toHaveBeenCalled();
-      },
-    );
 
     it.each([
       ['authorization_code', ['uaaUrl', 'uaaClientId', 'uaaClientSecret']],
