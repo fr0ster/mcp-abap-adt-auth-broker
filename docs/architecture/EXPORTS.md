@@ -49,8 +49,7 @@ class DestinationConfigError extends Error {
   readonly code: 'DESTINATION_CONFIG';
   readonly destination: string;
   readonly missingFields: string[]; // field or option names only, never a value
-  readonly cause?: unknown;         // a provider constructor's error, when that refused
-}
+}                                   // no cause: a provider's error quotes values
 ```
 
 `IAuthProvider` is not re-exported: take it from `@mcp-abap-adt/interfaces-auth`.

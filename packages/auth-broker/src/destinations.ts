@@ -162,7 +162,6 @@ export function sncProvider(
         destination,
         (error.missingFields ?? []).map((field) => SNC_FIELDS[field] ?? field),
         'the SNC provider refused the destination’s SNC settings',
-        error,
       );
     }
     throw error;

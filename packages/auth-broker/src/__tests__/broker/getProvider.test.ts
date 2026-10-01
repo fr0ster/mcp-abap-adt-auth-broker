@@ -321,25 +321,25 @@ describe('getProvider', () => {
       },
     );
 
-    it("turns the provider's own ValidationError into one naming sncQop, the original as cause", async () => {
+    it("turns the provider's own ValidationError into one naming sncQop, and carries none of its text", async () => {
+      const QOP_SENTINEL = 'S3NTINEL-qop-must-not-leak';
       const error = await refusal(
         new AuthBroker({
           sessionStore: sessionStore(),
           serviceKeyStore: keyStore({
             authType: 'snc',
             sncPartnerName: 'p:CN=SID',
-            sncQop: '7',
+            sncQop: QOP_SENTINEL,
             password: SENTINEL,
           }),
         }).getProvider('D'),
       );
 
       expect(error.missingFields).toEqual(['sncQop']);
-      expect(error.cause).toBeInstanceOf(Error);
-      expect(
-        (error.cause as { missingFields?: string[] }).missingFields,
-      ).toEqual(['qop']);
-      expect(error.message).not.toContain("'7'");
+      // The provider's own message quotes the value it refused, so it is not
+      // carried — as cause or anywhere else.
+      expect(error.cause).toBeUndefined();
+      expect(everythingIn(error)).not.toContain(QOP_SENTINEL);
       expect(everythingIn(error)).not.toContain(SENTINEL);
     });
   });

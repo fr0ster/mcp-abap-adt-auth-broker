@@ -486,9 +486,10 @@ const tokens = await Promise.all(
   authorization strategy throws. The broker does not retry.
 - **`DestinationConfigError`** (`code: 'DESTINATION_CONFIG'`) — a destination
   that lacks what its type needs, from `getProvider`; or no `provider` option,
-  from the token API. `missingFields` names fields or options, never a value;
-  `cause` is a provider constructor's own error when that is what refused (an
-  `sncQop` outside `1`, `2`, `3`, `8`, `9`).
+  from the token API. `missingFields` names fields or options, never a value.
+  A provider constructor's refusal (an `sncQop` outside `1`, `2`, `3`, `8`,
+  `9`) is mapped to the store field's name; its own error is not kept, since
+  its message quotes the value it refused.
 - **Missing service URL**: `Session for destination "<name>" is missing required
   field 'serviceUrl'` — neither the session nor the service key has one.
 - **No token in the provider's result**: `Token provider did not return

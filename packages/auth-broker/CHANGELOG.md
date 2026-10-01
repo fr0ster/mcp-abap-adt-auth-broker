@@ -28,12 +28,13 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   build once, and dropped when the build throws, so the next call retries.
   `getProvider` writes to no store.
 - **`DestinationConfigError`** (`code: 'DESTINATION_CONFIG'`, `destination`,
-  `missingFields`, `cause?`) — a destination that lacks what its type needs:
+  `missingFields`) — a destination that lacks what its type needs:
   no `serviceKeyStore` option, no means, no or an unknown `authType`, a
   `jwt`/`saml` destination without a `grantType` or with a pair outside the
   table, a missing field of its row (`''` counts as missing), or a provider
-  constructor's own `ValidationError` (an `sncQop` outside `1|2|3|8|9`, kept as
-  `cause`). It names fields and options, never a stored value.
+  constructor's own `ValidationError` (an `sncQop` outside `1|2|3|8|9`, named
+  as the store field; the provider's error, which quotes the value, is not
+  kept). It names fields and options, never a stored value.
 - The collaborator options `authorization`, `oidcAuthorization`,
   `deviceCodePresenter`, `samlCookies`, `assertionReplayStore` on
   `AuthBrokerConfig`, and the `StrategyGrant` type — declared for the token

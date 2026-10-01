@@ -617,8 +617,9 @@ configuration whole, and the key's only when the session had none.
   `getProvider` throws it before any provider is asked; the token API throws
   it when there is no `provider` option. It carries `code:
   'DESTINATION_CONFIG'`, `destination`, `missingFields` — field or option
-  names only — and, when a provider's constructor refused (an `sncQop`
-  outside `1`, `2`, `3`, `8`, `9`), that error as `cause`. **No stored value
+  names only. When a provider's constructor refused (an `sncQop` outside `1`,
+  `2`, `3`, `8`, `9`), the store field is named and the provider's own error
+  is not kept — its message quotes the value. **No stored value
   reaches it**: not a password, not a token, not an `authType` that is none of
   the four. Thrown for:
 
@@ -631,7 +632,7 @@ configuration whole, and the key's only when the session had none.
   | `jwt` / `saml` without `grantType`, `''`, or a pair outside the table | `grantType` |
   | `basic` without user or password (`''` counts as missing) | `username`, `password` — each that is missing |
   | `snc` without `sncPartnerName` | `sncPartnerName` |
-  | `snc` whose settings the provider refuses (`cause` set) | the store field, e.g. `sncQop` |
+  | `snc` whose settings the provider refuses | the store field, e.g. `sncQop` |
   | `jwt` / `none` without a token in the session | `authorizationToken` |
   | `saml` / `none` without cookies in the session | `sessionCookies` |
 
