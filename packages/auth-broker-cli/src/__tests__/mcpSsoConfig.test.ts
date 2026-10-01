@@ -1,5 +1,5 @@
 /**
- * Coverage for the CLI/config merge in bin/mcpSsoConfig.ts.
+ * Coverage for the CLI/config merge in mcpSsoConfig.ts.
  *
  * This is the code `mcp-sso`'s `main()` uses to reconcile `--protocol`/
  * `--flow`/flag options with an optional `--config <path.json>` file before

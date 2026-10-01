@@ -1,13 +1,12 @@
 /**
- * Pure config-building logic for `mcp-sso`, split out from bin/mcp-sso.ts so
+ * Pure config-building logic for `mcp-sso`, split out from mcp-sso.ts so
  * it can be imported by tests directly.
  *
- * bin/mcp-sso.ts itself cannot be `import`ed safely: it `require()`s the
- * compiled `dist/index.js` at module load time (assuming it is always run
- * from `dist/bin/`) and calls `main()` at the bottom of the file. Neither is
- * true when a test loads the TypeScript source directly, so anything that
- * needs unit coverage — building an `SsoProviderConfig` from CLI options and
- * an optional `--config` file, and merging the two — lives here instead.
+ * mcp-sso.ts itself cannot be `import`ed safely: it calls `main()` at the
+ * bottom of the file, which parses the test runner's argv and exits. So
+ * anything that needs unit coverage — building an `SsoProviderConfig` from
+ * CLI options and an optional `--config` file, and merging the two — lives
+ * here instead.
  */
 
 import { readFileSync } from 'node:fs';
@@ -351,7 +350,7 @@ export function resolveIdpCertificates(
 /**
  * Parses the SAML trust flags into `target`, returning how many values after
  * `arg` were consumed (0 for a flag with no value, or an argument that is not
- * one of these). Kept here rather than in bin/mcp-sso.ts so it can be tested.
+ * one of these). Kept here rather than in mcp-sso.ts so it can be tested.
  */
 export function parseSamlTrustArg(
   target: Partial<McpSsoOptions>,

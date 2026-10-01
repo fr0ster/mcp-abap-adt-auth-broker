@@ -1,5 +1,5 @@
 /**
- * The configs bin/mcpSsoConfig.ts builds, handed to the real auth-providers
+ * The configs mcpSsoConfig.ts builds, handed to the real auth-providers
  * SAML providers — no mock of the package. What this pins, without an
  * identity provider:
  *

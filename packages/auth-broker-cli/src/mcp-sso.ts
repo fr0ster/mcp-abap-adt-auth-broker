@@ -31,13 +31,7 @@
  *   mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp-signing.pem --idp-entity-id https://idp/metadata --cookie "SAP_SESSION=..." --output ./sso.env --type abap
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-
-// Use require for CommonJS dist files with absolute path
-const distPath = path.resolve(__dirname, '..', 'index.js');
-const { AuthBroker } = require(distPath);
-
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
   type SsoProviderConfig,
   SsoProviderFactory,
@@ -50,6 +44,8 @@ import {
 } from '@mcp-abap-adt/auth-stores';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   applyFileConfig,
   buildProviderConfig,
@@ -62,25 +58,11 @@ import { applySamlMetadata } from './samlMetadata';
 import { createWorkDir } from './workDir';
 
 function getVersion(): string {
+  // This package's own manifest: dist/<bin>.js and src/<bin>.ts both sit one
+  // level below it. Never the library's — the CLI has its own version.
   try {
-    const candidates = [
-      path.join(__dirname, 'package.json'),
-      path.join(__dirname, '..', 'package.json'),
-      path.join(__dirname, '..', '..', 'package.json'),
-    ];
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        const packageJson = JSON.parse(fs.readFileSync(candidate, 'utf8'));
-        return packageJson.version || 'unknown';
-      }
-    }
-
-    const localRequire = require('module').createRequire(__filename);
-    const resolved = localRequire.resolve(
-      '@mcp-abap-adt/auth-broker/package.json',
-    );
-    const packageJson = JSON.parse(fs.readFileSync(resolved, 'utf8'));
-    return packageJson.version || 'unknown';
+    const manifest = path.join(__dirname, '..', 'package.json');
+    return JSON.parse(fs.readFileSync(manifest, 'utf8')).version || 'unknown';
   } catch {
     return 'unknown';
   }

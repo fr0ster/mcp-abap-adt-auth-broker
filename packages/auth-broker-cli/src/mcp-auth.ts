@@ -20,14 +20,7 @@
  *   mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap
  */
 
-import { spawnSync } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
-
-// Use require for CommonJS dist files with absolute path
-const distPath = path.resolve(__dirname, '..', 'index.js');
-const { AuthBroker } = require(distPath);
-
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
   AuthorizationCodeProvider,
   browserCallbackStrategy,
@@ -45,6 +38,9 @@ import {
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
+import { spawnSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 import { createWorkDir } from './workDir';
 
 /**
@@ -68,25 +64,11 @@ interface McpAuthOptions {
 }
 
 function getVersion(): string {
+  // This package's own manifest: dist/<bin>.js and src/<bin>.ts both sit one
+  // level below it. Never the library's — the CLI has its own version.
   try {
-    const candidates = [
-      path.join(__dirname, 'package.json'),
-      path.join(__dirname, '..', 'package.json'),
-      path.join(__dirname, '..', '..', 'package.json'),
-    ];
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        const packageJson = JSON.parse(fs.readFileSync(candidate, 'utf8'));
-        return packageJson.version || 'unknown';
-      }
-    }
-
-    const localRequire = require('module').createRequire(__filename);
-    const resolved = localRequire.resolve(
-      '@mcp-abap-adt/auth-broker/package.json',
-    );
-    const packageJson = JSON.parse(fs.readFileSync(resolved, 'utf8'));
-    return packageJson.version || 'unknown';
+    const manifest = path.join(__dirname, '..', 'package.json');
+    return JSON.parse(fs.readFileSync(manifest, 'utf8')).version || 'unknown';
   } catch {
     return 'unknown';
   }
