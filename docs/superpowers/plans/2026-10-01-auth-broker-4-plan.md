@@ -136,8 +136,16 @@ each protects, not their bodies. No step carries a time estimate.
   - the destination store (per D6): every means field written and read back;
     `uaaClientSecret: ''` answered as a public client; the fallback store fills
     only what the file leaves out; the same 2.x fixture read as means; no
-    secret field is answered (item 4).
-- **Load-bearing:** accept one means field in a session write (each group
+    secret field is answered (item 4);
+  - one file shared by both stores (the destination store and the session
+    store pointed at the same directory — what a consumer may compose, and
+    what step 5's CLI does), in both orders: write a session (token or
+    cookies, `expiresAt`, refresh token), then update the means through the
+    destination store — every secret key is still there and `loadSession`
+    answers it unchanged; write means, then a session — every means key is
+    still there and the destination store answers it unchanged; and an
+    update of one means field keeps the others (items 2 and 4).
+- **Load-bearing:** let the destination store's write rewrite the file with its own keys only, and the shared-file test goes red; accept one means field in a session write (each group
   alone); answer `SAP_URL` from a session; clear another type's keys on a
   session write; answer a `grantType` from a service key; drop the `''`
   pass-through; let the file override nothing / everything in the fallback —
