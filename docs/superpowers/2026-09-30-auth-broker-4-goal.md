@@ -131,11 +131,14 @@ that builds its own.
     refused, so the broker always declares it.
 4. **This package, 4.0.0** — in this PR: goal → review → spec → review → plan →
    review → implementation → external review → merge → release. ← now
-4a. `@mcp-abap-adt/auth-broker-cli` 1.0.0 — the commands from 3.x, on broker
-    4 and auth-stores 2; released right after 4.0.0, so there is no gap in
-    which neither package ships `mcp-auth`. Its check installs the packed
-    tarball into an empty directory and runs each bin (3.0.4 shipped a bin
-    that died on `MODULE_NOT_FOUND`).
+4a. `@mcp-abap-adt/auth-broker-cli` — the commands in a package of their own.
+    1.0.0 shipped early, with `@mcp-abap-adt/auth-broker` 3.1.0 (no `bin`):
+    the 3.x commands as they are, on the library `^3.1.0` (decided
+    2026-10-01), so the commands install separately and the library imports
+    separately from then on. The CLI on broker 4 — explicit collaborators,
+    `flush()` — is a later CLI version, released right after 4.0.0. Its
+    check installs the packed tarball into an empty directory and runs each
+    bin (3.0.4 shipped a bin that died on `MODULE_NOT_FOUND`).
 5. `mcp-abap-adt` — the provider from the broker into the connector; the
    per-auth-type construction and the broker 3.x call removed. Live check:
    basic over HTTP and RFC, a token destination, SNC over RFC — one code path.
