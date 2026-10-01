@@ -132,7 +132,10 @@ Files are searched in the following order (highest to lowest priority):
    ```typescript
    import { AuthBroker } from '@mcp-abap-adt/auth-broker';
    import { AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-stores';
-   import { AuthorizationCodeProvider } from '@mcp-abap-adt/auth-providers';
+   import {
+     AuthorizationCodeProvider,
+     browserCallbackStrategy,
+   } from '@mcp-abap-adt/auth-providers';
 
    const broker = new AuthBroker({
      serviceKeyStore: new AbapServiceKeyStore(process.cwd()),
@@ -144,6 +147,7 @@ Files are searched in the following order (highest to lowest priority):
          clientSecret: authConfig!.uaaClientSecret,
          refreshToken: authConfig!.refreshToken,
          accessToken: connConfig.authorizationToken,
+         authorization: browserCallbackStrategy({ browser: 'system' }),
        }),
    });
    const token = await broker.getToken('TRIAL');

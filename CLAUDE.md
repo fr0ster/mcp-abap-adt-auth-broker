@@ -39,7 +39,7 @@ npm test -w @mcp-abap-adt/auth-broker-cli
 - Implements a multi-step token acquisition flow: validate cached token -> refresh token -> browser-based OAuth
 - Creates `ITokenRefresher` instances for dependency injection into consuming services
 
-**Stores** (interfaces from `@mcp-abap-adt/interfaces-auth-sap`, implementations in `@mcp-abap-adt/auth-stores` — which the library's runtime never imports; only its tests and the CLI do):
+**Stores** (interfaces from `@mcp-abap-adt/interfaces-auth-broker`, implementations in `@mcp-abap-adt/auth-stores` — which the library's runtime never imports; only its tests and the CLI do):
 - `ISessionStore` - Stores session data (tokens, connection config) in `.env` files
 - `IServiceKeyStore` - Reads service keys from `.json` files for initial authentication
 
@@ -49,7 +49,7 @@ npm test -w @mcp-abap-adt/auth-broker-cli
 
 ### Package Dependencies
 
-The contracts come from the packages that declare them — `@mcp-abap-adt/interfaces-auth` (tokens, `STORE_ERROR_CODES`), `-auth-sap` (`IConfig`, `IConnectionConfig`, `IAuthorizationConfig`, the store contracts, `AuthType`) and `-utils` (`ILogger`). **Not `@mcp-abap-adt/interfaces`**: that facade is deleted as of its 52.0.0, npm serves 51.0.0 to whoever is pinned to it, and nothing further ships there. Three of those types are re-exported here for convenience. Store and provider implementations are in separate packages:
+The contracts come from the packages that declare them — `@mcp-abap-adt/interfaces-auth` 3 (tokens, `STORE_ERROR_CODES`), `-auth-broker` 1 (the store contracts: `IConfig`, `IConnectionConfig`, `ISessionStore`, `IServiceKeyStore`), `-auth-sap` 2 (`IAuthorizationConfig`, `AuthType` — the only two that stayed there) and `-utils` (`ILogger`). The library's tests and the CLI use `auth-providers` 5.1 and still `auth-stores` 1.2.3: its 3.0.0 session stores refuse the means the 3.x broker and the CLI write into a session, so the library's tests move to it with the broker's persistence (plan step 4e) and the CLI with its destination store (step 5). **Not `@mcp-abap-adt/interfaces`**: that facade is deleted as of its 52.0.0, npm serves 51.0.0 to whoever is pinned to it, and nothing further ships there. Some of those types are re-exported here for convenience, each from the package that declares it. Store and provider implementations are in separate packages:
 - `@mcp-abap-adt/auth-stores` - ABAP and XSUAA store implementations
 - `@mcp-abap-adt/auth-providers` - Token provider implementations
 

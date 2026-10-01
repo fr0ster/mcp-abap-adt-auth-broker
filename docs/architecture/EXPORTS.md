@@ -29,7 +29,10 @@ export {
 
 ### Interfaces (for consumers)
 
-These are the stable interfaces consumers should use.
+These are the stable interfaces consumers should use. The store contracts
+(`IConnectionConfig`, `IServiceKeyStore`, `ISessionStore`, and `IConfig` below)
+come from `@mcp-abap-adt/interfaces-auth-broker` 1.0.0; `IAuthorizationConfig`
+from `@mcp-abap-adt/interfaces-auth-sap` 2.0.0.
 
 ```typescript
 export type {
@@ -57,7 +60,7 @@ export type {
 } from './providers';
 ```
 
-**Shapes** (from `@mcp-abap-adt/interfaces-auth` 2.1.0):
+**Shapes** (from `@mcp-abap-adt/interfaces-auth` 3.0.0):
 ```typescript
 export interface ITokenProvider {
   getTokens(): Promise<ITokenResult>;
