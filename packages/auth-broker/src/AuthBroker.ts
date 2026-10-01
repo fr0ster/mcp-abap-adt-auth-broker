@@ -695,10 +695,10 @@ export class AuthBroker {
     await this.sessionStore.saveSession(destination, {
       authorizationToken: result.authorizationToken,
       expiresAt: result.expiresAt,
-      refreshToken: result.refreshToken ?? storedRefreshToken,
+      refreshToken: result.refreshToken || storedRefreshToken,
     });
     this.logger.info(`[AuthBroker] Session secret saved for ${destination}`, {
-      hasRefreshToken: !!(result.refreshToken ?? storedRefreshToken),
+      hasRefreshToken: !!(result.refreshToken || storedRefreshToken),
       expiresAt: result.expiresAt,
     });
   }
