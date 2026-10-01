@@ -60,9 +60,9 @@ and `calm` (`mcp-calm-server`). *(inference)* marks what was not verified;
 
 ## 1. Prerequisites
 
-Four releases precede 4.0.0: a new contract package, the SAP one without what moved into it, the stores and the providers.
+Four releases precede 4.0.0: a new contract package, the SAP one without what moved into it, the stores and the providers. The first two are done: `interfaces-auth-sap` 2.0.0 and `interfaces-auth-broker` 1.0.0 were published on 2026-10-01 (tags `interfaces-auth-sap-v2.0.0`, `interfaces-auth-broker-v1.0.0` in `mcp-abap-adt-interfaces`).
 
-### 1.1 `@mcp-abap-adt/interfaces-auth-broker` 1.0.0 (new) and `interfaces-auth-sap` 2.0.0
+### 1.1 `@mcp-abap-adt/interfaces-auth-broker` 1.0.0 (new) and `interfaces-auth-sap` 2.0.0 — published 2026-10-01
 
 **The split (decided 2026-10-01).** `interfaces-auth-sap` 1.1.0 holds two
 subjects: the SAP system and BTP (`ISapConfig`, `SapAuthType`, XSUAA,
@@ -221,8 +221,10 @@ the cookies, which this provider already answers as its `authorizationToken`
 carry no expiry of their own. The token providers whose token is a JWT take
 `expiresAt?` as well, used only when the token has no `exp`. No contract
 changes: a constructor is called by whoever knows the class, so its config is
-the class's, not `interfaces-auth`'s. Dependents on `^5.0.1` (connection)
-take it without a release.
+the class's, not `interfaces-auth`'s. `connection` 10.0.2 has auth-providers
+only as a dev dependency (`^5.0.1`, for its tests); its runtime dependencies
+are `interfaces-auth` ^3.0.0 and `interfaces-auth-sap` ^1.1.0 among others, so
+5.1.0 needs no connection release.
 
 Neither the broker nor the CLI can be released before these three; §9 gives
 the order.
@@ -334,7 +336,7 @@ The token API does not read `grantType` and serves it as in 3.x (§9).
 
 ### 4.1 What each destination gets
 
-All classes are auth-providers 5.0.1. "Seed" is the stored `authorizationToken`
+All classes are auth-providers 5.1.0 (5.0.1 plus the `saml2_pure` seed and the `expiresAt` fallback, §1.3). "Seed" is the stored `authorizationToken`
 (`accessToken`) and refresh token. Every token provider gets
 `onTokens` (§6) and the broker's logger.
 
@@ -542,18 +544,18 @@ by `getProvider` and the token API** (when no consumer `provider` is given).
 
 ## 8. What the store contract must carry (H0; goal open 5)
 
-| Destination | Needs | Where (1.2.0) |
+| Destination | Needs | Where (`interfaces-auth-broker` 1.0.0 `src/auth/IConnectionConfig.ts`, unless named) |
 |---|---|---|
-| any | `authType` | `IConnectionConfig.authType` (1.1.0, `IConnectionConfig.ts:15`); stated by every store (§1.2 item 3) |
-| `jwt`, `saml` | the grant | **new** `IConnectionConfig.grantType` |
-| `basic` | `username`, `password` | 1.1.0 (`:11`, `:13`) |
-| `snc` | `sncPartnerName`, `sncQop`, `sncLib`, `sncMyName` | 1.1.0 (`:26-32`) |
-| UAA grants, `saml2_bearer`, OIDC client | `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = public), `refreshToken` | 1.1.0 `IAuthorizationConfig`; public client semantics new (§1.2 item 5) |
-| OIDC grants | issuer, endpoints, scopes; subject/actor token and types; audience | **new** `oidc*` fields |
-| `password` | `username`, `password` | 1.1.0 fields, kept in a `jwt` session (§1.2 item 2) |
-| SAML grants | IdP SSO URL, entity IDs, certificates, ACS, relay state, `idpInitiated`, clock skew, token URL | **new** `saml*` fields |
-| `none` | the token or the cookies | 1.1.0 (`:9`, `:21`) |
-| renewal write-back | `setConnectionConfig` with the credential and `authType`; `setAuthorizationConfig` / `saveSession` with the refresh token | `ISessionStore` (1.1.0), as 3.x uses it; a token under `saml` for `saml2_bearer` (§1.2 item 2) |
+| any | `authType` | `IConnectionConfig.authType` (`:20`; moved unchanged from `interfaces-auth-sap` 1.1.0); stated by every store (§1.2 item 3) |
+| `jwt`, `saml` | the grant | `IConnectionConfig.grantType` (`:22`, new in 1.0.0; `DestinationGrant` in `src/auth/DestinationGrant.ts`) |
+| `basic` | `username`, `password` | `:13`, `:15` |
+| `snc` | `sncPartnerName`, `sncQop`, `sncLib`, `sncMyName` | `:38-44` |
+| UAA grants, `saml2_bearer`, OIDC client | `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = public), `refreshToken` | `IAuthorizationConfig` — `interfaces-auth-sap` 2.0.0 (`src/auth/IAuthorizationConfig.ts:5-14`, unchanged since 1.1.0); public client semantics new (§1.2 item 5) |
+| OIDC grants | issuer, endpoints, scopes; subject/actor token and types; audience | the `oidc*` fields (`:50-64`, new in 1.0.0) |
+| `password` | `username`, `password` | `:13`, `:15`, kept in a `jwt` session (§1.2 item 2) |
+| SAML grants | IdP SSO URL, entity IDs, certificates, ACS, relay state, `idpInitiated`, clock skew, token URL | the `saml*` fields (`:68-83`, new in 1.0.0) |
+| `none` | the token or the cookies | `:11`, `:33` |
+| renewal write-back | `setConnectionConfig` with the credential and `authType`; `setAuthorizationConfig` / `saveSession` with the refresh token | `ISessionStore` (`interfaces-auth-broker` 1.0.0 `src/session/ISessionStore.ts:27`, `:59`, `:70`; moved unchanged from `interfaces-auth-sap` 1.1.0), as 3.x uses it; a token under `saml` for `saml2_bearer` (§1.2 item 2) |
 | a destination before its first login | read back with what it states | store behaviour (§1.2 item 4) |
 
 Certificates are out of scope (goal, open 4): no field is added for them.
@@ -661,7 +663,7 @@ cannot reach it. Same check as the server's
 (`server src/__tests__/unit/binSmoke.test.ts`), which exists because 3.0.3
 shipped a bin that died on `MODULE_NOT_FOUND`.
 
-**Release order.** `interfaces-auth-sap` 2.0.0 and `interfaces-auth-broker` 1.0.0 (one run of the interfaces repository's `release:publish`), then `auth-stores` 2.1.0 and `auth-providers` 5.1.0 (§1; the last depends on neither).
+**Release order.** `interfaces-auth-sap` 2.0.0 and `interfaces-auth-broker` 1.0.0 — done, published 2026-10-01 in one run of the interfaces repository's `release:publish`; then `auth-stores` 2.1.0 and `auth-providers` 5.1.0 (§1; the last depends on neither).
 Then one `release:publish` run here publishes `auth-broker` 4.0.0 and
 `auth-broker-cli` 1.0.0 in workspace order, so no registry state has 3.x's
 `mcp-auth` gone without the CLI package present.
@@ -723,6 +725,14 @@ tools/                     publish-changed.js, test-publish-changed.js (copied; 
   `interfaces-auth-sap`, `interfaces-auth-broker`, `interfaces-utils`, `auth-providers`;
   `auth-broker-cli` → the §10 list. H0's "the library never imports
   auth-stores" becomes a check.
+- **`check-graph.js` is adapted, not copied.** The interfaces version walks
+  every file under a package's `src` (`mcp-abap-adt-interfaces
+  tools/check-graph.js:54`) and compares imports with `dependencies` only;
+  there `src` holds no tests. Here `src/__tests__` imports dev dependencies
+  (`auth-stores`, `auth-providers`, later `connection` and `sap-rfc-lite`). So
+  the allowlist and the declared-and-used rules apply to the non-test files
+  and `dependencies`; a file under `__tests__` may import what the package
+  declares in `devDependencies` (or `dependencies`), and nothing undeclared.
 - Tags from here on: `auth-broker-v4.0.0`, `auth-broker-cli-v1.0.0`; the `v*`
   tags stay as history.
 - **CHANGELOGs:** today's `CHANGELOG.md` moves to `packages/auth-broker/` and
@@ -864,7 +874,10 @@ writes (§10 table); `readManualInput` honours the abort; the smoke check.
   "store implementations: `@mcp-abap-adt/auth-stores`, or any
   `ISessionStore` / `IServiceKeyStore`"; `src/types.ts:4` and
   `src/stores/interfaces.ts:4` say "imported from `@mcp-abap-adt/interfaces`",
-  deleted as of its 52.0.0 — they name `interfaces-auth-sap`.
+  deleted as of its 52.0.0 — they name `interfaces-auth-broker` for the store
+  contracts (`IConnectionConfig`, `IConfig`, `ISessionStore`,
+  `IServiceKeyStore`) and `interfaces-auth-sap` for `IAuthorizationConfig` and
+  `AuthType` (`src/index.ts:10`), the only two that stayed there.
 - **Docs updated for 4.0** (all of them, not only the CHANGELOG): root and both
   package READMEs (the destination table of §3.1/§4.1, the collaborator options,
   a *Migrating to 4.0.0* section with §12); `docs/architecture/ARCHITECTURE.md`
@@ -894,7 +907,7 @@ writes (§10 table); `readManualInput` honours the abort; the smoke check.
 | no implicit defaults: strategy, presenter, SAML validator and replay store, SNC locator and probes explicit | §5 (strategies, presenter, cookie function, replay store), §4.1 (validator composed from data + replay store; SNC recipe) |
 | the commands move to `@mcp-abap-adt/auth-broker-cli`; the interfaces layout; `release:publish` | §10, §11 |
 | the CLI on explicit collaborators: presenter, `assertionValidator`, `read(prompt, signal)` | §10 |
-| dependencies: auth-providers ^5.0.1, interfaces-auth ^3.0.0, interfaces-auth-sap; auth-stores only as a dev dependency of the library | §12 item 2 (auth-providers ^5.1.0, interfaces-auth-sap ^2.0.0 and interfaces-auth-broker ^1.0.0, the releases §1.3 and §1.1 add), §11 `check-graph` |
+| dependencies: auth-providers ^5.1.0, interfaces-auth ^3.0.0, interfaces-auth-sap ^2.0.0, interfaces-auth-broker ^1.0.0; auth-stores only as a dev dependency of the library | §12 item 2, §1.3 (auth-providers 5.1.0), §1.1 (the interfaces releases), §11 `check-graph` |
 | the session's `authType` is not overwritten | §6 item 1 and 3, §9 |
 | *Stays:* the stores and their contracts; no client secret in the session; the token API and `createTokenRefresher`; injecting a provider or a factory | §1 (contracts extended, not changed), §6 item 2, §9, §4.3 |
 

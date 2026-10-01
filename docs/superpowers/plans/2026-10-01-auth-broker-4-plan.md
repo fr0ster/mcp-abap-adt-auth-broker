@@ -5,9 +5,9 @@ spec), under `docs/superpowers/2026-09-30-auth-broker-4-goal.md` (the goal). The
 goal's *Holds throughout* (H0–H6) bind every step; where a step and a hold
 disagree, the hold wins and the step changes in review. The plan does not
 redesign the spec. Where reading the code showed the spec stale or wrong, the
-plan says so under *Spec points found while planning* and either follows the
-spec or names the decision the user must take before that step opens — it
-never fixes the spec silently.
+plan says so under *Spec points found while planning*: facts were corrected in
+the spec in review; design points are named as decisions the user must take
+before that step opens — never fixed silently.
 
 **Status:** draft for review in #33, with the goal and the spec.
 
@@ -37,9 +37,8 @@ each protects, not their bodies. No step carries a time estimate.
     interfaces-auth-sap-v1.1.0 interfaces-auth-sap-v2.0.0` touches no file that
     holds `IAuthorizationConfig`, `ISapConfig` or `ICertificateMaterialLoader`:
     those shapes are identical in 1.1.0 and 2.0.0.
-- So spec §1.1 is delivered, and its release-order paragraph (§10, *Release
-  order*, first sentence) is history. What the spec still names at the old
-  location is listed under *Spec points* (items 1, 2, 5).
+- So spec §1.1 is delivered; the spec and the goal now record it (see *Spec
+  points*).
 - Goal path steps 1–3a (interfaces-auth 3.0.0, auth-providers 5.0.1,
   connection 10.0.2, auth-stores 2.0.0) are released, as the goal says.
 
@@ -273,7 +272,7 @@ existing suites prove it.
      from the library README).
   4. `tools/`: `publish-changed.js`, `test-publish-changed.js` (copied, the
      interfaces-facade comments removed), `check-graph.js` (allowlist of §11;
-     adapted per *Spec points* item 9), `check-packed.js` (the bin smoke check
+     adapted as spec §11 now says, R1), `check-packed.js` (the bin smoke check
      of §10), `version-stats.sh`.
   5. `.github/workflows/release.yml` triggers on `auth-broker-v*` /
      `auth-broker-cli-v*` and packs the workspace the tag names (§11
@@ -329,7 +328,7 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
     Spec §14 stale comments: `src/index.ts:34-37`, `src/stores/index.ts:4-6`
     (non-existent `auth-stores-btp`/`-xsuaa`), `src/types.ts:4`,
     `src/stores/interfaces.ts:4` (they name `interfaces-auth-broker` for the store
-    contracts — *Spec points* item 2).
+    contracts, as spec §14 now says).
   - CLI (spec §10, third bullet): `auth-providers` `^5.1.0`, `auth-stores`
     `^2.1.0`, the contract packages; the device flow gets
     `consoleDeviceCodePresenter(logger)`; the SAML flows get an
@@ -658,35 +657,42 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   intended (nothing should publish before step 7), and the root README says so
   while it lasts.
 
-## Spec points found while planning (listed, not fixed)
+## Spec points found while planning
 
-1. **§8 table, column "Where (1.2.0)", and its `IConnectionConfig.ts:15`,
-   `:11`, `:13`, `:26-32`, `:9`, `:21` references** point at
-   `interfaces-auth-sap` 1.1.0 / an unpublished 1.2.0. The fields are in
-   `interfaces-auth-broker` 1.0.0
-   (`packages/interfaces-auth-broker/src/auth/IConnectionConfig.ts`).
-2. **§14** says `src/types.ts:4` and `src/stores/interfaces.ts:4` should "name
-   `interfaces-auth-sap`". Since the split, the store contracts they re-export
-   come from `interfaces-auth-broker`; only `IAuthorizationConfig` (and
-   `AuthType`, `src/index.ts:10`) stay in `interfaces-auth-sap`. Step 4a follows
-   the split.
-3. **§4.1** says "All classes are auth-providers 5.0.1"; the `saml2_pure` seed
-   and the `expiresAt` fallback need 5.1.0 (§1.3, the broker's `^5.1.0`).
-4. **§16**, *What changes* table, dependencies row: "auth-providers ^5.0.1";
-   the goal says `^5.1.0` (goal line 60) and §12 item 2 agrees with the goal.
-5. **Goal, line 30** names `interfaces-auth-sap` 1.1.0 as where `authType`
-   lives; it is `interfaces-auth-broker` 1.0.0 now. The goal is the anchor, so
-   this is for the user to correct there.
-6. **§1.3, `refreshToken?` on `Saml2PureProviderConfig`** — unused by a provider
-   with no refresh grant (D4).
-7. **§1.3, "Dependents on `^5.0.1` (connection) take it without a release"** —
-   `connection` 10.0.2 has auth-providers only as a dev dependency (registry
-   manifest); nothing of connection's runtime depends on it.
-8. **§1.2 item 4 vs §10** — credential-less destinations in the XSUAA session
-   stores (D1).
-9. **§11, `check-graph.js` "copied"** — needs the test/dev-dependency
-   adaptation (R1).
-10. **§10, *Release order*** still describes the interfaces releases as future.
+**Corrected in the spec and the goal** (facts, not design; commit after this
+plan's first version):
+
+1. §8 table — every field now points at `interfaces-auth-broker` 1.0.0
+   (`src/auth/IConnectionConfig.ts` lines, `src/session/ISessionStore.ts`), and
+   `IAuthorizationConfig` at `interfaces-auth-sap` 2.0.0.
+2. §14 — the stale comments name `interfaces-auth-broker` for the store
+   contracts and `interfaces-auth-sap` for `IAuthorizationConfig` and
+   `AuthType`.
+3. §4.1 — the classes are auth-providers 5.1.0 (the `saml2_pure` seed and the
+   `expiresAt` fallback).
+4. §16 — the dependencies row reads auth-providers ^5.1.0, interfaces-auth-sap
+   ^2.0.0, interfaces-auth-broker ^1.0.0, as the goal and §12 item 2.
+5. Goal, *What changes* — `authType` lives in `interfaces-auth-broker` 1.0.0
+   (moved from `interfaces-auth-sap` 1.1.0, decided 2026-10-01). Nothing else in
+   the goal changed.
+6. §1.3 — `connection` 10.0.2 has auth-providers only as a dev dependency; its
+   runtime takes `interfaces-auth` ^3.0.0 and `interfaces-auth-sap` ^1.1.0.
+7. §11 — `check-graph.js` is adapted, not copied: the allowlist and
+   declared-and-used rules over non-test files and `dependencies`; tests may
+   import declared dev dependencies (R1).
+8. §1 and §10 *Release order* — the interfaces releases are recorded as done
+   (published 2026-10-01).
+
+**Still open — they wait for the user** (see *Decisions needed*):
+
+- §1.2 item 4 vs §10 — destinations with no credential in the XSUAA session
+  stores (D1).
+- §1.2 heading — auth-stores minor or major, settled by step 1's type check
+  (D2).
+- auth-providers' `interfaces-auth-sap` range (D3).
+- §1.3 — `refreshToken?` on `Saml2PureProviderConfig`, unused by a provider
+  with no refresh grant (D4).
+- §13 — reusing the auth-providers stand (D5).
 
 ## Checklist: goal and spec → step
 

@@ -27,7 +27,8 @@ afterwards; and the token API behaves as in 3.x.
 
 - **`getProvider(destination): IAuthProvider`.** The broker builds the provider
   the destination's configuration states (`IConnectionConfig.authType`:
-  `basic`, `jwt`, `saml`, `snc` — `@mcp-abap-adt/interfaces-auth-sap` 1.1.0),
+  `basic`, `jwt`, `saml`, `snc` — `@mcp-abap-adt/interfaces-auth-broker` 1.0.0,
+  moved from `interfaces-auth-sap` 1.1.0, decided 2026-10-01),
   from the stores it already reads:
   - `basic` → `BasicAuthProvider(username, password)`;
   - `jwt` (a token destination) → a token provider seeded from the session and
