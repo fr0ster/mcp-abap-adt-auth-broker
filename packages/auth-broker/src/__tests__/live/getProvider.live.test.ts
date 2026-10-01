@@ -40,10 +40,10 @@ import {
   rfcConversationFrom,
 } from '@mcp-abap-adt/connection';
 import type { IConnectionConfig } from '@mcp-abap-adt/interfaces-auth-broker';
+import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
 // auth-stores 3 under an npm alias, for this file only: the library's other
 // suites stay on auth-stores 1.x until step 4e (plan decision D7).
 import { EnvDestinationStore, SafeAbapSessionStore } from 'auth-stores-3';
-import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
 import { AuthBroker } from '../../index';
 
 /** The logger the other suites use (createTestLogger's base), always on here: a live run's result is the point. */
