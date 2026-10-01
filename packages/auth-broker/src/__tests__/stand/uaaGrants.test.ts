@@ -29,6 +29,7 @@ import {
   EnvDestinationStore,
 } from 'auth-stores-3';
 import { AuthBroker, type StrategyGrant } from '../../index';
+import { describeWhere } from '../helpers/describeWhere';
 import { authorizeByForm, FormBrowser } from './formLogin';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
@@ -37,20 +38,6 @@ const USER = { username: 'tester', password: 'tester' };
 const CALLBACK = 'http://localhost/callback';
 const SERVICE_URL = 'https://abap.stand.invalid';
 const UNAUTHORIZED = { at: 'request', status: 401, error: null } as const;
-
-/** Run the block, or skip it with the reason in its title and on stderr. */
-function describeWhere(
-  title: string,
-  unavailable: string | null,
-  body: () => void,
-): void {
-  if (unavailable) {
-    process.stderr.write(`skipped: ${title} — ${unavailable}\n`);
-    describe.skip(`${title} — skipped: ${unavailable}`, body);
-  } else {
-    describe(title, body);
-  }
-}
 
 const claims = (jwt: string): Record<string, unknown> =>
   JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));

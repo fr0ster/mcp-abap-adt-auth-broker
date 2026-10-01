@@ -62,7 +62,6 @@ import type {
   IAuthRejection,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { IConnectionConfig } from '@mcp-abap-adt/interfaces-auth-broker';
-import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
 // auth-stores 3 under an npm alias, for this file only: the library's other
 // suites stay on auth-stores 1.x until step 4e (plan decision D7).
 import {
@@ -71,9 +70,7 @@ import {
   SafeAbapSessionStore,
 } from 'auth-stores-3';
 import { AuthBroker } from '../../index';
-
-/** The logger the other suites use (createTestLogger's base), always on here: a live run's result is the point. */
-const log = new DefaultLogger(getLogLevel());
+import { describeWhere, runLog as log } from '../helpers/describeWhere';
 
 const env = process.env;
 
@@ -167,20 +164,6 @@ function jwtUnavailable(): string | null {
   return missing.length
     ? `no BTP ABAP destination configured: set ${missing.join(', ')}`
     : null;
-}
-
-/** Run the block, or skip it with the reason in its title and in the log. */
-function describeWhere(
-  title: string,
-  unavailable: string | null,
-  body: () => void,
-): void {
-  if (unavailable) {
-    log.info(`skipped: ${title} — ${unavailable}`);
-    describe.skip(`${title} — skipped: ${unavailable}`, body);
-  } else {
-    describe(title, body);
-  }
 }
 
 /** The broker over the means directory; the session store is never read here. */
