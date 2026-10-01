@@ -12,20 +12,48 @@ Main orchestrator for token retrieval and refresh.
 export {
   AuthBroker,
   type AuthBrokerConfig,
+  type StrategyGrant,
   type TokenProviderFactory,
 } from './AuthBroker';
 ```
 
-**Constructor**: `new AuthBroker({ sessionStore, serviceKeyStore?, provider }, logger?)`, where
-`provider` is an `IRefreshableTokenProvider` or a `TokenProviderFactory`
-`(destination, authConfig, connConfig) => IRefreshableTokenProvider`.
+**Constructor**: `new AuthBroker({ sessionStore, serviceKeyStore?, provider?, …collaborators }, logger?)`, where
+`provider` — the token API's source, not used by `getProvider` — is an
+`IRefreshableTokenProvider` or a `TokenProviderFactory`
+`(destination, authConfig, connConfig) => IRefreshableTokenProvider`. The
+collaborator options (`authorization`, `oidcAuthorization`,
+`deviceCodePresenter`, `samlCookies`, `assertionReplayStore`) are each a
+function of the destination; `StrategyGrant` is the grant `authorization` is
+called with (`'authorization_code' | 'passcode' | 'saml2_pure' | 'saml2_bearer'`).
 
 **Key methods**:
+- `getProvider(destination: string): Promise<IAuthProvider>` — the provider the destination states, from the key store's means and the session's secret; cached per destination
 - `getToken(destination: string): Promise<string>`
 - `refreshToken(destination: string): Promise<string>` — a forced refresh (`provider.refreshTokens()`)
-- `getAuthorizationConfig(destination: string): Promise<IAuthorizationConfig | null>`
-- `getConnectionConfig(destination: string): Promise<IConnectionConfig | null>`
+- `getAuthorizationConfig(destination: string): Promise<IAuthorizationConfig | null>` — the key store's client with the session's refresh token
+- `getConnectionConfig(destination: string): Promise<IConnectionConfig | null>` — the key store's means with the session's secret
 - `createTokenRefresher(destination: string): ITokenRefresher`
+
+### `DestinationConfigError`
+What `getProvider` (and the token API without a `provider`) throws for a
+destination that lacks what its type needs.
+
+**Export**:
+```typescript
+export { DestinationConfigError } from './DestinationConfigError';
+```
+
+**Shape**:
+```typescript
+class DestinationConfigError extends Error {
+  readonly code: 'DESTINATION_CONFIG';
+  readonly destination: string;
+  readonly missingFields: string[]; // field or option names only, never a value
+  readonly cause?: unknown;         // a provider constructor's error, when that refused
+}
+```
+
+`IAuthProvider` is not re-exported: take it from `@mcp-abap-adt/interfaces-auth`.
 
 ### Interfaces (for consumers)
 
@@ -85,7 +113,9 @@ export type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 
 Concrete implementations are **not** in this package:
 - Stores live in `@mcp-abap-adt/auth-stores`.
-- Providers live in `@mcp-abap-adt/auth-providers`.
+- Providers live in `@mcp-abap-adt/auth-providers` — a runtime dependency,
+  since `getProvider` builds `BasicAuthProvider`, `SncLogonProvider`,
+  `TokenAuthProvider` and `SamlAuthProvider`; none of them is re-exported.
 
 ## Minimal Relationship Diagram
 
@@ -94,6 +124,7 @@ flowchart TD
   AB[AuthBroker] --> SS[ISessionStore]
   AB --> SK[IServiceKeyStore]
   AB --> TP[IRefreshableTokenProvider]
+  AB -->|getProvider| AP[IAuthProvider]
   SS --> IConn[IConnectionConfig]
   SS --> IAuth[IAuthorizationConfig]
   SK --> IConn

@@ -15,6 +15,8 @@ packages/auth-broker/src/__tests__/
 ├── broker/
 │   ├── AuthBroker.test.ts               # the broker against fake stores and providers,
 │   │                                    # and once against a real AbapSessionStore on disk
+│   ├── getProvider.test.ts              # getProvider: fake stores, real auth-providers credentials,
+│   │                                    # driven only through IAuthProvider
 │   └── AuthBroker.integration.test.ts   # real service keys, sessions and providers
 └── helpers/                             # test configuration, logger, free-port helpers
 
@@ -31,8 +33,10 @@ defined).
 
 ## What each suite needs
 
-- **`AuthBroker.test.ts`** and **every CLI suite**: nothing — no network, no
-  configuration, no browser.
+- **`AuthBroker.test.ts`**, **`getProvider.test.ts`** and **every CLI suite**:
+  nothing — no network, no configuration, no browser. The SNC case writes a
+  64-byte ELF header for the host's architecture into a temporary directory as
+  its `sncLib`: the locator reads only the header, so no SNC product is needed.
 - **`AuthBroker.integration.test.ts`**: a real destination. It reads
   `packages/auth-broker/tests/test-config.yaml`; without it the template
   (`test-config.yaml.template`) is read, its placeholders disable every case,

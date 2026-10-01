@@ -11,8 +11,48 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
 
 ## [Unreleased]
 
+### Added
+
+- **`getProvider(destination): Promise<IAuthProvider>`** — the credential the
+  destination states, for a `@mcp-abap-adt/connection` 10 connector. The
+  destination's `authType` (and `grantType`, for `jwt` and `saml`) chooses the
+  provider and nothing else does; the means are read from the service key
+  store only, the secret (token or cookies) from the session store only. Built
+  in this version: `basic` → `BasicAuthProvider`, `snc` →
+  `SncLogonProvider.forSecureLoginClient` (from `sncPartnerName`, `sncQop`,
+  `sncLib`, `sncMyName`), `jwt` / `none` → `TokenAuthProvider.fixed` with the
+  session's token, `saml` / `none` → `SamlAuthProvider` with the session's
+  cookies. The token grants are valid pairs not built yet: `getProvider`
+  throws a plain `Error` for them. One provider per destination: the promise
+  of the build is cached before the first read, so concurrent first calls
+  build once, and dropped when the build throws, so the next call retries.
+  `getProvider` writes to no store.
+- **`DestinationConfigError`** (`code: 'DESTINATION_CONFIG'`, `destination`,
+  `missingFields`, `cause?`) — a destination that lacks what its type needs:
+  no `serviceKeyStore` option, no means, no or an unknown `authType`, a
+  `jwt`/`saml` destination without a `grantType` or with a pair outside the
+  table, a missing field of its row (`''` counts as missing), or a provider
+  constructor's own `ValidationError` (an `sncQop` outside `1|2|3|8|9`, kept as
+  `cause`). It names fields and options, never a stored value.
+- The collaborator options `authorization`, `oidcAuthorization`,
+  `deviceCodePresenter`, `samlCookies`, `assertionReplayStore` on
+  `AuthBrokerConfig`, and the `StrategyGrant` type — declared for the token
+  grants; no destination built in this version uses one yet.
+
 ### Changed
 
+- **`provider` is optional.** It is the token API's source and `getProvider`
+  does not use it. Without it, `getToken` and `refreshToken` throw
+  `DestinationConfigError` naming `provider`.
+- **Breaking: `getConnectionConfig` / `getAuthorizationConfig` compose the two
+  stores** instead of answering the session's configuration whole (and the
+  key's only when the session had none). `getConnectionConfig` is the key
+  store's means with the session's `authorizationToken`, `sessionCookies` and
+  `expiresAt` laid over them; `getAuthorizationConfig` is the key store's
+  client with the session's refresh token, `null` without a client in the key
+  store. Means a session store answers are not read, nor a secret a key store
+  answers. A consumer that kept the URL or the client only in its session
+  store gets them from a key store now.
 - **Contracts from their 2026-10 packages.** `@mcp-abap-adt/interfaces-auth`
   `^3.0.0` (was `^2.1.0`), `@mcp-abap-adt/interfaces-auth-sap` `^2.0.0` (was
   `^1.0.1`), and `@mcp-abap-adt/interfaces-auth-broker` `^1.0.0` (new). The
@@ -24,8 +64,9 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   imports them from this package changes nothing; one that imports
   `ISessionStore` and friends from `interfaces-auth-sap` itself takes them
   from `interfaces-auth-broker` from its 2.0.0 on.
-- Dev dependency `@mcp-abap-adt/auth-providers` `^5.1.0` (was `^4.2.0`). The
-  dev dependency `@mcp-abap-adt/auth-stores` stays `^1.2.3`: 3.0.0's session
+- `@mcp-abap-adt/auth-providers` `^5.1.0` (was `^4.2.0`, a dev dependency) is
+  a runtime dependency: `getProvider` constructs its classes. None is
+  re-exported. The dev dependency `@mcp-abap-adt/auth-stores` stays `^1.2.3`: 3.0.0's session
   stores hold the secret alone and refuse the `serviceUrl` and `authType`
   this version's `getToken` writes into the session, so the tests move to it
   with the change that writes the secret alone.

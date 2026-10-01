@@ -41,7 +41,9 @@ tools/                     check-graph.js, check-packed.js, publish-changed.js,
 
 ## Core Principles
 
-- **Interface-only communication**: The broker only talks to `ISessionStore`, `IServiceKeyStore`, and `IRefreshableTokenProvider` interfaces.
+- **Interface-only communication**: The broker only talks to `ISessionStore`, `IServiceKeyStore`, and `IRefreshableTokenProvider` interfaces. `getProvider` constructs auth-providers classes by name, from what the destination states, and hands them out as `IAuthProvider`.
+- **Means and secret are split by store**: the service key store holds the means (`authType`, `grantType`, the client, basic's user and password, the SNC fields, `serviceUrl`), the session store the secret (token or cookies, `expiresAt`, refresh token). `getProvider` and the broker's `getConnectionConfig` / `getAuthorizationConfig` read each from its own store only.
+- **The destination states its provider**: `authType`, and `grantType` for `jwt` / `saml`, choose it — never which other fields are present.
 - **Dependency inversion**: Implementations live in `@mcp-abap-adt/auth-stores` and `@mcp-abap-adt/auth-providers`.
 - **The provider decides**: Providers own the token lifecycle — whether the cached token is still good, refresh, re-login — and how a login is conducted (their authorization strategy). The broker does not repeat or override any of it.
 
@@ -54,6 +56,23 @@ tools/                     check-graph.js, check-packed.js, publish-changed.js,
 - Builds the provider on first use when given a factory, seeded with the above, and reuses it per destination; uses an instance as given.
 - Asks the provider once — `getTokens()` for `getToken()`, `refreshTokens()` for `refreshToken()` — with no retry and no fallback.
 - Persists the result by type (session cookies for SAML, bearer token otherwise; the refresh token when present) and returns the token.
+
+### `getProvider`
+
+`getProvider(destination)` builds the `IAuthProvider` a `connection` 10
+connector takes:
+- reads the means from the service key store (`getConnectionConfig`); none,
+  or no `authType`, is a `DestinationConfigError` — whatever the session holds;
+- `basic` → `BasicAuthProvider(username, password)`; `snc` →
+  `SncLogonProvider.forSecureLoginClient(…)` from the four SNC fields — neither
+  reads the session;
+- `jwt` / `saml` need a `grantType` from the table (spec §3.1); `none` reads the
+  session (`loadSession`) and hands over its token (`TokenAuthProvider.fixed`)
+  or cookies (`SamlAuthProvider`); the token grants are not built yet;
+- caches the *promise* of the build per destination, set before the first store
+  read and dropped when the build throws, so concurrent first calls build once
+  and a failure is retried;
+- writes nothing.
 
 ### Stores
 
@@ -94,6 +113,9 @@ The broker writes tokens and the refresh token to the session store, never the c
 - Provider errors propagate unchanged (class, `code`, `missingFields`, `cause`).
 - Store reads: `null` or `FILE_NOT_FOUND` is absence and the broker goes on to the next source; any other store failure is thrown unchanged — before the provider is asked when it happens in the reads that come before the token, after the provider answered and the token was written when it happens in the reads `persist()` makes to save the refresh token.
 - Store writes that fail propagate.
+- A destination that lacks what its type needs: `DestinationConfigError`
+  (`code: 'DESTINATION_CONFIG'`, `destination`, `missingFields` — names only,
+  never a value — and a provider constructor's error as `cause`).
 
 ## Responsibilities Split
 
