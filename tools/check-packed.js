@@ -36,6 +36,23 @@ const run = (cmd, args, cwd) =>
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+const IS_WINDOWS = process.platform === 'win32';
+// npm itself, started without a shell: on Windows `npm` is a .cmd shim, which
+// Node does not start without one. Under `npm run`, npm names its own entry
+// point; run directly, Windows' npm ships beside node.exe.
+const NPM_CLI = /npm-cli\.js$/.test(process.env.npm_execpath ?? '')
+  ? process.env.npm_execpath
+  : IS_WINDOWS
+    ? path.join(
+        path.dirname(process.execPath),
+        'node_modules',
+        'npm',
+        'bin',
+        'npm-cli.js',
+      )
+    : undefined;
+const npm = (args) =>
+  NPM_CLI ? [process.execPath, [NPM_CLI, ...args]] : ['npm', args];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 // A failed command's stderr is a stack trace; the line naming the error is the
 // one worth reading.
@@ -72,14 +89,18 @@ try {
   const tarballs = path.join(work, 'tarballs');
   fs.mkdirSync(tarballs);
   for (const { dir } of Object.values(manifests))
-    run('npm', ['pack', '--pack-destination', tarballs, '--silent'], dir);
+    run(...npm(['pack', '--pack-destination', tarballs, '--silent']), dir);
   files = fs.readdirSync(tarballs).map((f) => path.join(tarballs, f));
 
-  // 2. The tarballs themselves.
+  // 2. The tarballs themselves. tar gets the bare name from their directory:
+  // GNU tar (Git for Windows) reads `C:\…` as a remote host.
   for (const tgz of files) {
-    const listing = run('tar', ['-tzf', tgz], work).split('\n');
+    const name = path.basename(tgz);
+    const listing = run('tar', ['-tzf', name], tarballs)
+      .split('\n')
+      .map((l) => l.trim());
     const manifest = JSON.parse(
-      run('tar', ['-xzOf', tgz, 'package/package.json'], work),
+      run('tar', ['-xzOf', name, 'package/package.json'], tarballs),
     );
     const label = `${manifest.name}@${manifest.version}`;
     if (!listing.some((f) => f.startsWith('package/dist/')))
@@ -123,17 +144,16 @@ try {
     // .npmrc, nothing but the tarballs and the registry.
     const consumer = path.join(work, 'consumer');
     fs.mkdirSync(consumer);
-    run('npm', ['init', '-y'], consumer);
+    run(...npm(['init', '-y']), consumer);
     const install = spawnSync(
-      'npm',
-      [
+      ...npm([
         'install',
         '--no-save',
         '--ignore-scripts',
         '--no-audit',
         '--no-fund',
         ...files,
-      ],
+      ]),
       { cwd: consumer, encoding: 'utf8' },
     );
     if (install.status !== 0) {
@@ -172,18 +192,26 @@ try {
         `${CLI} carries its own ${LIBRARY} ${readJson(path.join(nested, 'package.json')).version}, not the packed one`,
       );
 
-    // 4. Every bin starts. Through node_modules/.bin, as a user's shell would.
+    // 4. Every bin starts. Through node_modules/.bin, as a user's shell would;
+    // on Windows that is the `.cmd` shim, which only a shell starts. The
+    // arguments are this script's own literals, so the command line is safe.
     const cliVersion = manifests[CLI].manifest.version;
     const libraryVersion = manifests[LIBRARY].manifest.version;
     for (const [bin] of bins) {
       const exe = path.join(consumer, 'node_modules', '.bin', bin);
+      const options = {
+        cwd: consumer,
+        encoding: 'utf8',
+        timeout: 30_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      };
       const call = (args) =>
-        spawnSync(exe, args, {
-          cwd: consumer,
-          encoding: 'utf8',
-          timeout: 30_000,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
+        IS_WINDOWS
+          ? spawnSync(`"${exe}.cmd" ${args.join(' ')}`, {
+              ...options,
+              shell: true,
+            })
+          : spawnSync(exe, args, options);
 
       const version = call(['--version']);
       const printed = (version.stdout ?? '').trim();

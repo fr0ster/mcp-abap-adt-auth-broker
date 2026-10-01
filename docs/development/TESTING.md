@@ -204,8 +204,9 @@ In PowerShell quote the `--`: unquoted, PowerShell consumes it, npm takes
 `-t` for its own option, and Jest receives only the bare words. The test and
 build scripts run on any platform (`cross-env` sets `NODE_OPTIONS`, `clean`
 is plain Node), so `npm test`, `npm run test:live` and `npm run build` work on
-Windows as well. `check:packed` and `check:publish` do not yet: they spawn
-`npm` and the bins without a shell, which Windows requires for `.cmd` shims.
+Windows as well. So does `check:packed`: it starts npm through its
+`npm-cli.js` and, on Windows, the bins through their `.cmd` shims.
+`check:publish` does not yet: its fake `npm` is a shell script with a shebang.
 
 The `basic` cases run there too with their variables set. On macOS the SNC
 case runs the same way (`export` instead of `$env:`, `DYLD_LIBRARY_PATH` for
