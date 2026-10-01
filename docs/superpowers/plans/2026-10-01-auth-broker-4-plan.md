@@ -80,102 +80,84 @@ each protects, not their bodies. No step carries a time estimate.
 - **What:** review of this plan; the user's decisions on the open points below
   (*Decisions needed*) recorded in the spec or here before merge.
 - **Merge:** on the user's word. Documentation only, no release.
-- **Next depends on:** the merge, and decisions D1 and D2 (step 1), D3 (step 2).
+- **Next depends on:** the merge, and decisions D2 and D6 (step 1), D3 (step 2).
 
-## Step 1 — `@mcp-abap-adt/auth-stores` 2.1.0 (spec §1.2)
+## Step 1 — `@mcp-abap-adt/auth-stores` 3.0.0 (spec §1.2)
 
-- **Repository:** `mcp-abap-adt-auth-stores`, worktree `~/prj/.wt-auth-stores-21`,
-  branch `feat/destination-grant` from `master` (`2a7fc4b`, 2.0.0).
-- **Version: minor (2.1.0), as the spec says.** Evidence:
-  - The package re-exports no contract type: `src/index.ts` exports the store
-    classes, their aliases, the error classes, loaders, constants and file
-    utilities only. Its published declarations *reference*
-    `IAuthorizationConfig`, `IConfig`, `IConnectionConfig`, `ISessionStore`,
-    `IServiceKeyStore` (`dist/stores/**/*.d.ts`, e.g.
-    `dist/stores/abap/AbapSessionStore.d.ts:11`), so moving those imports to
-    `interfaces-auth-broker` changes which package names the types, not what a
-    consumer can import from auth-stores.
-  - The moved types are the 1.1.0 shapes plus optional fields
-    (`interfaces-auth-sap` 2.0.0 CHANGELOG: "Moved, unchanged"; the added fields
-    are all optional). So a store of 2.1.0 is assignable to 1.1.0's
-    `ISessionStore` / `IServiceKeyStore` and accepts every 1.1.0
-    `IConnectionConfig`: a consumer still on `interfaces-auth-sap` 1.1.0 compiles
-    unchanged. This is proven in the step by a type check (below), not argued.
-  - The behaviour changes are additions (new fields kept), or answers where 2.0.0
-    returned `null` or threw for data the same store had written (spec §1.2
-    items 4 and 5, measured there) — defects of 2.0.0 fixed.
-  - This differs from 2.0.0, which its CHANGELOG called breaking because
-    `interfaces-auth` 3.0.0 changed shapes the stores used; here no shape the
-    stores use changes.
-  - If the type check below fails, the version is 3.0.0, and the step's
-    migration note says what a consumer on `interfaces-auth-sap` 1.x must change;
-    the broker's and CLI's ranges in later steps follow.
-- **What changes, by spec section:**
+- **Repository:** `mcp-abap-adt-auth-stores`, worktree `~/prj/.wt-auth-stores-3`,
+  branch `feat/means-and-secret` from `master` (`2a7fc4b`, 2.0.0).
+- **Version: major (3.0.0)** — spec §1.2 item 5, with the evidence there: the
+  session stores refuse means writes 2.0.0 accepted (the 3.x broker's
+  `persist`, `src/AuthBroker.ts:301-308`; the 3.x CLI, `bin/mcp-auth.ts:890`,
+  `bin/mcp-sso.ts:826`, `:845`, `bin/generate-env-from-service-key.ts:122`),
+  stop answering means 2.0.0 answered (read first by the 3.x broker,
+  `src/AuthBroker.ts:264-285`, `:378-420`), and the service key stores change
+  their answers (`authType` added, `authorizationToken: ''` gone). The
+  2.1.0-era type-compatibility check is dropped: it can no longer change the
+  version. Decision D2 confirms 3.0.0.
+- **What changes, by spec §1.2 item:**
   1. Dependencies: `@mcp-abap-adt/interfaces-auth-broker` `^1.0.0` added;
-     `@mcp-abap-adt/interfaces-auth-sap` `^1.1.0` → `^2.0.0`; the seven store
-     files and the test helpers import the store contracts from
-     `interfaces-auth-broker`, `IAuthorizationConfig` from `interfaces-auth-sap`.
-  2. §1.2 item 1 — every §1.1 field kept by `AbapSessionStore`,
+     `@mcp-abap-adt/interfaces-auth-sap` `^1.1.0` → `^2.0.0`; the store files
+     and test helpers import the store contracts from `interfaces-auth-broker`,
+     `IAuthorizationConfig` from `interfaces-auth-sap`.
+  2. Item 1 — the five session stores (`AbapSessionStore`,
      `SafeAbapSessionStore`, `XsuaaSessionStore`, `SafeXsuaaSessionStore`,
-     `EnvFileSessionStore`, under the existing field-by-field update rule
-     (`''` clears; a list written whole). Key names `SAP_GRANT_TYPE`,
-     `SAP_OIDC_*`, `SAP_SAML_*`, `SAP_EXPIRES_AT`; `XSUAA_*` in the XSUAA
-     stores; added to the exported `*_CONNECTION_VARS` constants.
-  3. §1.2 item 2 — the one-credential rule extended by grant (`jwt`: token,
-     `grantType`, `oidc*`, and `username`/`password` only with `grantType:
-     'password'`; `saml`: `grantType`, `saml*`, `sessionCookies` for
-     `saml2_pure`/`none`, `authorizationToken` for `saml2_bearer`); a write of
-     another type drops them.
-  4. §1.2 item 3 — `XSUAA_AUTH_TYPE` written and read; a file without it answers
-     `jwt`; both service-key stores answer `authType: 'jwt'` from
-     `getConnectionConfig`.
-  5. §1.2 item 4 — a destination with no credential yet is kept and answered by
-     both ABAP session stores; **and by the XSUAA session stores if decision D1
-     says so**.
-  6. §1.2 item 5 — `uaaClientSecret: ''` kept and returned as a public client by
-     all four session stores.
-  7. §1.2 item 6 — `expiresAt` kept with its credential, cleared with it.
+     `EnvFileSessionStore`) hold the secret alone: token or cookies,
+     `expiresAt` (`SAP_EXPIRES_AT`, `XSUAA_EXPIRES_AT`), refresh token; no
+     `serviceUrl` required or answered; a write carrying any means field is
+     refused naming the fields; `setAuthorizationConfig` refuses,
+     `getAuthorizationConfig` answers `null`; writing one secret kind clears
+     the other; the XSUAA stores keep refusing a session without a token.
+  3. Item 2 — 2.x files still read: the session store answers only the secret
+     keys; a session write rewrites only secret keys and preserves every other
+     line (no `SAP_URL`, no `SAP_AUTH_TYPE`, no clearing of other types' keys).
+  4. Item 3 — `AbapServiceKeyStore` and `XsuaaServiceKeyStore` answer
+     `authType: 'jwt'`, no `grantType`, and no `authorizationToken`.
+  5. Item 4 — the destination store, **as decision D6 settles it**
+     (recommended: an `IServiceKeyStore` over `<dir>/<destination>.env` with
+     the 2.x key names plus `SAP_GRANT_TYPE`, `SAP_OIDC_*`, `SAP_SAML_*`; the
+     public client as `''`; an optional fallback `IServiceKeyStore`; a write
+     method of its own outside the contract). New exports: the class and its
+     key constants.
 - **Tests first, and the rule each protects:**
-  - per store and per item 1 field group: write, read back through
-    `getConnectionConfig` and `loadSession`; a `''` clears; a list replaced
-    whole (item 1);
-  - a write of another type drops the grant fields; `username`/`password`
-    survive in `jwt` only with `grantType: 'password'`; `saml2_bearer` holds a
-    token under `saml` (item 2);
-  - XSUAA store writes and reads `authType`; a pre-2.1.0 XSUAA file answers
-    `jwt`; both service-key stores answer `jwt` (item 3);
-  - the measured 2.0.0 cases of §1.2 items 4 and 5 become tests, each first run
-    red against 2.0.0 behaviour: `saveSession(d, { serviceUrl, authType: 'jwt',
-    grantType, uaaUrl, uaaClientId, uaaClientSecret })` then
-    `getConnectionConfig` answers it (both ABAP stores; XSUAA per D1); a public
-    client's `getAuthorizationConfig` is not `null` and carries `''` (four
-    stores);
-  - `expiresAt` written with the token or cookies, cleared when the credential
-    is cleared or replaced by another type (item 6);
-  - **type compatibility (the version decision):** a `__typechecks__` file
-    assigns each store class to `ISessionStore` / `IServiceKeyStore` of
-    `interfaces-auth-sap` 1.1.0 (a dev dependency under an npm alias) and passes
-    a 1.1.0 `IConnectionConfig` to `setConnectionConfig`; it runs under
-    `test:check`.
-- **Load-bearing:** remove the grant-field keep in one store (item 1), the
-  `grantType: 'password'` condition (item 2), the XSUAA `jwt` default (item 3),
-  the credential-less read path (item 4), the `''` secret pass-through (item 5),
-  the `expiresAt` clear (item 6); each goes red alone.
+  - each session store: a write of `{ authorizationToken, expiresAt,
+    refreshToken }` with no `serviceUrl` is kept and read back through
+    `loadSession` (item 1 — red against 2.0.0, which needs `SAP_URL`);
+  - each means field, one test per field group (URL and type, basic, SNC,
+    client, OIDC, SAML, `sapClient`/`language`), refused by a session write
+    with the field names in the message and no value (item 1);
+  - token then cookies clears the token, and back (item 1); an XSUAA session
+    without a token is still refused (item 1);
+  - a 2.x fixture file with every key: `loadSession` answers only the four
+    secret fields; after a session write every non-secret line is byte-for-byte
+    unchanged (item 2);
+  - both service key stores: `authType: 'jwt'`, `grantType` absent,
+    `authorizationToken` absent (item 3);
+  - the destination store (per D6): every means field written and read back;
+    `uaaClientSecret: ''` answered as a public client; the fallback store fills
+    only what the file leaves out; the same 2.x fixture read as means; no
+    secret field is answered (item 4).
+- **Load-bearing:** accept one means field in a session write (each group
+  alone); answer `SAP_URL` from a session; clear another type's keys on a
+  session write; answer a `grantType` from a service key; drop the `''`
+  pass-through; let the file override nothing / everything in the fallback —
+  each red alone.
 - **Gate:** `npm run build`, `npm run test:check`, `npm run lint:check`,
   `npm test` — in the worktree, where `tests/test-config.yaml` is absent and the
   helper falls back to the template (`src/__tests__/helpers/configHelpers.ts:65-110`);
   the gate confirms the integration suites skip on the template, and if any does
-  not, that is fixed in this step before anything else.
-- **Docs:** README (*Session Stores*, the env formats for ABAP and XSUAA with the
-  new keys, the one-credential rule by grant, public client, credential-less
-  destination), CHANGELOG 2.1.0 (*Added* / *Fixed*, with the version reasoning
-  above in one paragraph), `docs/archive` untouched.
-- **Release:** 2.1.0, tag `v2.1.0` on the merge commit, `npm publish` by the
-  user; check `npm view @mcp-abap-adt/auth-stores@2.1.0 version` and its
+  not, that is fixed in this step before anything else (R4).
+- **Docs:** README (the two roles; *Session Stores* reduced to the secret; the
+  destination store and its key names; the 2.x file mapping table of spec §1.2
+  item 2; public client), CHANGELOG 3.0.0 (*Breaking*, with a migration note
+  for a consumer on the 2.x roles: write means through a key store, read them
+  from one), `docs/archive` untouched.
+- **Release:** 3.0.0, tag `v3.0.0` on the merge commit, `npm publish` by the
+  user; check `npm view @mcp-abap-adt/auth-stores@3.0.0 version` and its
   `dependencies` naming `interfaces-auth-broker`; build and test the tag in the
   main checkout.
-- **Next depends on:** 2.1.0 on the registry (the broker's dev dependency and
-  the CLI's runtime dependency are `^2.1.0`).
+- **Next depends on:** 3.0.0 on the registry (the broker's dev dependency and
+  the CLI's runtime dependency are `^3.0.0`).
 
 ## Step 2 — `@mcp-abap-adt/auth-providers` 5.1.0 (spec §1.3)
 
@@ -324,13 +306,13 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
     `interfaces-auth-broker` `^1.0.0`; store contracts imported from
     `interfaces-auth-broker`, `IAuthorizationConfig` and `AuthType` from
     `interfaces-auth-sap`; the 3.x re-exports kept (spec §2), from the new
-    sources; dev dependencies `auth-stores` `^2.1.0`, `auth-providers` `^5.1.0`.
+    sources; dev dependencies `auth-stores` `^3.0.0`, `auth-providers` `^5.1.0`.
     Spec §14 stale comments: `src/index.ts:34-37`, `src/stores/index.ts:4-6`
     (non-existent `auth-stores-btp`/`-xsuaa`), `src/types.ts:4`,
     `src/stores/interfaces.ts:4` (they name `interfaces-auth-broker` for the store
     contracts, as spec §14 now says).
   - CLI (spec §10, third bullet): `auth-providers` `^5.1.0`, `auth-stores`
-    `^2.1.0`, the contract packages; the device flow gets
+    `^3.0.0`, the contract packages; the device flow gets
     `consoleDeviceCodePresenter(logger)`; the SAML flows get an
     `assertionValidator` built from the trust the CLI collects
     (`createSignedResponseValidator` for pure, `createSignedAssertionValidator`
@@ -354,9 +336,13 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 - **Branch:** `feat/get-provider-core`.
 - **What changes:** spec §2 (`getProvider`, `DestinationConfigError`,
   `provider` optional; the collaborator options declared but no row uses them
-  yet), §3.1 (the pair table, `authType` + `grantType` only), §3.2 (no rule of
-  the broker's own), §3.3 (where each field comes from; store reads keep the 3.x
-  absence rule), §4.1 rows `basic`, `snc`, `jwt`/`none`, `saml`/`none`, §4.2,
+  yet), §3.1 (the pair table, `authType` + `grantType` only, read from the key
+  store), §3.2 (means from the key store only — no fallback to a session's
+  means, not even for a 3.x file), §3.3 (means from `IServiceKeyStore`, the
+  secret from `loadSession`; the broker's `getConnectionConfig` /
+  `getAuthorizationConfig` composed from both; store reads keep the 3.x
+  absence rule), §4.1 (how a provider is built from the two stores) rows
+  `basic`, `snc`, `jwt`/`none`, `saml`/`none`, §4.2,
   §4.4 (every case that applies to these rows; a constructor's
   `ValidationError` — `sncQop` — becomes a `DestinationConfigError` naming the
   store field, original as `cause`), §7 (the promise cache: set before the first
@@ -373,8 +359,15 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
     `snc_qop`, `snc_myname`, `snc_lib`, with `sncLib` pointing at a fixture
     whose header is the host's architecture (risk R3); a missing `sncLib` file
     is refused naming `sncLib`;
-  - each `none`: presents what is stored;
-  - `DestinationConfigError`: no `authType`, an unknown one, `jwt`/`saml`
+  - each `none`: presents what the session store holds; without a session it
+    is the error naming the field;
+  - the split: a session fake answering `authType`, `grantType`, `username` or
+    a client is ignored, so a destination whose means only the session holds is
+    the error naming `authType`; a key store answering `authorizationToken` is
+    not a seed; the key store fake has no write method and a spy shows none
+    called;
+  - `DestinationConfigError`: no `serviceKeyStore` option, no means, no
+    `authType`, an unknown one, `jwt`/`saml`
     without `grantType`, each invalid pair, each missing field of these rows,
     `''` as missing, the `sncQop` constructor error with `cause`;
     `missingFields` asserted, and no stored value appears in the message;
@@ -383,8 +376,9 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   - cache: concurrent first calls build once; a failed build is retried on the
     next call.
 - **Load-bearing:** the pair table (allow one invalid pair), the `''`-is-missing
-  rule, the promise cache (set after the `await`, as 3.x did), the
-  value-free message — each red alone.
+  rule, a fallback to the session's means (add it: the split test goes red),
+  the promise cache (set after the `await`, as 3.x did), the value-free
+  message — each red alone.
 - **Docs:** library README (the destination table for these rows,
   `DestinationConfigError`), `docs/using/USAGE.md` (`getProvider` for basic and
   SNC), `docs/architecture/ARCHITECTURE.md`, `EXPORTS.md`, CHANGELOG.
@@ -393,7 +387,9 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 ### 4c — persistence through `onTokens`; the UAA grants
 
 - **Branch:** `feat/get-provider-persistence`.
-- **What changes:** spec §6 whole (`persist` rules 1–3, `expiresAt` written, the
+- **What changes:** spec §6 whole (`persist` rules 1–3 — one `saveSession` of
+  the secret alone, the stored refresh token carried forward, no means ever
+  written, nothing written for `basic`/`snc` — `expiresAt` written, the
   broker's own retry queue — growing delay capped at one minute, `unref()`ed
   timer, latest result replaces a pending one, attempts per destination never
   overlap, failures logged by class name only — and `flush()`); §4.1 rows
@@ -401,8 +397,9 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   the seed (`expiresAt` included), the logger and `onTokens`; §5 for the
   `authorization` option (called once per build, with the grant; required only
   by its rows; never disposed by the broker); §4.4 for these rows (`uaaUrl`,
-  `serviceUrl`, the `authorization` option by name); §3.3 public client (`''`
-  reaches the provider as no secret).
+  `serviceUrl` in the means, the `authorization` option by name); §3.3 public
+  client (`''` from the key store reaches the provider as no secret); §4.1 item
+  3 (no session: unseeded, logs in at `prepare()`).
 - **Why persistence and the first token rows together:** a token provider handed
   out without `onTokens` would break H3 at this merge.
 - **Tests first:**
@@ -411,10 +408,11 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
     strategy is handed `<uaaUrl>/passcode`;
   - persistence (spec §13): a renewal through `rejected({ at: 'request',
     status: 401 })` on the returned provider is in the session store afterwards,
-    with the stated `authType`, the refresh token beside it, **no client
-    secret** (H4); a refresh token without session credentials goes through
-    `saveSession` alone; nothing written meanwhile is reverted (re-read at write
-    time); a `basic` / `snc` session is never overwritten (rule 3);
+    and the `saveSession` call's field set is exactly `{ authorizationToken,
+    expiresAt, refreshToken }` — **no client secret** (H4), no `serviceUrl`, no
+    `authType`; a result with no refresh token carries the stored one forward;
+    no write for a `basic` / `snc` destination (rule 3); a destination with no
+    session logs in at `prepare()` and its first secret is written;
   - retry: a store whose write fails once — `onTokens` does not throw, the
     authentication succeeds, and with no further call to the provider (fake
     timers) the same result is written; delays grow and cap; a newer result
@@ -422,9 +420,10 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
     the logged failure carries the class name and no message;
   - `flush()` resolves once pending writes land; rejects naming the destination
     when the store still fails; the timer does not keep the process alive.
-- **Load-bearing:** derive `authType` from the result instead of declaring it;
-  drop the `basic`/`snc` guard; write the client secret (H4 branch); remove the
-  retry (write once); remove `unref()`; let attempts overlap — each red alone.
+- **Load-bearing:** write `serviceUrl`, then `authType`, then the client
+  secret into the session — each alone (the field-set test); drop the carried
+  refresh token; drop the `basic`/`snc` guard; remove the retry (write once);
+  remove `unref()`; let attempts overlap — each red alone.
 - **Docs:** library README (persistence, `flush()` and when to call it,
   collaborator `authorization`, the UAA rows), `docs/using/USAGE.md`,
   `ARCHITECTURE.md`, CHANGELOG.
@@ -435,8 +434,8 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 - **Branch:** `feat/get-provider-oidc-saml`.
 - **What changes:** §4.1 rows `oidc_authorization_code`, `device_code`,
   `password`, `token_exchange`, `saml2_pure` (seeded with `sessionCookies` and
-  `expiresAt`, auth-providers 5.1.0), `saml2_bearer` (token persisted under
-  `saml`); §4.1 validator composition (`createSignedResponseValidator` for pure,
+  `expiresAt`, auth-providers 5.1.0), `saml2_bearer` (token persisted to
+  the session as a token); §4.1 validator composition (`createSignedResponseValidator` for pure,
   `createSignedAssertionValidator` for bearer, from `samlIdpCertificates`,
   `samlClockSkewMs` and the consumer's replay store; `samlIdpEntityId` as
   expected issuer); §5 options `oidcAuthorization`, `deviceCodePresenter`,
@@ -448,8 +447,8 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   cookie function, replay store); the SAML rows validate a signed fixture
   assertion against `samlIdpCertificates` and refuse one signed by another key;
   a seeded `saml2_pure` destination reuses its cookies before `expiresAt` and
-  logs in after; a `saml2_bearer` token is stored under `saml`, `saml2_pure`
-  cookies as cookies, each with `expiresAt`; each missing collaborator is a
+  logs in after; a `saml2_bearer` token is written as a token, `saml2_pure`
+  cookies as cookies, each with `expiresAt` and nothing else; each missing collaborator is a
   `DestinationConfigError` naming the option; a headless refusing collaborator
   yields Oops from `prepare()` with the class label and never the message.
 - **Stand suites** per decision D5.
@@ -466,15 +465,20 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 - **What changes:** spec §9 whole — `getProvider` and the token API share the
   §7 cache when no consumer `provider` is given; with one, the token API is as
   3.x (persist after every `getTokens()` / `refreshTokens()`, cache hits
-  included); with a broker-built provider the token API writes nothing itself
+  included — but the secret alone, §6 — and its reads in the 3.x order, session
+  then key store, H5); with a broker-built provider the token API writes nothing itself
   and throws the failure recorded for the result it received (the
   `WeakMap<ITokenResult, unknown>`; result identity holds — `BaseTokenProvider`
   passes the same object to `onTokens` and returns it,
   `auth-providers src/providers/BaseTokenProvider.ts:219-247`); `basic`/`snc`
-  destinations refused before any provider is asked; destinations whose row is
+  destinations — by the key store's `authType` — refused before any provider is asked; destinations whose row is
   not a token provider refused without a consumer `provider`; §4.3 (the README
   states the two-sources case).
-- **Tests first:** every row of the §9 table carried over and green; `getProvider`
+- **Tests first:** every row of the §9 table carried over and green — the rows
+  that asserted `serviceUrl` / `authType` / the client in the written session
+  now assert the secret alone, as spec §9 says; with a consumer `provider` and
+  a session store that still answers means, the token API reads them as 3.x
+  did; `getProvider`
   and `getToken` share one provider and one renewal (one `onTokens`); the token
   API on a `basic` / `snc` destination throws `DestinationConfigError` and asks
   no provider; a write failure surfaces from `getToken` while the retry goes
@@ -493,9 +497,14 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 
 - **Repository:** auth-broker, worktree `.worktrees/cli-1`, branch
   `feat/cli-destinations` from `main`.
-- **What changes:** the remaining §10 items — each command writes a complete 4.0
-  destination before the login (the §10 table: `authType`, `grantType`, the
-  grant's data, through the session store's contract); a public client written
+- **What changes:** the remaining §10 items — each command writes the
+  destination's means before the login through the key store's own write
+  method (the destination store of D6; the §10 table: `authType`, `grantType`,
+  the grant's data, the client) and nothing into the session but what the
+  login obtains (the `--cookie` row writes its handed-over cookies to the
+  session store itself); the 3.x writes of the client into the session
+  (`bin/mcp-auth.ts:890`, `bin/mcp-sso.ts:826`, `:845`,
+  `generate-env-from-service-key.ts:122`) go; a public client written
   as `uaaClientSecret: ''` instead of `__public__` stripped afterwards
   (`bin/mcp-sso.ts:836-850`, `:911-920` before the move); `--flow password
   --passcode` becomes the `passcode` grant; `generate-env-from-service-key`
@@ -504,18 +513,19 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   non-zero on a failure; `mcp-auth` keeps injecting its own provider (token API
   path). Dependencies as §10 (`auth-broker` at the workspace version, which
   becomes `^4.0.0` in step 7).
-- **Tests first:** one per row of the §10 table — the file each command writes
-  reads back, through the store, as a destination `getProvider` builds from
-  (the CLI test builds the provider from the written file with the step-4
-  broker); the public client round-trips as `''`; `--passcode` writes
+- **Tests first:** one per row of the §10 table — the means each command
+  writes read back through the key store, and with the session store as a
+  destination `getProvider` builds from (the CLI test builds the provider with
+  the step-4 broker); the session store holds no means after any command; the
+  public client round-trips as `''`; `--passcode` writes
   `passcode`; `generate-env` without the grant flag refuses, never infers; a
   failing `flush()` gives a non-zero exit; the smoke check of step 3 stays
   green.
 - **Load-bearing:** omit `grantType` from one command's write → the read-back
   build fails; restore the URL inference in `generate-env` → red; ignore
   `flush()`'s rejection → red.
-- **Depends on decision D1** for the `xsuaa` rows (the XSUAA session store must
-  keep a destination before its first login).
+- **Depends on decision D6** (which key store the CLI writes means to, and
+  where its files live; the `--type xsuaa` rows included).
 - **Gate:** step-3 gate.
 - **Docs:** CLI README (each command's destination, the install command, the
   `flush` exit code), root README, `docs/installing/INSTALLATION.md`
@@ -556,7 +566,8 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 - **What changes:** library version `4.0.0`, CLI `1.0.0` with its dependency
   `@mcp-abap-adt/auth-broker` `^4.0.0`; both CHANGELOGs dated, the library's with
   the §12 *Breaking* list and the migration notes (server, calm-server, global
-  `mcp-auth` installs, 3.x session files needing `grantType`); a final pass over
+  `mcp-auth` installs, the means/secret split and how a 3.x session file maps
+  onto it, 3.x `jwt`/`saml` files needing `grantType`); a final pass over
   every document §14 lists, against the merged code; **`docs/superpowers/`
   goal, spec and this plan deleted** (what they still owe the future — step 8 —
   goes into this PR's description first).
@@ -577,8 +588,10 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 - `mcp-abap-adt` (goal path step 5): the connector from `getProvider`; the
   per-auth-type construction, the `getToken` before connecting and the
   `tokenRefresher` removed; the broker built with `authorization` and the other
-  collaborators; seeded sessions get `authType: 'jwt'`, `grantType:
-  'authorization_code'`; `flush()` on `SIGTERM` and before a stdio transport
+  collaborators; a key store for the means (under D6 the destination store,
+  falling back to its service key store) and the session store for the
+  secret; instead of seeding sessions from service keys it writes `authType:
+  'jwt'`, `grantType: 'authorization_code'` as means; `flush()` on `SIGTERM` and before a stdio transport
   closes; its docs install `@mcp-abap-adt/auth-broker-cli`; live check basic
   HTTP and RFC, token, SNC — one code path (spec §12). Its imports of moved types
   (`src/lib/stores/index.ts:24`, `src/lib/auth/brokerFactory.ts:36`) change
@@ -588,22 +601,19 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   `targetUrlSessionStore.ts:6`, `buildBroker.ts:11`) import `ISessionStore` and
   friends from `interfaces-auth-sap`: the path changes to
   `interfaces-auth-broker` when they upgrade; calm-server's `mcp-auth` hints
-  name the CLI package.
+  name the CLI package. calm-server wraps its session store only to keep the
+  `serviceUrl` 3.x writes back out of it (`calm
+  src/server/auth/targetUrlSessionStore.ts:12-19`); under the split that wrap
+  can become a key store answering the URL *(inference — calm's to design)*.
 
 ## Decisions needed (before the step named)
 
-- **D1 (step 1, used by step 5) — credential-less destinations in the XSUAA
-  session stores.** Spec §10 has every command write the destination *before*
-  the login, including under `--type xsuaa` (`bin/mcp-auth.ts:803`,
-  `bin/mcp-sso.ts:796` use `XsuaaSessionStore`), but §1.2 item 4 makes only the
-  ABAP session stores keep a destination with no token; `XsuaaSessionStore`
-  throws without one (`src/stores/xsuaa/XsuaaSessionStore.ts:138`, measured in
-  §1.2 item 4), as does `SafeXsuaaSessionStore` (`:76`). Proposed: step 1 extends
-  item 4 to both XSUAA session stores. The alternative — the CLI writes `xsuaa`
-  destinations only after the login — makes a failed first login leave no
-  destination, unlike `abap`.
-- **D2 (step 1) — the version.** Minor by the evidence in step 1, conditional on
-  its type-compatibility check; a red check makes it 3.0.0.
+- **D2 (step 1) — the auth-stores version.** Proposed: **3.0.0**. Session
+  stores refuse means writes 2.0.0 accepted and stop answering means 2.0.0
+  answered; the service key stores change their answers (spec §1.2 item 5,
+  with the callers that break). The 2.1.0 type-compatibility check is dropped.
+  The one way to stay minor would be to keep accepting and answering means in
+  the session stores — which is the split not done.
 - **D3 (step 2) — `interfaces-auth-sap` range in auth-providers.** `^2.0.0`
   (what the task names) or `^1.1.0 || ^2.0.0`. The second is honest — the three
   types it imports are identical in both — and avoids a second copy of the
@@ -624,6 +634,25 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   started from the auth-providers checkout with `npm run stand:up`; a grant it
   does not serve is named in the PR. The local-endpoint unit tests of 4c/4d cover
   every row regardless.
+- **D6 (step 1, used by steps 5 and 8) — where a destination's means live
+  when there is no SAP service key, and where a service key's grant is
+  stated.** An auth-stores question, not the broker's: the broker takes any
+  `IServiceKeyStore`. A SAP service key cannot state a grant (spec §1.2 item
+  3), so without a further store every service-key destination is refused
+  naming `grantType`, and basic, SNC, OIDC, SAML and `none` destinations have
+  nowhere to state their means. Proposed (spec §1.2 item 4): auth-stores ships
+  a destination store — an `IServiceKeyStore` over `<dir>/<destination>.env`
+  in the 2.x key names plus `SAP_GRANT_TYPE`, `SAP_OIDC_*`, `SAP_SAML_*`, with
+  an optional fallback `IServiceKeyStore` (a SAP key supplies client and URL,
+  the file the grant), the public client as `''`, and a write method of its
+  own. Its default directory is the one the session store uses, so every 2.x
+  session file is already a readable destination and no path changes; the CLI
+  writes means there and the server writes its service keys' grant there. The
+  alternatives: a separate destinations directory (the secret apart from the
+  means on disk, at the price of every user's paths changing and a migration
+  of 3.x files); or a `grantType` option on the SAP service key stores (stated
+  by whoever configures the store — smaller, but it covers only the service
+  key case and leaves basic, SNC, OIDC and SAML without a store).
 
 ## Risks / open points found in the code
 
@@ -659,6 +688,17 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 
 ## Spec points found while planning
 
+**Reworked for the means/secret split** (the user's decision of 2026-10-01,
+design, not a correction): spec §0 fact 6, §1.2 (auth-stores 3.0.0), §2
+(store roles), §3.1–§3.3, §4.1, §4.4, §6, §8 (the split, verified sufficient,
+§8.3 open points), §9, §10, §12, §13, §16; in this plan step 1, 4a–4e, 5, 7,
+8 and the decisions: D1 (credential-less destinations in the XSUAA session
+stores) is removed — the means come from the key store, so no session store
+keeps a destination before its first login, and the XSUAA stores' refusal of a
+tokenless session stays correct (spec §1.2 item 1); D2 changed; D6 added. The goal is
+unchanged: its *Stays* ("the stores and their contracts", "a client secret is
+never copied into the session") and H0–H6 hold as written.
+
 **Corrected in the spec and the goal** (facts, not design; commit after this
 plan's first version):
 
@@ -685,10 +725,13 @@ plan's first version):
 
 **Still open — they wait for the user** (see *Decisions needed*):
 
-- §1.2 item 4 vs §10 — destinations with no credential in the XSUAA session
-  stores (D1).
-- §1.2 heading — auth-stores minor or major, settled by step 1's type check
-  (D2).
+- §1.2 item 5 — auth-stores 3.0.0 (D2).
+- §1.2 item 4, §10, §12 — the destination store: whether auth-stores ships it,
+  and its directory (D6).
+- §8.3 — where the contract carries the split only by convention (a client
+  with no secret or no UAA URL as `''`; `saveSession`'s merge semantics; doc
+  comments describing the 2.x roles). Recorded, not scheduled: a
+  documentation-only `interfaces-auth-broker` patch only if the user asks.
 - auth-providers' `interfaces-auth-sap` range (D3).
 - §1.3 — `refreshToken?` on `Saml2PureProviderConfig`, unused by a provider
   with no refresh grant (D4).
@@ -698,11 +741,11 @@ plan's first version):
 
 | Goal hold / item | Delivered by |
 |---|---|
-| H0 the broker speaks only the store contracts | interfaces (done); step 1 (stores implement the contract); step 3 (`check-graph`: no `auth-stores` import in the library); 4b–4e (fakes of the contract in tests) |
-| H1 the configuration states the provider | 4b (pair table, `authType` + `grantType` only, no broker rule for legacy files); step 5 (CLI writes both; `generate-env` stops inferring) |
+| H0 the broker speaks only the store contracts | interfaces (done; sufficient for the split, spec §8.2); step 1 (stores implement the split); step 3 (`check-graph`: no `auth-stores` import in the library); 4b–4e (fakes of the contract in tests) |
+| H1 the configuration states the provider | 4b (pair table, `authType` + `grantType` from the key store only, no fallback to a session's means); step 1 (no grant answered from a SAP key); step 5 (CLI writes both; `generate-env` stops inferring) |
 | H2 no implicit defaults | 4a (CLI's presenter, validator, `read`); 4b–4d (every collaborator from the consumer, missing → `DestinationConfigError`) |
 | H3 what a provider obtains reaches the session store | 4c (`onTokens`, retry, `flush()`); 4d (OIDC/SAML results); 4e (through connection 10) |
-| H4 no secret the broker was not given | 4c (no client secret, test and break); step 5 (the CLI's own writes are the user's) |
+| H4 no secret the broker was not given | 4c (the session gets the secret alone — field-set test and breaks); step 1 (session stores refuse means); step 5 (the CLI writes means to the key store; the user's) |
 | H5 the token API keeps 3.x | every step-4 PR keeps the §9 suite green; 4e (shared cache, `basic`/`snc` refusal) |
 | H6 measured: basic, token, SNC through connection 10 | step 6 (SNC on Windows, by the user) |
 | Success: server builds from `getProvider`; a renewal in the connector is in the store; token API as 3.x | 4e (end to end through connection 10, no SAP); step 6 (live); step 8 (the server itself) |
@@ -717,7 +760,7 @@ plan's first version):
 | §1.2 | 1 |
 | §1.3 | 2 |
 | §2 | 4b (surface), 4c (`flush`), 4d (options), 4e (`provider` optional for the token API) |
-| §3.1, §3.2, §3.3 | 4b; public client in 4c |
+| §3.1, §3.2, §3.3 | 4b (the split's reads); public client in 4c; the token API's 3.x reads in 4e |
 | §4.1 | 4b (`basic`, `snc`, `none`), 4c (UAA), 4d (OIDC, SAML) |
 | §4.2 | 4b–4d (each provider's own `rejected()`, tested through the contract) |
 | §4.3 | 4e |
@@ -725,7 +768,7 @@ plan's first version):
 | §5 | 4c (`authorization`), 4d (the rest) |
 | §6 | 4c |
 | §7 | 4b (promise cache), 4e (shared with the token API) |
-| §8 | 1 (stores), done (contract) |
+| §8 | 1 (stores), done (contract — verified sufficient, §8.2); §8.3 recorded only |
 | §9 | 4e; carried-over suite in every step-4 PR |
 | §10 | 3 (move, imports, version), 4a (explicit collaborators), 5 (destinations, flags, `flush`), 7 (release) |
 | §11 | 3 |
