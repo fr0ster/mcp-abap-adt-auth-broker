@@ -43,9 +43,9 @@
     "access": "public"
   },
   "scripts": {
-    "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.build.tsbuildinfo",
+    "clean": "node -e \"for (const p of ['dist', 'tsconfig.tsbuildinfo', 'tsconfig.build.tsbuildinfo']) require('fs').rmSync(p, { recursive: true, force: true })\"",
     "build": "tsc -b tsconfig.build.json",
-    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
+    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
     "test:check": "tsc -p tsconfig.json --noEmit",
     "test:mcp-auth": "sh tests/sso-demo/run-mcp-auth.sh",
     "test:mcp-sso": "sh tests/sso-demo/run-mcp-sso.sh",

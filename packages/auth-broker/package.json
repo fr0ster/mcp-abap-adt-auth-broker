@@ -40,10 +40,10 @@
     "access": "public"
   },
   "scripts": {
-    "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.build.tsbuildinfo",
+    "clean": "node -e \"for (const p of ['dist', 'tsconfig.tsbuildinfo', 'tsconfig.build.tsbuildinfo']) require('fs').rmSync(p, { recursive: true, force: true })\"",
     "build": "tsc -b tsconfig.build.json",
-    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
-    "test:live": "NODE_OPTIONS=--experimental-vm-modules jest -c jest.live.config.js",
+    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:live": "cross-env NODE_OPTIONS=--experimental-vm-modules jest -c jest.live.config.js",
     "test:check": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run --prefix ../.. check"
   },
