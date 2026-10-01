@@ -4,49 +4,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is `@mcp-abap-adt/auth-broker`, a per-destination token broker for SAP BTP/ABAP systems. For a destination name it reads the session and service key from injected stores, gets tokens from an injected `IRefreshableTokenProvider` (or a factory building one per destination), and persists the result — a JWT or SAML session cookies, with the refresh token. Token lifecycle decisions are the provider's (`@mcp-abap-adt/auth-providers`); storage is the stores' (`@mcp-abap-adt/auth-stores`). It also ships the `mcp-auth` and `mcp-sso` CLIs. XSUAA and ABAP authentication types are both supported.
+This repository is an npm workspace (the `mcp-abap-adt-interfaces` layout) with two packages: `packages/auth-broker` — `@mcp-abap-adt/auth-broker`, a per-destination token broker for SAP BTP/ABAP systems — and `packages/auth-broker-cli` — `@mcp-abap-adt/auth-broker-cli`, the `mcp-auth` and `mcp-sso` commands. For a destination name it reads the session and service key from injected stores, gets tokens from an injected `IRefreshableTokenProvider` (or a factory building one per destination), and persists the result — a JWT or SAML session cookies, with the refresh token. Token lifecycle decisions are the provider's (`@mcp-abap-adt/auth-providers`); storage is the stores' (`@mcp-abap-adt/auth-stores`). The commands moved out of the library into the CLI package; up to 3.0.4 they shipped in the library. XSUAA and ABAP authentication types are both supported.
 
 ## Build and Development Commands
 
+Everything runs from the repository root; the dev dependencies (Biome, TypeScript, Jest, ts-jest, semver) are the root's.
+
 ```bash
-# Build (clean, lint, compile)
-npm run build
-
-# Fast build (TypeScript only, skip lint)
-npm run build:fast
-
-# Lint and auto-fix
-npm run lint
-
-# Lint check only (no fix)
-npm run lint:check
-
-# Format code
+npm run build        # clean, Biome at error level, tsc -b over both packages
+npm run test:check   # type-check both packages, tests included
+npm run lint         # Biome with --write over packages/ and tools/
+npm run lint:check   # Biome, read-only
 npm run format
+npm test             # Jest in every workspace
+npm run check        # build, test:check, lint:check, check:graph, check:packed, check:publish (no Jest)
 
-# Run all tests
-npm test
-
-# Run specific test file
-npm test -- AuthBroker.test.ts
-
-# Run specific test by name pattern
-npm test -- -t "Test 1"
-
-# Type check (no emit)
-npm run test:check
+# One package, one file, one case
+npm test -w @mcp-abap-adt/auth-broker
+npm test -w @mcp-abap-adt/auth-broker -- AuthBroker.test.ts -t "name of the case"
+npm test -w @mcp-abap-adt/auth-broker-cli
 ```
+
+- `check:graph` (`tools/check-graph.js`): runtime files (src outside `__tests__`) import only their package's allowlist, declare it in `dependencies`, and use every dependency; tests import only what the package declares (dependencies or devDependencies). The library never imports `auth-stores`.
+- `check:packed` (`tools/check-packed.js`): the bin smoke check — pack both, install the tarballs into an empty directory, run `mcp-auth`/`mcp-sso` with `--version` (must print the CLI's version) and `help`, load the library (no `bin`). Needs the network.
+- `check:publish` (`tools/test-publish-changed.js`): the release tool against fixture repositories.
+- `release:publish` (`tools/publish-changed.js`): publishes exactly the versions the registry lacks, in workspace order, after one `npm run check`; refuses an untagged version. Tags are `<dir>-v<version>` (`auth-broker-v…`, `auth-broker-cli-v…`); the `v*` tags are the single package's history. Until 4.0.0 it refuses for the whole repository — the CLI's 1.0.0 is untagged on purpose. Never `npm publish` a workspace by hand.
 
 ## Architecture
 
 ### Core Components
 
-**AuthBroker** (`src/AuthBroker.ts`) - The main class that orchestrates token management:
+**AuthBroker** (`packages/auth-broker/src/AuthBroker.ts`) - The main class that orchestrates token management:
 - Coordinates between session stores, service key stores, and token providers
 - Implements a multi-step token acquisition flow: validate cached token -> refresh token -> browser-based OAuth
 - Creates `ITokenRefresher` instances for dependency injection into consuming services
 
-**Stores** (interfaces from `@mcp-abap-adt/interfaces-auth-sap`, implementations in `@mcp-abap-adt/auth-stores`):
+**Stores** (interfaces from `@mcp-abap-adt/interfaces-auth-sap`, implementations in `@mcp-abap-adt/auth-stores` — which the library's runtime never imports; only its tests and the CLI do):
 - `ISessionStore` - Stores session data (tokens, connection config) in `.env` files
 - `IServiceKeyStore` - Reads service keys from `.json` files for initial authentication
 
@@ -62,7 +55,7 @@ The contracts come from the packages that declare them — `@mcp-abap-adt/interf
 
 ### CLI Tool
 
-`bin/mcp-auth.ts` - Command-line tool for generating `.env` files from service keys:
+`packages/auth-broker-cli/src/` — `mcp-auth.ts`, `mcp-sso.ts` (the bins, compiled to `dist/`), `mcpSsoConfig.ts`, `samlMetadata.ts`, `workDir.ts`, and `generate-env-from-service-key.ts` (a development script run with `tsx`, `npm run generate-env -w @mcp-abap-adt/auth-broker-cli`, not compiled). They import `AuthBroker` from `@mcp-abap-adt/auth-broker` by name, never by a path into its `dist`, and `--version` reads the CLI's own manifest.
 ```bash
 mcp-auth --service-key ./key.json --output ./mcp.env --type xsuaa
 mcp-auth --service-key ./key.json --output ./abap.env --type abap --credential
@@ -70,10 +63,10 @@ mcp-auth --service-key ./key.json --output ./abap.env --type abap --credential
 
 ## Testing
 
-Tests are in `src/__tests__/` and use real implementations (no mocks) for integration testing:
-- Browser tests (Test 2) require user interaction and are skipped in CI
-- Tests run sequentially (`maxWorkers: 1`) to ensure proper file state
-- Test config: `tests/test-config.yaml` (from template `tests/test-config.yaml.template`)
+Tests live in each package's `src/__tests__/` (see `docs/development/TESTING.md`):
+- Library: `AuthBroker.test.ts` needs nothing; `AuthBroker.integration.test.ts` reads real service keys and sessions only when `packages/auth-broker/tests/test-config.yaml` exists (from the template beside it) — without it every case returns at once.
+- CLI: `mcpSsoConfig`, `mcpSsoSamlProviders`, `samlMetadata` — need nothing. The Keycloak and CAP stands under `packages/auth-broker-cli/tests/` are interactive, by hand only.
+- Tests run sequentially (`maxWorkers: 1`) to ensure proper file state.
 
 ## Code Style
 

@@ -153,6 +153,11 @@ Stores use the following environment variables internally (not exported as const
 
 ## CLI: mcp-auth
 
+The commands in this section and the next are `@mcp-abap-adt/auth-broker-cli`
+(`packages/auth-broker-cli`), not yet published; up to 3.0.4 they shipped in
+`@mcp-abap-adt/auth-broker`, which is where the published ones are. Their
+[README](../../packages/auth-broker-cli/README.md) has every option.
+
 Use `mcp-auth` to generate or refresh `.env`/JSON output using AuthBroker + stores.
 
 ```bash
@@ -230,8 +235,8 @@ mcp-sso bearer --idp-sso-url https://idp/sso --sp-entity-id <uaa-entity-id> --ac
   --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
 ```
 
-See the main README, *CLI: mcp-sso*, for every option, the `--config` fields and the migration
-from 2.2.0.
+See the [CLI's README](../../packages/auth-broker-cli/README.md), *CLI: mcp-sso*, for every
+option, the `--config` fields and the migration from 2.2.0.
 
 ## API Reference
 

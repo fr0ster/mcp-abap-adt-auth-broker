@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Contributors
 
-Thank you to all contributors! See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the complete list.
+Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
+
+## [Unreleased]
+
+### Changed
+
+- **The repository is a workspace** (the `mcp-abap-adt-interfaces` layout): this
+  package is `packages/auth-broker`, and the commands are
+  `packages/auth-broker-cli`, published as `@mcp-abap-adt/auth-broker-cli`. Tags
+  are `auth-broker-v<version>` from here on; the `v*` tags are this package's
+  history up to 3.0.4. Run everything from the repository root: `npm run build`,
+  `npm test`, `npm run check`.
+
+### Removed
+
+- **`bin`: `mcp-auth` and `mcp-sso`** move to `@mcp-abap-adt/auth-broker-cli`,
+  commands and flags unchanged. Whoever installs this package for the commands
+  installs that one instead, once it is published.
+- **`axios`** from the dependencies: nothing imports it.
+- **`@mcp-abap-adt/logger`** from the dependencies: only the commands use it
+  at run time; the tests keep it as a dev dependency.
+- **`@mcp-abap-adt/auth-stores` and `@mcp-abap-adt/auth-providers`** from the
+  dependencies: the library imports neither, only its tests do (dev
+  dependencies now). `tools/check-graph.js` keeps it that way for auth-stores.
+  A consumer that imported either without declaring it must declare it.
+- **The test helpers from `dist/`**: `dist/__tests__/helpers` shipped in the
+  tarball; the build no longer compiles anything under `src/__tests__`.
+- **`CONTRIBUTORS.md` from the tarball**: it stays at the repository root.
 
 ## [3.0.4] - 2026-09-28
 

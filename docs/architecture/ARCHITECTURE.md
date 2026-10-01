@@ -10,6 +10,35 @@ Supported authentication styles:
 - **ABAP/BTP**: authorization_code (browser or refresh token)
 - **XSUAA**: client_credentials (no browser)
 
+## Repository Layout
+
+An npm workspace in the layout of `mcp-abap-adt-interfaces`:
+
+```
+/                          private root: package.json (workspaces, scripts), package-lock.json,
+                           tsconfig.base.json, biome.json, tools/, docs/
+packages/auth-broker/      @mcp-abap-adt/auth-broker — the library (src/, its tests,
+                           tests/test-config.yaml.template)
+packages/auth-broker-cli/  @mcp-abap-adt/auth-broker-cli — mcp-auth and mcp-sso (src/, its tests,
+                           the Keycloak and CAP stands under tests/)
+tools/                     check-graph.js, check-packed.js, publish-changed.js,
+                           test-publish-changed.js, version-stats.sh
+```
+
+- The `workspaces` array lists the library first: it is the dependency order
+  and the publish order. The CLI depends on the library by its published name
+  and version range; inside the workspace npm links it.
+- Each package builds with `tsc -b tsconfig.build.json` (tests excluded); the
+  CLI's references the library's. `npm run build` at the root builds both.
+- `tools/check-graph.js` holds the dependency rules: the library's runtime
+  imports only the contract packages (`interfaces-auth`, `interfaces-auth-sap`,
+  `interfaces-auth-broker`, `interfaces-utils`) and `auth-providers` — never
+  `auth-stores`; the CLI's, the library, the stores, the providers, the
+  contracts and the logger.
+- Releases are tagged per package, `<dir>-v<version>` (`auth-broker-v4.0.0`,
+  `auth-broker-cli-v1.0.0`); `npm run release:publish` publishes exactly the
+  versions the registry lacks, and refuses one without its tag.
+
 ## Core Principles
 
 - **Interface-only communication**: The broker only talks to `ISessionStore`, `IServiceKeyStore`, and `IRefreshableTokenProvider` interfaces.

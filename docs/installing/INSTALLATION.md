@@ -16,6 +16,16 @@ This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` pa
 npm install @mcp-abap-adt/auth-broker
 ```
 
+The `mcp-auth` and `mcp-sso` commands are not part of this package any more on
+the main branch: they are `@mcp-abap-adt/auth-broker-cli`, in the same
+repository, **not published yet** (it is released with
+`@mcp-abap-adt/auth-broker` 4.0.0). Until then the published commands are in
+3.0.4 of this package:
+
+```bash
+npm install -g @mcp-abap-adt/auth-broker@3.0.4
+```
+
 ### Verify Installation
 
 ```bash
