@@ -280,7 +280,12 @@ describe('getProvider', () => {
       ]);
       expectNoWrites(store);
       expect(store.loadSession).not.toHaveBeenCalled();
-    });
+      // On Windows prepare() asks the registry whether the library is the
+      // Secure Login Client's: two `reg.exe` queries, each allowed 5 s before
+      // the value counts as absent (auth-providers' SncSystem). Usually ~0.1 s,
+      // but one slow process start reached Jest's default 5 s. Elsewhere no
+      // process is started.
+    }, 15_000);
 
     it('refuses a missing sncLib file at prepare(), naming sncLib', async () => {
       const missing = path.join(dir, 'no-such-library.so');
