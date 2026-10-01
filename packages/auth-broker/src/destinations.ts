@@ -7,18 +7,26 @@
  */
 
 import {
+  AuthorizationCodeProvider,
   BasicAuthProvider,
+  ClientCredentialsProvider,
   SamlAuthProvider,
   SncLogonProvider,
   TokenAuthProvider,
+  UaaPasscodeProvider,
   ValidationError,
 } from '@mcp-abap-adt/auth-providers';
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
+import type {
+  IAuthorizationStrategy,
+  IAuthProvider,
+  ITokenResult,
+} from '@mcp-abap-adt/interfaces-auth';
 import type {
   DestinationGrant,
   IConfig,
   IConnectionConfig,
 } from '@mcp-abap-adt/interfaces-auth-broker';
+import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { DestinationConfigError } from './DestinationConfigError';
 
@@ -195,4 +203,118 @@ export function handedOverProvider(
     );
   }
   return new SamlAuthProvider(secret.sessionCookies);
+}
+
+/** The UAA grants: one client, one token endpoint (`<uaaUrl>/oauth/token`). */
+export type UaaGrant = 'authorization_code' | 'client_credentials' | 'passcode';
+
+export function isUaaGrant(grant: DestinationGrant): grant is UaaGrant {
+  return (
+    grant === 'authorization_code' ||
+    grant === 'client_credentials' ||
+    grant === 'passcode'
+  );
+}
+
+/** What a UAA row is built from (spec §4.1). */
+export interface UaaRow {
+  destination: string;
+  grant: UaaGrant;
+  /** The means: `serviceUrl` is read here. */
+  means: IConnectionConfig;
+  /** The client, from the key store's `getAuthorizationConfig`. */
+  client: IAuthorizationConfig | null;
+  /** The session secret — the seed; `null` when there is no session. */
+  secret: IConfig | null;
+  /** The consumer's `authorization` option. */
+  authorization:
+    | ((
+        destination: string,
+        grant: 'authorization_code' | 'passcode',
+      ) => IAuthorizationStrategy<string>)
+    | undefined;
+  logger: ILogger;
+  onTokens: (result: ITokenResult) => Promise<void>;
+}
+
+/**
+ * `jwt` / `authorization_code` → `AuthorizationCodeProvider`,
+ * `client_credentials` → `ClientCredentialsProvider`, `passcode` →
+ * `UaaPasscodeProvider`: the client from the key store, the seed from the
+ * session (not for `client_credentials`, whose row takes the client alone).
+ *
+ * Every field and option the row lacks is named in one error, before the
+ * consumer's `authorization` is called. `uaaClientSecret: ''` is a public
+ * client: `passcode` takes it as no secret; the other two rows' providers
+ * require a secret, so for them `''` is missing.
+ */
+export function uaaProvider(row: UaaRow): IAuthProvider {
+  const { destination, grant, means, client, secret } = row;
+  const lacking: string[] = [];
+  if (!present(means.serviceUrl)) lacking.push('serviceUrl');
+  if (!present(client?.uaaUrl)) lacking.push('uaaUrl');
+  if (!present(client?.uaaClientId)) lacking.push('uaaClientId');
+  if (grant !== 'passcode' && !present(client?.uaaClientSecret)) {
+    lacking.push('uaaClientSecret');
+  }
+  if (grant !== 'client_credentials' && !row.authorization) {
+    lacking.push('authorization');
+  }
+  if (lacking.length > 0) {
+    throw new DestinationConfigError(
+      destination,
+      lacking,
+      `a jwt destination with grantType ${grant} lacks what its grant needs`,
+    );
+  }
+  const uaaUrl = client?.uaaUrl as string;
+  const clientId = client?.uaaClientId as string;
+  const clientSecret = present(client?.uaaClientSecret)
+    ? client.uaaClientSecret
+    : undefined;
+  const hooks = { onTokens: row.onTokens };
+
+  if (grant === 'client_credentials') {
+    return new ClientCredentialsProvider({
+      uaaUrl,
+      clientId,
+      clientSecret: clientSecret as string,
+      ...hooks,
+    });
+  }
+
+  const seed = {
+    accessToken: present(secret?.authorizationToken)
+      ? secret.authorizationToken
+      : undefined,
+    refreshToken: present(secret?.refreshToken)
+      ? secret.refreshToken
+      : undefined,
+    expiresAt:
+      typeof secret?.expiresAt === 'number' ? secret.expiresAt : undefined,
+  };
+  // Checked above: the rows that reach here need it.
+  const authorization = (
+    row.authorization as NonNullable<UaaRow['authorization']>
+  )(destination, grant);
+  if (grant === 'authorization_code') {
+    return new AuthorizationCodeProvider({
+      uaaUrl,
+      clientId,
+      clientSecret: clientSecret as string,
+      authorization,
+      ...seed,
+      logger: row.logger,
+      ...hooks,
+    });
+  }
+  return new UaaPasscodeProvider({
+    uaaUrl,
+    clientId,
+    clientSecret,
+    authorization,
+    ...seed,
+    logger: row.logger,
+    ...hooks,
+  });
 }
