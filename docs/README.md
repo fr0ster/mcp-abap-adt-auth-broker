@@ -1,10 +1,14 @@
 # Documentation
 
-Complete documentation for the `@mcp-abap-adt/auth-broker` package.
+Complete documentation for the `@mcp-abap-adt/auth-broker` repository: the library
+(`packages/auth-broker`) and its commands, `@mcp-abap-adt/auth-broker-cli`
+(`packages/auth-broker-cli`).
 
 ## Quick Start
 
-- [Main README](../README.md) - Package overview, installation, and quick start guide
+- [Repository README](../README.md) - The workspace: both packages, commands, releases
+- [Library README](../packages/auth-broker/README.md) - `@mcp-abap-adt/auth-broker`: installation, API, configuration
+- [CLI README](../packages/auth-broker-cli/README.md) - `mcp-auth` and `mcp-sso`
 - [Installation Guide](installing/INSTALLATION.md) - How to install and set up the package
 - [Usage Guide](using/USAGE.md) - API documentation and usage examples
 
@@ -17,7 +21,7 @@ docs/
 │   ├── ARCHITECTURE.md         # System architecture and design
 │   └── EXPORTS.md              # Exported entities and object diagrams
 ├── development/
-│   ├── TESTING.md              # Testing methodology and guide
+│   ├── TESTING.md              # Where the suites live, how to run them, the checks
 │   └── DEVELOPMENT_ROADMAP.md  # Development roadmap and future plans
 ├── installing/
 │   └── INSTALLATION.md         # Installation and setup guide
@@ -34,7 +38,7 @@ Technical documentation about the system architecture, design decisions, and int
 
 ### [Development](development/)
 Documentation for developers:
-- **[TESTING.md](development/TESTING.md)** - Testing methodology, test structure, running tests
+- **[TESTING.md](development/TESTING.md)** - Where the suites live, what they need, the release checks
 - **[DEVELOPMENT_ROADMAP.md](development/DEVELOPMENT_ROADMAP.md)** - Development roadmap and future plans
 
 ### [Installing](installing/INSTALLATION.md)

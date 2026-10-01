@@ -1,4 +1,6 @@
-# Dependencies
+# Dependencies. Both spellings on purpose: `node_modules/` matches a directory
+# and NOT a symlink to one, which a worktree borrowing an install creates.
+node_modules
 node_modules/
 
 # Build output
@@ -40,28 +42,33 @@ temp/
 test-destinations/*.json
 test-destinations/*.env
 
-# Test configuration (contains real credentials)
+# Test configuration (contains real credentials). The first line is where it
+# lived before the workspace layout, kept so an old copy never shows up as new.
 tests/test-config.yaml
+packages/auth-broker/tests/test-config.yaml
 
 *.json
-!tsconfig.cli.json
+!package.json
+!package-lock.json
+!tsconfig*.json
+!biome.json
 
 # Allow JSON for local test tooling
-!tests/keycloak/*.json
-!tests/sso-demo/**/*.json
+!packages/auth-broker-cli/tests/keycloak/*.json
+!packages/auth-broker-cli/tests/sso-demo/**/*.json
 
 # CAP demo build artifacts
-tests/sso-demo/node_modules/
-tests/sso-demo/gen/
-tests/sso-demo/mta_archives/
-tests/sso-demo/.cds-gen/
-tests/sso-demo/.cds-services.json
-tests/sso-demo/*.sqlite
-tests/sso-demo/*.db
-tests/sso-demo/.env
-tests/sso-demo/*.xsuaa.json
-tests/sso-demo/sso-demo-key.json
-tests/sso-demo/*.xml
+packages/auth-broker-cli/tests/sso-demo/node_modules/
+packages/auth-broker-cli/tests/sso-demo/gen/
+packages/auth-broker-cli/tests/sso-demo/mta_archives/
+packages/auth-broker-cli/tests/sso-demo/.cds-gen/
+packages/auth-broker-cli/tests/sso-demo/.cds-services.json
+packages/auth-broker-cli/tests/sso-demo/*.sqlite
+packages/auth-broker-cli/tests/sso-demo/*.db
+packages/auth-broker-cli/tests/sso-demo/.env
+packages/auth-broker-cli/tests/sso-demo/*.xsuaa.json
+packages/auth-broker-cli/tests/sso-demo/sso-demo-key.json
+packages/auth-broker-cli/tests/sso-demo/*.xml
 
 # Git worktrees
 .worktrees/

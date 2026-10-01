@@ -6,7 +6,12 @@
 		"useIgnoreFile": true
 	},
 	"files": {
-		"includes": ["**", "!!**/dist"]
+		"includes": [
+			"**",
+			"!!**/dist",
+			"!packages/auth-broker-cli/tests/keycloak",
+			"!packages/auth-broker-cli/tests/sso-demo"
+		]
 	},
 	"formatter": {
 		"enabled": true,

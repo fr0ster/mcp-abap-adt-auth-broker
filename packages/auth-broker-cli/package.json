@@ -1,0 +1,73 @@
+{
+  "name": "@mcp-abap-adt/auth-broker-cli",
+  "version": "1.0.0",
+  "description": "The mcp-auth and mcp-sso commands: log in to a SAP BTP or ABAP destination and write its session, through @mcp-abap-adt/auth-broker",
+  "bin": {
+    "mcp-auth": "./dist/mcp-auth.js",
+    "mcp-sso": "./dist/mcp-sso.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "COPYING"
+  ],
+  "keywords": [
+    "abap",
+    "sap",
+    "adt",
+    "jwt",
+    "authentication",
+    "cli",
+    "mcp",
+    "abap-adt",
+    "xsuaa",
+    "oauth2",
+    "oidc",
+    "saml",
+    "sso"
+  ],
+  "author": "Oleksii Kyslytsia <oleksij.kyslytsja@gmail.com>",
+  "license": "LGPL-3.0-only",
+  "homepage": "https://github.com/fr0ster/mcp-abap-adt-auth-broker/tree/main/packages/auth-broker-cli#readme",
+  "bugs": {
+    "url": "https://github.com/fr0ster/mcp-abap-adt-auth-broker/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fr0ster/mcp-abap-adt-auth-broker.git",
+    "directory": "packages/auth-broker-cli"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.build.tsbuildinfo",
+    "build": "tsc -b tsconfig.build.json",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:check": "tsc -p tsconfig.json --noEmit",
+    "test:mcp-auth": "sh tests/sso-demo/run-mcp-auth.sh",
+    "test:mcp-sso": "sh tests/sso-demo/run-mcp-sso.sh",
+    "test:device-code": "sh tests/keycloak/run-oidc.sh",
+    "test:saml-pure": "sh tests/keycloak/run-saml.sh",
+    "test:sso": "sh tests/keycloak/run-interactive.sh",
+    "generate-env": "tsx src/generate-env-from-service-key.ts",
+    "prepublishOnly": "npm run --prefix ../.. check"
+  },
+  "engines": {
+    "node": "^22 || ^24 || ^26"
+  },
+  "dependencies": {
+    "@mcp-abap-adt/auth-broker": "^3.1.0",
+    "@mcp-abap-adt/auth-providers": "^4.2.0",
+    "@mcp-abap-adt/auth-stores": "^1.2.3",
+    "@mcp-abap-adt/interfaces-utils": "^1.1.0",
+    "@mcp-abap-adt/logger": "^0.4.0"
+  },
+  "devDependencies": {
+    "pino": "^10.1.0",
+    "pino-pretty": "^13.1.3",
+    "tsx": "^4.21.0"
+  }
+}

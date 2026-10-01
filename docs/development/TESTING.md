@@ -1,320 +1,93 @@
-# Testing Methodology
+# Testing
 
-This document describes the testing methodology, test structure, and how to run tests for the `@mcp-abap-adt/auth-broker` package.
+How this repository is tested: where each suite lives, what it needs, and the
+checks that run before a release.
 
-## Test Structure
+The repository is an npm workspace with two packages, `packages/auth-broker`
+(the library) and `packages/auth-broker-cli` (the `mcp-auth` and `mcp-sso`
+commands). Every command below runs from the repository root, where the dev
+dependencies are installed.
 
-Tests are located in `src/__tests__/` and organized by functionality:
+## Where the suites live
 
 ```
-src/__tests__/
-├── AuthBroker.test.ts          # Basic AuthBroker class tests
-├── getToken.test.ts            # getToken() method tests
-├── refreshToken.test.ts        # refreshToken() method tests
-├── envLoader.test.ts           # Environment loader unit tests
-├── serviceKeyLoader.test.ts    # Service key loader unit tests
-└── pathResolver.test.ts        # Path resolver unit tests
+packages/auth-broker/src/__tests__/
+├── broker/
+│   ├── AuthBroker.test.ts               # the broker against fake stores and providers,
+│   │                                    # and once against a real AbapSessionStore on disk
+│   └── AuthBroker.integration.test.ts   # real service keys, sessions and providers
+└── helpers/                             # test configuration, logger, free-port helpers
+
+packages/auth-broker-cli/src/__tests__/
+├── mcpSsoConfig.test.ts                 # CLI flags and --config merged into a provider config
+├── mcpSsoSamlProviders.test.ts          # those configs handed to the real auth-providers SAML providers
+├── samlMetadata.test.ts                 # IdP and SP metadata read into the SAML trust
+└── fixtures/                            # metadata documents with their identities replaced
 ```
 
-## Test Configuration
+Each package has its own `jest.config.js` (ts-jest, `maxWorkers: 1`,
+`maxConcurrency: 1`: the tests run one at a time, in the order they are
+defined).
 
-### Jest Configuration
+## What each suite needs
 
-Tests use Jest with the following configuration (`jest.config.js`):
+- **`AuthBroker.test.ts`** and **every CLI suite**: nothing — no network, no
+  configuration, no browser.
+- **`AuthBroker.integration.test.ts`**: a real destination. It reads
+  `packages/auth-broker/tests/test-config.yaml`; without it the template
+  (`test-config.yaml.template`) is read, its placeholders disable every case,
+  and each case returns at once. With it, the cases read the service keys and
+  sessions it points at and may open a browser for a login. Copy the template
+  and fill in:
+  - `auth_broker.paths.service_keys_dir` — directory of `{destination}.json`
+  - `auth_broker.paths.sessions_dir` — directory of `{destination}.env`
+  - `auth_broker.abap.destination` — ABAP destination name (e.g. `trial`)
+  - `auth_broker.xsuaa.btp_destination`, `auth_broker.xsuaa.mcp_url` — for the
+    XSUAA cases
 
-- **Sequential Execution**: `maxWorkers: 1` and `maxConcurrency: 1` ensure tests run one by one
-- **TypeScript Support**: Uses `ts-jest` preset
-- **ES Module Support**: Handles ES modules (e.g., `open` package) via dynamic imports
-- **Test Timeout**: 5 minutes for browser authentication tests
+  Before the workspace layout this file lived at `tests/test-config.yaml` in
+  the repository root; move an existing copy.
 
-### Test Environment
-
-Tests require:
-- Node.js 22, 24 or 26
-- YAML configuration file: `tests/test-config.yaml` (see `tests/test-config.yaml.template`)
-  - `auth_broker.paths.service_keys_dir` - Directory for service key files
-  - `auth_broker.paths.sessions_dir` - Directory for session files
-  - `auth_broker.abap.destination` - ABAP destination name (e.g., "trial")
-  - `auth_broker.xsuaa.btp_destination` - XSUAA destination name (e.g., "btp")
-  - `auth_broker.xsuaa.mcp_url` - MCP server URL (optional, for XSUAA tests)
-
-## Test Scenarios
-
-### getToken.test.ts
-
-Three main test scenarios:
-
-#### Test 1: Destination that does not exist
-- **Purpose**: Verify error handling for non-existent destination
-- **Requirements**: `NO_EXISTS.json` should NOT exist
-- **Expected**: Error message with instructions on where to place files
-- **Status**: ✅ Always runs (no external dependencies)
-
-#### Test 2: Service key exists but no .env file
-- **Purpose**: Test browser authentication flow
-- **Requirements**: 
-  - `TRIAL.json` must exist in `./test-destinations/`
-  - `TRIAL.env` should NOT exist (will be removed if exists)
-- **Expected**: 
-  - Browser opens for OAuth authentication
-  - User completes authentication
-  - `TRIAL.env` file is created with tokens
-- **Status**: ⚠️ Requires user interaction (browser authentication)
-- **Timeout**: 5 minutes
-
-#### Test 3: .env file exists - token refresh
-- **Purpose**: Test token retrieval/refresh from existing .env file
-- **Requirements**: 
-  - `TRIAL.json` must exist
-  - `TRIAL.env` must exist (can be created by Test 2 or manually)
-- **Expected**: 
-  - Token is retrieved from .env
-  - If expired, token is refreshed
-  - .env file is updated with new token
-- **Status**: ✅ Can run independently if .env exists
-
-### refreshToken.test.ts
-
-Similar structure to `getToken.test.ts` but tests `refreshToken()` method:
-
-#### Test 1: Destination that does not exist
-- Same as getToken Test 1
-
-#### Test 2: Service key exists but no .env file
-- Same as getToken Test 2 (browser authentication)
-
-#### Test 3: .env file exists - token refresh
-- Tests refresh using refresh token from .env
-
-#### Error Cases
-- Invalid service key (missing UAA fields)
-- Missing SAP URL in service key
-
-## Running Tests
-
-### Run All Tests
+## Running
 
 ```bash
+# Every workspace's tests
 npm test
+
+# One package
+npm test -w @mcp-abap-adt/auth-broker
+npm test -w @mcp-abap-adt/auth-broker-cli
+
+# One file, or one case
+npm test -w @mcp-abap-adt/auth-broker -- AuthBroker.test.ts
+npm test -w @mcp-abap-adt/auth-broker -- AuthBroker.test.ts -t "name of the case"
 ```
 
-### Run Specific Test File
+`DEBUG_BROKER=true` (or `DEBUG_AUTH_BROKER=true`) turns on the test logger.
 
-```bash
-# Run all tests in getToken.test.ts (Test 1, 2, 3 sequentially)
-npm test -- getToken.test.ts
+## The checks
 
-# Run all tests in refreshToken.test.ts
-npm test -- refreshToken.test.ts
-```
+`npm run check` is the release gate; `npm run release:publish` runs it once,
+and each package's `prepublishOnly` runs it too:
 
-### Run Specific Test
+| Script | What it proves |
+|---|---|
+| `npm run build` | Biome at error level, then `tsc -b` over both packages (the CLI references the library) |
+| `npm run test:check` | both packages type-check, tests included |
+| `npm run lint:check` | Biome over `packages/` and `tools/` |
+| `npm run check:graph` | each package imports only what its allowlist permits, declares it, and uses every runtime dependency it declares; tests import only declared dependencies; the library never imports `auth-stores` |
+| `npm run check:packed` | the bin smoke check: both packages packed and installed into an empty directory, `mcp-auth` and `mcp-sso` run with `--version` (the CLI's version) and `help`, the library loads with no `bin`. Needs the network, and says so when it cannot reach it |
+| `npm run check:publish` | `tools/publish-changed.js` exercised against fixture repositories and a fake npm |
 
-```bash
-# Run only Test 1
-npm test -- getToken.test.ts -t "Test 1"
+`npm run check` does not run Jest: the library's integration suite reads real
+session files when configured, and a release gate must not reach a real system
+unasked. Run `npm test` beside it.
 
-# Run only Test 2 (requires Test 1 to pass first)
-npm test -- getToken.test.ts -t "Test 2"
+## Interactive stands (CLI)
 
-# Run only Test 3
-npm test -- getToken.test.ts -t "Test 3"
-```
+Not part of `npm test`; run by hand, each needs a browser or a deployed app:
 
-### Run Unit Tests Only
-
-```bash
-# Run unit tests (no browser interaction required)
-npm test -- pathResolver.test.ts
-npm test -- envLoader.test.ts
-npm test -- serviceKeyLoader.test.ts
-npm test -- AuthBroker.test.ts
-```
-
-## Test Execution Order
-
-Tests are designed to run sequentially:
-
-1. **Test 1** must pass before Test 2 can run (`test1Passed` flag)
-2. **Test 2** creates `TRIAL.env` file needed for Test 3
-3. **Test 3** can run independently if `TRIAL.env` exists
-
-### Sequential Execution Guarantee
-
-Jest configuration ensures sequential execution:
-- `maxWorkers: 1` - Only one worker process
-- `maxConcurrency: 1` - Only one test at a time
-
-This guarantees:
-- Tests run in the order they are defined
-- No race conditions between tests
-- File state is predictable between tests
-
-## Test Setup Requirements
-
-### Before Running Tests
-
-1. **Place Service Key**: Copy your service key to `./test-destinations/TRIAL.json`
-   ```bash
-   cp /path/to/your/service-key.json ./test-destinations/TRIAL.json
-   ```
-
-2. **Ensure Clean State**: 
-   - `TRIAL.env` will be automatically removed before Test 2
-   - `NO_EXISTS.json` should not exist (for Test 1)
-
-3. **Optional**: Set custom test destinations path
-   ```bash
-   export TEST_DESTINATIONS_PATH=/custom/path
-   ```
-
-### Test File Management
-
-- **Before Test 1**: `NO_EXISTS.json` should NOT exist in configured `service_keys_dir`
-- **Before Test 2**: `{destination}.env` is automatically removed if exists in configured `sessions_dir`
-- **After Test 2**: `{destination}.env` is created (not deleted) in configured `sessions_dir`
-- **Before Test 3**: `{destination}.env` must exist (created by Test 2 or manually) in configured `sessions_dir`
-
-## Test Methodology
-
-### Integration Tests (getToken.test.ts, refreshToken.test.ts)
-
-These tests use **real implementations** without mocks:
-- ✅ Real file system operations
-- ✅ Real HTTP requests (token validation, refresh)
-- ✅ Real browser authentication (Test 2)
-- ✅ Real service key files
-
-**Why no mocks?**
-- Tests real-world scenarios
-- Validates actual integration with SAP systems
-- Catches issues that mocks might miss
-
-### Test Output
-
-Tests are designed to be **silent by default**:
-- No verbose logging during test execution
-- Only test results and errors are shown
-- Clean, focused output that highlights failures
-- No informational messages about expected test flow
-
-This approach ensures:
-- **Clear visibility** when tests fail (no noise from passing tests)
-- **Fast feedback** - only important information is displayed
-- **Better CI/CD integration** - minimal output in automated pipelines
-
-### Unit Tests (pathResolver.test.ts, envLoader.test.ts, etc.)
-
-These tests focus on individual components:
-- Test specific functions in isolation
-- Use temporary directories for file operations
-- Clean up after each test
-
-## Test Scenarios Coverage
-
-### ✅ Covered Scenarios
-
-1. **Error Handling**
-   - Non-existent destination
-   - Missing service key
-   - Missing .env file
-   - Invalid service key structure
-
-2. **Browser Authentication**
-   - OAuth flow initiation
-   - Token acquisition
-   - .env file creation
-
-3. **Token Management**
-   - Token retrieval from .env
-   - Token validation
-   - Token refresh
-   - Cache management
-
-### ⚠️ Edge Cases (Not Explicitly Tested)
-
-These scenarios are covered implicitly or would require complex setup:
-
-1. **Valid Token in Cache** - Covered implicitly (if token is valid, it's returned from cache)
-2. **Valid Token in .env** - Covered implicitly (if token is valid, it's returned without refresh)
-3. **Multi-Path Search** - Would require complex directory setup
-4. **Expired Refresh Token** - Would require expired refresh token (triggers browser auth)
-5. **Token Validation Network Errors** - Would require network mocking
-6. **Different Service Key Structures** - Partially covered in error cases
-
-## Debugging Tests
-
-### Enable Debug Logging
-
-To see detailed authentication flow during tests:
-
-```bash
-DEBUG_AUTH_LOG=true npm test
-```
-
-This will show:
-- Browser authentication flow details
-- Token refresh operations
-- Debug messages from AuthBroker
-
-### Enable Verbose Jest Output
-
-Jest is configured with `verbose: true` by default, showing:
-- Test names
-- Console output
-- Error details
-
-### Check Test State
-
-If tests fail or skip unexpectedly:
-
-1. **Check File Existence**:
-   ```bash
-   ls -la ./test-destinations/
-   ```
-
-2. **Check Test Output**: Look for skip messages in console
-
-3. **Verify YAML Configuration**: Ensure `tests/test-config.yaml` exists and has correct paths
-
-4. **Verify Service Key**: Ensure `{destination}.json` exists in configured `service_keys_dir` and is valid JSON with required fields
-
-5. **Check .env File**: If Test 3 fails, verify `{destination}.env` exists in configured `sessions_dir` and has valid tokens
-
-### Common Issues
-
-#### Test 2 Skips
-- **Cause**: `test1Passed = false` (Test 1 didn't run or failed)
-- **Solution**: Run all tests together: `npm test -- getToken.test.ts`
-
-#### Browser Doesn't Open
-- **Cause**: ES module import issue or system browser configuration
-- **Solution**: Check console for error messages, verify `open` package is installed
-
-#### Test 3 Skips
-- **Cause**: `TRIAL.env` doesn't exist
-- **Solution**: Run Test 2 first to create it, or create manually
-
-## Best Practices
-
-1. **Run Tests Sequentially**: Always run test files completely to ensure proper order
-2. **Clean State**: Tests handle cleanup automatically, but ensure no conflicting files
-3. **Service Key Security**: Never commit service keys to version control
-4. **Test Isolation**: Each test file uses its own temporary directories
-5. **Real Scenarios**: Tests use real implementations to catch integration issues
-
-## Continuous Integration
-
-For CI/CD pipelines:
-
-1. **Skip Browser Tests**: Test 2 requires user interaction - skip in CI
-   ```bash
-   npm test -- getToken.test.ts -t "Test 1|Test 3"
-   ```
-
-2. **Use Test Service Keys**: Use dedicated test service keys (not production)
-
-3. **Timeout Configuration**: Ensure CI has sufficient timeout for tests (5+ minutes)
-
-4. **Environment Variables**: Set `TEST_DESTINATIONS_PATH` if needed
-
+| Script (`-w @mcp-abap-adt/auth-broker-cli`) | What it runs |
+|---|---|
+| `test:device-code`, `test:saml-pure`, `test:sso` | `mcp-sso` against a local Keycloak (`packages/auth-broker-cli/tests/keycloak`) |
+| `test:mcp-auth`, `test:mcp-sso` | `mcp-auth` against the CAP demo on BTP (`packages/auth-broker-cli/tests/sso-demo`) |
