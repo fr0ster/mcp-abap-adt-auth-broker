@@ -174,6 +174,19 @@ name a destination whose `SAP_URL` host is reachable on the RFC gateway port
 
 ### On Windows (SNC)
 
+**Keep the checkout's path short.** The lockfile nests some packages deep
+(`node_modules\jest\node_modules\jest-cli\…\jest-haste-map\node_modules\@parcel\watcher`
+is about 200 characters on its own), and npm runs their install scripts with
+that directory as the working directory, which Windows limits to 260
+characters (`MAX_PATH`). Under a root such as
+`C:\Users\<name>\projects\mcp-abap-adt-auth-broker`, `npm ci` fails with
+`npm error enoent spawn C:\WINDOWS\system32\cmd.exe ENOENT` and a `path` deep
+in `node_modules`. Run from a short root instead, e.g. a worktree:
+
+```powershell
+git worktree add C:\ab <branch>                 # then run everything below in C:\ab
+```
+
 Log on to the SAP Secure Login Client first. Install the SAP NW RFC SDK and
 put its `lib` on `PATH`, then:
 
