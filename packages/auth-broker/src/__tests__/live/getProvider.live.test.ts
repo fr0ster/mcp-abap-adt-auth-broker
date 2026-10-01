@@ -122,6 +122,13 @@ function sncUnavailable(): string | null {
   if (missing.length) {
     return `no SNC destination configured: set ${missing.join(', ')}`;
   }
+  // Decided by sncLibrary.setup.ts (the live config's globalSetup): empty
+  // when a library was found, else why none was.
+  const library = env.AUTH_BROKER_LIVE_SNC_LIBRARY;
+  if (library === undefined) {
+    return 'the SNC library was not looked for: run through `npm run test:live` (its globalSetup searches for it)';
+  }
+  if (library) return library;
   return rfcUnavailable();
 }
 

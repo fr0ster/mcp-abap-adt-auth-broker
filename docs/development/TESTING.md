@@ -106,7 +106,7 @@ Only status codes and response sizes are printed — never a value from the stor
 |---|---|---|
 | `basic` over HTTP | any machine that reaches an on-premise system | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_BASIC_DESTINATION` |
 | `basic` over RFC (`rfcConversationFrom`) | a machine with the SAP NW RFC SDK and `@mcp-abap-adt/sap-rfc-lite` built against it, that reaches the system's RFC gateway | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_RFC_DESTINATION`; optional `SAP_SYSNR` |
-| `snc` over RFC | Windows or macOS with the SAP Secure Login Client logged on, the NW RFC SDK and `sap-rfc-lite` | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_SNC_DESTINATION`; optional `SAP_SYSNR` |
+| `snc` over RFC | Windows or macOS with an SNC library installed (the SAP Secure Login Client, logged on), the NW RFC SDK and `sap-rfc-lite` — on Windows or macOS with no SNC library it skips, naming every place it looked | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_SNC_DESTINATION`; optional `SAP_SYSNR` |
 
 The `jwt` / `authorization_code` case of the plan (a token the system refuses,
 renewed in `rejected()`, the new token in the session file) needs the token
