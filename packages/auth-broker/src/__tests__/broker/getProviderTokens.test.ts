@@ -566,6 +566,29 @@ describe('persistence through onTokens (spec §6)', () => {
     });
   });
 
+  it('takes an empty refresh token in a result as none, and keeps the stored one', async () => {
+    const { broker, held } = brokerFor('authorization_code', {
+      session: { refreshToken: 'kept-rt' },
+    });
+    // The stored refresh token is refused; the login then answers ''.
+    endpoint.answerNext({ status: 400, body: { error: 'invalid_grant' } });
+    endpoint.answerNext({
+      status: 200,
+      body: {
+        access_token: jwtExpiringIn(3600, { jti: 'no-rt' }),
+        refresh_token: '',
+      },
+    });
+
+    await (await broker.getProvider(D)).prepare();
+
+    expect(endpoint.requests.map((r) => r.grantType)).toEqual([
+      'refresh_token',
+      'authorization_code',
+    ]);
+    expect(held()?.refreshToken).toBe('kept-rt');
+  });
+
   it.each(['basic', 'snc'] as const)(
     'writes nothing once the key store states %s for the destination',
     async (authType) => {
