@@ -620,11 +620,12 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   package in a tree that also holds `connection` 10.0.2, which depends on
   `^1.1.0`; both are type-only imports, so a second copy costs nothing at run
   time either. Minor in both cases. Proposed: `^1.1.0 || ^2.0.0`.
-- **D4 (step 2) — `refreshToken?` on `Saml2PureProviderConfig`.** Spec §1.3
-  asks for it, but the provider has no refresh grant (`Saml2PureProvider.ts:103-109`:
-  `hasRefreshGrant()` is `false`, `performRefresh()` throws), so a seeded refresh
-  token is never used. Proposed: leave it out, and the spec's §1.3 sentence is
-  corrected in review.
+- **D4 — decided 2026-10-01: no `refreshToken?` on `Saml2PureProviderConfig`**
+  (step 2). SAML has no refresh token and the provider has no refresh grant
+  (`Saml2PureProvider.ts:103-109`); its seed is `accessToken?` (the cookies)
+  and `expiresAt?`. Renewing the cookies without the user is a later step of
+  its own (spec §15): measure which mechanism the system and the IdP support
+  (`IsPassive`, ECP, `MYSAPSSO2`), then implement it.
 - **D5 (step 4d) — the auth-providers stand.** Spec §13 proposes, as inference,
   running the broker's OIDC and SAML grants against the auth-providers stand
   (Keycloak, UAA in Docker), gated on `UAA_URL` / `KEYCLOAK_URL`. Not checked:

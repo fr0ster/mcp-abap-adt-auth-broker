@@ -313,8 +313,10 @@ providers take theirs (`AuthorizationCodeProvider`, `UaaPasscodeProvider`, the
 four OIDC providers and `Saml2BearerProvider` have `accessToken?` /
 `refreshToken?`; `Saml2PureProvider.ts:30-35` has neither): `accessToken?` —
 the cookies, which this provider already answers as its `authorizationToken`
-(`Saml2PureProvider.ts:93`) — `refreshToken?`, and `expiresAt?`, since cookies
-carry no expiry of their own. The token providers whose token is a JWT take
+(`Saml2PureProvider.ts:93`) — and `expiresAt?`, since cookies
+carry no expiry of their own. No `refreshToken?`: SAML has no refresh
+token and the provider has no refresh grant (`Saml2PureProvider.ts:103-109`);
+renewal is a new SAML login through the strategy (D4, decided 2026-10-01). The token providers whose token is a JWT take
 `expiresAt?` as well, used only when the token has no `exp`. No contract
 changes: a constructor is called by whoever knows the class, so its config is
 the class's, not `interfaces-auth`'s. `connection` 10.0.2 has auth-providers
@@ -1181,6 +1183,11 @@ writes (§10 table); `readManualInput` honours the abort; the smoke check.
 - Certificates (goal, open 4 — decided).
 - Evicting a cached provider when a store changes underneath it (§7).
 - The server's migration (goal step 5) beyond §12.
+- Renewing SAML session cookies without the user (passive re-authentication
+  with `IsPassive`, the ECP profile, or SAP's `MYSAPSSO2` logon ticket): a step
+  of its own after 4.0.0 — first measure which of them the SAP system and the
+  IdP support (the Keycloak stand is at hand), then give `Saml2PureProvider` that
+  renewal (decided 2026-10-01).
 
 ## 16. Check against the goal
 
