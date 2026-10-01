@@ -43,7 +43,11 @@ import type { IConnectionConfig } from '@mcp-abap-adt/interfaces-auth-broker';
 // auth-stores 3 under an npm alias, for this file only: the library's other
 // suites stay on auth-stores 1.x until step 4e (plan decision D7).
 import { EnvDestinationStore, SafeAbapSessionStore } from 'auth-stores-3';
+import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
 import { AuthBroker } from '../../index';
+
+/** The logger the other suites use (createTestLogger's base), always on here: a live run's result is the point. */
+const log = new DefaultLogger(getLogLevel());
 
 const env = process.env;
 
@@ -121,18 +125,14 @@ function sncUnavailable(): string | null {
   return rfcUnavailable();
 }
 
-/**
- * Run the block, or skip it with the reason in its title — and on stderr:
- * Jest prints no titles for a file whose every case is skipped, and a skip
- * whose reason nobody sees says nothing about where the case runs.
- */
+/** Run the block, or skip it with the reason in its title and in the log. */
 function describeWhere(
   title: string,
   unavailable: string | null,
   body: () => void,
 ): void {
   if (unavailable) {
-    process.stderr.write(`skipped: ${title}\n  why: ${unavailable}\n`);
+    log.info(`skipped: ${title} — ${unavailable}`);
     describe.skip(`${title} — skipped: ${unavailable}`, body);
   } else {
     describe(title, body);
@@ -204,7 +204,7 @@ describeWhere(
           headers: { Accept: 'application/xml' },
           timeout: 15_000,
         });
-        console.log(
+        log.info(
           `basic over HTTP: GET ${PROBE} → ${response.status}, ${byteSize(response.data)} bytes`,
         );
         expect(response.status).toBe(200);
@@ -237,7 +237,7 @@ describeWhere(
           headers: { Accept: 'application/xml' },
           timeout: 15_000,
         });
-        console.log(
+        log.info(
           `basic over RFC: GET ${PROBE} → ${response.status}, ${byteSize(response.data)} bytes`,
         );
         expect(response.status).toBe(200);
@@ -269,7 +269,7 @@ describeWhere(
           url: PROBE,
           timeout: 15_000,
         });
-        console.log(
+        log.info(
           `snc over RFC: GET ${PROBE} → ${response.status}, ${byteSize(response.data)} bytes`,
         );
         expect(response.status).toBe(200);

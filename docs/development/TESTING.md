@@ -89,12 +89,14 @@ from the repository root (or `npm run test:live` in `packages/auth-broker`).
 
 Each case states where it runs and reads only the environment variables it
 names — there is no configuration file. Where a condition does not hold, the
-case is skipped and the reason is printed on stderr (Jest prints no titles for
-a file whose every case is skipped):
+case is skipped with the reason in its title, and the reason and each result
+go through `@mcp-abap-adt/logger`'s `DefaultLogger` — the logger the other
+suites use (`createTestLogger`), level from `AUTH_LOG_LEVEL`. (Jest 30 shows
+only a summary when it runs under an AI agent — `AI_AGENT`, `CLAUDECODE` and
+the like; `--reporters=default` restores the full report.)
 
 ```
-skipped: snc over RFC — Windows or macOS with the SAP Secure Login Client logged on (getProvider → rfcConversationFrom)
-  why: the SAP Secure Login Client exists only on Windows and macOS; this is linux
+[INFO] ℹ️ skipped: snc over RFC — Windows or macOS with the SAP Secure Login Client logged on (getProvider → rfcConversationFrom) — the SAP Secure Login Client exists only on Windows and macOS; this is linux
 ```
 
 A skip is not a failure: it says this machine is not the one the case is for.
