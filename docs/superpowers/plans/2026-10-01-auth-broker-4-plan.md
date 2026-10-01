@@ -634,7 +634,7 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   started from the auth-providers checkout with `npm run stand:up`; a grant it
   does not serve is named in the PR. The local-endpoint unit tests of 4c/4d cover
   every row regardless.
-- **D6 (step 1, used by steps 5 and 8) — where a destination's means live
+- **D6 — decided 2026-10-01: yes, a file-backed key store only (step 1, used by steps 5 and 8) — where a destination's means live
   when there is no SAP service key, and where a service key's grant is
   stated.** An auth-stores question, not the broker's: the broker takes any
   `IServiceKeyStore`. A SAP service key cannot state a grant (spec §1.2 item
@@ -645,8 +645,9 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   in the 2.x key names plus `SAP_GRANT_TYPE`, `SAP_OIDC_*`, `SAP_SAML_*`, with
   an optional fallback `IServiceKeyStore` (a SAP key supplies client and URL,
   the file the grant), the public client as `''`, and a write method of its
-  own, plus an in-memory twin (as auth-stores pairs `AbapSessionStore` with
-  `SafeAbapSessionStore`); a folder is only the first, simplest back end, for
+  own — the file implementation only (decided 2026-10-01: an in-memory key
+  store is added when a consumer needs one; auth-stores' in-memory stores are
+  session stores only); a folder is only the first, simplest back end, for
   a local user — a SAP Credential Store, a database or anything else is
   another implementation of the same contract, outside this plan. The file
   one's directory is a constructor parameter with no default: the

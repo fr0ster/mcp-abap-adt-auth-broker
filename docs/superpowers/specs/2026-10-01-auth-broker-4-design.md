@@ -255,10 +255,11 @@ stores answer the means.
    auth-stores question, not a broker one (decision D6).** The broker never
    assumes a file: any `IServiceKeyStore` serves — in memory, a SAP Credential
    Store, a database, a folder. A folder is only the first, simplest
-   implementation, for a local user; auth-stores ships it and an in-memory one
-   (as it does for sessions: `AbapSessionStore` / `SafeAbapSessionStore`), and
-   other back ends are implementations of the same contract outside this
-   work. Basic, SNC, OIDC,
+   implementation, for a local user, and the only one auth-stores ships now
+   (decided 2026-10-01). An in-memory key store is added when a consumer needs
+   one — auth-stores' in-memory stores are session stores only
+   (`SafeAbapSessionStore`, `SafeXsuaaSessionStore`). Other back ends are
+   implementations of the same contract outside this work. Basic, SNC, OIDC,
    SAML, a `none` destination and a service key's missing grant all need
    somewhere to state means. **Recommendation:** auth-stores ships an
    `IServiceKeyStore` over `<dir>/<destination>.env` (working name
