@@ -1,9 +1,13 @@
 name: Release
 
+# One workspace per tag: `<dir>-v<version>`, as tools/publish-changed.js
+# requires. The bare `v*.*.*` tags are the single package's history up to
+# 3.0.4; nothing new is tagged that way.
 on:
   push:
     tags:
-      - 'v*.*.*'  # Triggers on version tags like v1.1.0, v1.2.3, etc.
+      - 'auth-broker-v*'      # @mcp-abap-adt/auth-broker
+      - 'auth-broker-cli-v*'  # @mcp-abap-adt/auth-broker-cli
 
 permissions:
   contents: write  # Required for creating releases
@@ -25,22 +29,35 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build project
+      - name: Build workspaces
         run: npm run build
 
-      - name: Create package
-        run: npm pack
+      - name: Resolve the workspace the tag names
+        id: workspace
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          DIR="${TAG%-v*}"
+          VERSION="${TAG##*-v}"
+          if [ ! -f "packages/${DIR}/package.json" ]; then
+            echo "Tag ${TAG} names no workspace: packages/${DIR} does not exist" >&2
+            exit 1
+          fi
+          LOCAL=$(node -p "require('./packages/${DIR}/package.json').version")
+          if [ "${LOCAL}" != "${VERSION}" ]; then
+            echo "Tag ${TAG} says ${VERSION}, packages/${DIR}/package.json says ${LOCAL}" >&2
+            exit 1
+          fi
+          echo "dir=${DIR}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Get package filename
+      - name: Create package
         id: package
         run: |
-          PACKAGE_FILE=$(ls mcp-abap-adt-auth-broker-*.tgz)
-          echo "filename=$PACKAGE_FILE" >> $GITHUB_OUTPUT
-          echo "Package created: $PACKAGE_FILE"
-
-      - name: Extract version from tag
-        id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          mkdir -p release
+          npm pack --workspace "packages/${{ steps.workspace.outputs.dir }}" --pack-destination release
+          PACKAGE_FILE=$(ls release/*.tgz)
+          echo "filename=${PACKAGE_FILE}" >> "$GITHUB_OUTPUT"
+          echo "Package created: ${PACKAGE_FILE}"
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -61,4 +78,3 @@ jobs:
             ## What's Changed
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
