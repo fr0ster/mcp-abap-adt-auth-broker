@@ -274,14 +274,16 @@ stores answer the means.
      is read-only, `interfaces-auth-broker src/serviceKey/IServiceKeyStore.ts:11-36`),
      which is what the CLI (§10) and the server (§12) write means through.
 
-   It may point at the session store's directory — disjoint keys in one file,
-   each store touching only its own — which keeps every existing path and 2.x
-   file working with no move, or at a directory of its own when the secret
-   should live apart. Recommended default: the same directory *(the
-   concurrent-writer case — CLI and server writing one file at once — is
-   inference, not measured; both write with an atomic rename,
-   `tokenStorage.ts:203-207`)*. The broker is indifferent: it takes whatever
-   `IServiceKeyStore` it is given.
+   Its directory is a constructor parameter with no default (auth-providers
+   rule 7 and H2 — the consumer composes): the consumer that builds the stores
+   decides where means and secrets live, and the broker takes whatever
+   `IServiceKeyStore` and `ISessionStore` it is handed. A consumer may point it
+   at the session store's directory — disjoint keys in one file, each store
+   touching only its own, so 2.x files are read where they are *(concurrent
+   writers to one file are inference, not measured; both write with an atomic
+   rename, `tokenStorage.ts:203-207`)* — or at a directory of its own, the
+   secret apart from the means. Which one the CLI and the server use is theirs
+   to state (§10, §12), not this spec's.
 5. **Version: 3.0.0.** Evidence that 2.1.0 would break consumers:
    - session stores refuse writes 2.0.0 accepted — the 3.x broker's `persist`
      spreads the connection config, `serviceUrl` and `authType` into
@@ -1061,8 +1063,8 @@ Additive: `getProvider`, `DestinationConfigError`, the collaborator options,
 - **People who `npm i -g @mcp-abap-adt/auth-broker` for `mcp-auth`:**
   `npm uninstall -g @mcp-abap-adt/auth-broker && npm i -g @mcp-abap-adt/auth-broker-cli`.
   Commands and flags are the same. A session file written by 3.x carries means
-  and secret together: under D6's destination store pointed at the same
-  directory its means are read as they are, and a `basic` or `snc` one works
+  and secret together: a consumer that points D6's destination store at the
+  same directory has its means read as they are, and a `basic` or `snc` one works
   unchanged; a `jwt` or `saml` one needs `grantType` — run the command that
   produced it again, or add `SAP_GRANT_TYPE` (§3.2). The token API with a
   consumer `provider` serves it as in 3.x (§9).

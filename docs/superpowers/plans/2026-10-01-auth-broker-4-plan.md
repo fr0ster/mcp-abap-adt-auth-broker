@@ -645,14 +645,13 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   in the 2.x key names plus `SAP_GRANT_TYPE`, `SAP_OIDC_*`, `SAP_SAML_*`, with
   an optional fallback `IServiceKeyStore` (a SAP key supplies client and URL,
   the file the grant), the public client as `''`, and a write method of its
-  own. Its default directory is the one the session store uses, so every 2.x
-  session file is already a readable destination and no path changes; the CLI
-  writes means there and the server writes its service keys' grant there. The
-  alternatives: a separate destinations directory (the secret apart from the
-  means on disk, at the price of every user's paths changing and a migration
-  of 3.x files); or a `grantType` option on the SAP service key stores (stated
-  by whoever configures the store — smaller, but it covers only the service
-  key case and leaves basic, SNC, OIDC and SAML without a store).
+  own. Its directory is a constructor parameter with no default: the
+  consumer composes the stores and so decides where means and secrets live
+  (same directory as the sessions, or apart); the broker takes whatever stores
+  it is handed. The question left for the user is only whether auth-stores
+  ships this implementation. The alternative: a `grantType` option on the SAP
+  service key stores (smaller, but it covers only the service key case and
+  leaves basic, SNC, OIDC and SAML without a store).
 
 ## Risks / open points found in the code
 
