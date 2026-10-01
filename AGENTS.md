@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - npm workspace (the `mcp-abap-adt-interfaces` layout); the root `package.json` is private and lists the packages in dependency order.
-- `packages/auth-broker/` — `@mcp-abap-adt/auth-broker`: `src/` (core `AuthBroker`, providers, stores, types), `src/__tests__/` (Jest), `tests/test-config.yaml.template`.
+- `packages/auth-broker/` — `@mcp-abap-adt/auth-broker`: `src/` (core `AuthBroker`, providers, stores, types), `src/__tests__/` (Jest), `tests/test-config.yaml.template`, `tests/stand/` (UAA and Keycloak in Docker for the token-grant suites).
 - `packages/auth-broker-cli/` — `@mcp-abap-adt/auth-broker-cli`: `src/` (`mcp-auth`, `mcp-sso` and their helpers; `generate-env-from-service-key.ts`), `src/__tests__/`, `tests/keycloak` and `tests/sso-demo` (interactive stands).
 - `tools/` — `check-graph.js`, `check-packed.js`, `publish-changed.js`, `test-publish-changed.js`, `version-stats.sh`.
 - `dist/` in each package is build output (generated).
@@ -16,6 +16,7 @@ Run from the repository root.
 - `npm run test:check`: Typecheck both packages, tests included.
 - `npm run check`: build, test:check, lint:check, check:graph, check:packed (bin smoke check, needs the network), check:publish. No Jest.
 - `npm run test:live`: the library's live suite (`src/__tests__/live/`, real systems), excluded from `npm test`; each case reads only the environment variables it names and skips, printing why, elsewhere (`docs/development/TESTING.md`).
+- `npm run test:stand`: the library's stand suites (`src/__tests__/stand/`) against UAA and Keycloak in Docker — starts the stand, runs them, stops what it started (`stand:up` / `stand:down` to keep it running); needs only Docker.
 - `npm run generate-env -w @mcp-abap-adt/auth-broker-cli -- <destination>`: Generate `.env` from a service key (a `tsx` script, not shipped).
 - `mcp-auth` / `mcp-sso` are compiled to `packages/auth-broker-cli/dist/` (no `tsx` at runtime).
 - `npm run release:publish`: publish the versions the registry lacks; tags are `<dir>-v<version>`.

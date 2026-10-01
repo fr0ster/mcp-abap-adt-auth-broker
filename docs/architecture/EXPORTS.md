@@ -24,7 +24,8 @@ export {
 collaborator options (`authorization`, `oidcAuthorization`,
 `deviceCodePresenter`, `samlCookies`, `assertionReplayStore`) are each a
 function of the destination; `StrategyGrant` is the grant `authorization` is
-called with (`'authorization_code' | 'passcode' | 'saml2_pure' | 'saml2_bearer'`).
+called with (`'authorization_code' | 'passcode' | 'saml2_pure' | 'saml2_bearer'`
+— this version builds the first two).
 
 **Key methods**:
 - `getProvider(destination: string): Promise<IAuthProvider>` — the provider the destination states, from the key store's means and the session's secret; cached per destination
@@ -33,6 +34,7 @@ called with (`'authorization_code' | 'passcode' | 'saml2_pure' | 'saml2_bearer'`
 - `getAuthorizationConfig(destination: string): Promise<IAuthorizationConfig | null>` — the key store's client with the session's refresh token
 - `getConnectionConfig(destination: string): Promise<IConnectionConfig | null>` — the key store's means with the session's secret
 - `createTokenRefresher(destination: string): ITokenRefresher`
+- `flush(): Promise<void>` — one more attempt for every session write `getProvider`'s providers left pending; rejects with an `AggregateError` naming the destinations still failing
 
 ### `DestinationConfigError`
 What `getProvider` (and the token API without a `provider`) throws for a
@@ -114,7 +116,9 @@ Concrete implementations are **not** in this package:
 - Stores live in `@mcp-abap-adt/auth-stores`.
 - Providers live in `@mcp-abap-adt/auth-providers` — a runtime dependency,
   since `getProvider` builds `BasicAuthProvider`, `SncLogonProvider`,
-  `TokenAuthProvider` and `SamlAuthProvider`; none of them is re-exported.
+  `TokenAuthProvider`, `SamlAuthProvider`, `AuthorizationCodeProvider`,
+  `ClientCredentialsProvider` and `UaaPasscodeProvider`; none of them is
+  re-exported.
 
 ## Minimal Relationship Diagram
 
