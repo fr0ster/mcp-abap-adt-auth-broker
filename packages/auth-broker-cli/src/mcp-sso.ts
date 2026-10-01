@@ -844,7 +844,9 @@ async function main() {
       : config;
 
   const tokenProvider = SsoProviderFactory.create(
-    withLogger(buildProviderConfig(options, existingAuth, existingConn)),
+    withLogger(
+      buildProviderConfig(options, existingAuth, existingConn, logger),
+    ),
   );
   const broker = new AuthBroker(
     {

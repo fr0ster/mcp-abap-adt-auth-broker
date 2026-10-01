@@ -3,15 +3,22 @@
  * SAML providers — no mock of the package. What this pins, without an
  * identity provider:
  *
- * - missing trust material fails at construction with the provider's own
- *   ValidationError, which this CLI does not duplicate;
+ * - missing trust material fails before construction with a ValidationError
+ *   naming what is missing: since auth-providers 5 the CLI builds the
+ *   assertion validator itself, from the trust it collects;
  * - with --idp-initiated the CLI's strategy never calls
  *   buildAuthorizationUrl, which auth-providers refuses for an IdP-initiated
- *   login: the login gets as far as validating the pasted assertion.
+ *   login: the login gets as far as validating the pasted assertion;
+ * - the validator each flow gets checks the signature against the trusted
+ *   certificates, and is the kind its flow needs: bearer requires the
+ *   Assertion signed, pure the Response.
  */
 
 // The IdP-initiated strategy reads the pasted SAMLResponse through
 // readManualInput; answer it here instead of waiting on a terminal.
+const mockPasted = {
+  value: Buffer.from('<not-a-saml-response/>').toString('base64'),
+};
 jest.mock('node:readline', () => ({
   createInterface: () => {
     // Like the real interface, `close()` emits 'close'.
@@ -21,7 +28,7 @@ jest.mock('node:readline', () => ({
         if (event === 'close') onClose.push(listener);
       },
       question: (_prompt: string, answer: (value: string) => void) =>
-        answer(Buffer.from('<not-a-saml-response/>').toString('base64')),
+        answer(mockPasted.value),
       close: () => {
         for (const listener of onClose) listener();
       },
@@ -32,6 +39,11 @@ jest.mock('node:readline', () => ({
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import {
+  generateKeyMaterial,
+  type KeyMaterial,
+  signXml,
+} from '@mcp-abap-adt/auth-mocks';
 import {
   AssertionValidationError,
   Saml2BearerProvider,
@@ -116,6 +128,14 @@ describe.each([['bearer' as const], ['pure' as const]])(
       ]);
     });
 
+    it('without trust material, no validator is built and no provider constructed', () => {
+      expect(() =>
+        construct[flow](
+          samlOptions({ idpEntityId: 'https://idp.example/metadata' }),
+        ),
+      ).toThrow('missing idpCertificates');
+    });
+
     it('with --idp-initiated and --authn-request-id, construction fails in the provider', () => {
       expect(() =>
         construct[flow](
@@ -147,3 +167,81 @@ describe.each([['bearer' as const], ['pure' as const]])(
     });
   },
 );
+
+const IDP_ENTITY_ID = 'https://idp.example/metadata';
+
+/** A Response whose Assertion alone is signed, as most identity providers send. */
+function assertionSignedResponse(key: KeyMaterial): string {
+  const now = new Date().toISOString();
+  const xml =
+    '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ' +
+    'xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ' +
+    `ID="_response1" Version="2.0" IssueInstant="${now}">` +
+    `<saml:Issuer>${IDP_ENTITY_ID}</saml:Issuer>` +
+    '<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>' +
+    `<saml:Assertion ID="_assertion1" Version="2.0" IssueInstant="${now}">` +
+    `<saml:Issuer>${IDP_ENTITY_ID}</saml:Issuer>` +
+    '<saml:Subject><saml:NameID>user@example.com</saml:NameID></saml:Subject>' +
+    '</saml:Assertion></samlp:Response>';
+  return Buffer.from(signXml(xml, key)).toString('base64');
+}
+
+describe('the validator mcp-sso builds, against a signed assertion', () => {
+  let tempDir: string;
+  let trusted: KeyMaterial;
+  let other: KeyMaterial;
+  let trustedCertFile: string;
+
+  beforeAll(() => {
+    trusted = generateKeyMaterial();
+    other = generateKeyMaterial();
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-sso-signed-'));
+    trustedCertFile = path.join(tempDir, 'idp.pem');
+    fs.writeFileSync(trustedCertFile, trusted.certificatePem);
+  });
+
+  afterAll(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  async function refusalOf(
+    flow: 'bearer' | 'pure',
+    signedBy: KeyMaterial,
+  ): Promise<AssertionValidationError> {
+    mockPasted.value = assertionSignedResponse(signedBy);
+    const provider = construct[flow](
+      samlOptions({
+        idpCertificateFiles: [trustedCertFile],
+        idpEntityId: IDP_ENTITY_ID,
+        idpInitiated: true,
+        assertionFlow: 'manual',
+      }),
+    );
+    const refusal = await provider.getTokens().catch((error) => error);
+    expect(refusal).toBeInstanceOf(AssertionValidationError);
+    return refusal as AssertionValidationError;
+  }
+
+  it.each([['bearer' as const], ['pure' as const]])(
+    '%s refuses an assertion signed by a key it does not trust',
+    async (flow) => {
+      const refusal = await refusalOf(flow, other);
+      expect(refusal.check).toBe('signature');
+    },
+  );
+
+  it('bearer accepts the signature on the Assertion (saml2-bearer sends the Assertion alone)', async () => {
+    const refusal = await refusalOf('bearer', trusted);
+    // Refused later, for what the fixture leaves out — past the signature
+    // and the signed-element checks.
+    expect(['signature', 'signedNode']).not.toContain(refusal.check);
+  });
+
+  it('pure requires the Response signed', async () => {
+    const refusal = await refusalOf('pure', trusted);
+    expect(refusal.check).toBe('signedNode');
+    expect(refusal.message).toContain(
+      'the signature does not cover the samlp:Response',
+    );
+  });
+});
