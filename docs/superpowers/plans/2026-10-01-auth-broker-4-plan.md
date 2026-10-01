@@ -645,7 +645,11 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   in the 2.x key names plus `SAP_GRANT_TYPE`, `SAP_OIDC_*`, `SAP_SAML_*`, with
   an optional fallback `IServiceKeyStore` (a SAP key supplies client and URL,
   the file the grant), the public client as `''`, and a write method of its
-  own. Its directory is a constructor parameter with no default: the
+  own, plus an in-memory twin (as auth-stores pairs `AbapSessionStore` with
+  `SafeAbapSessionStore`); a folder is only the first, simplest back end, for
+  a local user — a SAP Credential Store, a database or anything else is
+  another implementation of the same contract, outside this plan. The file
+  one's directory is a constructor parameter with no default: the
   consumer composes the stores and so decides where means and secrets live
   (same directory as the sessions, or apart); the broker takes whatever stores
   it is handed. The question left for the user is only whether auth-stores

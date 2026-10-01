@@ -252,7 +252,13 @@ stores answer the means.
      (`AbapServiceKeyStore.ts:181`, `XsuaaServiceKeyStore.ts:165`): a token is
      secret, and a key store answers means only.
 4. **A key store for a destination that has no SAP service key — an
-   auth-stores question, not a broker one (decision D6).** Basic, SNC, OIDC,
+   auth-stores question, not a broker one (decision D6).** The broker never
+   assumes a file: any `IServiceKeyStore` serves — in memory, a SAP Credential
+   Store, a database, a folder. A folder is only the first, simplest
+   implementation, for a local user; auth-stores ships it and an in-memory one
+   (as it does for sessions: `AbapSessionStore` / `SafeAbapSessionStore`), and
+   other back ends are implementations of the same contract outside this
+   work. Basic, SNC, OIDC,
    SAML, a `none` destination and a service key's missing grant all need
    somewhere to state means. **Recommendation:** auth-stores ships an
    `IServiceKeyStore` over `<dir>/<destination>.env` (working name
