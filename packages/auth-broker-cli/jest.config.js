@@ -13,15 +13,16 @@ module.exports = {
   coverageReporters: ['text', 'lcov', 'html'],
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
   transform: {
-    '^.+\\.ts$': ['ts-jest', {
-      tsconfig: {
-        esModuleInterop: true,
+    '^.+\\.ts$': [
+      'ts-jest',
+      {
+        tsconfig: {
+          esModuleInterop: true,
+        },
       },
-    }],
+    ],
   },
-  transformIgnorePatterns: [
-    'node_modules/(?!(open)/)',
-  ],
+  transformIgnorePatterns: ['node_modules/(?!(open)/)'],
   verbose: true,
   // Run tests sequentially (not in parallel) to guarantee order
   maxWorkers: 1, // Only 1 worker process

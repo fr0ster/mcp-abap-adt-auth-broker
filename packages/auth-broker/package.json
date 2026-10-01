@@ -1,0 +1,66 @@
+{
+  "name": "@mcp-abap-adt/auth-broker",
+  "version": "3.0.4",
+  "description": "Per-destination token broker for SAP BTP and ABAP: sessions and service keys from stores, tokens from an injected provider, results persisted",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "COPYING"
+  ],
+  "keywords": [
+    "abap",
+    "sap",
+    "adt",
+    "jwt",
+    "authentication",
+    "token",
+    "broker",
+    "mcp",
+    "abap-adt",
+    "xsuaa",
+    "oauth2",
+    "saml"
+  ],
+  "author": "Oleksii Kyslytsia <oleksij.kyslytsja@gmail.com>",
+  "license": "LGPL-3.0-only",
+  "homepage": "https://github.com/fr0ster/mcp-abap-adt-auth-broker/tree/main/packages/auth-broker#readme",
+  "bugs": {
+    "url": "https://github.com/fr0ster/mcp-abap-adt-auth-broker/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fr0ster/mcp-abap-adt-auth-broker.git",
+    "directory": "packages/auth-broker"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "rm -rf dist tsconfig.tsbuildinfo tsconfig.build.tsbuildinfo",
+    "build": "tsc -b tsconfig.build.json",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:check": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run --prefix ../.. check"
+  },
+  "engines": {
+    "node": "^22 || ^24 || ^26"
+  },
+  "dependencies": {
+    "@mcp-abap-adt/interfaces-auth": "^2.1.0",
+    "@mcp-abap-adt/interfaces-auth-sap": "^1.0.1",
+    "@mcp-abap-adt/interfaces-utils": "^1.1.0"
+  },
+  "devDependencies": {
+    "@mcp-abap-adt/auth-providers": "^4.2.0",
+    "@mcp-abap-adt/auth-stores": "^1.2.3",
+    "@mcp-abap-adt/logger": "^0.4.0",
+    "@types/js-yaml": "^4.0.9",
+    "js-yaml": "^4.1.1",
+    "pino": "^10.1.0",
+    "pino-pretty": "^13.1.3"
+  }
+}

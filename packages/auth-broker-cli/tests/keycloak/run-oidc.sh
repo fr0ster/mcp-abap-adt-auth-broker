@@ -19,7 +19,7 @@ if [ "$READY" != "yes" ]; then
 fi
 
 echo "Starting OIDC device flow (approve in browser)..."
-node "$ROOT_DIR/dist/bin/mcp-sso.js" \
+node "$ROOT_DIR/dist/mcp-sso.js" \
   oidc \
   --flow device \
   --issuer http://localhost:8080/realms/mcp-sso \

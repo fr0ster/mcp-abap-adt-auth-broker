@@ -42,7 +42,7 @@ import {
   buildSamlBearerConfig,
   buildSamlPureConfig,
   type McpSsoOptions,
-} from '../../../bin/mcpSsoConfig';
+} from '../mcpSsoConfig';
 
 // A self-signed certificate made for this test only; its key was discarded.
 const TEST_IDP_CERT =

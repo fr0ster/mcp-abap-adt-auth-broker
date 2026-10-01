@@ -85,7 +85,7 @@ import {
   parseSamlTrustArg,
   readIdpCertificateFile,
   readManualInput,
-} from '../../../bin/mcpSsoConfig';
+} from '../mcpSsoConfig';
 
 function baseOptions(overrides: Partial<McpSsoOptions> = {}): McpSsoOptions {
   return {

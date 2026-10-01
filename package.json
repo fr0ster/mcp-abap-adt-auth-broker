@@ -1,93 +1,36 @@
 {
-  "name": "@mcp-abap-adt/auth-broker",
-  "version": "3.0.4",
-  "description": "Per-destination token broker for SAP BTP and ABAP: sessions and service keys from stores, tokens from an injected provider, results persisted - plus the mcp-auth and mcp-sso CLIs",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "files": [
-    "dist",
-    "README.md",
-    "CHANGELOG.md",
-    "CONTRIBUTORS.md",
-    "LICENSE",
-    "COPYING"
-  ],
-  "keywords": [
-    "abap",
-    "sap",
-    "adt",
-    "jwt",
-    "authentication",
-    "token",
-    "broker",
-    "mcp",
-    "abap-adt",
-    "xsuaa",
-    "oauth2",
-    "saml",
-    "sso"
-  ],
-  "author": "Oleksii Kyslytsia <oleksij.kyslytsja@gmail.com>",
+  "name": "mcp-abap-adt-auth-broker-workspace",
+  "private": true,
   "license": "LGPL-3.0-only",
-  "homepage": "https://github.com/fr0ster/mcp-abap-adt-auth-broker#readme",
-  "bugs": {
-    "url": "https://github.com/fr0ster/mcp-abap-adt-auth-broker/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/fr0ster/mcp-abap-adt-auth-broker.git"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
+  "workspaces": [
+    "packages/auth-broker",
+    "packages/auth-broker-cli"
+  ],
   "scripts": {
     "chrono": "./tools/version-stats.sh",
-    "clean": "rm -rf dist tsconfig.tsbuildinfo",
-    "lint": "biome check --write src",
-    "lint:check": "biome check src",
-    "format": "biome format --write src",
-    "build": "npm run --silent clean && biome check src --diagnostic-level=error && tsc -p tsconfig.json && tsc -p tsconfig.cli.json",
-    "build:fast": "tsc -p tsconfig.json && tsc -p tsconfig.cli.json",
-    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
-    "test:check": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
-    "test:mcp-auth": "sh tests/sso-demo/run-mcp-auth.sh",
-    "test:mcp-sso": "sh tests/sso-demo/run-mcp-sso.sh",
-    "test:device-code": "sh tests/keycloak/run-oidc.sh",
-    "test:saml-pure": "sh tests/keycloak/run-saml.sh",
-    "test:sso": "sh tests/keycloak/run-interactive.sh",
-    "prepublishOnly": "npm run build",
-    "prepack": "npm run build",
-    "generate-env": "tsx bin/generate-env-from-service-key.ts"
-  },
-  "bin": {
-    "mcp-auth": "./dist/bin/mcp-auth.js",
-    "mcp-sso": "./dist/bin/mcp-sso.js"
+    "clean": "npm run clean --workspaces",
+    "lint": "biome check --write packages tools",
+    "lint:check": "biome check packages tools",
+    "format": "biome format --write packages tools",
+    "build": "npm run clean --workspaces && biome check packages tools --diagnostic-level=error && tsc -b packages/auth-broker/tsconfig.build.json packages/auth-broker-cli/tsconfig.build.json",
+    "test": "npm run test --workspaces --if-present",
+    "test:check": "npm run test:check --workspaces",
+    "check:graph": "node tools/check-graph.js",
+    "check": "npm run build && npm run test:check && npm run lint:check && npm run check:graph && npm run check:packed && npm run check:publish",
+    "check:packed": "node tools/check-packed.js",
+    "check:publish": "node tools/test-publish-changed.js",
+    "release:publish": "node tools/publish-changed.js"
   },
   "engines": {
     "node": "^22 || ^24 || ^26"
   },
-  "dependencies": {
-    "@mcp-abap-adt/auth-providers": "^4.2.0",
-    "@mcp-abap-adt/auth-stores": "^1.2.3",
-    "@mcp-abap-adt/interfaces-auth": "^2.1.0",
-    "@mcp-abap-adt/interfaces-auth-sap": "^1.0.1",
-    "@mcp-abap-adt/interfaces-utils": "^1.1.0",
-    "@mcp-abap-adt/logger": "^0.4.0",
-    "axios": "^1.13.5"
-  },
   "devDependencies": {
     "@biomejs/biome": "^2.3.14",
-    "@types/express": "^5.0.5",
     "@types/jest": "^30.0.0",
-    "@types/js-yaml": "^4.0.9",
     "@types/node": "^25.2.3",
     "jest": "^30.2.0",
-    "jest-util": "^30.2.0",
-    "js-yaml": "^4.1.1",
-    "pino": "^10.1.0",
-    "pino-pretty": "^13.1.3",
+    "semver": "^7.8.5",
     "ts-jest": "^29.2.5",
-    "tsx": "^4.21.0",
     "typescript": "^5.9.2"
   }
 }

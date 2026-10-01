@@ -78,9 +78,13 @@ npm run service-key:create
 npm run service-key:fetch
 ```
 
-This produces `tests/sso-demo/sso-demo.xsuaa.json` (gitignored).
+This produces `packages/auth-broker-cli/tests/sso-demo/sso-demo.xsuaa.json` (gitignored).
 
 ## Run Tests (Interactive)
+
+The scripts belong to the CLI package: run them in `packages/auth-broker-cli`,
+or from the repository root with `-w @mcp-abap-adt/auth-broker-cli`, after
+`npm run build` at the root.
 
 ```bash
 npm run test:mcp-auth

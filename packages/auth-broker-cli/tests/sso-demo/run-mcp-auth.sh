@@ -10,7 +10,7 @@ if [ ! -f "$KEY_PATH" ]; then
   exit 1
 fi
 
-node "$ROOT_DIR/dist/bin/mcp-auth.js" \
+node "$ROOT_DIR/dist/mcp-auth.js" \
   auth-code \
   --service-key "$KEY_PATH" \
   --output /tmp/xsuaa-auth.env \

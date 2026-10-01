@@ -5,6 +5,9 @@ plus a basic SAML IdP client for generating SAML assertions (pure SAML tests).
 
 ## Start
 
+Every command below runs from `packages/auth-broker-cli` (the CLI package),
+after `npm run build` at the repository root.
+
 ```bash
 cd tests/keycloak
 docker compose up -d
@@ -24,7 +27,7 @@ Admin login: `admin` / `admin`
 
 ```bash
 # OIDC browser flow (authorization code via local callback on :3001)
-node dist/bin/mcp-sso.js \
+node dist/mcp-sso.js \
   --protocol oidc \
   --flow browser \
   --issuer http://localhost:8080/realms/mcp-sso \
@@ -34,7 +37,7 @@ node dist/bin/mcp-sso.js \
   --type xsuaa
 
 # OIDC password flow (direct access grant)
-node dist/bin/mcp-sso.js \
+node dist/mcp-sso.js \
   --protocol oidc \
   --flow password \
   --token-endpoint http://localhost:8080/realms/mcp-sso/protocol/openid-connect/token \
@@ -45,7 +48,7 @@ node dist/bin/mcp-sso.js \
   --type xsuaa
 
 # OIDC device flow
-node dist/bin/mcp-sso.js \
+node dist/mcp-sso.js \
   --protocol oidc \
   --flow device \
   --issuer http://localhost:8080/realms/mcp-sso \
@@ -77,7 +80,7 @@ node tests/keycloak/saml-sp.js
 After login, `saml-acs.js` will print `SAMLResponse` (base64). Use it with:
 
 ```bash
-node dist/bin/mcp-sso.js \
+node dist/mcp-sso.js \
   --protocol saml2 \
   --flow pure \
   --idp-sso-url http://localhost:8080/realms/mcp-sso/protocol/saml \

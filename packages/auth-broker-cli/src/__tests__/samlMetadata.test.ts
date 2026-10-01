@@ -8,14 +8,14 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { parseSamlTrustArg } from '../../../bin/mcpSsoConfig';
+import { parseSamlTrustArg } from '../mcpSsoConfig';
 import {
   applySamlMetadata,
   loadMetadata,
   readIdpMetadata,
   readSpMetadata,
   type SamlMetadataTarget,
-} from '../../../bin/samlMetadata';
+} from '../samlMetadata';
 
 const fixture = (name: string) =>
   fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');

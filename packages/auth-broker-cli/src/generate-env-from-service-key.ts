@@ -6,7 +6,7 @@
  * Usage:
  *   npm run generate-env <destination> [service-key-path] [session-path]
  *   or
- *   npx tsx bin/generate-env-from-service-key.ts <destination> [service-key-path] [session-path]
+ *   npx tsx src/generate-env-from-service-key.ts <destination> [service-key-path] [session-path]
  *
  * Examples:
  *   npm run generate-env mcp
@@ -14,6 +14,7 @@
  *   npm run generate-env TRIAL ~/.config/mcp-abap-adt/service-keys/TRIAL.json
  */
 
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
   AuthorizationCodeProvider,
   browserCallbackStrategy,
@@ -27,7 +28,6 @@ import {
 } from '@mcp-abap-adt/auth-stores';
 import * as fs from 'fs';
 import * as path from 'path';
-import { AuthBroker } from '../src/AuthBroker';
 
 /**
  * A person completes this login at a browser; the provider's own default

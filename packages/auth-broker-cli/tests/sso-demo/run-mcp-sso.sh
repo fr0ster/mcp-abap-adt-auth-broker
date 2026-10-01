@@ -18,7 +18,7 @@ if [ ! -f "$ASSERTION_FILE" ]; then
 fi
 ASSERTION_ARG="--assertion $(cat "$ASSERTION_FILE")"
 
-node "$ROOT_DIR/dist/bin/mcp-auth.js" \
+node "$ROOT_DIR/dist/mcp-auth.js" \
   saml2-bearer \
   --dev \
   --service-key "$KEY_PATH" \
