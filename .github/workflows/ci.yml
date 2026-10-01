@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+jobs:
+  # The repository's own gate: build, type check, lint, the dependency graph,
+  # the packed bin smoke check (needs the registry), the release tool against
+  # its fixtures — then every workspace's unit suites. The stand and live
+  # suites skip here, each stating why.
+  build-and-test:
+    runs-on: ubuntu-latest
+    # The Node.js versions SAP BTP, Cloud Foundry supports (the engines range).
+    # Follow SAP: add a version when the buildpack gains it, drop one when it
+    # loses it.
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['22', '24', '26']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check
+        run: npm run check
+
+      - name: Test
+        run: npm test
+
+  # getProvider's token grants against real authorization servers — Cloud
+  # Foundry UAA and Keycloak — started in Docker by
+  # packages/auth-broker/tests/stand/run.sh and stopped again when the suites
+  # end. On failure the script prints the servers' logs first.
+  broker-stand:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['22', '24', '26']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test against UAA and Keycloak
+        run: npm run test:stand

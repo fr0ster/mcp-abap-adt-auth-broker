@@ -1,0 +1,183 @@
+# UAA configuration for the provider test stand — a TEST FIXTURE.
+#
+# Every key and password in this file exists only for the local stand: UAA runs
+# in Docker on 127.0.0.1 and nothing outside the test suites ever trusts these
+# keys. They are committed on purpose, so a fresh clone needs no setup step and
+# every machine — and CI — runs the same configuration. Do not reuse them.
+issuer:
+  uri: http://localhost:8080/uaa
+
+jwt:
+  token:
+    policy:
+      activeKeyId: key-1
+      keys:
+        key-1:
+          signingAlg: RS256
+          signingKey: |
+            -----BEGIN PRIVATE KEY-----
+            MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC6YxwuRHfekwhE
+            cs1awzVD+4fN2vTsjPzIdiRn54DvV2/mqHl2FlDUTBqN55AzBsqYctFAeSF6zaQa
+            mnacMDyALwrZjZ1D2kOk7Y8Vv/2Y2u95whvUFpnYtsefyTNrbf9ReXIGuo1/MDtl
+            PYR3y0O04cg8LKBjuXl0IfN/1ZDgNzhN1kJEH1xkXr1teAg6rRqAoFxfhgIzROLe
+            nDcHd42OkqbjeaGpDJ0GhDRTvOFYIMFK1pjRUiKouLeYJTbSiBwUp0bEqKpeN7ba
+            s4P+kRYfsil0j++usmqO63cRMgLrq8adGgWP7MnTr4CA2pl0HlhhMj9Zl4kvnehB
+            0qsJxbM1AgMBAAECggEAEiDMn2APwT6kubTpbeVO8Mnt7KLaBTM17NtiHBcDToQU
+            a/yWilqOSa+4j3URFzLBvAUYKWtT9ck60k7pWrSYVdFS0/5hkuAPieLZyABF4+WQ
+            utNweHbVnM3ePuzHSwYbpJV+y9Jo1mY0XgWXNOg4sXGaU5FK7O11DMthObLluzYz
+            3kUH0AdN66xBw/7RCkr6t6G6i8aBDiFUzD5hYAUj/9gBs2b1seeM2FVO/mZUBtwY
+            +NyIcS/AOk/9ApnCVacwVFqd3ZQUrtbvldvBt/KRAo04F81RIyq0AGCQ6Q04UwIz
+            Cbvws1zzj0t9NW9jvTKQETGK1ktZNd1NmOuqJdsDSwKBgQDhei+u/1Mc0CrnoNjA
+            dgyQJNlsFr410n1G6aGsBiF7k1hYtDvN0q3S8qnrPRWjTWO9akKAndlYOq03SqOV
+            iAhVVRmyiDxcKc4nKf+WM0GI+JAVsqIRldG1O4jXRF4nC82eU+BHFPtR+mQbcXSX
+            M4dQQYkuYStVFBl6ufCiG6mrtwKBgQDTnkXJuDE5gjdTNXEnGTbkxAGzuDwpV1wN
+            H8OmZlfiKYw9s59uUCHHoCqOcmCX7ISe85aehx8sJEkEPr/WSdea2yWGCZ7COQ9H
+            pc4f9/I5GHOMAj0wrzzcNnqtLRIinhg+SL6W7a/dz3401c8KA3N7/N5ye99cjINK
+            nT7QNP7wcwKBgGemkqsApoVVUJPgRiPbYJUWy3g70D7Pv1VM60w4GUZEitVkLSXF
+            1rBlayU/lGXYmqQlZ+LWLWa4uo3zWtXPjf0kPMbsh8raUPGCBgNXFqZPlXTUBFrP
+            I3MLpjFHNXz/mQtShYRHqeyajVBsTGuBfY+wQM64ToIy1i+rsGnlC49rAoGAIGMC
+            r0KfVfvV18hADwnO2ugckpLJslIKZn/MA7V6EcTmD7Nj3RAqe1DJ8o8StW2fRmxl
+            StHHNYxAGIQ5++PFOY/8iC0EvRjae86mY0IhMhfJ502Ya9EF8XXtBH/3XJDxiOa9
+            NIAgAER3PkLSsuegTwN+T+shXhqrJUo3iMnzkn0CgYEAt74o5b6VWNAIiG5JDXr2
+            OAEf/vzlsiCfhA9is8wY7RooKhW8mJXfnY5Z/KwAIDp8qrf1GCftBQCR569iQsP9
+            +txwdDjJpYrvD9wuxofJby8aQlQXJlL2sNuBMZS8D6GfeCUfev1WW3YUnu+4rnJT
+            cs5fgFCpsjJo/dNzJAbZTB8=
+            -----END PRIVATE KEY-----
+    refresh:
+      format: opaque
+
+login:
+  # The SAML service provider entity ID: the Audience a bearer assertion must name.
+  entityID: uaa-sp
+  saml:
+    activeKeyId: sp-key
+    keys:
+      sp-key:
+        key: |
+          -----BEGIN PRIVATE KEY-----
+          MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC+7jXa5+Fo+KWF
+          DtlK3frwvr3dG4qVp1ZpASMHLPVXcdgDNq1ZdBeGUr9+Di2MkLQpJRP1V8YcAUo0
+          1lXfVMRUDlAvmLFZItBKUk8R5cElHbGo58ICp7WByWG8+acs9Hse3YKWCY5suo4N
+          znqnCZ6z0AfQTaBquW2gKm9HSwJynt92mdxax2f+drLFVL19xIjrMpOE9LhAW+6x
+          yq3OF/tIGuHa7IkXyi3YImY8yMEk6sZv5y31DXeqtY0IdIcPBxmbnJX1VxcYHNEs
+          eUeKNS7WRsBQGm0uXpjCm9pt4pQG5Q5stHshVJ7I7DHJ1keqgUzKFAYeTRtQVE3C
+          +KCczfPDAgMBAAECggEARDqE1UayttvP7lYJkWb04y4OVCKg6ezEBL8KwOgwfkCo
+          9DEITmSdeXs9gfLYFRiqwN9GnBBzM5PEbFBBnI7Cn9UDk5apnZRCwaRbLCah2D0d
+          vSGgo2lCA/CudCT0uCxfiP6YSTx+AF3EIKvuCZ328APBnw72adz8j1VKsbvc0o9T
+          wAOXq7LBSSG/zPGvLRFj7YNzKnirJSJ0k1rgCZWUQSv2XuXYa9HuB7DuZ7WiRQ0L
+          Bd927uESKB4dqJi6f+T2TtUlmQSzAtoAdqS1t3BGWr1lAlqozRPOZDyKwbvtkbET
+          lGYqhB0edJGiYvpm38fh7Vc1Tj7Vzq+HUb2mGBoPOQKBgQDz0o8YvSjKQqltKBCq
+          XNGoC9p7Ujq0HwO0IRGACWANj3jzkPy/MM2kTvClI6GoplTKAxUszhs3p9yK+Vyb
+          fs0eVtoWD4GROfetURl+6GXUEoonUkdy6UmTF24Q876fNhMH7UWXzSYyAUy7yCWU
+          Qi5cCc8lc1BmjotSzmhYBFhl6QKBgQDId2PwDYFalz4WMXmR7R+07NcAj4Ljt2If
+          4nowkTXEzEz1LrBKyH2NgKhZi/jfuNQg2SnnPeP6qZOBXYDQRzJM3DtjELgGbtFK
+          N8iQoAoLsdFm9RJs3lcDZ8zusyekaTVwv3skhMS4hkapuGC/RtKsTynz6wOoXGVT
+          xGsIRkGEywKBgQDfITcRFbKpfl3cZgjyTyUSm15i8vqD8coK4yRHvsynPEAc7fdO
+          5FOc5Rz2k2gSlb0MbcvICAoCYdzDVbZ5Go6OED9eZuxUwe62LnydlgHyFNFXcMWw
+          FGvfb1arrtQokWzTGUFRzU0CAAx/4Ib7aaFRWyy1ghT29cXsjrYQrlFTWQKBgCNs
+          nZdk+4/DnDAVzBLSYUD6fT/XHF0bIdbakZcVgffl1k+ZUYPVjAI+UwGH75GxOqMX
+          XQVE9Y1s++jnWgT0H9pfLItj//D7EjbYRrPv4/aPFJ7p/biJTb0HUbp4pC+0e8IR
+          xDP+1jh5WfFR6J7EaCQU1SgKRpowwaMc2YEb0SYjAoGAArVYrLR4OlKVSGOVDVO2
+          X4CYOCqKzxaR71np8SEropGjoE2jIh8VXtbME9rOFtnftMCr+XhxlAufczGV/QiQ
+          kwtPGhp+RioxZq5Ey8UaWOEuFk/FeAJJlMSBsLdCMx1BdZRCOCzHRGG3spMTEGCD
+          EWvh5JHySumeaFAntCe19wg=
+          -----END PRIVATE KEY-----
+        certificate: |
+          -----BEGIN CERTIFICATE-----
+          MIIDAzCCAeugAwIBAgIUa9q8TtPRCevSYCArN1e843U6NfowDQYJKoZIhvcNAQEL
+          BQAwETEPMA0GA1UEAwwGdWFhLXNwMB4XDTI2MDkyNDE1MDU1MloXDTM2MDkyMTE1
+          MDU1MlowETEPMA0GA1UEAwwGdWFhLXNwMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A
+          MIIBCgKCAQEAvu412ufhaPilhQ7ZSt368L693RuKladWaQEjByz1V3HYAzatWXQX
+          hlK/fg4tjJC0KSUT9VfGHAFKNNZV31TEVA5QL5ixWSLQSlJPEeXBJR2xqOfCAqe1
+          gclhvPmnLPR7Ht2ClgmObLqODc56pwmes9AH0E2garltoCpvR0sCcp7fdpncWsdn
+          /nayxVS9fcSI6zKThPS4QFvuscqtzhf7SBrh2uyJF8ot2CJmPMjBJOrGb+ct9Q13
+          qrWNCHSHDwcZm5yV9VcXGBzRLHlHijUu1kbAUBptLl6YwpvabeKUBuUObLR7IVSe
+          yOwxydZHqoFMyhQGHk0bUFRNwvignM3zwwIDAQABo1MwUTAdBgNVHQ4EFgQUqBac
+          1WU9qgbH4y1FudC1YRc6E9MwHwYDVR0jBBgwFoAUqBac1WU9qgbH4y1FudC1YRc6
+          E9MwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEASGWR1yUKKLVF
+          kcZhh/P+qV/LbhcXkhCTjTQHK2rlI0ZZLSiwqpEEy6He7gTxGVFnf8rFiDpTjoBh
+          uxPIAK7IDUGkonyl4hSBTFb3IaflespiCnluwqj1QIbCA1buCs2mFQ7BREisren+
+          78EL1h3xRzI1K5At1iv5wt/x861M/wZc7r7bkG8cV/0uZ3bNaJzUpDv03OwigCjN
+          7t80iiWQijXJu47XHr3I/q43wKQOmOYYu8QhNvvT+zVui+N/l5KxpS0gqk+W+zui
+          ROkBG8sBzpztr/u4+z7RZ9wRSFJlu0ICAftl2v2F0Yn8bXsfoX5sdQihQBtKJOMR
+          2oS1ZaMqtw==
+          -----END CERTIFICATE-----
+    providers:
+      # The asserting party. Its metadata carries the certificate the tests sign
+      # with, so UAA verifies the signature exactly as it would a real IdP's.
+      test-idp:
+        idpMetadata: '<?xml version="1.0" encoding="UTF-8"?><md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="test-idp"><md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"><md:KeyDescriptor use="signing"><ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:X509Data><ds:X509Certificate>MIIDBzCCAe+gAwIBAgIUYPF2ER9o/sReoxifyaAycVnkj4gwDQYJKoZIhvcNAQELBQAwEzERMA8GA1UEAwwIdGVzdC1pZHAwHhcNMjYwOTI0MTUwNTUyWhcNMzYwOTIxMTUwNTUyWjATMREwDwYDVQQDDAh0ZXN0LWlkcDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALHYB5HV1pWoOkzMG1tgBPE77tRPMGBrRCkzuagex05ScDd1QHP5yCovU2tps0ag9Oe2OnxFIfcRXoY9QxRjVSih1kVAjINgw20sXn35e0zlMWkdOv6D4kMRCe6uqPFQa12G7WlZzEzRg0YwmsASyVPB0qTz59Yf+rfxsz9GBP/bEX0zB+1gqGIfU/+tLK0ga2ELUahoq+sTAgsQ/sfJ40leSkq5wNfC42+MnIaPHquO0vCuGjX02ubedeLKO7DfkLvqVIovy4cETfVNOxa0mBg0RJk+3Ox8s8w6Tcyt1U8Z6lst9q7xfIHv6YU6ELXgCExDL8VWykNjEhf1IEd9GQ0CAwEAAaNTMFEwHQYDVR0OBBYEFFqVsbIyDgTEIyVVtNMb6sUYr1EAMB8GA1UdIwQYMBaAFFqVsbIyDgTEIyVVtNMb6sUYr1EAMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAFISLvYoee0UeRXX0Cvx5hBPSQKvvuu9C4fKXOyPtbgVIjaD4FE91CjSirCZi/UyMJYmrtpdfw/C87R3LKbM/P1fuvOoBACEDjPUCmQ7tXwJ178wZV6xPRhkbRxJtOEp+VmmvRVoH00K6Ing3pFQ1bYrPzNOeJW2vAWtV2miBRICwb9EHnIJcm7RRIwgXBsCO2be8GUsbqjt6K84orOyBrYVknWCNnGcfO/hNcpOsyUI+jVbXsfsRQMyCHreEYo9zEk1ZSt88pY8CvXq+DHKnuEfNlyDiJGhBHo3kMWNfeeHxpz9+A11hwe+W4bBwBfWK6fGAhywmf7Ci/FGfBsKwoI=</ds:X509Certificate></ds:X509Data></ds:KeyInfo></md:KeyDescriptor><md:NameIDFormat>urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified</md:NameIDFormat><md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="http://test-idp.invalid/sso"/></md:IDPSSODescriptor></md:EntityDescriptor>'
+        nameID: urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified
+        assertionConsumerIndex: 0
+        metadataTrustCheck: false
+        showSamlLoginLink: false
+        addShadowUserOnLogin: true
+
+scim:
+  users:
+    # For the interactive authorization-code login the tests perform.
+    - tester|tester|tester@example.com|Test|User|uaa.user
+
+oauth:
+  user:
+    authorities: [openid, uaa.user]
+  clients:
+    # The UAA suite registers Keycloak as a SAML identity provider at run time,
+    # from the metadata Keycloak publishes — its keys are generated per start.
+    stand_admin:
+      id: stand_admin
+      secret: secret
+      authorized-grant-types: client_credentials
+      authorities: 'idps.read,idps.write'
+    # Saml2BearerProvider end to end: an assertion Keycloak issued after a real
+    # login, exchanged here.
+    saml_kc:
+      id: saml_kc
+      secret: secret
+      authorized-grant-types: 'urn:ietf:params:oauth:grant-type:saml2-bearer,refresh_token'
+      scope: 'openid,uaa.user'
+      authorities: uaa.none
+      autoapprove: 'true'
+      allowedproviders: [keycloak]
+    # ClientCredentialsProvider.
+    cc_client:
+      id: cc_client
+      secret: secret
+      authorized-grant-types: client_credentials
+      authorities: uaa.resource
+    # UaaPasscodeProvider: the user fetches a one-time code from /passcode in a
+    # browser; the provider exchanges it through the password grant.
+    passcode_client:
+      id: passcode_client
+      secret: secret
+      authorized-grant-types: 'password,refresh_token'
+      scope: 'openid,uaa.user'
+      authorities: uaa.none
+      autoapprove: 'true'
+    # AuthorizationCodeProvider: the tests log in through UAA's own form.
+    authcode:
+      id: authcode
+      secret: secret
+      authorized-grant-types: 'authorization_code,refresh_token'
+      scope: 'openid,uaa.user'
+      authorities: uaa.none
+      autoapprove: 'true'
+      redirect-uri: 'http://localhost/callback'
+    # May spend refresh tokens: UAA issues one with the saml2-bearer token.
+    saml_rt:
+      id: saml_rt
+      secret: secret
+      authorized-grant-types: 'urn:ietf:params:oauth:grant-type:saml2-bearer,refresh_token'
+      scope: 'openid,uaa.user'
+      authorities: uaa.none
+      autoapprove: 'true'
+      allowedproviders: [test-idp]
+    # May not: UAA issues no refresh token, and the provider must log in again.
+    saml_nort:
+      id: saml_nort
+      secret: secret
+      authorized-grant-types: 'urn:ietf:params:oauth:grant-type:saml2-bearer'
+      scope: 'openid,uaa.user'
+      authorities: uaa.none
+      autoapprove: 'true'
+      allowedproviders: [test-idp]
