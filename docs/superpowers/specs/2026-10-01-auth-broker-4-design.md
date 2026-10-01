@@ -1140,10 +1140,19 @@ first request 401 and the second 200, with a local token endpoint; the
 provider renews once, the connector resends once, and the session store holds
 the new token — the goal's success criterion end to end.
 
-**Through the auth-providers stand** *(inference — the stand is that
-repository's; reusing it here is proposed, not checked)*: the OIDC and SAML
-grants against Keycloak and UAA in Docker, as auth-providers proves its own
-wire contract, run only when `UAA_URL` / `KEYCLOAK_URL` are set.
+**Through the broker's own stand** (D5, decided 2026-10-01): `tests/stand/`
+in this repository — Keycloak and UAA in Docker, copied whole from
+auth-providers' stand (compose, `up.sh` / `run.sh` / `down.sh`, the committed
+configuration and test IdP key, a CI job of its own) and owned here, so the
+broker's tests never depend on another repository's state. The UAA grants
+(4c), the OIDC grants and both SAML grants (4d) run against it, only when
+`UAA_URL` / `KEYCLOAK_URL` are set (`npm run test:stand` sets them).
+`saml2_pure` end to end: Keycloak is the IdP, UAA the SP whose ACS takes the
+SAMLResponse and answers a session cookie — the consumer's `samlCookies`
+collaborator in the test posts to it — so assertion, validation, cookies,
+persistence, reuse and a 401 renewal are proven against a real SP. What it
+does not prove is SAP ICF's own SAML handling (`SAP_SESSIONID`, `MYSAPSSO2`):
+no system at hand accepts SAML from a test IdP, and that stays unmeasured.
 
 **Live (H6):** `packages/auth-broker/src/__tests__/live/getProvider.live.test.ts`,
 one case per row. Each reads a sessions directory and a destination name from
