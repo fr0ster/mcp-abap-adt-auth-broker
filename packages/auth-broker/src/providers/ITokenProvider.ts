@@ -11,10 +11,8 @@ import type {
   ITokenProviderOptions,
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
-import type {
-  IAuthorizationConfig,
-  IConnectionConfig,
-} from '@mcp-abap-adt/interfaces-auth-sap';
+import type { IConnectionConfig } from '@mcp-abap-adt/interfaces-auth-broker';
+import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 
 // Re-export for backward compatibility
 export type {

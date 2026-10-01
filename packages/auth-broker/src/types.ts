@@ -1,17 +1,18 @@
 /**
  * Type definitions for auth-broker package
  *
- * Type aliases (type) are defined here. Interfaces are imported from @mcp-abap-adt/interfaces.
+ * The store contracts (`IConfig`, `IConnectionConfig`, `ISessionStore`,
+ * `IServiceKeyStore`) come from `@mcp-abap-adt/interfaces-auth-broker`;
+ * `IAuthorizationConfig` from `@mcp-abap-adt/interfaces-auth-sap`.
  */
 
-// Import interfaces from shared package
 import type {
-  IAuthorizationConfig,
   IConfig,
   IConnectionConfig,
   IServiceKeyStore,
   ISessionStore,
-} from '@mcp-abap-adt/interfaces-auth-sap';
+} from '@mcp-abap-adt/interfaces-auth-broker';
+import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 
 // Re-export for backward compatibility
 export type {

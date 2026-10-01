@@ -1,8 +1,8 @@
 /**
  * Storage interfaces for AuthBroker
  *
- * Store implementations are in separate packages:
- * - @mcp-abap-adt/auth-stores-btp - BTP and ABAP stores
+ * Store implementations: `@mcp-abap-adt/auth-stores`, or any
+ * `ISessionStore` / `IServiceKeyStore`.
  */
 
 export type {

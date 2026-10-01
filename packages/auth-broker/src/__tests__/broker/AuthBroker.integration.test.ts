@@ -545,6 +545,8 @@ describe('AuthBroker Integration', () => {
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
         logger,
+        // Only validates tokens: a login here is a failure, not a prompt.
+        authorization: headlessStrategy(),
       });
 
       const broker = new AuthBroker(
