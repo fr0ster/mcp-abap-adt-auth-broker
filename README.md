@@ -52,6 +52,7 @@ npm run check      # build, type checks, lint, dependency graph, packed tarballs
 | `check:packed` | `tools/check-packed.js`: both packages packed and installed into an empty directory; `mcp-auth` and `mcp-sso` run with `--version` and `help`; needs the network |
 | `check:publish` | `tools/test-publish-changed.js`: the release tool against fixture repositories |
 | `check` | all of the above but Jest |
+| `test:live` | the library's live suite against real systems — not in `test` or `check`; each case skips, printing why, where its variables, platform or RFC SDK are missing ([`TESTING.md`](docs/development/TESTING.md#live-checks-getprovider-against-real-systems)) |
 | `release:publish` | `tools/publish-changed.js` |
 | `chrono` | `tools/version-stats.sh` |
 

@@ -15,6 +15,7 @@ Run from the repository root.
 - `npm test`: Jest in every workspace, sequentially (VM modules enabled); `npm test -w <package>` for one.
 - `npm run test:check`: Typecheck both packages, tests included.
 - `npm run check`: build, test:check, lint:check, check:graph, check:packed (bin smoke check, needs the network), check:publish. No Jest.
+- `npm run test:live`: the library's live suite (`src/__tests__/live/`, real systems), excluded from `npm test`; each case reads only the environment variables it names and skips, printing why, elsewhere (`docs/development/TESTING.md`).
 - `npm run generate-env -w @mcp-abap-adt/auth-broker-cli -- <destination>`: Generate `.env` from a service key (a `tsx` script, not shipped).
 - `mcp-auth` / `mcp-sso` are compiled to `packages/auth-broker-cli/dist/` (no `tsx` at runtime).
 - `npm run release:publish`: publish the versions the registry lacks; tags are `<dir>-v<version>`.

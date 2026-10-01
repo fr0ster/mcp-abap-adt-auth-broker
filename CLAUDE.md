@@ -66,6 +66,7 @@ mcp-auth --service-key ./key.json --output ./abap.env --type abap --credential
 
 Tests live in each package's `src/__tests__/` (see `docs/development/TESTING.md`):
 - Library: `AuthBroker.test.ts` and `getProvider.test.ts` need nothing (stores are in-memory fakes of the contract, providers real; the SNC case writes a header-only library fixture of the host's architecture to a temp directory); `AuthBroker.integration.test.ts` reads real service keys and sessions only when `packages/auth-broker/tests/test-config.yaml` exists (from the template beside it) — without it every case returns at once.
+- Library, live: `src/__tests__/live/getProvider.live.test.ts`, run only by `npm run test:live` (`jest.live.config.js`; `jest.config.js` ignores `__tests__/live/`). `basic` over HTTP and RFC, `snc` over RFC through connection 10; each case reads only the `AUTH_BROKER_LIVE_*` variables it names and skips with the reason on stderr where they, the platform (SNC: Windows/macOS) or the RFC addon are missing — no configuration file. It reads the means with auth-stores 3's `EnvDestinationStore` through the dev alias `auth-stores-3` (the other suites stay on 1.2.3 until 4e, D7).
 - CLI: `mcpSsoConfig`, `mcpSsoSamlProviders`, `samlMetadata` — need nothing. The Keycloak and CAP stands under `packages/auth-broker-cli/tests/` are interactive, by hand only.
 - Tests run sequentially (`maxWorkers: 1`) to ensure proper file state.
 

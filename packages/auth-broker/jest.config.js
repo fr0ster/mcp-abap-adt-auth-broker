@@ -3,6 +3,8 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.test.ts'],
+  // Real systems: run by `npm run test:live` (jest.live.config.js), never here.
+  testPathIgnorePatterns: ['/node_modules/', '/__tests__/live/'],
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',

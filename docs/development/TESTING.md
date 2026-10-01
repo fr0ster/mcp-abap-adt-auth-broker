@@ -18,6 +18,9 @@ packages/auth-broker/src/__tests__/
 │   ├── getProvider.test.ts              # getProvider: fake stores, real auth-providers credentials,
 │   │                                    # driven only through IAuthProvider
 │   └── AuthBroker.integration.test.ts   # real service keys, sessions and providers
+├── live/
+│   └── getProvider.live.test.ts         # getProvider through connection 10 against real
+│                                        # systems; `npm run test:live` only
 └── helpers/                             # test configuration, logger, free-port helpers
 
 packages/auth-broker-cli/src/__tests__/
@@ -29,7 +32,8 @@ packages/auth-broker-cli/src/__tests__/
 
 Each package has its own `jest.config.js` (ts-jest, `maxWorkers: 1`,
 `maxConcurrency: 1`: the tests run one at a time, in the order they are
-defined).
+defined). The library's `jest.config.js` ignores `__tests__/live/`;
+`jest.live.config.js` runs only that directory.
 
 ## What each suite needs
 
@@ -68,6 +72,122 @@ npm test -w @mcp-abap-adt/auth-broker -- AuthBroker.test.ts -t "name of the case
 ```
 
 `DEBUG_BROKER=true` (or `DEBUG_AUTH_BROKER=true`) turns on the test logger.
+
+## Live checks: getProvider against real systems
+
+`packages/auth-broker/src/__tests__/live/getProvider.live.test.ts` hands the
+provider `getProvider` builds to a `@mcp-abap-adt/connection` 10 connector and
+reads `/sap/bc/adt/compatibility/graph` from a real system. It is not part of
+`npm test` or `npm run check`; run it with
+
+```bash
+npm run test:live                               # every case
+npm run test:live -- -t "basic over HTTP"       # one case
+```
+
+from the repository root (or `npm run test:live` in `packages/auth-broker`).
+
+Each case states where it runs and reads only the environment variables it
+names — there is no configuration file. Where a condition does not hold, the
+case is skipped and the reason is printed on stderr (Jest prints no titles for
+a file whose every case is skipped):
+
+```
+skipped: snc over RFC — Windows or macOS with the SAP Secure Login Client logged on (getProvider → rfcConversationFrom)
+  why: the SAP Secure Login Client exists only on Windows and macOS; this is linux
+```
+
+A skip is not a failure: it says this machine is not the one the case is for.
+Only status codes and response sizes are printed — never a value from the store.
+
+| Case | Runs where | Variables |
+|---|---|---|
+| `basic` over HTTP | any machine that reaches an on-premise system | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_BASIC_DESTINATION` |
+| `basic` over RFC (`rfcConversationFrom`) | a machine with the SAP NW RFC SDK and `@mcp-abap-adt/sap-rfc-lite` built against it, that reaches the system's RFC gateway | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_RFC_DESTINATION`; optional `SAP_SYSNR` |
+| `snc` over RFC | Windows or macOS with the SAP Secure Login Client logged on, the NW RFC SDK and `sap-rfc-lite` | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_SNC_DESTINATION`; optional `SAP_SYSNR` |
+
+The `jwt` / `authorization_code` case of the plan (a token the system refuses,
+renewed in `rejected()`, the new token in the session file) needs the token
+providers `getProvider` builds from step 4c, and is added with them.
+
+**The destinations.** `AUTH_BROKER_LIVE_KEYS_DIR` is a directory of
+`<destination>.env` files read by auth-stores 3's `EnvDestinationStore` — the
+means, in its `SAP_*` keys. The connector dials the same destination's
+`SAP_URL` and `SAP_CLIENT`. A `basic` destination:
+
+```bash
+SAP_URL=http://127.0.0.1:8000
+SAP_CLIENT=100
+SAP_AUTH_TYPE=basic
+SAP_USERNAME=DEVELOPER
+SAP_PASSWORD='...'
+```
+
+An `snc` destination states the system's SNC name instead of a user; the
+library is found as the Secure Login Client installs it unless `SAP_SNC_LIB`
+names it:
+
+```bash
+SAP_URL=https://host.example:44300
+SAP_CLIENT=100
+SAP_AUTH_TYPE=snc
+SAP_SNC_PARTNERNAME='p:CN=SID, O=ORG, C=DE'
+# optional: SAP_SNC_QOP=9, SAP_SNC_LIB=<path>, SAP_SNC_MYNAME=p:CN=ME
+```
+
+A 3.x session file of a `basic` destination (`SAP_URL`, `SAP_USERNAME`,
+`SAP_PASSWORD`, `SAP_CLIENT`) serves as it is once it states
+`SAP_AUTH_TYPE=basic`: the store reads only its means keys.
+
+**RFC.** The RFC address is the host of `SAP_URL`; the system number is taken
+from its port by the SAP convention (`80NN` → `NN`) unless `SAP_SYSNR` is set
+(connection 10's `rfcParamsFrom`). `@mcp-abap-adt/sap-rfc-lite` is
+connection's optional dependency: `npm ci` builds it only when `SAPNWRFC_HOME`
+points at the SDK, and leaves it out without failing otherwise — then the RFC
+cases skip, naming why.
+
+### On this Linux machine (HTTP and RFC)
+
+```bash
+# basic over HTTP, through the E19 tunnel (127.0.0.1:8000, HTTP only)
+AUTH_BROKER_LIVE_KEYS_DIR=~/.config/mcp-abap-adt/sessions \
+AUTH_BROKER_LIVE_BASIC_DESTINATION=e19-tunnel \
+npm run test:live -- -t "basic over HTTP"
+
+# basic over RFC: build the addon against the SDK once, then run
+export SAPNWRFC_HOME=~/sap/nwrfcsdk
+# Homebrew's Node ships its own glibc: give it the system libuuid
+mkdir -p ~/.local/lib/sap-rfc-lite
+ln -sf /lib/x86_64-linux-gnu/libuuid.so.1 ~/.local/lib/sap-rfc-lite/
+export LD_LIBRARY_PATH="$HOME/.local/lib/sap-rfc-lite:$SAPNWRFC_HOME/lib:$LD_LIBRARY_PATH"
+npm ci                                          # builds sap-rfc-lite now that the SDK is found
+AUTH_BROKER_LIVE_KEYS_DIR=~/.config/mcp-abap-adt/sessions \
+AUTH_BROKER_LIVE_RFC_DESTINATION=<a basic destination whose SAP_URL host is the RFC host> \
+npm run test:live -- -t "basic over RFC"
+```
+
+The E19 tunnel forwards HTTP only, so `e19-tunnel` cannot serve the RFC case:
+name a destination whose `SAP_URL` host is reachable on the RFC gateway port
+(`33NN`), with `SAP_SYSNR` when its HTTP port does not follow `80NN`.
+
+### On Windows (SNC)
+
+Log on to the SAP Secure Login Client first. Install the SAP NW RFC SDK and
+put its `lib` on `PATH`, then:
+
+```powershell
+$env:SAPNWRFC_HOME = 'C:\nwrfcsdk\nwrfcsdk'
+$env:PATH = "$env:SAPNWRFC_HOME\lib;$env:PATH"
+npm ci                                          # builds sap-rfc-lite against the SDK
+
+$env:AUTH_BROKER_LIVE_KEYS_DIR = "$HOME\Documents\mcp-abap-adt\sessions"
+$env:AUTH_BROKER_LIVE_SNC_DESTINATION = '<an snc destination>'
+npm run test:live -- -t "snc over RFC"
+```
+
+The `basic` cases run there too with their variables set. On macOS the SNC
+case runs the same way (`export` instead of `$env:`, `DYLD_LIBRARY_PATH` for
+the SDK's `lib`).
 
 ## The checks
 
