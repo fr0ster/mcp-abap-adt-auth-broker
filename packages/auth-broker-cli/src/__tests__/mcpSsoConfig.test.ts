@@ -32,6 +32,21 @@ const asOidcResult = jest.fn((inner: unknown) => ({
   __kind: 'asOidcResult',
   inner,
 }));
+// The collaborators auth-providers 5 no longer defaults: each records what it
+// was built from, so a test can tell which one a config carries.
+const consoleDeviceCodePresenter = jest.fn((logger: unknown) => ({
+  __kind: 'consoleDeviceCodePresenter',
+  logger,
+}));
+const createSignedResponseValidator = jest.fn((options: unknown) => ({
+  __kind: 'signedResponseValidator',
+  options,
+}));
+const createSignedAssertionValidator = jest.fn((options: unknown) => ({
+  __kind: 'signedAssertionValidator',
+  options,
+}));
+const defaultReplayStore = { __kind: 'defaultReplayStore' };
 
 jest.mock('@mcp-abap-adt/auth-providers', () => ({
   DEFAULT_CALLBACK_PORT: 61001,
@@ -44,23 +59,39 @@ jest.mock('@mcp-abap-adt/auth-providers', () => ({
   manualSamlResponseStrategy: (...args: unknown[]) =>
     (manualSamlResponseStrategy as any)(...args),
   asOidcResult: (...args: unknown[]) => (asOidcResult as any)(...args),
+  consoleDeviceCodePresenter: (...args: unknown[]) =>
+    (consoleDeviceCodePresenter as any)(...args),
+  createSignedResponseValidator: (...args: unknown[]) =>
+    (createSignedResponseValidator as any)(...args),
+  createSignedAssertionValidator: (...args: unknown[]) =>
+    (createSignedAssertionValidator as any)(...args),
+  defaultReplayStore,
+  ValidationError: jest.requireActual('@mcp-abap-adt/auth-providers')
+    .ValidationError,
 }));
 
 // The IdP-initiated strategy reads the pasted SAMLResponse through
 // readManualInput; answer it here instead of waiting on a terminal.
-const pastedInput: { value: string | null } = {
+const pastedInput: { value: string | null | undefined } = {
   value: 'PASTED-SAML-RESPONSE',
 };
+// Every interface created, and whether it was closed — a readline left open
+// holds stdin and keeps the process alive.
+const interfaces: Array<{ closed: boolean }> = [];
 // Like the real interface, `close()` emits 'close'. `null` stands for a
 // closed stdin: the question is never answered and the stream just ends.
+// `undefined` stands for a terminal nobody types at: no answer, no end.
 jest.mock('node:readline', () => ({
   createInterface: () => {
     const onClose: Array<() => void> = [];
+    const state = { closed: false };
+    interfaces.push(state);
     return {
       on: (event: string, listener: () => void) => {
         if (event === 'close') onClose.push(listener);
       },
       question: (_prompt: string, answer: (value: string) => void) => {
+        if (pastedInput.value === undefined) return;
         if (pastedInput.value === null) {
           for (const listener of onClose) listener();
           return;
@@ -68,6 +99,8 @@ jest.mock('node:readline', () => ({
         answer(` ${pastedInput.value} `);
       },
       close: () => {
+        if (state.closed) return;
+        state.closed = true;
         for (const listener of onClose) listener();
       },
     };
@@ -77,6 +110,8 @@ jest.mock('node:readline', () => ({
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { ValidationError } from '@mcp-abap-adt/auth-providers';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   applyFileConfig,
   buildProviderConfig,
@@ -86,6 +121,15 @@ import {
   readIdpCertificateFile,
   readManualInput,
 } from '../mcpSsoConfig';
+
+// Trust for a SAML config whose test is about something else: since
+// auth-providers 5 the CLI builds the validator, and refuses without trust.
+const FILE_TRUST = {
+  idpCertificates: [
+    '-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----',
+  ],
+  idpEntityId: 'https://idp.example/metadata',
+};
 
 function baseOptions(overrides: Partial<McpSsoOptions> = {}): McpSsoOptions {
   return {
@@ -232,6 +276,7 @@ describe('mcp-sso CLI/config merge', () => {
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
         browser: 'firefox',
+        ...FILE_TRUST,
       });
 
       const options = baseOptions();
@@ -250,6 +295,7 @@ describe('mcp-sso CLI/config merge', () => {
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
         redirectPort: 5005,
+        ...FILE_TRUST,
       });
 
       const options = baseOptions();
@@ -292,6 +338,7 @@ describe('mcp-sso CLI/config merge', () => {
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
         assertionFlow: 'manual',
+        ...FILE_TRUST,
       });
 
       const options = baseOptions();
@@ -320,6 +367,68 @@ describe('mcp-sso CLI/config merge', () => {
         'process.exit(1)',
       );
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(field));
+    });
+  });
+
+  describe('collaborators auth-providers 5 requires explicitly', () => {
+    const logger: ILogger = {
+      info: jest.fn(),
+      error: jest.fn(),
+      warn: jest.fn(),
+      debug: jest.fn(),
+    };
+
+    // A read that never settles must not leave the next test's stdin silent.
+    afterEach(() => {
+      pastedInput.value = 'PASTED-SAML-RESPONSE';
+    });
+
+    it('the device flow gets the console presenter, writing to the CLI logger', () => {
+      const config = (
+        buildProviderConfig(
+          baseOptions({
+            protocol: 'oidc',
+            flow: 'device',
+            clientId: 'cli-client',
+            issuerUrl: 'https://issuer.example',
+          }),
+          null,
+          null,
+          logger,
+        ) as unknown as { config: Record<string, unknown> }
+      ).config;
+      expect(consoleDeviceCodePresenter).toHaveBeenCalledTimes(1);
+      expect(consoleDeviceCodePresenter).toHaveBeenCalledWith(logger);
+      expect(config.presenter).toEqual({
+        __kind: 'consoleDeviceCodePresenter',
+        logger,
+      });
+    });
+
+    it("the manual SAML strategy's read passes the strategy's signal on", async () => {
+      buildProviderConfig(
+        baseOptions({
+          protocol: 'saml2',
+          flow: 'pure',
+          idpSsoUrl: 'https://idp.example/sso',
+          spEntityId: 'sp-entity',
+          assertionFlow: 'manual',
+          ...FILE_TRUST,
+        }),
+        null,
+        null,
+      );
+      const { read } = manualSamlResponseStrategy.mock.calls[0][0] as {
+        read: (prompt: string, signal: AbortSignal) => Promise<string>;
+      };
+      pastedInput.value = undefined;
+      const controller = new AbortController();
+      const reading = read('Paste: ', controller.signal);
+      const rejected = expect(reading).rejects.toThrow(
+        'input abandoned at "Paste:"',
+      );
+      controller.abort();
+      await rejected;
     });
   });
 
@@ -529,10 +638,15 @@ describe('mcp-sso CLI/config merge', () => {
       });
     });
 
+    const VALIDATOR_KIND = {
+      bearer: 'signedAssertionValidator',
+      pure: 'signedResponseValidator',
+    } as const;
+
     describe.each([['bearer' as const], ['pure' as const]])(
       'passing into the %s config',
       (flow) => {
-        it('carries inline and file certificates, entity id and request settings', () => {
+        it('builds the validator from inline and file certificates; carries entity id and request settings', () => {
           const file = writeFile('rotated.pem', PEM_B);
           const config = samlConfigOf(
             samlOptions(flow, {
@@ -544,18 +658,55 @@ describe('mcp-sso CLI/config merge', () => {
           );
           expect(config).toEqual(
             expect.objectContaining({
-              idpCertificates: [PEM_A, PEM_B],
               idpEntityId: 'https://idp/meta',
               authnRequestId: '_req1',
               spEntityId: 'sp-entity',
             }),
           );
+          // auth-providers 5 takes no certificates on the provider: the
+          // validator holds them.
+          expect(config.idpCertificates).toBeUndefined();
+          expect(config.assertionValidator).toEqual({
+            __kind: VALIDATOR_KIND[flow],
+            options: {
+              idpCertificates: [PEM_A, PEM_B],
+              replayStore: defaultReplayStore,
+            },
+          });
         });
 
-        it('invents no trust material: absent stays absent for the provider to name', () => {
-          const config = samlConfigOf(samlOptions(flow));
-          expect(config.idpCertificates).toBeUndefined();
-          expect(config.idpEntityId).toBeUndefined();
+        it('builds the validator its flow requires, and only that one', () => {
+          samlConfigOf(samlOptions(flow, FILE_TRUST));
+          const [wanted, other] =
+            flow === 'pure'
+              ? [createSignedResponseValidator, createSignedAssertionValidator]
+              : [createSignedAssertionValidator, createSignedResponseValidator];
+          expect(wanted).toHaveBeenCalledTimes(1);
+          expect(other).not.toHaveBeenCalled();
+        });
+
+        it.each([
+          [{}, ['idpCertificates', 'idpEntityId']],
+          [{ idpEntityId: 'https://idp/meta' }, ['idpCertificates']],
+          [{ idpCertificates: [PEM_A] }, ['idpEntityId']],
+        ])(
+          'without trust (%p), refuses naming %p and builds no validator',
+          (trust, missing) => {
+            let caught: unknown;
+            try {
+              samlConfigOf(samlOptions(flow, trust));
+            } catch (error) {
+              caught = error;
+            }
+            expect(caught).toBeInstanceOf(ValidationError);
+            expect((caught as ValidationError).missingFields).toEqual(missing);
+            expect(createSignedResponseValidator).not.toHaveBeenCalled();
+            expect(createSignedAssertionValidator).not.toHaveBeenCalled();
+          },
+        );
+
+        it('invents no request settings: absent stays absent', () => {
+          const config = samlConfigOf(samlOptions(flow, FILE_TRUST));
           expect(config.idpInitiated).toBeUndefined();
           expect(config.authnRequestId).toBeUndefined();
         });
@@ -563,6 +714,7 @@ describe('mcp-sso CLI/config merge', () => {
         it('with --idp-initiated, the strategy never asks for an authorization URL', async () => {
           const config = samlConfigOf(
             samlOptions(flow, {
+              ...FILE_TRUST,
               idpInitiated: true,
               acsUrl: 'https://uaa.example/saml/SSO/alias/x',
             }),
@@ -586,7 +738,7 @@ describe('mcp-sso CLI/config merge', () => {
 
         it('with --idp-initiated and no --acs-url, names the default callback as the ACS', async () => {
           const config = samlConfigOf(
-            samlOptions(flow, { idpInitiated: true }),
+            samlOptions(flow, { ...FILE_TRUST, idpInitiated: true }),
           );
           const outcome = await (
             config.authorization as {
@@ -598,7 +750,11 @@ describe('mcp-sso CLI/config merge', () => {
 
         it('with --idp-initiated and --assertion, uses the static strategy', () => {
           samlConfigOf(
-            samlOptions(flow, { idpInitiated: true, assertion: 'ASSERTION' }),
+            samlOptions(flow, {
+              ...FILE_TRUST,
+              idpInitiated: true,
+              assertion: 'ASSERTION',
+            }),
           );
           expect(staticCodeStrategy).toHaveBeenCalledWith(
             expect.objectContaining({ payload: 'ASSERTION' }),
@@ -609,6 +765,7 @@ describe('mcp-sso CLI/config merge', () => {
           expect(() =>
             samlConfigOf(
               samlOptions(flow, {
+                ...FILE_TRUST,
                 idpInitiated: true,
                 assertionFlow: 'browser',
               }),
@@ -642,5 +799,34 @@ describe('readManualInput', () => {
     await expect(readManualInput('Paste: ')).rejects.toThrow(
       'no input: stdin closed at "Paste:"',
     );
+  });
+
+  // A manual strategy's deadline or dispose() aborts the read. A readline
+  // left open holds stdin, and the process never exits.
+  it('rejects when the signal aborts, and closes its readline', async () => {
+    pastedInput.value = undefined;
+    const controller = new AbortController();
+    const reading = readManualInput('Paste: ', controller.signal);
+    const rejected = expect(reading).rejects.toThrow(
+      'input abandoned at "Paste:"',
+    );
+    controller.abort();
+    await rejected;
+    expect(interfaces.at(-1)?.closed).toBe(true);
+  });
+
+  it('opens no readline for a signal already aborted', async () => {
+    const before = interfaces.length;
+    const controller = new AbortController();
+    controller.abort();
+    await expect(readManualInput('Paste: ', controller.signal)).rejects.toThrow(
+      'input abandoned at "Paste:"',
+    );
+    expect(interfaces.length).toBe(before);
+  });
+
+  it('closes its readline after an answer', async () => {
+    await readManualInput('Paste: ', new AbortController().signal);
+    expect(interfaces.at(-1)?.closed).toBe(true);
   });
 });

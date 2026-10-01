@@ -6,7 +6,7 @@ log in through it. Two packages, one repository.
 
 | package | what it is | depends on |
 |---|---|---|
-| [`@mcp-abap-adt/auth-broker`](packages/auth-broker) | the library: for a destination name, reads its session and service key from the stores it is given, gets a token from a provider, persists the result | the contract packages (`interfaces-auth`, `interfaces-auth-sap`, `interfaces-utils`) |
+| [`@mcp-abap-adt/auth-broker`](packages/auth-broker) | the library: for a destination name, reads its session and service key from the stores it is given, gets a token from a provider, persists the result | the contract packages (`interfaces-auth`, `interfaces-auth-sap`, `interfaces-auth-broker`, `interfaces-utils`) |
 | [`@mcp-abap-adt/auth-broker-cli`](packages/auth-broker-cli) | the `mcp-auth` and `mcp-sso` commands: service key, OIDC or SAML login, written to a session file | the library, `auth-stores`, `auth-providers`, the logger |
 
 ## Installing

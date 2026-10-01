@@ -91,12 +91,17 @@ given, for every destination, and the broker seeds it with nothing:
 ```typescript
 const broker = new AuthBroker({
   sessionStore: new AbapSessionStore('/path/to/sessions'),
-  provider: new AuthorizationCodeProvider({ uaaUrl, clientId, clientSecret }),
+  provider: new AuthorizationCodeProvider({
+    uaaUrl, clientId, clientSecret,
+    authorization: browserCallbackStrategy({ browser: 'system' }),
+  }),
 });
 ```
 
 > `AuthorizationCodeProvider` and the other `@mcp-abap-adt/auth-providers`
-> providers implement `IRefreshableTokenProvider` from auth-providers 4.2.0.
+> providers implement `IRefreshableTokenProvider` (from `@mcp-abap-adt/interfaces-auth`
+> 3.0.0) as of auth-providers 5.1.0. Since auth-providers 5 the interactive ones
+> take their `authorization` strategy explicitly — none is built for you.
 
 ### Headless Processes (No Browser)
 

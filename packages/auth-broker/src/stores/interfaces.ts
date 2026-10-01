@@ -1,17 +1,16 @@
 /**
  * Storage interfaces for AuthBroker
  *
- * All interfaces are imported from @mcp-abap-adt/interfaces package.
- * Type aliases (type) are in types.ts.
+ * The store contracts come from `@mcp-abap-adt/interfaces-auth-broker`;
+ * `IAuthorizationConfig` from `@mcp-abap-adt/interfaces-auth-sap`.
  */
 
-// Import interfaces from shared package
 import type {
-  IAuthorizationConfig,
   IConnectionConfig,
   IServiceKeyStore,
   ISessionStore,
-} from '@mcp-abap-adt/interfaces-auth-sap';
+} from '@mcp-abap-adt/interfaces-auth-broker';
+import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 
 // Re-export for backward compatibility
 export type {

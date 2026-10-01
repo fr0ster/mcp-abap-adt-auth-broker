@@ -4,8 +4,10 @@
  * tokens from an injected provider, results persisted.
  */
 
-// Three contract types re-exported for convenience, each from the package that
-// declares it — `@mcp-abap-adt/interfaces` is deleted as of its 52.0.0.
+// Contract types re-exported for convenience, each from the package that
+// declares it: tokens from `interfaces-auth`, `AuthType` and
+// `IAuthorizationConfig` from `interfaces-auth-sap`, the store contracts from
+// `interfaces-auth-broker`, `ILogger` from `interfaces-utils`.
 export type { ITokenRefresher } from '@mcp-abap-adt/interfaces-auth';
 export type { AuthType } from '@mcp-abap-adt/interfaces-auth-sap';
 export type { ILogger } from '@mcp-abap-adt/interfaces-utils';
@@ -31,7 +33,5 @@ export type {
 } from './stores/interfaces';
 export type { IConfig } from './types';
 
-// Store and provider implementations are in separate packages:
-// - @mcp-abap-adt/auth-stores-btp - BTP and ABAP stores
-// - @mcp-abap-adt/auth-stores-xsuaa - XSUAA stores
-// - @mcp-abap-adt/auth-providers - XSUAA and BTP token providers
+// Store implementations: `@mcp-abap-adt/auth-stores`, or any `ISessionStore` /
+// `IServiceKeyStore`. Provider implementations: `@mcp-abap-adt/auth-providers`.

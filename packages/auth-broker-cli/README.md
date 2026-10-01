@@ -159,9 +159,12 @@ mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --i
 
 **SAML assertion validation:**
 Both SAML flows validate every assertion before using it — signature, issuer, audience,
-recipient, time window, request ID and replay (done by `@mcp-abap-adt/auth-providers` 4; see its
-README, *SAML assertion validation*). The provider will not even be constructed without the
-trust it checks against, and `mcp-sso` invents none of it — it is stated, or read from SAML
+recipient, time window, request ID and replay (done by `@mcp-abap-adt/auth-providers` 5; see its
+README, *SAML assertion validation*). `mcp-sso` builds the validator from the trust below:
+`bearer` gets the one that requires the `Assertion` signed — the token endpoint is sent the
+Assertion alone — and `pure` the one that requires the `Response` signed; both refuse an
+assertion seen before in the same process. Without the trust no validator is built and no
+provider constructed, and `mcp-sso` invents none of it — it is stated, or read from SAML
 metadata:
 
 | Option | `--config` field | What it is |
@@ -188,9 +191,11 @@ Which request setting a run needs:
   login at the identity provider and paste the `SAMLResponse` it posts. `--idp-initiated` with
   `--assertion-flow browser` is refused, since there is no request URL to open.
 
-`--idp-initiated` together with `--authn-request-id`, a missing certificate or entity ID, or an
-assertion that fails a check is reported by `auth-providers` itself (`ValidationError` or
-`AssertionValidationError`), with the field or the check it refused.
+A missing certificate or entity ID is refused by `mcp-sso` before anything starts, with a
+`ValidationError` naming each missing field (`idpCertificates`, `idpEntityId`). `--idp-initiated`
+together with `--authn-request-id`, or an assertion that fails a check, is reported by
+`auth-providers` itself (`ValidationError` or `AssertionValidationError`), with the field or the
+check it refused.
 
 **XSUAA's side of a bearer run:**
 None of `--sp-entity-id`, `--acs-url` and the bearer token endpoint is in an XSUAA service key, but

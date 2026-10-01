@@ -1,8 +1,8 @@
 /**
  * Token provider interface
  *
- * Provider implementations are in separate packages:
- * - @mcp-abap-adt/auth-providers - XSUAA and BTP providers
+ * Provider implementations: `@mcp-abap-adt/auth-providers`, or any
+ * `IRefreshableTokenProvider`.
  */
 
 export type {

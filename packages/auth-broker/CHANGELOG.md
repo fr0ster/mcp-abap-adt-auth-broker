@@ -11,6 +11,27 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
 
 ## [Unreleased]
 
+### Changed
+
+- **Contracts from their 2026-10 packages.** `@mcp-abap-adt/interfaces-auth`
+  `^3.0.0` (was `^2.1.0`), `@mcp-abap-adt/interfaces-auth-sap` `^2.0.0` (was
+  `^1.0.1`), and `@mcp-abap-adt/interfaces-auth-broker` `^1.0.0` (new). The
+  store contracts — `IConfig`, `IConnectionConfig`, `ISessionStore`,
+  `IServiceKeyStore` — moved out of `interfaces-auth-sap` into
+  `interfaces-auth-broker`; this package now takes them from there.
+  `IAuthorizationConfig` and `AuthType` stay in `interfaces-auth-sap`. The
+  re-exported names are unchanged; only where they come from. A consumer that
+  imports them from this package changes nothing; one that imports
+  `ISessionStore` and friends from `interfaces-auth-sap` itself takes them
+  from `interfaces-auth-broker` from its 2.0.0 on.
+- Dev dependency `@mcp-abap-adt/auth-providers` `^5.1.0` (was `^4.2.0`). The
+  dev dependency `@mcp-abap-adt/auth-stores` stays `^1.2.3`: 3.0.0's session
+  stores hold the secret alone and refuse the `serviceUrl` and `authType`
+  this version's `getToken` writes into the session, so the tests move to it
+  with the change that writes the secret alone.
+- Comments no longer name `@mcp-abap-adt/auth-stores-btp` / `-xsuaa` (which do
+  not exist) or the deleted `@mcp-abap-adt/interfaces` facade.
+
 ## [3.1.0] - 2026-10-01
 
 **Why a minor.** The library's API is unchanged: every export, signature and

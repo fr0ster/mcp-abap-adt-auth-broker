@@ -206,8 +206,10 @@ mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsua
 ## CLI: mcp-sso (SAML)
 
 `mcp-sso` (and `mcp-auth saml2-pure`/`saml2-bearer`, which call it) validates every SAML
-assertion through `@mcp-abap-adt/auth-providers` 4 before using it, and a SAML run does not start
-without the trust it checks against:
+assertion through `@mcp-abap-adt/auth-providers` 5 before using it, and a SAML run does not start
+without the trust it checks against. `mcp-sso` builds the validator from that trust: `bearer`
+requires the `Assertion` signed (the token endpoint gets the Assertion alone), `pure` the
+`Response`; a replay is refused within the process:
 
 - `--idp-metadata <url|path>` — the identity provider's SAML metadata, e.g.
   `https://<tenant>.accounts.ondemand.com/saml2/metadata` — or `--idp-cert <path>` (repeatable;

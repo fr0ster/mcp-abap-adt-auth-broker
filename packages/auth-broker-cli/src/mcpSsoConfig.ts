@@ -14,7 +14,11 @@ import { resolve as resolvePath } from 'node:path';
 import { createInterface } from 'node:readline';
 import {
   asOidcResult,
+  consoleDeviceCodePresenter,
+  createSignedAssertionValidator,
+  createSignedResponseValidator,
   DEFAULT_CALLBACK_PORT,
+  defaultReplayStore,
   manualSamlResponseStrategy,
   type OidcBrowserProviderConfig,
   type OidcDeviceFlowProviderConfig,
@@ -26,7 +30,9 @@ import {
   type SsoProviderConfig,
   samlCallbackStrategy,
   staticCodeStrategy,
+  ValidationError,
 } from '@mcp-abap-adt/auth-providers';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 
 /**
  * A person completes these logins at a browser; the library's own default
@@ -106,7 +112,20 @@ export interface McpSsoOptions {
   authnRequestId?: string;
 }
 
-export function readManualInput(prompt: string): Promise<string> {
+/**
+ * Reads one line from this CLI's stdin. `signal` is a manual strategy's: when
+ * its deadline passes or it is disposed, the read is abandoned and its
+ * `readline` closed — an open one holds stdin and keeps the process alive.
+ */
+export function readManualInput(
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const abandoned = () =>
+    new Error(`input abandoned at "${prompt.trim()}": the read was aborted`);
+  if (signal?.aborted) {
+    return Promise.reject(abandoned());
+  }
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -115,13 +134,23 @@ export function readManualInput(prompt: string): Promise<string> {
   // settles lets the event loop drain: the process exited 0 with nothing
   // written, which a script reads as success. End of input is a refusal.
   return new Promise((resolve, reject) => {
-    let answered = false;
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      rl.close();
+      reject(abandoned());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
     rl.on('close', () => {
-      if (!answered)
-        reject(new Error(`no input: stdin closed at "${prompt.trim()}"`));
+      signal?.removeEventListener('abort', onAbort);
+      if (settled) return;
+      settled = true;
+      reject(new Error(`no input: stdin closed at "${prompt.trim()}"`));
     });
     rl.question(prompt, (answer) => {
-      answered = true;
+      if (settled) return;
+      settled = true;
       rl.close();
       resolve(answer.trim());
     });
@@ -335,7 +364,7 @@ export function readIdpCertificateFile(filePath: string): string[] {
 /**
  * The certificates the SAML providers are given: inline ones (a `--config`
  * file) and those read from `--idp-cert` files. `undefined` when there are
- * none, so the provider's own `ValidationError` names what is missing.
+ * none, so `buildSamlTrust` names what is missing.
  */
 export function resolveIdpCertificates(
   options: McpSsoOptions,
@@ -456,14 +485,18 @@ export function buildOidcBrowserConfig(
 
 export function buildOidcDeviceConfig(
   options: McpSsoOptions,
+  logger?: ILogger,
 ): OidcDeviceFlowProviderConfig {
   // Device flow never opens a browser from this process; --browser and
-  // --redirect-port have nothing to attach to here.
+  // --redirect-port have nothing to attach to here. Where to go and what to
+  // enter goes to this CLI's logger (stderr without one), as auth-providers 4
+  // did by default.
   return {
     ...buildOidcCommon(options),
     deviceAuthorizationEndpoint: options.deviceAuthorizationEndpoint,
     tokenEndpoint: resolveOidcTokenEndpoint(options),
     scopes: options.scopes,
+    presenter: consoleDeviceCodePresenter(logger),
   };
 }
 
@@ -525,7 +558,7 @@ function buildSamlAuthorization(options: McpSsoOptions) {
     // lift the SAMLResponse out of the POST body by hand.
     return manualSamlResponseStrategy({
       redirectUri: options.acsUrl,
-      read: readManualInput,
+      read: (prompt, signal) => readManualInput(prompt, signal),
     });
   }
   // No fallback: an omitted --redirect-port lets the strategy bind its own
@@ -588,12 +621,36 @@ function buildSamlCookieProvider(
 }
 
 /**
- * What auth-providers 4 validates an assertion against. Absent trust material
- * is passed as absent: the provider's constructor names what is missing.
+ * The assertion validator and the trust settings a SAML provider takes.
+ *
+ * auth-providers 5 builds no validator of its own: this CLI builds the
+ * shipped one its flow needs from the trust it collected — bearer sends the
+ * Assertion alone to the token endpoint, so the Assertion must be signed;
+ * pure reads the whole Response, so the Response must be. Replays are
+ * refused through the process-wide `defaultReplayStore`. Missing trust is
+ * refused here, naming each field, as the 4.x provider did at construction.
  */
-function buildSamlTrust(options: McpSsoOptions) {
+function buildSamlTrust(options: McpSsoOptions, flow: 'bearer' | 'pure') {
+  const idpCertificates = resolveIdpCertificates(options);
+  const missing: string[] = [];
+  if (!idpCertificates) missing.push('idpCertificates');
+  if (!options.idpEntityId) missing.push('idpEntityId');
+  if (missing.length > 0 || !idpCertificates) {
+    throw new ValidationError(
+      `The assertion validator needs the identity provider to trust: missing ${missing.join(', ')}. ` +
+        'Supply --idp-cert and --idp-entity-id, or --idp-metadata.',
+      missing,
+    );
+  }
+  const createValidator =
+    flow === 'bearer'
+      ? createSignedAssertionValidator
+      : createSignedResponseValidator;
   return {
-    idpCertificates: resolveIdpCertificates(options),
+    assertionValidator: createValidator({
+      idpCertificates,
+      replayStore: defaultReplayStore,
+    }),
     idpEntityId: options.idpEntityId,
     idpInitiated: options.idpInitiated,
     authnRequestId: options.authnRequestId,
@@ -608,7 +665,7 @@ export function buildSamlBearerConfig(
     spEntityId: requireOption(options.spEntityId, '--sp-entity-id'),
     acsUrl: options.acsUrl,
     relayState: options.relayState,
-    ...buildSamlTrust(options),
+    ...buildSamlTrust(options, 'bearer'),
     tokenUrl: options.tokenEndpoint,
     uaaUrl: options.uaaUrl,
     clientId: options.clientId,
@@ -625,7 +682,7 @@ export function buildSamlPureConfig(
     spEntityId: requireOption(options.spEntityId, '--sp-entity-id'),
     acsUrl: options.acsUrl,
     relayState: options.relayState,
-    ...buildSamlTrust(options),
+    ...buildSamlTrust(options, 'pure'),
     authorization: buildSamlAuthorization(options),
     cookieProvider: buildSamlCookieProvider(options),
   };
@@ -644,6 +701,7 @@ export function buildProviderConfig(
   options: McpSsoOptions,
   existingAuth: { refreshToken?: string } | null,
   existingConn: { authorizationToken?: string } | null,
+  logger?: ILogger,
 ): SsoProviderConfig {
   if (!options.protocol || !options.flow) {
     throw new Error(
@@ -665,7 +723,7 @@ export function buildProviderConfig(
         result = {
           protocol: 'oidc',
           flow: 'device',
-          config: buildOidcDeviceConfig(options),
+          config: buildOidcDeviceConfig(options, logger),
         };
         break;
       case 'password':

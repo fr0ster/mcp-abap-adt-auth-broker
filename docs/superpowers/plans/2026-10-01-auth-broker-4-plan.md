@@ -327,7 +327,7 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 
 ### 4a — both packages on the new contracts and providers
 
-- **Branch:** `feat/contracts-auth-providers-5`.
+- **Branch:** `feat/contracts-auth-3`.
 - **Why first, and why both packages together:** once the library's types come
   from `interfaces-auth` 3, a CLI still on auth-providers 4 (`interfaces-auth`
   2) cannot pass its provider to `AuthBroker` and `npm run check` builds both —
@@ -338,13 +338,14 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
     `interfaces-auth-broker` `^1.0.0`; store contracts imported from
     `interfaces-auth-broker`, `IAuthorizationConfig` and `AuthType` from
     `interfaces-auth-sap`; the 3.x re-exports kept (spec §2), from the new
-    sources; dev dependencies `auth-stores` `^3.0.0`, `auth-providers` `^5.1.0`.
+    sources; dev dependency `auth-providers` `^5.1.0`; dev dependency
+    `auth-stores` **stays `^1.2.3`** (decision D7 — it moves in 4e).
     Spec §14 stale comments: `src/index.ts:34-37`, `src/stores/index.ts:4-6`
     (non-existent `auth-stores-btp`/`-xsuaa`), `src/types.ts:4`,
     `src/stores/interfaces.ts:4` (they name `interfaces-auth-broker` for the store
     contracts, as spec §14 now says).
-  - CLI (spec §10, third bullet): `auth-providers` `^5.1.0`, `auth-stores`
-    `^3.0.0`, the contract packages; its range on `@mcp-abap-adt/auth-broker`
+  - CLI (spec §10, third bullet): `auth-providers` `^5.1.0`; `auth-stores`
+    **stays `^1.2.3`** (decision D7 — it moves in step 5); its range on `@mcp-abap-adt/auth-broker`
     stays `^3.1.0` (the workspace links the library whatever its range, and
     `check:packed` installs the packed one) until step 7 sets `^4.0.0` — a
     published CLI must never accept a library it was not built against, which
@@ -356,6 +357,16 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
     (`bin/mcpSsoConfig.ts:595-602` before the move); manual strategies get
     `read: (prompt, signal)`, and `readManualInput` closes its `readline` and
     rejects when the signal aborts.
+- **Not in 4a (D7, measured 2026-10-01):** auth-stores 3.0.0. Its session
+  stores refuse means and its `setAuthorizationConfig` always refuses, so on
+  it the 3.x `persist` (`AuthBroker.ts`, `setConnectionConfig` with
+  `serviceUrl`/`authType`, `setAuthorizationConfig`) throws
+  `RefusedFieldsError` — the carried-over §9 case *with AbapSessionStore on
+  disk* goes red — and every CLI command fails at its first session write
+  (`mcp-sso.ts:808`, `:827`, `mcp-auth.ts:872`,
+  `generate-env-from-service-key.ts:122`) as well as inside `getToken`. The
+  fixes are 4e's (persist writes the secret alone) and step 5's (means to the
+  destination store); neither is 4a's.
 - **Tests first:** the CLI provider-construction suites (`mcpSsoConfig`,
   `mcpSsoSamlProviders`) assert the presenter, the validator kind per flow and the
   `read` signature, and a SAML fixture signed by another key is refused;
@@ -506,7 +517,11 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   and throws the failure recorded for the result it received (the
   `WeakMap<ITokenResult, unknown>`; result identity holds — `BaseTokenProvider`
   passes the same object to `onTokens` and returns it,
-  `auth-providers src/providers/BaseTokenProvider.ts:219-247`); `basic`/`snc`
+  `auth-providers src/providers/BaseTokenProvider.ts:219-247`); the dev
+  dependency `auth-stores` moves from `^1.2.3` to `^3.0.0` here (D7), with
+  the token API's persist writing the secret alone — the carried-over case
+  *with AbapSessionStore on disk* runs against the 3.0.0 store and asserts
+  the secret alone in its file; `basic`/`snc`
   destinations — by the key store's `authType` — refused before any provider is asked; destinations whose row is
   not a token provider refused without a consumer `provider`; §4.3 (the README
   states the two-sources case).
@@ -558,7 +573,9 @@ dependency on `auth-broker` `^4.0.0` alone does not decide it.
   inference H1 forbids); the CLI calls `broker.flush()` before it exits and exits
   non-zero on a failure; `mcp-auth` keeps injecting its own provider (token API
   path). Dependencies as §10 (`auth-broker` at the workspace version, which
-  stays `^3.1.0` until step 7 sets `^4.0.0`).
+  stays `^3.1.0` until step 7 sets `^4.0.0`); `auth-stores` moves from
+  `^1.2.3` to `^3.0.0` here (D7), with `EnvDestinationStore` for the means
+  and the session stores' new constructors (no `defaultServiceUrl`).
 - **Tests first:** one per row of the §10 table — the means each command
   writes read back through the key store, and with the session store as a
   destination `getProvider` builds from (the CLI test builds the provider with
@@ -702,6 +719,16 @@ dependency on `auth-broker` `^4.0.0` alone does not decide it.
   service key stores (smaller, but it covers only the service key case and
   leaves basic, SNC, OIDC and SAML without a store).
 
+- **D7 — decided 2026-10-01: 4a keeps `auth-stores` `^1.2.3`** (the
+  library's dev dependency and the CLI's runtime dependency). Measured in
+  4a's worktree: on 3.0.0 the 3.x broker's `persist` and every CLI command's
+  session writes are refused (`RefusedFieldsError`), so the move cannot both
+  compile and keep working before the code that writes the secret alone. The
+  library's dev dependency moves in 4e, with that persist; the CLI's in step
+  5, with the destination store. On 1.2.3 the library compiles against the
+  new contracts and its suite stays green (its `AbapSessionStore` fits the
+  `interfaces-auth-broker` types structurally).
+
 ## Risks / open points found in the code
 
 - **R1 — `check-graph.js` cannot be copied as is.** The interfaces version walks
@@ -798,7 +825,7 @@ plan's first version):
 | H5 the token API keeps 3.x | every step-4 PR keeps the §9 suite green; 4e (shared cache, `basic`/`snc` refusal) |
 | H6 measured: basic, token, SNC through connection 10 | step 6 (SNC on Windows, by the user) |
 | Success: server builds from `getProvider`; a renewal in the connector is in the store; token API as 3.x | 4e (end to end through connection 10, no SAP); step 6 (live); step 8 (the server itself) |
-| What changes: dependencies | step 2 (5.1.0); 4a (contracts); 4b (`auth-providers` runtime); step 3 (`auth-stores` dev only) |
+| What changes: dependencies | step 2 (5.1.0); 4a (contracts, `auth-providers` 5.1); 4b (`auth-providers` runtime); step 3 (`auth-stores` dev only); 4e (library's `auth-stores` dev `^3.0.0`, D7); step 5 (CLI's `auth-stores` `^3.0.0`, D7) |
 | What changes: the session's `authType` not overwritten | 4c (rule 1, rule 3); 4e (token API refusal) |
 | What changes: commands move to the CLI package; layout; `release:publish` | step 3; step 5; step 7 |
 
