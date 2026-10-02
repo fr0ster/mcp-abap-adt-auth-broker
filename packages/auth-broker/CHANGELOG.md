@@ -107,9 +107,12 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   imports them from this package changes nothing; one that imports
   `ISessionStore` and friends from `interfaces-auth-sap` itself takes them
   from `interfaces-auth-broker` from its 2.0.0 on.
-- `@mcp-abap-adt/auth-providers` `^5.1.0` (was `^4.2.0`, a dev dependency) is
+- `@mcp-abap-adt/auth-providers` `^5.2.0` (was `^4.2.0`, a dev dependency) is
   a runtime dependency: `getProvider` constructs its classes. None is
-  re-exported. The dev dependency `@mcp-abap-adt/auth-stores` stays `^1.2.3`: 3.0.0's session
+  re-exported. 5.2.0 because `ClientCredentialsProvider` takes a `logger`
+  from it: the broker passes its own, so a `client_credentials` destination's
+  token lifecycle is logged like the other grants' (tokens redacted by the
+  provider). The dev dependency `@mcp-abap-adt/auth-stores` stays `^1.2.3`: 3.0.0's session
   stores hold the secret alone and refuse the `serviceUrl` and `authType`
   this version's `getToken` writes into the session, so the tests move to it
   with the change that writes the secret alone.

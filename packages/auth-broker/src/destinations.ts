@@ -277,6 +277,7 @@ export function uaaProvider(row: UaaRow): IAuthProvider {
       uaaUrl,
       clientId,
       clientSecret: clientSecret as string,
+      logger: row.logger,
       ...hooks,
     });
   }

@@ -352,6 +352,37 @@ describe('getProvider — the UAA grants', () => {
       expect(held()?.authorizationToken).toBe(endpoint.issued[0]);
     });
 
+    it('hands the provider the broker’s logger: its lines arrive whole, with no token in them', async () => {
+      const logger = silentLogger();
+      const { broker } = brokerFor('client_credentials', {
+        withAuthorization: false,
+        logger,
+      });
+
+      await (await broker.getProvider(D)).prepare();
+
+      const token = endpoint.issued[0];
+      const redacted = `<redacted, ${token.length} chars>`;
+      expect(logger.info.mock.calls).toEqual(
+        expect.arrayContaining([
+          ['[BaseTokenProvider] No usable refresh token, performing login'],
+          [
+            '[BaseTokenProvider] Login completed',
+            { newToken: redacted, newRefreshToken: undefined },
+          ],
+        ]),
+      );
+      const everything = JSON.stringify([
+        logger.info.mock.calls,
+        logger.warn.mock.calls,
+        logger.error.mock.calls,
+        logger.debug.mock.calls,
+      ]);
+      expect(everything).not.toContain(token);
+      expect(everything).not.toContain(token.split('.')[1]);
+      expect(everything).not.toContain(CLIENT_SECRET);
+    });
+
     it('is not seeded: the row takes the client alone (spec §4.1)', async () => {
       const { broker } = brokerFor('client_credentials', {
         session: { authorizationToken: jwtExpiringIn(3600) },
