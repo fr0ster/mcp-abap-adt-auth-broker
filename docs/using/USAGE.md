@@ -500,8 +500,9 @@ async getConnectionConfig(destination: string): Promise<IConnectionConfig | null
 ```
 
 Composed from both stores, each for its role: `getConnectionConfig` is the
-key store's means with the session's `authorizationToken`, `sessionCookies`
-and `expiresAt` laid over them (`null` when neither holds anything);
+key store's means with the session's `authorizationToken`, `sessionCookies`,
+`expiresAt` and binding (`issuedFor`, `issuedBy`) laid over them — a key
+store's answer for any of these is never used (`null` when neither holds anything);
 `getAuthorizationConfig` is the key store's client with the session's refresh
 token (`null` without a client in the key store). Means a session store
 answers are not read. Up to 3.1.0 both answered the session's configuration

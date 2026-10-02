@@ -32,7 +32,7 @@ called with (`'authorization_code' | 'passcode' | 'saml2_pure' | 'saml2_bearer'`
 - `getToken(destination: string): Promise<string>`
 - `refreshToken(destination: string): Promise<string>` — a forced refresh (`provider.refreshTokens()`)
 - `getAuthorizationConfig(destination: string): Promise<IAuthorizationConfig | null>` — the key store's client with the session's refresh token
-- `getConnectionConfig(destination: string): Promise<IConnectionConfig | null>` — the key store's means with the session's secret
+- `getConnectionConfig(destination: string): Promise<IConnectionConfig | null>` — the key store's means with the session's secret and its binding (`issuedFor`, `issuedBy`)
 - `createTokenRefresher(destination: string): ITokenRefresher`
 - `flush(): Promise<void>` — one more attempt for every session write `getProvider`'s providers left pending; rejects with an `AggregateError` naming the destinations still failing
 

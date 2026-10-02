@@ -138,10 +138,13 @@ export interface AuthBrokerConfig {
 }
 
 /** The session secret's fields on a connection config — never means. */
+/** The session's side: the secret and what it is bound to (D9). */
 const SECRET_FIELDS = [
   'authorizationToken',
   'sessionCookies',
   'expiresAt',
+  'issuedFor',
+  'issuedBy',
 ] as const;
 const isSecretField = (field: string): boolean =>
   (SECRET_FIELDS as readonly string[]).includes(field);
@@ -525,7 +528,7 @@ export class AuthBroker {
   /**
    * The destination's connection config: the service key store's means with
    * the session's secret (`authorizationToken`, `sessionCookies`,
-   * `expiresAt`) laid over them; `null` when neither store holds anything.
+   * `expiresAt`) and its binding (`issuedFor`, `issuedBy`) laid over them; `null` when neither store holds anything.
    * Means a session store answers are not read, nor a secret a key store
    * answers.
    */
