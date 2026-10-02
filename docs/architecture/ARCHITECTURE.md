@@ -18,7 +18,8 @@ An npm workspace in the layout of `mcp-abap-adt-interfaces`:
 /                          private root: package.json (workspaces, scripts), package-lock.json,
                            tsconfig.base.json, biome.json, tools/, docs/
 packages/auth-broker/      @mcp-abap-adt/auth-broker — the library (src/, its tests,
-                           tests/test-config.yaml.template)
+                           tests/test-config.yaml.template, tests/stand/: UAA and
+                           Keycloak in Docker for the token grants' suites)
 packages/auth-broker-cli/  @mcp-abap-adt/auth-broker-cli — mcp-auth and mcp-sso (src/, its tests,
                            the Keycloak and CAP stands under tests/)
 tools/                     check-graph.js, check-packed.js, publish-changed.js,
@@ -68,11 +69,33 @@ connector takes:
   reads the session;
 - `jwt` / `saml` need a `grantType` from the table (spec §3.1); `none` reads the
   session (`loadSession`) and hands over its token (`TokenAuthProvider.fixed`)
-  or cookies (`SamlAuthProvider`); the token grants are not built yet;
+  or cookies (`SamlAuthProvider`);
+- `jwt` / `authorization_code`, `client_credentials`, `passcode` →
+  `AuthorizationCodeProvider`, `ClientCredentialsProvider`,
+  `UaaPasscodeProvider`, with the client from the key store
+  (`getAuthorizationConfig`), seeded from the session (token, refresh token,
+  `expiresAt`; not `client_credentials`), the consumer's `authorization(d,
+  grant)` for the two interactive ones, the broker's logger and `onTokens`;
+  the OIDC and SAML grants are not built yet;
 - caches the *promise* of the build per destination, set before the first store
   read and dropped when the build throws, so concurrent first calls build once
-  and a failure is retried;
-- writes nothing.
+  and a failure is retried.
+
+### Persistence (`SessionWriter`)
+
+Every token provider `getProvider` builds gets `onTokens`, which
+`BaseTokenProvider` awaits after every login and refresh — never on a cache
+hit — so a renewal inside a connector is stored before the connector resends.
+The broker writes the session secret alone, `{ authorizationToken, expiresAt,
+refreshToken }` in one `saveSession` — the expiry fixed when the result
+arrives, the stored refresh token carried forward when the result has none —
+and never a means field; a destination the key store states as `basic` or
+`snc` is not written. `onTokens` never throws: a failed write stays pending per
+destination in `SessionWriter` (`src/SessionWriter.ts`), retried on an
+`unref()`ed timer (1 s, doubling, capped at 60 s), the latest result replacing
+a pending one, the attempts for one destination chained so they never overlap,
+each failure logged by class name. `flush()` gives every pending write one more
+attempt and rejects naming the destinations still failing.
 
 ### Stores
 
@@ -106,16 +129,18 @@ Providers live in `@mcp-abap-adt/auth-providers` and implement `IRefreshableToke
 
 ## Secrets
 
-The broker writes tokens and the refresh token to the session store, never the client secret; credentials from the service key stay there. A session with credentials of its own keeps them and only its refresh token changes. The broker logs no part of any token.
+What a `getProvider` provider obtains is written as the secret alone (see *Persistence*). The token API writes tokens and the refresh token to the session store, never the client secret; credentials from the service key stay there. A session with credentials of its own keeps them and only its refresh token changes. The broker logs no part of any token.
 
 ## Error Handling
 
 - Provider errors propagate unchanged (class, `code`, `missingFields`, `cause`).
 - Store reads: `null` or `FILE_NOT_FOUND` is absence and the broker goes on to the next source; any other store failure is thrown unchanged — before the provider is asked when it happens in the reads that come before the token, after the provider answered and the token was written when it happens in the reads `persist()` makes to save the refresh token.
-- Store writes that fail propagate.
+- Store writes that fail propagate from the token API; `getProvider`'s writes
+  are retried and reported by `flush()`.
 - A destination that lacks what its type needs: `DestinationConfigError`
   (`code: 'DESTINATION_CONFIG'`, `destination`, `missingFields` — names only,
-  never a value — and a provider constructor's error as `cause`).
+  never a value; no `cause`, since a provider's own error quotes the value it
+  refused).
 
 ## Responsibilities Split
 

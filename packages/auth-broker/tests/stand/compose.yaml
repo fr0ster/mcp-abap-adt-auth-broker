@@ -1,0 +1,35 @@
+# The broker's test stand: Cloud Foundry UAA — the open-source server XSUAA is
+# built from — and Keycloak, each on the loopback address only. Their
+# configuration is committed test fixtures: uaa/config and keycloak/. Start the
+# stand through up.sh or run.sh, which also wait until both servers answer.
+#
+# Copied from @mcp-abap-adt/auth-providers' tests/stand and owned here: the
+# broker's tests never depend on another repository. The project and container
+# names are the broker's own, so this stand and auth-providers' are told apart
+# by Docker (both directories are named `stand`); they share the default ports,
+# so only one runs at a time unless UAA_PORT / KEYCLOAK_PORT move one of them.
+name: auth-broker-stand
+
+services:
+  uaa:
+    image: docker.io/cfidentity/uaa:v79.7.0
+    container_name: auth-broker-uaa
+    ports:
+      - "127.0.0.1:${UAA_PORT:-8080}:8080"
+    environment:
+      CLOUDFOUNDRY_CONFIG_PATH: /config
+      SERVER_SERVLET_CONTEXT_PATH: /uaa
+    volumes:
+      - ./uaa/config:/config:ro
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4
+    container_name: auth-broker-keycloak
+    command: ["start-dev", "--import-realm"]
+    ports:
+      - "127.0.0.1:${KEYCLOAK_PORT:-8081}:8080"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    volumes:
+      - ./keycloak/realm-test.json:/opt/keycloak/data/import/realm-test.json:ro

@@ -54,6 +54,7 @@ packages/auth-broker/tests/test-config.yaml
 !biome.json
 
 # Allow JSON for local test tooling
+!packages/auth-broker/tests/stand/keycloak/*.json
 !packages/auth-broker-cli/tests/keycloak/*.json
 !packages/auth-broker-cli/tests/sso-demo/**/*.json
 

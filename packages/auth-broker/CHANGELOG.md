@@ -22,23 +22,65 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   `SncLogonProvider.forSecureLoginClient` (from `sncPartnerName`, `sncQop`,
   `sncLib`, `sncMyName`), `jwt` / `none` → `TokenAuthProvider.fixed` with the
   session's token, `saml` / `none` → `SamlAuthProvider` with the session's
-  cookies. The token grants are valid pairs not built yet: `getProvider`
-  throws a plain `Error` for them. One provider per destination: the promise
-  of the build is cached before the first read, so concurrent first calls
-  build once, and dropped when the build throws, so the next call retries.
-  `getProvider` writes to no store.
+  cookies, and the UAA grants (below). The OIDC and SAML grants are valid
+  pairs not built yet: `getProvider` throws a plain `Error` for them. One
+  provider per destination: the promise of the build is cached before the
+  first read, so concurrent first calls build once, and dropped when the build
+  throws, so the next call retries.
+- **The UAA grants in `getProvider`**: `jwt` / `authorization_code` →
+  `AuthorizationCodeProvider`, `jwt` / `client_credentials` →
+  `ClientCredentialsProvider`, `jwt` / `passcode` → `UaaPasscodeProvider`. The
+  client (`uaaUrl`, `uaaClientId`, `uaaClientSecret`) comes from the key
+  store's `getAuthorizationConfig`; `authorization_code` and `passcode` are
+  seeded from the session — the token, the refresh token and `expiresAt` —
+  and without a session log in at `prepare()`; `client_credentials` takes the
+  client alone. `uaaClientSecret: ''` is a public client, which `passcode`
+  takes as no secret. No row needs `serviceUrl`: the resource URL is not
+  authorization data — no token provider reads it — so the connector takes it
+  from the key store, and `getProvider` neither requires nor passes it.
+- **The `authorization` option is used**: `(destination, grant) =>
+  IAuthorizationStrategy<string>`, the interactive half of
+  `authorization_code` and `passcode` (for `passcode` the strategy is handed
+  `<uaaUrl>/passcode`). Called once per destination's build, never disposed
+  by the broker; required only by those two grants, with no default.
+- **What a `getProvider` provider obtains is stored.** Every token provider
+  the broker builds gets `onTokens`, so a token obtained at `prepare()`, on
+  expiry, or in `rejected()` after a 401 is in the session store before the
+  provider answers. The write is the session secret alone — one
+  `saveSession(destination, { authorizationToken, expiresAt, refreshToken })`,
+  the stored refresh token carried forward when the result has none — and
+  never a means field (no `serviceUrl`, no `authType`, no client secret). A
+  destination the key store states as `basic` or `snc` is not written.
+- **A failed session write does not fail the authentication**: it stays
+  pending for its destination and the broker retries it on its own — one
+  second, doubling, capped at one minute, on a timer that does not keep the
+  process alive. A newer result replaces the pending one; writes for one
+  destination never overlap; failures are logged by class name, never their
+  message.
+- **`flush(): Promise<void>`** — one more attempt for every pending session
+  write; resolves when all have landed, rejects with an `AggregateError`
+  naming the destinations whose store still refuses (the retries go on). Call
+  it on shutdown.
 - **`DestinationConfigError`** (`code: 'DESTINATION_CONFIG'`, `destination`,
   `missingFields`) — a destination that lacks what its type needs:
   no `serviceKeyStore` option, no means, no or an unknown `authType`, a
   `jwt`/`saml` destination without a `grantType` or with a pair outside the
-  table, a missing field of its row (`''` counts as missing), or a provider
+  table, a missing field of its row (`''` counts as missing; for the UAA
+  grants `uaaUrl`, `uaaClientId`, and `uaaClientSecret` for
+  `authorization_code` / `client_credentials`), a missing collaborator option
+  (`authorization`), or a provider
   constructor's own `ValidationError` (an `sncQop` outside `1|2|3|8|9`, named
   as the store field; the provider's error, which quotes the value, is not
   kept). It names fields and options, never a stored value.
 - The collaborator options `authorization`, `oidcAuthorization`,
   `deviceCodePresenter`, `samlCookies`, `assertionReplayStore` on
-  `AuthBrokerConfig`, and the `StrategyGrant` type — declared for the token
-  grants; no destination built in this version uses one yet.
+  `AuthBrokerConfig`, and the `StrategyGrant` type. `authorization` is used by
+  the UAA grants; the others are declared for the OIDC and SAML grants.
+- **The broker's own test stand** (`tests/stand/`, `npm run test:stand`):
+  Cloud Foundry UAA and Keycloak in Docker, copied from auth-providers' stand,
+  with suites running the UAA grants end to end through auth-stores 3's file
+  stores; a CI workflow runs the build-and-test gate and the stand on every
+  push and pull request. Not shipped in the package.
 
 ### Changed
 

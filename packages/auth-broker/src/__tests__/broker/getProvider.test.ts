@@ -681,10 +681,8 @@ describe('getProvider', () => {
   });
 
   describe('token grants', () => {
+    // The UAA grants are built since 4c (getProviderTokens.test.ts).
     it.each([
-      ['jwt', 'authorization_code'],
-      ['jwt', 'client_credentials'],
-      ['jwt', 'passcode'],
       ['jwt', 'oidc_authorization_code'],
       ['jwt', 'device_code'],
       ['jwt', 'password'],

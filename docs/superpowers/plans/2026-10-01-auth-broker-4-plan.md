@@ -9,7 +9,9 @@ plan says so under *Spec points found while planning*: facts were corrected in
 the spec in review; design points are named as decisions the user must take
 before that step opens — never fixed silently.
 
-**Status:** draft for review in #33, with the goal and the spec.
+**Status:** draft for review in #33, with the goal and the spec; D8 and D9
+(2026-10-02; D9 refined the same day to two fields) and the steps 4c1–4c3
+recorded in #37.
 
 **What a step is here.** Each step is one pull request, reviewed and merged
 before the next one opens — across all repositories, this one included. Code
@@ -315,7 +317,7 @@ existing suites prove it.
   Build and test the tags in the main checkout.
 - **Next depends on:** the merge.
 
-## Step 4 — `@mcp-abap-adt/auth-broker` 4.0.0, in five PRs
+## Step 4 — `@mcp-abap-adt/auth-broker` 4.0.0, in five PRs (and, between 4c and 4d, three for D8/D9)
 
 All in auth-broker, each in its own worktree under `.worktrees/`, branched from
 `main` after the previous merge. Every PR keeps the carried-over §9 suite
@@ -444,7 +446,9 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   the seed (`expiresAt` included), the logger and `onTokens`; §5 for the
   `authorization` option (called once per build, with the grant; required only
   by its rows; never disposed by the broker); §4.4 for these rows (`uaaUrl`,
-  `serviceUrl` in the means, the `authorization` option by name); §3.3 public
+  `uaaClientId`, the secret where the provider needs one, the `authorization`
+  option by name — **not `serviceUrl`**, D8: the requirement 4c first had is
+  removed in the same PR, its test inverted); §3.3 public
   client (`''` from the key store reaches the provider as no secret); §4.1 item
   3 (no session: unseeded, logs in at `prepare()`).
 - **Why persistence and the first token rows together:** a token provider handed
@@ -467,14 +471,136 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
     the logged failure carries the class name and no message;
   - `flush()` resolves once pending writes land; rejects naming the destination
     when the store still fails; the timer does not keep the process alive.
+  - D8: each UAA row with `serviceUrl` absent or `''` in the means is built
+    and obtains a token (red while `uaaProvider` required it).
+  - live (`npm run test:live` only): the `jwt` / `authorization_code` case
+    takes its means from the SAP service key — `AbapServiceKeyStore` over
+    `AUTH_BROKER_LIVE_SERVICE_KEYS_DIR`, the grant added by a test-only
+    wrapper marked "until auth-stores 3.1.0" — and its session from a
+    temporary copy of `AUTH_BROKER_LIVE_SESSIONS_DIR`'s file.
 - **Load-bearing:** write `serviceUrl`, then `authType`, then the client
   secret into the session — each alone (the field-set test); drop the carried
   refresh token; drop the `basic`/`snc` guard; remove the retry (write once);
-  remove `unref()`; let attempts overlap — each red alone.
+  remove `unref()`; let attempts overlap; require `serviceUrl` again — each
+  red alone.
 - **Docs:** library README (persistence, `flush()` and when to call it,
-  collaborator `authorization`, the UAA rows), `docs/using/USAGE.md`,
-  `ARCHITECTURE.md`, CHANGELOG.
+  collaborator `authorization`, the UAA rows, no `serviceUrl` needed),
+  `docs/using/USAGE.md`, `ARCHITECTURE.md`, `TESTING.md` (the live case's
+  service keys), CHANGELOG.
 - **Next depends on:** the merge.
+
+### 4c1 — `@mcp-abap-adt/interfaces-auth-broker` 1.1.0 (spec §1.4; D9)
+
+- **Repository:** `mcp-abap-adt-interfaces`, a worktree per its own rules,
+  branch `feat/issued-for` from its default branch.
+- **What changes:** two flat optional fields on `IConnectionConfig`:
+  `issuedFor?: string` — "the canonical URI of the resource the secret was
+  obtained for" (scheme and host lower-cased, explicit port, path without a
+  trailing `/`, `sap-client=<n>` when the destination states a client) — and
+  `issuedBy?: string` — "the canonical URI of who issued the secret and to
+  which client" (`<uaaUrl or issuer>?client_id=<clientId>` for a token; the
+  ACS's origin and path for SAML cookies), spec §1.4, in the doc comments;
+  types only, no function (the interfaces package holds no logic). The
+  package README gets the note for store authors (spec §12 *Binding*): a
+  custom `ISessionStore` must persist both beside the secret, else every
+  process start is a fresh login. Version 1.1.0, minor.
+- **Tests first:** whatever the interfaces repository's own checks hold for an
+  added field (its surface/package-map checks list the export unchanged; the
+  type compiles in a consumer that sets it).
+- **Gate:** that repository's `npm run check`.
+- **Release:** tag `interfaces-auth-broker-v1.1.0`, the user publishes;
+  `npm view @mcp-abap-adt/interfaces-auth-broker@1.1.0 version`.
+- **Next depends on:** 1.1.0 on the registry.
+
+### 4c2 — `@mcp-abap-adt/auth-stores` 3.1.0 (spec §1.5; D8, D9)
+
+- **Repository:** `mcp-abap-adt-auth-stores`, worktree
+  `~/prj/.wt-auth-stores-31`, branch `feat/key-store-options-issued-for` from
+  `master` (3.0.0).
+- **What changes:**
+  1. `AbapServiceKeyStore(dir, { grantType?, log? })` and
+     `XsuaaServiceKeyStore(dir, { serviceUrl?, grantType?, log? })` — an
+     option given is what `getConnectionConfig` answers for that field; the
+     3.0.0 `(dir, log)` form keeps working (minor).
+  2. The session stores keep `issuedFor` and `issuedBy` (`SAP_ISSUED_FOR`,
+     `SAP_ISSUED_BY`; `XSUAA_ISSUED_FOR`, `XSUAA_ISSUED_BY`; fields in the
+     in-memory ones): accepted by `saveSession`, written and cleared with the
+     credential, answered by `loadSession` while a credential is held. Stored
+     as given — the store neither canonicalises nor judges them.
+  3. Legacy read: a file holding a credential and no `SAP_ISSUED_FOR` answers
+     `issuedFor` from `SAP_URL` with `SAP_CLIENT` as `sap-client`
+     (`XSUAA_MCP_URL` for the XSUAA stores); no `SAP_ISSUED_BY` → `issuedBy`
+     from `SAP_UAA_URL` with `SAP_UAA_CLIENT_ID` as `client_id`
+     (`XSUAA_UAA_URL`, `XSUAA_UAA_CLIENT_ID`) — the 3.x CLI and `persist`
+     wrote them with the token (spec §1.5 item 3).
+  4. `interfaces-auth-broker` `^1.1.0`.
+- **Tests first, and the rule each protects:** each option answered, and its
+  absence leaving the 3.0.0 answer (item 1); each of `issuedFor` and
+  `issuedBy` written and read back with a token and with cookies, cleared by
+  a new credential written without it, not answered once the credential is
+  cleared (item 2); a 2.x fixture and a 3.0.0-written file each answer
+  `issuedFor` from `SAP_URL` (+ client) and `issuedBy` from `SAP_UAA_URL` +
+  `SAP_UAA_CLIENT_ID`, a file without the `SAP_UAA_*` keys answers no
+  `issuedBy`, and a file that has `SAP_ISSUED_FOR` / `SAP_ISSUED_BY` answers
+  them and ignores the legacy keys (item 3); the XSUAA stores alike.
+- **Load-bearing:** drop the option (answer the key's reading); keep either
+  field across a new credential; read the legacy keys even when the new ones
+  are present; drop `SAP_CLIENT` from the legacy `issuedFor`; drop the client
+  id from the legacy `issuedBy` — each red alone.
+- **Gate:** as step 1.
+- **Docs:** README (the options; `issuedFor`, `issuedBy` and the legacy
+  reading, with the remaining risk of spec §1.5 item 3), CHANGELOG 3.1.0.
+- **Release:** tag `v3.1.0`, the user publishes; `npm view
+  @mcp-abap-adt/auth-stores@3.1.0 version dependencies`.
+- **Next depends on:** 3.1.0 on the registry.
+
+### 4c3 — the broker binds a secret to its resource and issuer (spec §4.5, §6; D9)
+
+- **Repository:** auth-broker, branch `feat/secret-bound-to-resource`.
+- **What changes:** `interfaces-auth-broker` `^1.1.0`; the dev alias
+  `auth-stores-3` `^3.1.0`. One canonicalising function in the library
+  (spec §4.5 item 1; the broker's only, decided). `getProvider` computes from
+  the means this destination's `issuedFor` (`serviceUrl`, `sapClient`) and
+  `issuedBy` (`uaaUrl` + `uaaClientId`; the OIDC issuer + client in 4d;
+  `samlAcsUrl` in 4d) and seeds a provider only when **both** stored values,
+  canonicalised, equal them; otherwise the secret — refresh token included —
+  is not used, the provider logs in afresh, and the log says only "secret
+  bound to another resource, discarded". `persist` writes both with every
+  secret (each absent when the means lack its source). For these obtained
+  secrets both fields are mandatory and must both match. The `none` rows
+  (decided 2026-10-02): `issuedFor` always required to match, `issuedBy`
+  compared only when the means state an issuer (the client or OIDC issuer for
+  `jwt` / `none`, `samlAcsUrl` for `saml` / `none`); a mismatch is a
+  `DestinationConfigError` naming the field, never a discard. The live case's
+  `withGrant` wrapper is replaced by `new AbapServiceKeyStore(dir,
+  { grantType: 'authorization_code' })`.
+- **Tests first** (spec §13): a mismatched `issuedFor` — a different host, a
+  different path, a different SAP client, `issuedFor` absent, `serviceUrl`
+  absent — and a mismatched `issuedBy` — another `uaaUrl`, another client id,
+  `issuedBy` absent (another ACS with `saml2_pure` in 4d) — is not seeded: a fresh login (the endpoint sees the grant, never the
+  stored refresh token), the stored token never presented, the log line
+  carrying neither URI nor any part of the secret, the new secret written
+  with this destination's `issuedFor` and `issuedBy`. Variants that
+  canonicalise equal are seeded: host case, scheme case, explicit default
+  port, trailing `/`, `sapClient` against `?sap-client=` in the URL; `uaaUrl`
+  case, port and trailing `/`. The `none` rows: no issuer in the means and
+  a matching `issuedFor` → seeded (presented); an issuer stated and `issuedBy`
+  mismatched → `DestinationConfigError` naming `issuedBy`; an `issuedFor`
+  mismatch → `DestinationConfigError` naming `issuedFor`. The field-set test now expects `issuedFor` and
+  `issuedBy` beside the secret. The stand suite runs the binding
+  against UAA with auth-stores 3.1.0's file stores: a session file bound to
+  another URL is not reused.
+- **Load-bearing:** seed regardless of `issuedFor`; seed regardless of
+  `issuedBy`; compare without canonicalising; drop the SAP client from
+  `issuedFor`; drop the path; drop `client_id` from `issuedBy`; write either
+  field not at all; let a `none` mismatch through; compare `issuedBy` for a
+  `none` row even when the means state no issuer (the "no issuer → seeded"
+  test goes red) — each red alone.
+- **Docs:** library README (the binding; the consumer impact of spec §12
+  *Binding* — a custom session store must keep both fields, a headless
+  refusing strategy answers Oops on a mismatch, one fresh login after a
+  changed UAA/client/URL or for XSUAA sessions written with an empty URL), `USAGE.md`, `ARCHITECTURE.md`, `TESTING.md`, CHANGELOG.
+- **Next depends on:** the merge; then 4d.
 
 ### 4d — OIDC and SAML grants; the remaining collaborators
 
@@ -654,7 +780,10 @@ dependency on `auth-broker` `^4.0.0` alone does not decide it.
   collaborators; a key store for the means (under D6 the destination store,
   falling back to its service key store) and the session store for the
   secret; instead of seeding sessions from service keys it writes `authType:
-  'jwt'`, `grantType: 'authorization_code'` as means; `flush()` on `SIGTERM` and before a stdio transport
+  'jwt'`, `grantType: 'authorization_code'` as means; its `detectStoreType`
+  passes `{ grantType }` to `AbapServiceKeyStore` and `{ serviceUrl,
+  grantType }` to `XsuaaServiceKeyStore` (auth-stores 3.1.0, D8) — the URL it
+  passed to `BtpSessionStore` in 2.x; `flush()` on `SIGTERM` and before a stdio transport
   closes; its docs install `@mcp-abap-adt/auth-broker-cli`; live check basic
   HTTP and RFC, token, SNC — one code path (spec §12). Its imports of moved types
   (`src/lib/stores/index.ts:24`, `src/lib/auth/brokerFactory.ts:36`) change
@@ -722,6 +851,86 @@ dependency on `auth-broker` `^4.0.0` alone does not decide it.
   ships this implementation. The alternative: a `grantType` option on the SAP
   service key stores (smaller, but it covers only the service key case and
   leaves basic, SNC, OIDC and SAML without a store).
+
+- **D8 — decided 2026-10-02: the resource URL is not authorization data;
+  it comes from the consumer's key store** (4c, 4c2, step 8). No token
+  provider reads `serviceUrl` — `AuthorizationCodeProvider`,
+  `ClientCredentialsProvider` and `UaaPasscodeProvider` take the client and
+  `uaaUrl` only (`auth-providers src/providers/AuthorizationCodeProvider.ts:27-31`,
+  `ClientCredentialsProvider.ts:20-23`, `UaaPasscodeProvider.ts:26-32`) — so
+  `getProvider` does not require it (4c removed the requirement it had added,
+  `src/destinations.ts` `uaaProvider`). The connector needs the URL, and the
+  broker hands what the key store answers. Where the key store gets it: from
+  the consumer's store factory, as before — the server's `detectStoreType`
+  (`server src/lib/stores/index.ts:34-97`) picks the store by the key's
+  format; an ABAP environment key carries the ABAP URL, an XSUAA/BTP key only
+  the authorizing service, so its URL was passed separately (2.x: `new
+  BtpSessionStore(dir, serviceUrl)`; 3.0.0 removed it from the session stores
+  without moving it). It moves to the key store: auth-stores 3.1.0 gives
+  `AbapServiceKeyStore(dir, { grantType })` and `XsuaaServiceKeyStore(dir,
+  { serviceUrl, grantType })` — stated by whoever builds the store, so nothing
+  is inferred (H1). A SAP key cannot state a grant.
+- **D9 — decided 2026-10-02 (refined 2026-10-02: the canonical URI; refined
+  2026-10-02: two fields): a secret is bound to the resource it was obtained
+  for and to the issuer and client that issued it** (4c1, 4c2, 4c3). A JWT's
+  audience, cookies' host and path, basic's system: presenting a secret to
+  another resource is a leak; and a secret from another authorization server,
+  client or system must not be seeded in place of this destination's. The
+  session store keeps, beside the secret, two flat optional fields of
+  `IConnectionConfig` (`interfaces-auth-broker` 1.1.0):
+  - `issuedFor` — the canonical URI of the resource: scheme and host
+    lower-cased, explicit port, path without a trailing `/`, the SAP client as
+    `sap-client=<n>` when the destination states one
+    (`https://my-abap.example.com:443/sap/bc/adt?sap-client=100`). More than a
+    host because several apps with their own XSUAA share a BTP host and cookies
+    carry a `Path`, and clients 100 and 200 are different user stores; a URI,
+    not an HTTP URL, so an RFC system could be `sap-rfc://host/00?sap-client=100`
+    later (nothing stores an RFC secret today).
+  - `issuedBy` — the canonical URI of who issued the secret and to which
+    client: for OAuth/OIDC tokens the authorization server and client
+    (`<uaaUrl or issuer, canonicalised>?client_id=<clientId>`), for SAML
+    session cookies the ACS of the system that set them (canonical
+    `samlAcsUrl`, origin and path).
+
+  File keys `SAP_ISSUED_FOR` / `SAP_ISSUED_BY` (`XSUAA_ISSUED_FOR` /
+  `XSUAA_ISSUED_BY`). The broker computes both from the means (`serviceUrl`
+  + `sapClient`; `IAuthorizationConfig.uaaUrl` / `uaaClientId`, the OIDC
+  issuer and client, `samlAcsUrl`) with one canonicalising function — the
+  broker's only, decided; `persist` writes both with the secret and they are
+  cleared with it; `getProvider` seeds only when both stored values equal the
+  computed ones (both sides canonicalised) — otherwise (either different, or
+  absent) the secret, refresh token included, is not used, the provider logs
+  in afresh, and the log says only "secret bound to another resource,
+  discarded", no values. For obtained secrets (the UAA, OIDC and SAML grant
+  rows) both fields are mandatory and must both match. **`none` rows:
+  `issuedFor` always, `issuedBy` only when stated — decided 2026-10-02:**
+  `issuedFor` is always required to match (it is what stops the leak);
+  `issuedBy` is compared only when the means state an issuer, and then must
+  match (a consumer who wants it strict states the issuer); a mismatch is a
+  `DestinationConfigError` naming the field — the broker cannot log in
+  there, so an honest refusal beats a leak.
+  Why both: `issuedFor` stops a secret going to another resource, `issuedBy`
+  stops a secret from another issuer or client being seeded in place of this
+  one (a changed UAA, client or system). For XSUAA a token is accepted by
+  every service that trusts it (`aud` / `xsappname`); with `issuedFor` each
+  service gets its own login — accepted; relaxable for XSUAA later without a
+  contract change, since both fields exist. The token's audience stays the
+  resource's to enforce; the broker compares strings and parses no token.
+  Legacy files (2.x/3.0) have neither key: the session store reads their
+  `SAP_URL` (+ `SAP_CLIENT`) as `issuedFor` — the 3.x `persist` wrote
+  `SAP_URL` with the token — and `SAP_UAA_URL` + `SAP_UAA_CLIENT_ID` as
+  `issuedBy` — the 3.x CLI wrote the client with the token and the 3.x
+  `persist` rewrote it with each refresh token — so existing sessions keep
+  working after the upgrade. **Remaining risk:** a legacy shared file whose
+  `SAP_URL` or `SAP_UAA_*` was edited by hand before its first renewal under
+  the binding (or whose token a 3.0.0 store rewrote after the means moved)
+  answers a binding nobody checked, until that renewal writes the new keys.
+  **Consumer impact** (spec §12 *Binding*): a custom session store must keep
+  both fields, else every start is a fresh login; a headless refusing
+  strategy answers Oops on a mismatch instead of using a foreign secret;
+  XSUAA sessions the server wrote with an empty URL log in once; a changed
+  UAA, client or URL costs one login (intended); the proxy and calm-server
+  are unaffected until they migrate.
 
 - **D7 — decided 2026-10-01: 4a keeps `auth-stores` `^1.2.3`** (the
   library's dev dependency and the CLI's runtime dependency). Measured in
@@ -822,10 +1031,10 @@ plan's first version):
 | Goal hold / item | Delivered by |
 |---|---|
 | H0 the broker speaks only the store contracts | interfaces (done; sufficient for the split, spec §8.2); step 1 (stores implement the split); step 3 (`check-graph`: no `auth-stores` import in the library); 4b–4e (fakes of the contract in tests) |
-| H1 the configuration states the provider | 4b (pair table, `authType` + `grantType` from the key store only, no fallback to a session's means); step 1 (no grant answered from a SAP key); step 5 (CLI writes both; `generate-env` stops inferring) |
+| H1 the configuration states the provider | 4b (pair table, `authType` + `grantType` from the key store only, no fallback to a session's means); step 1 (no grant answered from a SAP key); 4c2 (the grant and an XSUAA key's resource URL stated by whoever builds the key store, D8); step 5 (CLI writes both; `generate-env` stops inferring) |
 | H2 no implicit defaults | 4a (CLI's presenter, validator, `read`); 4b–4d (every collaborator from the consumer, missing → `DestinationConfigError`) |
 | H3 what a provider obtains reaches the session store | 4c (`onTokens`, retry, `flush()`); 4d (OIDC/SAML results); 4e (through connection 10) |
-| H4 no secret the broker was not given | 4c (the session gets the secret alone — field-set test and breaks); step 1 (session stores refuse means); step 5 (the CLI writes means to the key store; the user's) |
+| H4 no secret the broker was not given | 4c (the session gets the secret alone — field-set test and breaks); step 1 (session stores refuse means); step 5 (the CLI writes means to the key store; the user's); 4c1–4c3 (a stored secret presented only to the resource it was obtained for, and seeded only from its own issuer and client, D9) |
 | H5 the token API keeps 3.x | every step-4 PR keeps the §9 suite green; 4e (shared cache, `basic`/`snc` refusal) |
 | H6 measured: basic, token, SNC through connection 10 | step 6 (SNC on Windows, by the user) |
 | Success: server builds from `getProvider`; a renewal in the connector is in the store; token API as 3.x | 4e (end to end through connection 10, no SAP); step 6 (live); step 8 (the server itself) |
@@ -839,21 +1048,24 @@ plan's first version):
 | §1.1 | done (interfaces) |
 | §1.2 | 1 |
 | §1.3 | 2 |
+| §1.4 | 4c1 |
+| §1.5 | 4c2 |
 | §2 | 4b (surface), 4c (`flush`), 4d (options), 4e (`provider` optional for the token API) |
-| §3.1, §3.2, §3.3 | 4b (the split's reads); public client in 4c; the token API's 3.x reads in 4e |
+| §3.1, §3.2, §3.3 | 4b (the split's reads); public client and no `serviceUrl` requirement in 4c (D8); `issuedFor` / `issuedBy` read in 4c3; the token API's 3.x reads in 4e |
 | §4.1 | 4b (`basic`, `snc`, `none`), 4c (UAA), 4d (OIDC, SAML) |
 | §4.2 | 4b–4d (each provider's own `rejected()`, tested through the contract) |
 | §4.3 | 4e |
-| §4.4 | 4b, extended per row in 4c and 4d |
+| §4.4 | 4b, extended per row in 4c and 4d (`serviceUrl` not required, 4c, D8) |
+| §4.5 | 4c3 |
 | §5 | 4c (`authorization`), 4d (the rest) |
-| §6 | 4c |
+| §6 | 4c; `issuedFor` and `issuedBy` written with the secret in 4c3 |
 | §7 | 4b (promise cache), 4e (shared with the token API) |
-| §8 | 1 (stores), done (contract — verified sufficient, §8.2); §8.3 recorded only |
+| §8 | 1 (stores), done (contract — verified sufficient for the split, §8.2); `issuedFor` / `issuedBy` 4c1 (contract), 4c2 (stores); §8.3 recorded only |
 | §9 | 4e; carried-over suite in every step-4 PR |
 | §10 | 3 (move, imports, version), 4a (explicit collaborators), 5 (destinations, flags, `flush`), 7 (release) |
 | §11 | 3 |
-| §12 | 7 (breaking list, migration notes); 8 (consumers) |
-| §13 | 4b–4e (unit, connection 10), 4d (stand, D5), 6 (live) |
+| §12 | 7 (breaking list, migration notes, the *Binding* consumer impact); 4c1 (its README note); 8 (consumers — the server passes `serviceUrl` / `grantType` to its key stores, D8) |
+| §13 | 4b–4e (unit, connection 10), 4c (D8; the live jwt case on service keys), 4c3 (the binding tests), 4d (stand, D5), 6 (live) |
 | §14 | 4a (stale comments), every step (its docs), 7 (final pass, deletion) |
 | §15 | not delivered, by design |
 | §16 | this checklist |

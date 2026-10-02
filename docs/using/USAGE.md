@@ -85,7 +85,7 @@ from 4.2.0.
 `getProvider(destination)` returns the `IAuthProvider` the destination states,
 for a `@mcp-abap-adt/connection` 10 connector. The **service key store**
 answers the means — `authType`, `grantType`, the user and password, the SNC
-fields — and the **session store** the secret; neither is read for the
+fields, the UAA client — and the **session store** the secret; neither is read for the
 other's fields, and nothing is inferred from which fields are present. No
 `provider` option is needed: that one is the token API's.
 
@@ -104,33 +104,54 @@ SAP_AUTH_TYPE=snc
 SAP_SNC_PARTNERNAME=p:CN=PRD, O=ACME
 SAP_SNC_QOP=9
 SAP_SNC_LIB=C:\Program Files\SAP\FrontEnd\SecureLogin\lib\sapcrypto.dll
+
+# TRIAL.env — BTP ABAP environment, UAA authorization code
+SAP_URL=https://<id>.abap.us10.hana.ondemand.com
+SAP_AUTH_TYPE=jwt
+SAP_GRANT_TYPE=authorization_code
+SAP_UAA_URL=https://<subdomain>.authentication.us10.hana.ondemand.com
+SAP_UAA_CLIENT_ID=...
+SAP_UAA_CLIENT_SECRET=...
 ```
 
 ```typescript
 import { AuthBroker, DestinationConfigError } from '@mcp-abap-adt/auth-broker';
 import { AbapSessionStore, EnvDestinationStore } from '@mcp-abap-adt/auth-stores';
 
+import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
+
 const broker = new AuthBroker({
   serviceKeyStore: new EnvDestinationStore('/path/to/destinations'),
   sessionStore: new AbapSessionStore('/path/to/sessions'),
+  // The interactive half of authorization_code and passcode; called once per
+  // destination's build, never disposed by the broker.
+  authorization: (destination, grant) => browserCallbackStrategy(),
 });
 
-const basic = await broker.getProvider('DEV'); // BasicAuthProvider: header over HTTP, user/passwd over RFC
-const snc = await broker.getProvider('PRD');   // SncLogonProvider: snc_* logon parameters after prepare()
+const basic = await broker.getProvider('DEV');   // BasicAuthProvider: header over HTTP, user/passwd over RFC
+const snc = await broker.getProvider('PRD');     // SncLogonProvider: snc_* logon parameters after prepare()
+const trial = await broker.getProvider('TRIAL'); // AuthorizationCodeProvider, seeded from TRIAL's session
 ```
 
 | `authType` / `grantType` | Provider | Needs |
 |---|---|---|
 | `basic` | `BasicAuthProvider` | `username`, `password` in the key store |
 | `snc` | `SncLogonProvider.forSecureLoginClient` | `sncPartnerName` in the key store; `sncQop`, `sncLib`, `sncMyName` when set (absent: `qop` `'9'`, the library discovered, the name from the credential) |
+| `jwt` / `authorization_code` | `AuthorizationCodeProvider` | `uaaUrl`, `uaaClientId`, `uaaClientSecret` in the key store; the `authorization` option; seeded from the session (token, refresh token, `expiresAt`) when there is one |
+| `jwt` / `client_credentials` | `ClientCredentialsProvider` | `uaaUrl`, `uaaClientId`, `uaaClientSecret` in the key store; not seeded |
+| `jwt` / `passcode` | `UaaPasscodeProvider` | `uaaUrl`, `uaaClientId` (`uaaClientSecret` `''` is a public client) in the key store; the `authorization` option, handed `<uaaUrl>/passcode`; seeded like `authorization_code` |
 | `jwt` / `none` | `TokenAuthProvider.fixed` | `authorizationToken` in the session store |
 | `saml` / `none` | `SamlAuthProvider` | `sessionCookies` in the session store |
 
-The token grants (`jwt` with `authorization_code`, `client_credentials`,
-`passcode` and the OIDC grants; `saml` with `saml2_pure`, `saml2_bearer`) are
-valid pairs whose providers this version does not build yet: `getProvider`
-throws a plain `Error` for them. Use the token API with a `provider` for those
-destinations meanwhile.
+No row needs `serviceUrl`: it is where the connector connects, not
+authorization data, and no token provider reads it. Take the connector's URL
+from your key store's `getConnectionConfig`.
+
+The OIDC grants (`jwt` with `oidc_authorization_code`, `device_code`,
+`password`, `token_exchange`) and the SAML grants (`saml` with `saml2_pure`,
+`saml2_bearer`) are valid pairs whose providers this version does not build
+yet: `getProvider` throws a plain `Error` for them. Use the token API with a
+`provider` for those destinations meanwhile.
 
 A destination that lacks what its type needs throws `DestinationConfigError`,
 naming the fields — never their values:
@@ -150,8 +171,29 @@ try {
 
 The broker builds one provider per destination and keeps it: concurrent first
 calls share one build, a build that threw is retried on the next call, and a
-destination rewritten on disk is picked up by a new broker. `getProvider`
-writes to neither store.
+destination rewritten on disk is picked up by a new broker.
+
+### What a provider obtains is stored; `flush()`
+
+A token provider `getProvider` built writes every token it obtains — at
+`prepare()`, on expiry, or in `rejected()` after a 401 — to the session store
+before it answers: `{ authorizationToken, expiresAt, refreshToken }` in one
+`saveSession`, the stored refresh token kept when the result has none, and
+nothing else — no URL, no `authType`, no client. The key store is never
+written. `basic`, `snc` and `none` obtain nothing and write nothing.
+
+A write the store refuses does not fail the authentication: the broker retries
+it on its own (one second, doubling, capped at a minute, on a timer that does
+not keep the process alive), and only the latest result per destination is
+written. Before the process ends, ask whether everything landed:
+
+```typescript
+try {
+  await broker.flush(); // one more attempt for each pending write
+} catch (error) {
+  // AggregateError: the message names the destinations still not stored
+}
+```
 
 ## Store Methods
 
@@ -325,9 +367,10 @@ constructor(
     sessionStore: ISessionStore;
     serviceKeyStore?: IServiceKeyStore;  // getProvider needs it
     provider?: IRefreshableTokenProvider | TokenProviderFactory; // the token API needs it
-    // collaborators, declared for the token grants:
-    authorization?, oidcAuthorization?, deviceCodePresenter?,
-    samlCookies?, assertionReplayStore?
+    // collaborators, each a function of the destination:
+    authorization?,  // (destination, grant) — authorization_code, passcode
+    // declared for the OIDC and SAML grants, not built yet:
+    oidcAuthorization?, deviceCodePresenter?, samlCookies?, assertionReplayStore?
   },
   logger?: ILogger,
 )
@@ -353,6 +396,11 @@ type TokenProviderFactory = (
     has credentials;
   - `connConfig`: the session's connection config with `serviceUrl` resolved
     and the token stored last.
+- `config.authorization` — `(destination, grant) => IAuthorizationStrategy<string>`,
+  the login of `jwt` / `authorization_code` and `jwt` / `passcode`. Called once
+  when the destination's provider is built; never disposed by the broker. No
+  default: those grants without it are a `DestinationConfigError` naming
+  `authorization`.
 - `logger` — optional `ILogger`; without one nothing is logged. No log line
   contains any part of a token.
 
@@ -369,6 +417,16 @@ The provider the destination states (see *A Provider for a Connector*), cached
 per destination. Throws `DestinationConfigError` when the destination lacks
 what its type needs; a store failure other than absence is thrown as the store
 raised it.
+
+#### flush()
+
+```typescript
+async flush(): Promise<void>
+```
+
+One more attempt for every session write still pending; resolves when all have
+landed, rejects with an `AggregateError` naming the destinations whose store
+still refuses (the broker keeps retrying them). Call it on shutdown.
 
 #### getToken()
 
@@ -496,7 +554,9 @@ const tokens = await Promise.all(
   authorization token for destination "<name>"`.
 - **Store reads**: `null` or `FILE_NOT_FOUND` means absent and the broker tries
   the next source; any other store failure (an invalid or unreadable service
-  key, for instance) is thrown unchanged. **Store writes** that fail propagate.
+  key, for instance) is thrown unchanged. **Store writes** that fail propagate
+  from the token API; a `getProvider` provider's write is retried instead and
+  reported by `flush()`.
 
 ```typescript
 import { ValidationError } from '@mcp-abap-adt/auth-providers';

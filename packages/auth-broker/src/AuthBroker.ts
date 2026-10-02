@@ -3,6 +3,9 @@
  *
  * `getProvider` builds the `IAuthProvider` a destination states, from the
  * means its service key store holds and the secret its session store holds.
+ * Every token provider it builds writes what it obtains back to the session
+ * store through `onTokens` — the secret alone, retried by the broker when the
+ * store fails (`SessionWriter`); `flush()` reports what is still pending.
  * The token API (`getToken`, `refreshToken`, `createTokenRefresher`) asks a
  * provider the consumer gives it and keeps what it answers in the session
  * store.
@@ -33,10 +36,13 @@ import { DestinationConfigError } from './DestinationConfigError';
 import {
   basicProvider,
   handedOverProvider,
+  isUaaGrant,
   sncProvider,
   statedAuthType,
   statedGrant,
+  uaaProvider,
 } from './destinations';
+import { SessionWriter } from './SessionWriter';
 import type {
   IAuthorizationConfig,
   IConnectionConfig,
@@ -133,6 +139,15 @@ const SECRET_FIELDS = [
 const isSecretField = (field: string): boolean =>
   (SECRET_FIELDS as readonly string[]).includes(field);
 
+/** When the result expires, in epoch ms: its own `expiresAt`, else `expiresIn` from now. */
+function expiryOf(result: ITokenResult): number | undefined {
+  if (typeof result.expiresAt === 'number') return result.expiresAt;
+  if (typeof result.expiresIn === 'number') {
+    return Date.now() + Math.round(result.expiresIn * 1000);
+  }
+  return undefined;
+}
+
 function errorCode(error: unknown): string | undefined {
   if (error !== null && typeof error === 'object' && 'code' in error) {
     const code = (error as { code: unknown }).code;
@@ -155,6 +170,9 @@ export class AuthBroker {
   private readonly providers = new Map<string, IRefreshableTokenProvider>();
   /** getProvider's cache: the promise of the build, set before its first read. */
   private readonly built = new Map<string, Promise<IAuthProvider>>();
+  private readonly authorization: AuthBrokerConfig['authorization'];
+  /** getProvider's writes of the session secret, retried on their own (§6). */
+  private readonly writer: SessionWriter;
 
   /**
    * @param config Stores and the provider (instance or factory)
@@ -209,7 +227,12 @@ export class AuthBroker {
     this.sessionStore = sessionStore;
     this.serviceKeyStore = serviceKeyStore;
     this.provider = provider;
+    this.authorization = config.authorization;
     this.logger = logger ?? noOpLogger;
+    this.writer = new SessionWriter(
+      (destination, result) => this.writeSecret(destination, result),
+      this.logger,
+    );
     this.logger.debug('[AuthBroker] Broker initialized', {
       hasServiceKeyStore: !!serviceKeyStore,
       providerForm: typeof provider === 'function' ? 'factory' : 'instance',
@@ -524,6 +547,10 @@ export class AuthBroker {
    * One provider per destination for the broker's life: concurrent first calls
    * share one build, and a build that threw is tried again on the next call.
    *
+   * A token provider (the UAA grants) is seeded from the session and writes
+   * every token it obtains — at `prepare()`, on expiry, or in `rejected()` after
+   * a 401 — back to the session store before it answers (see `flush()`).
+   *
    * @throws DestinationConfigError when the destination lacks what its type
    *   needs — naming the fields or options, never a value.
    */
@@ -567,6 +594,38 @@ export class AuthBroker {
       provider = sncProvider(destination, stated, this.logger);
     } else {
       const grant = statedGrant(destination, authType, stated);
+      if (isUaaGrant(grant)) {
+        const client = await this.read(destination, 'client', () =>
+          serviceKeyStore.getAuthorizationConfig(destination),
+        );
+        const secret =
+          grant === 'client_credentials'
+            ? null
+            : await this.read(destination, 'session', () =>
+                this.sessionStore.loadSession(destination),
+              );
+        provider = uaaProvider({
+          destination,
+          grant,
+          client,
+          secret,
+          authorization: this.authorization,
+          logger: this.logger,
+          // The expiry is fixed when the result arrives, not when a retry
+          // finally writes it.
+          onTokens: (result) =>
+            this.writer.submit(destination, {
+              ...result,
+              expiresAt: expiryOf(result),
+            }),
+        });
+        this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
+          authType,
+          grant,
+          seeded: !!secret,
+        });
+        return provider;
+      }
       if (grant !== 'none') {
         throw new Error(
           `Destination "${destination}": getProvider does not build the ${authType} / ${grant} provider in this version`,
@@ -581,6 +640,66 @@ export class AuthBroker {
       authType,
     });
     return provider;
+  }
+
+  /**
+   * Waits for the session writes still pending — each gets one more attempt —
+   * and rejects naming the destinations whose store still refuses. Call it on
+   * shutdown to know whether every token a provider obtained is stored; the
+   * broker keeps retrying after a rejection.
+   */
+  flush(): Promise<void> {
+    return this.writer.flush();
+  }
+
+  /**
+   * One write of the destination's session secret — and nothing else (spec §6):
+   * `{ authorizationToken, expiresAt, refreshToken }` in one `saveSession`. No
+   * means is ever written: not `serviceUrl`, not `authType`, not the client —
+   * they live in the key store, which the broker never writes (H4).
+   *
+   * - `expiresAt`: fixed by `onTokens` when the result arrived — the result's
+   *   own, else the `expiresIn` it reports counted from then (the rule the
+   *   provider applies to its own cache).
+   * - `refreshToken`: the result's, else the one the session holds, read at
+   *   write time, so a result without one does not erase the stored one.
+   * - A destination the key store now states as `basic` or `snc` is not
+   *   written: those obtain no session secret.
+   */
+  private async writeSecret(
+    destination: string,
+    result: ITokenResult,
+  ): Promise<void> {
+    const serviceKeyStore = this.serviceKeyStore;
+    const means = serviceKeyStore
+      ? await this.read(destination, 'means', () =>
+          serviceKeyStore.getConnectionConfig(destination),
+        )
+      : null;
+    if (means?.authType === 'basic' || means?.authType === 'snc') {
+      this.logger.warn(
+        `[AuthBroker] Not written: ${destination} is a ${means.authType} destination, which holds no session secret`,
+      );
+      return;
+    }
+    const stored = result.refreshToken
+      ? null
+      : await this.read(destination, 'session', () =>
+          this.sessionStore.loadSession(destination),
+        );
+    const storedRefreshToken =
+      typeof stored?.refreshToken === 'string' && stored.refreshToken !== ''
+        ? stored.refreshToken
+        : undefined;
+    await this.sessionStore.saveSession(destination, {
+      authorizationToken: result.authorizationToken,
+      expiresAt: result.expiresAt,
+      refreshToken: result.refreshToken || storedRefreshToken,
+    });
+    this.logger.info(`[AuthBroker] Session secret saved for ${destination}`, {
+      hasRefreshToken: !!(result.refreshToken || storedRefreshToken),
+      expiresAt: result.expiresAt,
+    });
   }
 
   /**

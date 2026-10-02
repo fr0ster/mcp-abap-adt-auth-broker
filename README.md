@@ -6,7 +6,7 @@ log in through it. Two packages, one repository.
 
 | package | what it is | depends on |
 |---|---|---|
-| [`@mcp-abap-adt/auth-broker`](packages/auth-broker) | the library: for a destination name, builds the `IAuthProvider` it states (`getProvider`) from the means in its key store and the secret in its session store; and the token API — reads the stores, gets a token from a provider, persists the result | the contract packages (`interfaces-auth`, `interfaces-auth-sap`, `interfaces-auth-broker`, `interfaces-utils`), `auth-providers` |
+| [`@mcp-abap-adt/auth-broker`](packages/auth-broker) | the library: for a destination name, builds the `IAuthProvider` it states (`getProvider`) from the means in its key store and the secret in its session store, and stores every token that provider obtains; and the token API — reads the stores, gets a token from a provider, persists the result | the contract packages (`interfaces-auth`, `interfaces-auth-sap`, `interfaces-auth-broker`, `interfaces-utils`), `auth-providers` |
 | [`@mcp-abap-adt/auth-broker-cli`](packages/auth-broker-cli) | the `mcp-auth` and `mcp-sso` commands: service key, OIDC or SAML login, written to a session file | the library, `auth-stores`, `auth-providers`, the logger |
 
 ## Installing
@@ -53,6 +53,7 @@ npm run check      # build, type checks, lint, dependency graph, packed tarballs
 | `check:publish` | `tools/test-publish-changed.js`: the release tool against fixture repositories |
 | `check` | all of the above but Jest |
 | `test:live` | the library's live suite against real systems — not in `test` or `check`; each case skips, printing why, where its variables, platform or RFC SDK are missing ([`TESTING.md`](docs/development/TESTING.md#live-checks-getprovider-against-real-systems)) |
+| `test:stand` | the library's token-grant suites against UAA and Keycloak in Docker (`packages/auth-broker/tests/stand`): starts the stand, runs them, stops what it started; CI runs it as its own job. `stand:up` / `stand:down` keep it running between runs ([`TESTING.md`](docs/development/TESTING.md#the-stand-uaa-and-keycloak-in-docker)) |
 | `release:publish` | `tools/publish-changed.js` |
 | `chrono` | `tools/version-stats.sh` |
 

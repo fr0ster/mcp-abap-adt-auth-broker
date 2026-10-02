@@ -18,7 +18,8 @@ globally for them.
 
 ## Features
 
-- 🔌 **A credential for a connector**: `getProvider(destination)` builds the `IAuthProvider` the destination states — basic, SNC, or a credential handed over — from the service key store's means and the session store's secret
+- 🔌 **A credential for a connector**: `getProvider(destination)` builds the `IAuthProvider` the destination states — basic, SNC, the UAA grants (authorization code, client credentials, passcode), or a credential handed over — from the service key store's means and the session store's secret
+- 💾 **What a provider obtains is stored**: every token a `getProvider` provider obtains or renews — at `prepare()`, on expiry, or after a 401 in `rejected()` — is written to the session store, the secret alone; a failed write is retried by the broker, and `flush()` tells you whether everything landed
 - 🎯 **Per destination**: one provider per destination name, built by a factory or given once
 - 🔄 **Provider-driven token lifecycle**: The provider decides whether its cached token is still good, refreshes it, or logs in; the broker persists what it returns
 - ⚡ **Forced refresh**: `refreshToken()` obtains a new token even when the cached one looks valid — for a caller holding a 401
@@ -139,8 +140,17 @@ const provider = await broker.getProvider('DEV'); // an IAuthProvider
 |---|---|---|---|
 | `basic` (no grant read) | `new BasicAuthProvider(username, password)` | `username`, `password` | nothing |
 | `snc` (no grant read) | `SncLogonProvider.forSecureLoginClient({ partnerName, qop, sncLib, myName, logger })` | `sncPartnerName` (required); `sncQop`, `sncLib`, `sncMyName` when set | nothing |
+| `jwt` / `authorization_code` | `AuthorizationCodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` | the seed: `authorizationToken`, `refreshToken`, `expiresAt` |
+| `jwt` / `client_credentials` | `ClientCredentialsProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` | nothing (the row takes the client alone) |
+| `jwt` / `passcode` | `UaaPasscodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = a public client) | the seed: `authorizationToken`, `refreshToken`, `expiresAt` |
 | `jwt` / `none` | `TokenAuthProvider.fixed(authorizationToken)` | `authType`, `grantType` | `authorizationToken` (required) |
 | `saml` / `none` | `new SamlAuthProvider(sessionCookies)` | `authType`, `grantType` | `sessionCookies` (required) |
+
+**No row reads `serviceUrl`.** The URL of the system is where the connector
+connects, not authorization data: no token provider reads it — a UAA grant
+needs the client and `uaaUrl` — so `getProvider` neither requires nor passes
+it. Give the connector its URL from your key store (`getConnectionConfig`),
+as the key store answers it.
 
 `none` is how a handed-over credential is stated: the key store says
 `grantType: 'none'`, and the token or cookies live in the session. The SNC
@@ -153,16 +163,87 @@ The allowed pairs are `jwt` with `authorization_code`, `client_credentials`,
 `passcode`, `oidc_authorization_code`, `device_code`, `password`,
 `token_exchange` or `none`, and `saml` with `saml2_pure`, `saml2_bearer` or
 `none`. A pair outside them is a `DestinationConfigError` naming `grantType`.
-The token grants are allowed pairs whose providers this version does not
-build yet: `getProvider` throws a plain `Error` for them.
+The OIDC grants and the two SAML grants are allowed pairs whose providers
+this version does not build yet: `getProvider` throws a plain `Error` for them.
+
+**The UAA grants.** The client comes from the key store's
+`getAuthorizationConfig` — never from the session store. A session is the
+seed: the stored token is presented while it is valid (a JWT's own `exp`
+decides; the stored `expiresAt` serves a token that carries none), and the
+stored refresh token renews it. Without a session the provider is built
+unseeded and obtains its first token at `prepare()`. `uaaClientSecret: ''` is
+a public client: `passcode` takes it as no secret; `AuthorizationCodeProvider`
+and `ClientCredentialsProvider` require a secret, so for them `''` is missing.
+
+**The `authorization` option** is the interactive half of
+`authorization_code` and `passcode`: a function of the destination and the
+grant, returning the `IAuthorizationStrategy<string>` the provider logs in
+with. The broker calls it once, when it builds that destination's provider,
+and never disposes what it returns — whoever constructs, disposes. For
+`passcode` the strategy is handed `<uaaUrl>/passcode` as the URL to send the
+user to, and returns the code. There is no default: a destination whose grant
+needs it, without it, is a `DestinationConfigError` naming `authorization`.
+A headless process passes one that refuses (see *Headless Processes*).
+
+```typescript
+import { browserCallbackStrategy, manualPasscodeStrategy } from '@mcp-abap-adt/auth-providers';
+
+const broker = new AuthBroker({
+  serviceKeyStore: myKeyStore,
+  sessionStore: mySessionStore,
+  authorization: (destination, grant) =>
+    grant === 'passcode'
+      ? manualPasscodeStrategy({ timeoutMs: 300_000 })
+      : browserCallbackStrategy({ timeoutMs: 120_000 }),
+});
+```
 
 **One provider per destination** for the broker's life: concurrent first calls
 share one build, and a build that threw is tried again on the next call. A
 destination rewritten from outside is picked up by a new broker.
 
-**Nothing is written.** None of these providers obtains anything, so
-`getProvider` writes to neither store; the key store contract has no write
-method at all.
+### Persistence and `flush()`
+
+Every token provider `getProvider` builds writes what it obtains back to the
+session store, through its `onTokens` hook, before it answers — whichever
+moment triggered the renewal: `prepare()`, `authorize()` on expiry, or
+`rejected()` after a 401. A renewal inside a connector is stored before the
+connector resends.
+
+- **The secret alone, in one write**: `saveSession(destination, {
+  authorizationToken, expiresAt, refreshToken })`. No means is ever written —
+  not `serviceUrl`, not `authType`, not the client: the client secret lives in
+  the key store, and the broker never writes the key store (its contract has
+  no write method). `expiresAt` is the result's, else the `expires_in` it
+  reported counted from when it arrived. A result without a refresh token
+  keeps the one the session holds.
+- **`basic` and `snc` are never written**: they obtain no session secret, and
+  `none` obtains nothing either. A destination the key store states as
+  `basic` or `snc` at write time is not written.
+- **A failed write does not fail the authentication.** The connector goes on
+  with the token it holds; the broker keeps the result pending for that
+  destination and retries on its own — one second, doubling, capped at one
+  minute — on a timer that never keeps the process alive. A newer result
+  replaces the pending one; writes for one destination never overlap. Each
+  failure is logged by its class name, never its message.
+- **`flush()`** gives every pending write one more attempt, resolves when all
+  have landed, and rejects (an `AggregateError` naming the destinations; each
+  of its `errors` is `"<destination>": <error class>` — never the store's own
+  message, which may quote what was being written) when the store still
+  refuses — the broker keeps retrying.
+  Call it on shutdown — on `SIGTERM`, before a stdio transport closes — to
+  know whether every token is stored.
+
+```typescript
+process.on('SIGTERM', async () => {
+  try {
+    await broker.flush();
+  } catch (error) {
+    logger.error(`Tokens not stored: ${(error as Error).message}`);
+  }
+  process.exit(0);
+});
+```
 
 **A destination that lacks what its type needs** is a `DestinationConfigError`
 (see *Error Handling*), thrown by `getProvider` before any provider exists —
@@ -546,9 +627,10 @@ new AuthBroker(
           authConfig: IAuthorizationConfig | null,
           connConfig: IConnectionConfig,
         ) => IRefreshableTokenProvider);
-    // Collaborators, each a function of the destination (declared; no
-    // destination getProvider builds in this version uses one yet):
-    authorization?: (destination: string, grant: StrategyGrant) => IAuthorizationStrategy<string>;
+    // Collaborators, each a function of the destination, called once per
+    // build, never disposed by the broker:
+    authorization?: (destination: string, grant: StrategyGrant) => IAuthorizationStrategy<string>; // authorization_code, passcode
+    // Declared for the OIDC and SAML grants, which this version does not build yet:
     oidcAuthorization?: (destination: string) => IAuthorizationStrategy<OidcCallbackResult>;
     deviceCodePresenter?: (destination: string) => IDeviceCodePresenter;
     samlCookies?: (destination: string) => (samlResponse: string) => Promise<string>;
@@ -562,7 +644,8 @@ new AuthBroker(
 - `config.sessionStore` - **Required** - The session secret: the token or cookies, `expiresAt`, the refresh token. For the token API, its `serviceUrl`, or the service key's, is required.
 - `config.serviceKeyStore` - The means: `authType`, `grantType`, the client, basic's user and password, the SNC fields, `serviceUrl`. **Required by `getProvider`**, which has no other source of means.
 - `config.provider` - The token API's source (`getToken`, `refreshToken`, `createTokenRefresher`): a provider instance, used for every destination, or a factory (`TokenProviderFactory`), called once per destination and seeded with what the stores hold (see *Basic Usage*). Not used by `getProvider`. Without it, the token API throws `DestinationConfigError` naming `provider`.
-- The collaborator options — the interactive strategies, the device-code presenter, the SAML cookie function and replay store — are declared for the token grants; each will be required only by the grants that use it, and the broker supplies no default.
+- `config.authorization` - The interactive strategy of `jwt` / `authorization_code` and `jwt` / `passcode`, as a function of the destination and the grant (see *A Provider for a Connector*). Required only by those grants; the broker supplies no default and disposes nothing.
+- The other collaborator options — the OIDC strategy, the device-code presenter, the SAML cookie function and replay store — are declared for the OIDC and SAML grants; each will be required only by the grants that use it.
 - `logger` - Optional logger. If not provided, nothing is logged.
 
 **Available Implementations:**
@@ -578,6 +661,13 @@ and the session store's secret (see *A Provider for a Connector*). Cached per
 destination; a failed build is retried on the next call. Throws
 `DestinationConfigError` for a destination that lacks what its type needs, and
 passes a store failure other than absence on as the store raised it.
+
+##### `flush(): Promise<void>`
+
+Every session write still pending gets one more attempt. Resolves when all
+have landed; rejects with an `AggregateError` naming the destinations whose
+store still refuses (its `errors` carry each destination and the store
+error's class only, never its message) — the broker keeps retrying them. See *Persistence and `flush()`*.
 
 ##### `getToken(destination: string): Promise<string>`
 
@@ -635,6 +725,8 @@ configuration whole, and the key's only when the session had none.
   | `snc` whose settings the provider refuses | the store field, e.g. `sncQop` |
   | `jwt` / `none` without a token in the session | `authorizationToken` |
   | `saml` / `none` without cookies in the session | `sessionCookies` |
+  | a UAA grant without its client in the key store (`''` counts as missing) | `uaaUrl`, `uaaClientId`, and `uaaClientSecret` for `authorization_code` / `client_credentials` — each that is missing |
+  | `authorization_code` / `passcode` without the `authorization` option | `authorization` |
 
 - **Provider errors propagate unchanged** — the same object, with its class,
   `code`, `missingFields` and `cause`: auth-providers' `ValidationError`,
@@ -652,7 +744,9 @@ configuration whole, and the key's only when the session had none.
   the new token was written. (The session stores of
   auth-stores answer an unreadable session file with `null` themselves, so it
   reads as absent before the broker sees it.)
-- **Store writes propagate**: a token that cannot be saved is an error.
+- **Store writes**: the token API's write propagates — a token that cannot be
+  saved is an error. A `getProvider` provider's write never fails the
+  authentication; it is retried, and `flush()` reports it.
 - **A provider result without a token** is an error.
 
 ```typescript
@@ -679,6 +773,10 @@ try {
 ```
 
 #### Secrets in the Session Store
+
+What a `getProvider` provider obtains is written as the secret alone —
+`authorizationToken`, `expiresAt`, `refreshToken` — and nothing else (see
+*Persistence and `flush()`*). The token API, below, still writes as 3.x did.
 
 The broker writes the token (or session cookies) and the refresh token to the
 session store — never the client secret. When the credentials come from the
