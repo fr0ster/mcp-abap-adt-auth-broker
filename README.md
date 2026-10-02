@@ -7,7 +7,7 @@ log in through it. Two packages, one repository.
 | package | what it is | depends on |
 |---|---|---|
 | [`@mcp-abap-adt/auth-broker`](packages/auth-broker) | the library: for a destination name, builds the `IAuthProvider` it states (`getProvider`) from the means in its key store and the secret in its session store, and stores every token or SAML session cookie that provider obtains; and the token API (`getToken`, `refreshToken`, `createTokenRefresher`) on that same provider, or on one you give it | the contract packages (`interfaces-auth`, `interfaces-auth-sap`, `interfaces-auth-broker`, `interfaces-utils`), `auth-providers` |
-| [`@mcp-abap-adt/auth-broker-cli`](packages/auth-broker-cli) | the `mcp-auth` and `mcp-sso` commands: service key, OIDC or SAML login, written to a session file | the library, `auth-stores`, `auth-providers`, the logger |
+| [`@mcp-abap-adt/auth-broker-cli`](packages/auth-broker-cli) | the `mcp-auth` and `mcp-sso` commands: service key, OIDC, UAA passcode or SAML login, written as a destination — the means through `auth-stores`' destination store, the secret through the broker — to one `.env` file | the library, `auth-stores`, `auth-providers`, the logger |
 
 ## Installing
 
@@ -25,7 +25,10 @@ npm install -g @mcp-abap-adt/auth-broker-cli
 
 Up to 3.0.4 the commands shipped in the library package; from 3.1.0 they are
 `@mcp-abap-adt/auth-broker-cli` (1.0.0 on), which depends on the library
-`^3.1.0`. If you installed the library globally for the commands:
+`^3.1.0`. Its 2.0.0 is released with the library's 4.0.0 (`^4.0.0`) and writes
+a complete 4.0 destination; what changes for a 1.0.0 user is in its
+[README](packages/auth-broker-cli/README.md#migrating-from-100). If you
+installed the library globally for the commands:
 
 ```bash
 npm uninstall -g @mcp-abap-adt/auth-broker && npm i -g @mcp-abap-adt/auth-broker-cli

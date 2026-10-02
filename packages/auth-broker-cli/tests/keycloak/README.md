@@ -87,18 +87,21 @@ node dist/mcp-sso.js \
   --sp-entity-id mcp-sso-saml \
   --acs-url http://localhost:3002/acs \
   --idp-metadata http://localhost:8080/realms/mcp-sso/protocol/saml/descriptor \
-  --authn-request-id <ID of the AuthnRequest saml-sp.js built> \
+  --idp-initiated \
   --assertion <base64> \
+  --assertion-flow assertion \
+  --service-url http://localhost:4004 \
   --output /tmp/keycloak-saml.env \
   --type abap
 ```
 
-`mcp-sso` validates the assertion (auth-providers 4). `--idp-metadata` reads the realm's
-signing certificate and entityID from its SAML descriptor — the realm's key is generated when
-Keycloak imports the realm, so it cannot be checked in — and `--authn-request-id` is the `ID` of
-the request `saml-sp.js` built (it records it in `/tmp/keycloak-saml-request-id.txt`), since
-`mcp-sso` did not send it. `run-tests.sh` logs in IdP-initiated instead and passes
-`--idp-initiated`; the realm names `http://localhost:3002/acs` as that login's ACS.
+`mcp-sso` writes the destination (`saml` / `saml2_pure`, the trust under `SAP_SAML_*`) and the
+broker's provider validates the assertion. `--idp-metadata` reads the realm's signing certificate
+and entityID from its SAML descriptor — the realm's key is generated when Keycloak imports the
+realm, so it cannot be checked in. An assertion answering the SP-initiated request `saml-sp.js`
+built cannot be used from 2.0.0: that needed `--authn-request-id`, which a destination cannot
+state, so `mcp-sso` refuses it. `run-tests.sh` logs in IdP-initiated and passes `--idp-initiated`;
+the realm names `http://localhost:3002/acs` as that login's ACS.
 
 ## Automated (No Manual Codes)
 
@@ -137,4 +140,6 @@ tests/keycloak/run-saml.sh
 Notes:
 - OIDC device flow needs browser approval but no code paste.
 - SAML flow requires browser login, but no copy/paste of assertion.
-- `run-saml.sh` uses a simple SP-initiated AuthnRequest to avoid IdP-initiated URL issues.
+- `run-saml.sh` uses a simple SP-initiated AuthnRequest, answered with `--authn-request-id`,
+  which `mcp-sso` 2.0.0 refuses (see above): it fails until a destination can state a request ID.
+  `run-tests.sh` covers the SAML pure flow IdP-initiated, headless.

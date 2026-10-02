@@ -338,7 +338,13 @@ The commands in this section and the next are `@mcp-abap-adt/auth-broker-cli`
 3.0.4 they shipped in `@mcp-abap-adt/auth-broker`. Their
 [README](../../packages/auth-broker-cli/README.md) has every option.
 
-Use `mcp-auth` to generate or refresh `.env`/JSON output using AuthBroker + stores.
+Use `mcp-auth` to write a destination from a service key: its means through
+`EnvDestinationStore.setDestination` (`SAP_AUTH_TYPE=jwt`, `SAP_GRANT_TYPE`,
+the key's client, `SAP_URL`), then a login through the broker's token API with
+the command's own provider, which stores the secret alone (token, expiry,
+refresh token, `SAP_ISSUED_FOR` / `SAP_ISSUED_BY`) through the session store —
+both in one `<destination>.env`, `XSUAA_*` with `--type xsuaa`. The output is
+written once `flush()` reports the secret stored; otherwise the command exits 1.
 
 ```bash
 mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--credential] [--browser auto|none|system|chrome|edge|firefox] [--format json|env]
@@ -362,8 +368,10 @@ your identity provider, pass `--redirect-port` to match it. A login is given 5 m
 complete (a person switching to a browser and signing in by hand, not an unattended caller).
 
 **Behavior:**
-- If `--env` is provided and exists, refresh token is attempted first.
-- If refresh fails (or env is missing), service key auth is used.
+- If `--env` is provided and exists, it is the starting point: its refresh token
+  is attempted first, and its means are kept where the run does not restate them.
+- If refresh fails (or env is missing), the grant the command states logs in.
+- The grant is the command's (`--credential` or not), never read from the key.
 
 **Examples:**
 ```bash
@@ -383,13 +391,24 @@ mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --credential
 mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsuaa
 ```
 
-## CLI: mcp-sso (SAML)
+## CLI: mcp-sso
+
+`mcp-sso` writes the destination its flow states — `jwt` / `oidc_authorization_code`,
+`device_code`, `password`, `passcode` (`--flow password --passcode`), `token_exchange`;
+`saml` / `saml2_pure`, `saml2_bearer`, or `none` for `--cookie` — then asks the broker for that
+destination's provider (`getProvider`), handing it every collaborator explicitly: the OIDC
+browser, passcode and SAML strategies, the device-code presenter on its logger, the SAML cookie
+function and the process-wide replay store. The table of what each flow writes is in the
+[CLI's README](../../packages/auth-broker-cli/README.md#what-each-command-writes-and-where).
+
+### SAML
 
 `mcp-sso` (and `mcp-auth saml2-pure`/`saml2-bearer`, which call it) validates every SAML
 assertion through `@mcp-abap-adt/auth-providers` 5 before using it, and a SAML run does not start
-without the trust it checks against. `mcp-sso` builds the validator from that trust: `bearer`
-requires the `Assertion` signed (the token endpoint gets the Assertion alone), `pure` the
-`Response`; a replay is refused within the process:
+without the trust it checks against. `mcp-sso` writes that trust into the destination
+(`SAP_SAML_IDP_CERTIFICATES_B64`, `SAP_SAML_IDP_ENTITY_ID`) and the broker builds the validator
+from it: `bearer` requires the `Assertion` signed (the token endpoint gets the Assertion alone),
+`pure` the `Response`; a replay is refused within the process:
 
 - `--idp-metadata <url|path>` — the identity provider's SAML metadata, e.g.
   `https://<tenant>.accounts.ondemand.com/saml2/metadata` — or `--idp-cert <path>` (repeatable;
@@ -402,8 +421,9 @@ requires the `Assertion` signed (the token endpoint gets the Assertion alone), `
   needs it: both refuse an assertion carrying `InResponseTo`. Use it with `--assertion`, or with
   `--assertion-flow manual` (its default), which asks for the `SAMLResponse` the identity
   provider posts; the browser flow has no URL to open and is refused.
-- `--authn-request-id <id>` for an `--assertion` answering an SP-initiated request that
-  `mcp-sso` did not send.
+- `--authn-request-id` is refused from 2.0.0: a destination cannot state a request ID, so an
+  `--assertion` answering a request `mcp-sso` did not send cannot be validated.
+- `bearer` writes its client: `--uaa-url` and `--client-id`, or `--service-key`.
 
 ```bash
 # With a service key: XSUAA's side from its metadata, the IdP's from the IdP's
@@ -414,11 +434,12 @@ mcp-sso bearer --service-key ./service-key.json \
 # Every value stated
 mcp-sso bearer --idp-sso-url https://idp/sso --sp-entity-id <uaa-entity-id> --acs-url <uaa-bearer-acs> \
   --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --idp-initiated \
-  --token-endpoint https://uaa.example/oauth/token --assertion <base64> --output ./sso.env --type xsuaa
+  --uaa-url https://uaa.example --client-id <client> \
+  --token-endpoint https://uaa.example/oauth/token/alias/<alias> --assertion <base64> --output ./sso.env --type xsuaa
 ```
 
 See the [CLI's README](../../packages/auth-broker-cli/README.md), *CLI: mcp-sso*, for every
-option, the `--config` fields and the migration from 2.2.0.
+option, the `--config` fields, the migration from 2.2.0 and *Migrating from 1.0.0*.
 
 ## API Reference
 
