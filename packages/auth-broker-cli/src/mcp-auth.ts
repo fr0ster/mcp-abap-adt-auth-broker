@@ -20,10 +20,10 @@
  *   mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap
  */
 
+import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
-import { spawnSync } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
 import { type McpAuthOptions, runMcpAuth } from './runMcpAuth';
 import { createWorkDir } from './workDir';
 
@@ -339,7 +339,7 @@ function parseArgs(
       i++;
     } else if (args[i] === '--redirect-port' && i + 1 < args.length) {
       const port = parseInt(args[i + 1], 10);
-      if (isNaN(port) || port < 1 || port > 65535) {
+      if (Number.isNaN(port) || port < 1 || port > 65535) {
         console.error(
           `Invalid redirect port: ${args[i + 1]}. Must be a number between 1 and 65535`,
         );
@@ -498,9 +498,10 @@ async function main() {
     });
     // Exit explicitly to close any open handles (e.g., OAuth callback server)
     process.exit(code);
-  } catch (error: any) {
-    console.error(`❌ Error: ${error.message}`);
-    if (error.stack) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`❌ Error: ${message}`);
+    if (error instanceof Error && error.stack) {
       console.error(error.stack);
     }
     process.exit(1);
