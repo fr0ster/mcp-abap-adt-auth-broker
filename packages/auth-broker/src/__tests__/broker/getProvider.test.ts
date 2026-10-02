@@ -700,39 +700,6 @@ describe('getProvider', () => {
     });
   });
 
-  describe('token grants', () => {
-    // The UAA grants are built since 4c (getProviderTokens.test.ts).
-    it.each([
-      ['jwt', 'oidc_authorization_code'],
-      ['jwt', 'device_code'],
-      ['jwt', 'password'],
-      ['jwt', 'token_exchange'],
-      ['saml', 'saml2_pure'],
-      ['saml', 'saml2_bearer'],
-    ])(
-      '%s / %s is a valid pair this version does not build yet: no provider, no write',
-      async (authType, grantType) => {
-        const store = sessionStore({
-          authorizationToken: 't',
-          sessionCookies: 'c',
-        });
-        const error = await new AuthBroker({
-          sessionStore: store,
-          serviceKeyStore: keyStore({
-            authType,
-            grantType,
-          } as IConnectionConfig),
-        })
-          .getProvider('D')
-          .catch((e: unknown) => e);
-        expect(error).toBeInstanceOf(Error);
-        expect(error).not.toBeInstanceOf(DestinationConfigError);
-        expect((error as Error).message).toContain('does not build');
-        expectNoWrites(store);
-      },
-    );
-  });
-
   describe('cache', () => {
     it('builds once under concurrent first calls, and hands every caller the same provider', async () => {
       const keys = keyStore({

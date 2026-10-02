@@ -37,13 +37,19 @@ import {
   type Binding,
   boundHere,
   handedOverBinding,
+  oidcBinding,
+  samlPureBinding,
   uaaBinding,
 } from './binding';
 import { DestinationConfigError } from './DestinationConfigError';
 import {
   basicProvider,
   handedOverProvider,
+  isOidcGrant,
+  isSamlGrant,
   isUaaGrant,
+  oidcProvider,
+  samlProvider,
   sncProvider,
   statedAuthType,
   statedGrant,
@@ -192,6 +198,10 @@ export class AuthBroker {
   /** getProvider's cache: the promise of the build, set before its first read. */
   private readonly built = new Map<string, Promise<IAuthProvider>>();
   private readonly authorization: AuthBrokerConfig['authorization'];
+  private readonly oidcAuthorization: AuthBrokerConfig['oidcAuthorization'];
+  private readonly deviceCodePresenter: AuthBrokerConfig['deviceCodePresenter'];
+  private readonly samlCookies: AuthBrokerConfig['samlCookies'];
+  private readonly assertionReplayStore: AuthBrokerConfig['assertionReplayStore'];
   /** getProvider's writes of the session secret, retried on their own (§6). */
   private readonly writer: SessionWriter<BoundResult>;
 
@@ -249,6 +259,10 @@ export class AuthBroker {
     this.serviceKeyStore = serviceKeyStore;
     this.provider = provider;
     this.authorization = config.authorization;
+    this.oidcAuthorization = config.oidcAuthorization;
+    this.deviceCodePresenter = config.deviceCodePresenter;
+    this.samlCookies = config.samlCookies;
+    this.assertionReplayStore = config.assertionReplayStore;
     this.logger = logger ?? noOpLogger;
     this.writer = new SessionWriter<BoundResult>(
       (destination, bound) => this.writeSecret(destination, bound),
@@ -568,7 +582,8 @@ export class AuthBroker {
    * One provider per destination for the broker's life: concurrent first calls
    * share one build, and a build that threw is tried again on the next call.
    *
-   * A token provider (the UAA grants) is seeded from the session and writes
+   * A token provider (the UAA, OIDC and SAML grants) is seeded from the
+   * session when the stored secret is bound to this destination, and writes
    * every token it obtains — at `prepare()`, on expiry, or in `rejected()` after
    * a 401 — back to the session store before it answers (see `flush()`).
    *
@@ -615,13 +630,22 @@ export class AuthBroker {
       provider = sncProvider(destination, stated, this.logger);
     } else {
       const grant = statedGrant(destination, authType, stated);
-      if (isUaaGrant(grant)) {
-        const client = await this.read(destination, 'client', () =>
-          serviceKeyStore.getAuthorizationConfig(destination),
-        );
-        // What a secret for this destination is bound to (§4.5): written
-        // with every secret, and required of a stored one before it seeds.
-        const binding = uaaBinding(stated, client);
+      if (grant !== 'none') {
+        // A grant that obtains a secret: the row's client (none for
+        // saml2_pure), what a secret for this destination is bound to
+        // (§4.5) — written with every secret, and required of a stored one
+        // before it seeds — and the stored secret when it is.
+        const client =
+          grant === 'saml2_pure'
+            ? null
+            : await this.read(destination, 'client', () =>
+                serviceKeyStore.getAuthorizationConfig(destination),
+              );
+        const binding = isOidcGrant(grant)
+          ? oidcBinding(stated, client)
+          : grant === 'saml2_pure'
+            ? samlPureBinding(stated)
+            : uaaBinding(stated, client);
         const stored =
           grant === 'client_credentials'
             ? null
@@ -629,32 +653,53 @@ export class AuthBroker {
                 this.sessionStore.loadSession(destination),
               );
         const secret = this.boundOrDiscarded(destination, stored, binding);
-        provider = uaaProvider({
+        // The expiry is fixed when the result arrives, not when a retry
+        // finally writes it.
+        const onTokens = (result: ITokenResult) =>
+          this.writer.submit(destination, {
+            result: { ...result, expiresAt: expiryOf(result) },
+            binding,
+          });
+        const common = {
           destination,
-          grant,
           client,
           secret,
-          authorization: this.authorization,
           logger: this.logger,
-          // The expiry is fixed when the result arrives, not when a retry
-          // finally writes it.
-          onTokens: (result) =>
-            this.writer.submit(destination, {
-              result: { ...result, expiresAt: expiryOf(result) },
-              binding,
-            }),
-        });
+          onTokens,
+        };
+        if (isUaaGrant(grant)) {
+          provider = uaaProvider({
+            ...common,
+            grant,
+            authorization: this.authorization,
+          });
+        } else if (isOidcGrant(grant)) {
+          provider = oidcProvider({
+            ...common,
+            grant,
+            means: stated,
+            oidcAuthorization: this.oidcAuthorization,
+            deviceCodePresenter: this.deviceCodePresenter,
+          });
+        } else if (isSamlGrant(grant)) {
+          provider = samlProvider({
+            ...common,
+            grant,
+            means: stated,
+            authorization: this.authorization,
+            samlCookies: this.samlCookies,
+            assertionReplayStore: this.assertionReplayStore,
+          });
+        } else {
+          // statedGrant admits only the grants of §3.1.
+          throw new Error(`unreachable grant ${grant satisfies never}`);
+        }
         this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
           authType,
           grant,
           seeded: !!secret,
         });
         return provider;
-      }
-      if (grant !== 'none') {
-        throw new Error(
-          `Destination "${destination}": getProvider does not build the ${authType} / ${grant} provider in this version`,
-        );
       }
       const secret = await this.read(destination, 'session', () =>
         this.sessionStore.loadSession(destination),
@@ -715,7 +760,9 @@ export class AuthBroker {
   /**
    * One write of the destination's session secret — and nothing else (spec §6):
    * `{ authorizationToken, expiresAt, refreshToken, issuedFor, issuedBy }` in
-   * one `saveSession`. No means is ever written: not `serviceUrl`, not
+   * one `saveSession` — or, for a `saml2_pure` result (`tokenType: 'saml'`),
+   * `{ sessionCookies, expiresAt, issuedFor, issuedBy }`: cookies are written
+   * as cookies, every other result as a token (`saml2_bearer` included). No means is ever written: not `serviceUrl`, not
    * `authType`, not the client — they live in the key store, which the broker
    * never writes (H4).
    *
@@ -749,25 +796,36 @@ export class AuthBroker {
       );
       return;
     }
-    const stored = result.refreshToken
-      ? null
-      : await this.read(destination, 'session', () =>
-          this.sessionStore.loadSession(destination),
-        );
-    const storedRefreshToken =
-      present(stored?.refreshToken) && boundHere(stored, binding)
-        ? stored.refreshToken
-        : undefined;
-    const secret: IConfig = {
-      authorizationToken: result.authorizationToken,
-      expiresAt: result.expiresAt,
-      refreshToken: result.refreshToken || storedRefreshToken,
-    };
+    let secret: IConfig;
+    if (result.tokenType === 'saml') {
+      // saml2_pure: the cookies are the credential, and SAML has no refresh
+      // token to carry.
+      secret = {
+        sessionCookies: result.authorizationToken,
+        expiresAt: result.expiresAt,
+      };
+    } else {
+      const stored = result.refreshToken
+        ? null
+        : await this.read(destination, 'session', () =>
+            this.sessionStore.loadSession(destination),
+          );
+      const storedRefreshToken =
+        present(stored?.refreshToken) && boundHere(stored, binding)
+          ? stored.refreshToken
+          : undefined;
+      secret = {
+        authorizationToken: result.authorizationToken,
+        expiresAt: result.expiresAt,
+        refreshToken: result.refreshToken || storedRefreshToken,
+      };
+    }
     if (binding.issuedFor !== undefined) secret.issuedFor = binding.issuedFor;
     if (binding.issuedBy !== undefined) secret.issuedBy = binding.issuedBy;
     await this.sessionStore.saveSession(destination, secret);
     this.logger.info(`[AuthBroker] Session secret saved for ${destination}`, {
-      hasRefreshToken: !!(result.refreshToken || storedRefreshToken),
+      credential: secret.sessionCookies !== undefined ? 'cookies' : 'token',
+      hasRefreshToken: !!secret.refreshToken,
       expiresAt: result.expiresAt,
     });
   }

@@ -127,8 +127,8 @@ function resourceOf(means: IConnectionConfig): string | undefined {
 }
 
 /**
- * The UAA grants (`authorization_code`, `client_credentials`, `passcode`):
- * the resource, and `uaaUrl` with `uaaClientId` — both required to match.
+ * The UAA grants (`authorization_code`, `client_credentials`, `passcode`) and
+ * `saml2_bearer`, whose token UAA issues to its client: the resource, and `uaaUrl` with `uaaClientId` — both required to match.
  */
 export function uaaBinding(
   means: IConnectionConfig,
@@ -142,6 +142,41 @@ export function uaaBinding(
       : undefined,
     issuerKind: 'issuer',
     issuerStated: stated,
+  };
+}
+
+/**
+ * The OIDC grants: the resource, and the issuer — `oidcIssuerUrl`, else
+ * `uaaUrl` — with `uaaClientId`; both required to match. Means that state
+ * neither issuer (explicit endpoints alone) bind no stored secret: one is then
+ * never seeded.
+ */
+export function oidcBinding(
+  means: IConnectionConfig,
+  client: IAuthorizationConfig | null,
+): Binding {
+  const issuer = present(means.oidcIssuerUrl)
+    ? means.oidcIssuerUrl
+    : client?.uaaUrl;
+  const stated = present(issuer) && present(client?.uaaClientId);
+  return {
+    issuedFor: resourceOf(means),
+    issuedBy: stated ? issuerUri(issuer, client?.uaaClientId) : undefined,
+    issuerKind: 'issuer',
+    issuerStated: stated,
+  };
+}
+
+/**
+ * `saml2_pure`: the resource, and the ACS of the system that sets the
+ * cookies — `samlAcsUrl`, origin and path; both required to match.
+ */
+export function samlPureBinding(means: IConnectionConfig): Binding {
+  return {
+    issuedFor: resourceOf(means),
+    issuedBy: acsUri(means.samlAcsUrl),
+    issuerKind: 'acs',
+    issuerStated: present(means.samlAcsUrl),
   };
 }
 

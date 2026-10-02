@@ -22,10 +22,14 @@ packages/auth-broker/src/__tests__/
 │   ├── getProviderBinding.test.ts       # a stored secret used only where it is bound (issuedFor,
 │   │                                    # issuedBy): fake stores and auth-stores 3.1.0's
 │   │                                    # AbapSessionStore over a 3.x-shaped file
+│   ├── getProviderOidcSaml.test.ts      # the OIDC and SAML grants: fake stores, real providers,
+│   │                                    # a local token endpoint, auth-mocks' SAML identity provider
 │   └── AuthBroker.integration.test.ts   # real service keys, sessions and providers
 ├── stand/
 │   ├── uaaGrants.test.ts                # the UAA grants against UAA in Docker;
-│   │                                    # `npm run test:stand` runs them
+│   ├── oidcGrants.test.ts               # the OIDC grants against Keycloak in Docker;
+│   ├── samlGrants.test.ts               # the SAML grants, Keycloak to UAA, in Docker;
+│   │                                    # `npm run test:stand` runs the three
 │   └── formLogin.ts                     # plays the user on the stand's login pages
 ├── live/
 │   └── getProvider.live.test.ts         # getProvider through connection 10 against real
@@ -48,17 +52,24 @@ defined). The library's `jest.config.js` ignores `__tests__/live/`;
 ## What each suite needs
 
 - **`AuthBroker.test.ts`**, **`getProvider.test.ts`**,
-  **`getProviderTokens.test.ts`**, **`getProviderBinding.test.ts`** and
-  **every CLI suite**: nothing — no
+  **`getProviderTokens.test.ts`**, **`getProviderBinding.test.ts`**,
+  **`getProviderOidcSaml.test.ts`** and **every CLI suite**: nothing — no
   network beyond the loopback, no configuration, no browser. The SNC case
   writes a 64-byte ELF header for the host's architecture into a temporary
   directory as its `sncLib`: the locator reads only the header, so no SNC
   product is needed. The UAA grants get their tokens from a token endpoint the
-  test starts on `127.0.0.1` (`helpers/tokenEndpoint.ts`), and their
-  interactive half from a recording strategy; the retry of a failed session
-  write runs under Jest's fake timers.
-- **`stand/uaaGrants.test.ts`**: the stand (below). Without `UAA_URL` it is
-  skipped, printing why.
+  test starts on `127.0.0.1` (`helpers/tokenEndpoint.ts`, which also serves
+  an OIDC discovery document and a device authorization endpoint for the
+  OIDC grants), and their interactive half from a recording strategy or
+  presenter; the retry of a failed session write runs under Jest's fake
+  timers. The SAML grants' assertions come from
+  `@mcp-abap-adt/auth-mocks`' identity provider (a dev dependency), started on
+  `127.0.0.1` with a key generated per run — one signing the Response, one
+  the Assertion alone — and fetched by a test strategy as a browser would;
+  nothing in the suite signs a document itself.
+- **`stand/uaaGrants.test.ts`**, **`stand/oidcGrants.test.ts`**,
+  **`stand/samlGrants.test.ts`**: the stand (below). Without `UAA_URL` /
+  `KEYCLOAK_URL` each is skipped, printing why.
 - **`AuthBroker.integration.test.ts`**: a real destination. It reads
   `packages/auth-broker/tests/test-config.yaml`; without it the template
   (`test-config.yaml.template`) is read, its placeholders disable every case,
@@ -103,7 +114,8 @@ clients and signing keys), the Keycloak realm (`keycloak/realm-test.json`) and
 the test SAML IdP's key (`uaa/idp/`). Those keys and passwords are committed
 test fixtures, trusted by nothing but the local stand, so a clone needs only
 Docker. `src/__tests__/stand/formLogin.ts` plays the user on UAA's login form
-and `/passcode` page — no browser is opened.
+and `/passcode` page and on Keycloak's login, device and consent pages — no
+browser is opened.
 
 ```bash
 npm run test:stand                   # start the stand, run the suites, stop what it started
@@ -124,7 +136,7 @@ npm run stand:down                   # … and stop it
   `auth-broker-uaa`, `auth-broker-keycloak`, so Docker tells this stand from
   auth-providers'; both use the same default ports, so only one runs at a time
   unless one is moved.
-- The suite composes the broker as a consumer does: auth-stores 3's
+- Each suite composes the broker as a consumer does: auth-stores 3's
   `EnvDestinationStore` for the means, its `AbapSessionStore` for the secret,
   each in a temporary directory, and reads the session file back from disk.
   It takes UAA's issuer from its discovery document, never from `UAA_URL`.
@@ -137,8 +149,43 @@ session file as the secret alone with its binding (`SAP_ISSUED_FOR`,
 `SAP_ISSUED_BY`, asserted by value), and the two interactive ones renewed by
 refresh after a 401; and a session bound to another URL is not reused — the
 destination's `serviceUrl` changed, the next broker logs in through UAA's form
-again and writes the new binding. Keycloak and the test IdP are there for the OIDC and SAML
-grants, which join with their providers.
+again and writes the new binding.
+
+The OIDC grants against Keycloak's `test` realm (`oidcGrants.test.ts`):
+`password`, `oidc_authorization_code` (Keycloak's login page, PKCE, a public
+client), `device_code` (the consumer's presenter approves the code on
+Keycloak's pages) and `token_exchange` (a subject token obtained for another
+client, stated as means) — each written with its binding (`SAP_ISSUED_BY` the
+realm with `client_id`), renewed after a 401 (by refresh, or for
+`token_exchange` by a new exchange), and `password`'s token reused by a new
+broker.
+
+The SAML grants, Keycloak as identity provider and UAA as service provider
+(`samlGrants.test.ts`, plan D5): `saml2_pure` end to end — Keycloak's signed
+SAMLResponse, validated by the provider, posted by the test's `samlCookies`
+to UAA's web SSO ACS, whose session cookie is checked to be a real UAA login;
+written as cookies (`SAP_SESSION_COOKIES_B64`, `SAP_ISSUED_BY` the ACS),
+reused by a new broker, and renewed by a new login after a 401 — and
+`saml2_bearer`: the assertion exchanged at UAA's bearer grant, written as a
+token, renewed by refresh. The suite registers Keycloak in UAA from its
+metadata, trusts the certificates under `KeyDescriptor use="signing"`, and
+points Keycloak's `uaa-sp` client at the ACS each case needs, at run time.
+
+- **Both SAML logins are IdP-initiated** (`samlIdpInitiated: true`; the
+  test's strategy hands over the SAMLResponse without asking for an
+  AuthnRequest URL). UAA 79.7.0 refuses an assertion whose
+  `SubjectConfirmationData` carries an `InResponseTo` it did not send — at the
+  bearer grant, and, measured here, at web SSO too, even with
+  `login.saml.disableInResponseToCheck: true` (that switch drops the
+  Response-level check only).
+- **Keycloak's assertion lifespan is set to an hour** on `uaa-sp` (its
+  default `Conditions` end a minute after issue, inside a token provider's
+  one-minute margin: the stored cookies would count as expired on arrival, and
+  every request would log in again).
+- **What it does not prove** is SAP ICF's own SAML handling (`SAP_SESSIONID`,
+  `MYSAPSSO2`): no system at hand accepts SAML from a test IdP. Nor does it
+  tell the two validators apart — Keycloak signs both the Response and the
+  Assertion; the unit suite, whose identity providers sign one each, does.
 
 ## Live checks: getProvider against real systems
 

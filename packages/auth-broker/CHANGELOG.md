@@ -22,9 +22,8 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   `SncLogonProvider.forSecureLoginClient` (from `sncPartnerName`, `sncQop`,
   `sncLib`, `sncMyName`), `jwt` / `none` → `TokenAuthProvider.fixed` with the
   session's token, `saml` / `none` → `SamlAuthProvider` with the session's
-  cookies, and the UAA grants (below). The OIDC and SAML grants are valid
-  pairs not built yet: `getProvider` throws a plain `Error` for them. One
-  provider per destination: the promise of the build is cached before the
+  cookies, the UAA grants, the OIDC grants and the SAML grants (below) —
+  every pair of the table. One provider per destination: the promise of the build is cached before the
   first read, so concurrent first calls build once, and dropped when the build
   throws, so the next call retries.
 - **The UAA grants in `getProvider`**: `jwt` / `authorization_code` →
@@ -39,11 +38,43 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   authorization data — no token provider reads it — so the connector takes it
   from the key store, and `getProvider` neither requires it nor passes it to a
   provider; it reads it only to bind a stored secret (below).
+- **The OIDC grants in `getProvider`**: `jwt` / `oidc_authorization_code` →
+  `OidcBrowserProvider` (PKCE), `device_code` → `OidcDeviceFlowProvider`,
+  `password` → `OidcPasswordProvider`, `token_exchange` →
+  `OidcTokenExchangeProvider`. The client id and secret come from the key
+  store's client (`uaaClientSecret: ''` is a public client, sent with no
+  secret); the endpoints from `oidcIssuerUrl` (discovery) or, without it,
+  every explicit endpoint the row reads (`oidcAuthorizationEndpoint`,
+  `oidcDeviceAuthorizationEndpoint`, `oidcTokenEndpoint`); `oidcScopes` as
+  given, joined by one space into `token_exchange`'s `scope`; `password`'s
+  user and `token_exchange`'s subject, audience and actor token from the
+  means — sent, never written. Seeded from the session like the UAA rows;
+  `issuedBy` is `oidcIssuerUrl`, else `uaaUrl`, with `client_id`.
+- **The SAML grants in `getProvider`**: `saml` / `saml2_pure` →
+  `Saml2PureProvider`, `saml2_bearer` → `Saml2BearerProvider`. The broker
+  composes the assertion validator from the destination's trust —
+  `createSignedResponseValidator` for `saml2_pure`,
+  `createSignedAssertionValidator` for `saml2_bearer`, from
+  `samlIdpCertificates`, `samlClockSkewMs` and the consumer's
+  `assertionReplayStore` — and passes `samlIdpEntityId` as the expected
+  issuer, with `samlIdpSsoUrl`, `samlSpEntityId`, `samlAcsUrl`,
+  `samlRelayState` and `samlIdpInitiated`. `saml2_pure` is seeded with the
+  stored cookies and `expiresAt` (auth-providers 5.1.0's seed) and bound to
+  `samlAcsUrl` (origin and path); `saml2_bearer` takes the client and
+  `samlTokenUrl`, is seeded with the token, refresh token and `expiresAt`, and
+  is bound to `uaaUrl` with `client_id`.
 - **The `authorization` option is used**: `(destination, grant) =>
   IAuthorizationStrategy<string>`, the interactive half of
   `authorization_code` and `passcode` (for `passcode` the strategy is handed
   `<uaaUrl>/passcode`). Called once per destination's build, never disposed
-  by the broker; required only by those two grants, with no default.
+  by the broker; required only by those two grants and the two SAML grants
+  (which it conducts with the grant passed), with no default.
+- **The other collaborator options are used**: `oidcAuthorization` by
+  `oidc_authorization_code`, `deviceCodePresenter` by `device_code`,
+  `samlCookies` (the validated SAMLResponse → the system's session cookies)
+  by `saml2_pure`, `assertionReplayStore` by both SAML grants — each a
+  function of the destination, called once per build, never disposed, and
+  required only by its rows: missing, a `DestinationConfigError` naming it.
 - **What a `getProvider` provider obtains is stored.** Every token provider
   the broker builds gets `onTokens`, so a token obtained at `prepare()`, on
   expiry, or in `rejected()` after a 401 is in the session store before the
@@ -51,18 +82,24 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   `saveSession(destination, { authorizationToken, expiresAt, refreshToken,
   issuedFor, issuedBy })`, the stored refresh token carried forward when the
   result has none and the stored session is bound where the new secret is —
-  and never a means field (no `serviceUrl`, no `authType`, no client secret).
+  and never a means field (no `serviceUrl`, no `authType`, no client secret,
+  no subject token, no password). A `saml2_pure` result (`tokenType:
+  'saml'`) is written as cookies — `{ sessionCookies, expiresAt, issuedFor,
+  issuedBy }`, no refresh token; a `saml2_bearer` result as a token.
   A destination the key store states as `basic` or `snc` is not written.
 - **A stored secret is used only where it is bound** (`issuedFor` /
   `issuedBy`, `@mcp-abap-adt/interfaces-auth-broker` 1.1.0). The broker
   computes from the means the resource a secret is for (`serviceUrl` with
   `sap-client`) and who issued it to which client (`uaaUrl` with
-  `client_id`), canonicalises them and the session's values with one function
+  `client_id` for the UAA grants and `saml2_bearer`; the OIDC issuer, else
+  `uaaUrl`, with `client_id` for the OIDC grants; the ACS for `saml2_pure`),
+  canonicalises them and the session's values with one function
   — scheme and host lower-cased, the port explicit (`443` / `80`), the path
   without a trailing `/`, only `sap-client` (the means' `sapClient` first) or
   `client_id` kept and re-encoded, so percent-encoding compares equal — and
   writes both with every secret, each left out when the means lack its source.
-  The UAA grants are seeded only when both stored values match; otherwise the
+  The grants that obtain a secret (UAA, OIDC, SAML) are seeded only when both
+  stored values match; otherwise the
   stored secret, refresh token included, is not used: the provider logs in
   afresh and the log says only `<destination>: secret bound to another
   resource, discarded`. A `none` destination is refused instead: a
@@ -95,20 +132,29 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   table, a missing field of its row (`''` counts as missing; for the UAA
   grants `uaaUrl`, `uaaClientId`, and `uaaClientSecret` for
   `authorization_code` / `client_credentials`), a missing collaborator option
-  (`authorization`), a `none` credential not bound to the destination
+  (`authorization`; for the OIDC and SAML grants `oidcAuthorization`,
+  `deviceCodePresenter`, `samlCookies`, `assertionReplayStore`), an OIDC
+  grant with neither `oidcIssuerUrl` nor its endpoints (`oidcIssuerUrl` and
+  each endpoint missing), a SAML grant without its trust (`samlIdpSsoUrl`,
+  `samlSpEntityId`, `samlIdpEntityId`, `samlIdpCertificates` — an empty list
+  counts as missing), a certificate the validator cannot read
+  (`samlIdpCertificates`) or a `samlClockSkewMs` that is not a whole,
+  non-negative number, a `none` credential not bound to the destination
   (`issuedFor`, `issuedBy`), or a provider
   constructor's own `ValidationError` (an `sncQop` outside `1|2|3|8|9`, named
   as the store field; the provider's error, which quotes the value, is not
   kept). It names fields and options, never a stored value.
 - The collaborator options `authorization`, `oidcAuthorization`,
   `deviceCodePresenter`, `samlCookies`, `assertionReplayStore` on
-  `AuthBrokerConfig`, and the `StrategyGrant` type. `authorization` is used by
-  the UAA grants; the others are declared for the OIDC and SAML grants.
+  `AuthBrokerConfig`, and the `StrategyGrant` type.
 - **The broker's own test stand** (`tests/stand/`, `npm run test:stand`):
   Cloud Foundry UAA and Keycloak in Docker, copied from auth-providers' stand,
   with suites running the UAA grants end to end through auth-stores 3.1.0's
   file stores — the binding asserted in the session file, and a session bound
-  to another URL not reused; a CI workflow runs the build-and-test gate and the stand on every
+  to another URL not reused — the OIDC grants against Keycloak, and the SAML
+  grants with Keycloak as identity provider and UAA as service provider
+  (`saml2_pure`'s cookies a real UAA session from its web SSO ACS;
+  `saml2_bearer` exchanged at UAA's bearer grant); a CI workflow runs the build-and-test gate and the stand on every
   push and pull request. Not shipped in the package.
 
 ### Changed
@@ -151,6 +197,10 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   with `AbapServiceKeyStore(dir, { grantType })`.
 - Comments no longer name `@mcp-abap-adt/auth-stores-btp` / `-xsuaa` (which do
   not exist) or the deleted `@mcp-abap-adt/interfaces` facade.
+- Dev dependency `@mcp-abap-adt/auth-mocks` `^0.3.0` (new): the SAML grants'
+  unit tests validate assertions its identity provider signs — one signing
+  the Response, one the Assertion alone — rather than documents the suite
+  signs itself. Not shipped.
 
 ## [3.1.0] - 2026-10-01
 
