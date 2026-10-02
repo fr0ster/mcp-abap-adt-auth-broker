@@ -71,10 +71,10 @@ Start a local ACS endpoint and capture SAMLResponse:
 node tests/keycloak/saml-acs.js
 ```
 
-Then open the SP-initiated URL printed by:
+Then open the IdP-initiated login (Keycloak posts the assertion to the ACS the realm names):
 
 ```
-node tests/keycloak/saml-sp.js
+http://localhost:8080/realms/mcp-sso/protocol/saml/clients/mcp-sso-saml
 ```
 
 After login, `saml-acs.js` will print `SAMLResponse` (base64). Use it with:
@@ -98,10 +98,10 @@ node dist/mcp-sso.js \
 `mcp-sso` writes the destination (`saml` / `saml2_pure`, the trust under `SAP_SAML_*`) and the
 broker's provider validates the assertion. `--idp-metadata` reads the realm's signing certificate
 and entityID from its SAML descriptor — the realm's key is generated when Keycloak imports the
-realm, so it cannot be checked in. An assertion answering the SP-initiated request `saml-sp.js`
-built cannot be used from 2.0.0: that needed `--authn-request-id`, which a destination cannot
-state, so `mcp-sso` refuses it. `run-tests.sh` logs in IdP-initiated and passes `--idp-initiated`;
-the realm names `http://localhost:3002/acs` as that login's ACS.
+realm, so it cannot be checked in. An SP-initiated assertion cannot be used from 2.0.0: it
+needs `--authn-request-id`, a per-login value a destination cannot state, so `mcp-sso` refuses it. `run-tests.sh` and `run-saml.sh` both log in IdP-initiated
+(`/realms/mcp-sso/protocol/saml/clients/mcp-sso-saml`) and pass `--idp-initiated`; the realm names
+`http://localhost:3002/acs` as that login's ACS.
 
 ## Automated (No Manual Codes)
 
@@ -140,6 +140,4 @@ tests/keycloak/run-saml.sh
 Notes:
 - OIDC device flow needs browser approval but no code paste.
 - SAML flow requires browser login, but no copy/paste of assertion.
-- `run-saml.sh` uses a simple SP-initiated AuthnRequest, answered with `--authn-request-id`,
-  which `mcp-sso` 2.0.0 refuses (see above): it fails until a destination can state a request ID.
-  `run-tests.sh` covers the SAML pure flow IdP-initiated, headless.
+- `run-saml.sh` logs in IdP-initiated with a browser; `run-tests.sh` does the same headless.
