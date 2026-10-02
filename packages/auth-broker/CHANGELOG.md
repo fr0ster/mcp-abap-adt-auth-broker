@@ -11,7 +11,108 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
 
 ## [Unreleased]
 
-### Migration — the token API (`getToken`, `refreshToken`, `createTokenRefresher`)
+## [4.0.0] - 2026-10-02
+
+**What 4.0.0 is.** The broker hands a process **the credential for a
+destination, ready to use**: `getProvider(destination)` returns the
+`IAuthProvider` (`@mcp-abap-adt/interfaces-auth` 3) the destination states —
+basic, SNC, a UAA, OIDC or SAML grant, or a credential handed over — which a
+`@mcp-abap-adt/connection` 10 connector takes as it is, and whatever that
+provider obtains or renews is stored in the session store, whoever triggered
+it. The token API (`getToken`, `refreshToken`, `createTokenRefresher`) stays.
+Released with `@mcp-abap-adt/auth-broker-cli` 2.0.0, the commands on this
+version.
+
+### Breaking
+
+1. **The two stores have one role each.** The service key store holds the
+   *means* — `authType`, `grantType`, the client, basic's user and password,
+   the SNC, OIDC and SAML settings, `serviceUrl`; the session store holds the
+   *secret* — the token or cookies, `expiresAt`, the refresh token, and what
+   the secret is bound to (`issuedFor`, `issuedBy`). The broker writes the
+   secret alone, in one `saveSession`, and never a means field: no
+   `serviceUrl`, `authType` or client is written to the session any more
+   (3.x called `setConnectionConfig` and `setAuthorizationConfig`).
+   `getProvider` reads the means from the key store only: a destination
+   whose means only a session answers is a `DestinationConfigError`.
+2. **The session store must take a write of the secret alone:
+   `@mcp-abap-adt/auth-stores` 3 or later**, or a store of your own that does.
+   auth-stores 1.x and 2.x are not supported: their `AbapSessionStore`
+   throws on a `saveSession` without `serviceUrl` and their
+   `SafeAbapSessionStore` refuses it (measured on 1.2.3, 1.2.4 and 2.0.0), so
+   a token would be obtained and then never stored. auth-stores 3.1.0 or
+   later for the binding (item 4).
+3. **`getConnectionConfig` / `getAuthorizationConfig` compose the two
+   stores** — the key store's means with the session's secret laid over them
+   — instead of answering the session's configuration whole.
+4. **A stored secret is used only for the resource and issuer it was
+   obtained for** (`issuedFor`, `issuedBy`): one bound elsewhere, or not
+   bound at all, is not reused — the provider logs in afresh, and a `none`
+   destination is refused.
+5. **The token API refuses a destination the key store states as `basic` or
+   `snc`** (`DestinationConfigError`, `authType`), instead of writing a token
+   over its session.
+6. **Contracts and dependencies.** `@mcp-abap-adt/interfaces-auth` `^3.0.0`,
+   `@mcp-abap-adt/interfaces-auth-sap` `^2.0.0`,
+   `@mcp-abap-adt/interfaces-auth-broker` `^1.1.0` (the store contracts, new),
+   `@mcp-abap-adt/auth-providers` `^5.2.1` (now a runtime dependency). Types
+   of `interfaces-auth` 2.x and providers of auth-providers 4.x no longer mix
+   with this version.
+
+### Migrating from 3.x
+
+- **Stores.** Use `@mcp-abap-adt/auth-stores` `^3.1.0` (this version is
+  tested against 3.2.0), or stores of your own on the
+  `@mcp-abap-adt/interfaces-auth-broker` contracts. State the means in a key
+  store: an `EnvDestinationStore(dir, { fallback })` over
+  `<destination>.env`, or `AbapServiceKeyStore(dir, { grantType })` /
+  `XsuaaServiceKeyStore(dir, { grantType })` over a SAP service key — a key
+  cannot state its grant, so whoever builds the store states it. The session
+  store keeps the secret: `AbapSessionStore`, `XsuaaSessionStore`,
+  `EnvFileSessionStore`, or the in-memory `Safe*` ones. A custom
+  `ISessionStore` must persist `issuedFor` and `issuedBy` beside the secret,
+  or the broker never reuses its sessions (a login every start).
+- **3.x session files** hold means and secret together. Point an
+  `EnvDestinationStore` and a session store at the same directory: each reads
+  its own keys where they are. A `basic` or `snc` file works once it states
+  `SAP_AUTH_TYPE`; a `jwt` or `saml` file needs `SAP_GRANT_TYPE` (3.x never
+  wrote one) — run the `auth-broker-cli` command that produced it again, or
+  add the line. Its stored token is reused when its `SAP_URL` (+
+  `SAP_CLIENT`) and `SAP_UAA_URL` + `SAP_UAA_CLIENT_ID` are the destination's
+  (auth-stores 3.1.0 reads them as the binding); otherwise the first start
+  logs in once. XSUAA sessions written with an empty URL log in once.
+- **A `@mcp-abap-adt/connection` 10 connector:** build it from
+  `await broker.getProvider(destination)` instead of a token and a token
+  refresher. Construct the broker with a `serviceKeyStore` and without a
+  `provider`, and give it the collaborators its destinations' grants use —
+  `authorization`, `oidcAuthorization`, `deviceCodePresenter`, `samlCookies`,
+  `assertionReplayStore`; there is no default. A headless process gives ones
+  that refuse. The connector's URL comes from your key store
+  (`getConnectionConfig`); `getProvider` does not need it.
+- **The token API with a provider of your own** (calm-server's way): see
+  *The token API* below — the same calls, reads and answers; what it writes
+  is the secret alone.
+- **`DestinationConfigError`** (new, exported): catch it where the process
+  builds its connector or asks for a token. `missingFields` names what the
+  destination lacks (a field, or a collaborator option) — never a value.
+- **`flush()`** (new): a session write that fails is retried by the broker
+  instead of failing the authentication. Call `await broker.flush()` on
+  shutdown (`SIGTERM`, before a stdio transport closes) to learn whether
+  every secret is stored; it rejects naming the destinations still failing.
+- **`bindingOf(means, client?)`** (new): a consumer that writes a handed-over
+  token or cookies (a `none` destination) to the session store itself writes
+  `bindingOf(means)` beside them, or `getProvider` refuses the destination.
+- **Imports.** The re-exported types keep their names. If you import
+  `ISessionStore`, `IServiceKeyStore`, `IConnectionConfig` or `IConfig` from
+  `@mcp-abap-adt/interfaces-auth-sap` yourself, take them from
+  `@mcp-abap-adt/interfaces-auth-broker`; `IAuthorizationConfig` and
+  `AuthType` stay in `interfaces-auth-sap`. Providers are auth-providers 5:
+  the interactive ones take their `authorization` strategy explicitly.
+- **The commands** are `@mcp-abap-adt/auth-broker-cli` (since 3.1.0); its
+  2.0.0 is the version on this library — what changed for its flags, files
+  and exit codes is in its CHANGELOG, *Migrating from 1.0.0*.
+
+#### The token API (`getToken`, `refreshToken`, `createTokenRefresher`)
 
 **What stays.** A consumer that passes its own `provider` (an instance or a
 `TokenProviderFactory`) calls the same methods with the same signatures and
@@ -283,12 +384,14 @@ collaborators instead of a provider.
   imports them from this package changes nothing; one that imports
   `ISessionStore` and friends from `interfaces-auth-sap` itself takes them
   from `interfaces-auth-broker` from its 2.0.0 on.
-- `@mcp-abap-adt/auth-providers` `^5.2.0` (was `^4.2.0`, a dev dependency) is
+- `@mcp-abap-adt/auth-providers` `^5.2.1` (was `^4.2.0`, a dev dependency) is
   a runtime dependency: `getProvider` constructs its classes. None is
   re-exported. 5.2.0 because `ClientCredentialsProvider` takes a `logger`
   from it: the broker passes its own, so a `client_credentials` destination's
   token lifecycle is logged like the other grants' (tokens redacted by the
-  provider). The library's tests run against `@mcp-abap-adt/auth-stores`
+  provider); 5.2.1 because 5.2.0 skipped OIDC discovery unless every
+  device-flow endpoint was missing, so a `device_code` destination stating
+  its issuer and one explicit endpoint was refused at `prepare()`. The library's tests run against `@mcp-abap-adt/auth-stores`
   `^3.2.0` (a dev dependency, was `^1.2.3`; the `auth-stores-3` alias the
   stand, live and binding suites used is gone): its session stores hold the
   secret alone, which is all the broker writes now. The carried-over on-disk
