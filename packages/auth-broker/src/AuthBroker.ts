@@ -9,7 +9,7 @@
  * The token API (`getToken`, `refreshToken`, `createTokenRefresher`) asks that
  * same provider — one per destination, shared — or, when the consumer gives
  * one, the consumer's provider, whose every answer it writes through the same
- * path (spec §9).
+ * path.
  *
  * The broker orchestrates and nothing more. It resolves what the stores know
  * about a destination, hands it to the provider, asks the provider for a token
@@ -139,7 +139,7 @@ export interface AuthBrokerConfig {
 }
 
 /** The session secret's fields on a connection config — never means. */
-/** The session's side: the secret and what it is bound to (D9). */
+/** The session's side: the secret and what it is bound to. */
 const SECRET_FIELDS = [
   'authorizationToken',
   'sessionCookies',
@@ -166,14 +166,14 @@ interface BoundResult {
   /**
    * The result as the provider handed it over — the object the provider also
    * returns from `getTokens()` / `refreshTokens()`, so the token API can find
-   * the outcome of its write (spec §9). Never the copy above.
+   * the outcome of its write. Never the copy above.
    */
   original: ITokenResult;
   binding: Binding;
   /**
    * Which stored refresh token a result without one carries forward: only one
-   * bound where this secret is (`bound`, the providers the broker builds,
-   * §4.5), or whichever the session holds (`any`, a consumer's provider, which
+   * bound where this secret is (`bound`, the providers the broker builds:
+   * a secret is reused only where it is bound), or whichever the session holds (`any`, a consumer's provider, which
    * the token API seeds with it whatever its binding, as 3.x did).
    */
   carry: 'bound' | 'any';
@@ -181,12 +181,12 @@ interface BoundResult {
 
 /**
  * A consumer's provider as taken into use for one destination, with the
- * binding fixed then (spec §4.5, §7): the resource and the issuer it was built
+ * binding fixed then: the resource and the issuer it was built
  * — or, for an instance, first asked — for. Every result it answers for this
  * destination is written with this binding, never one recomputed from means
  * read later: a changed URL or client does not re-label a secret obtained
  * before it; like any other change to a destination, it is picked up by a new
- * broker (§7).
+ * broker.
  */
 interface ConsumerBuilt {
   provider: IRefreshableTokenProvider;
@@ -245,13 +245,13 @@ export class AuthBroker {
   private readonly consumerBuilt = new Map<string, Promise<ConsumerBuilt>>();
   /**
    * One cache per destination, shared by `getProvider` and — when the
-   * consumer gives no provider — the token API (spec §7): the promise of the
+   * consumer gives no provider — the token API: the promise of the
    * build, set before its first read.
    */
   private readonly built = new Map<string, Promise<IAuthProvider>>();
   /**
    * The write that failed for a result, keyed on the result the provider
-   * handed over and returns (spec §9), then on the destination it was written
+   * handed over and returns, then on the destination it was written
    * for: the token API throws it to its caller, as 3.x did, while the broker
    * keeps retrying. Dropped once a write of that result for that destination
    * lands.
@@ -265,7 +265,7 @@ export class AuthBroker {
   private readonly deviceCodePresenter: AuthBrokerConfig['deviceCodePresenter'];
   private readonly samlCookies: AuthBrokerConfig['samlCookies'];
   private readonly assertionReplayStore: AuthBrokerConfig['assertionReplayStore'];
-  /** getProvider's writes of the session secret, retried on their own (§6). */
+  /** getProvider's writes of the session secret, retried on their own. */
   private readonly writer: SessionWriter<BoundResult>;
 
   /**
@@ -358,7 +358,7 @@ export class AuthBroker {
    * out for the destination — the same instance, so one token and one renewal
    * serve both — and what it obtains is written by its `onTokens`. With one,
    * the consumer's provider is asked and its answer written, as in 3.x — the
-   * secret alone (spec §6, §9).
+   * secret alone.
    *
    * Errors from the provider (its typed errors included) propagate unchanged;
    * so does a store failure, a failed write of the token included — the token
@@ -396,7 +396,7 @@ export class AuthBroker {
    * The destination's means, read first: a destination the key store states
    * as `basic` or `snc` holds no token, so the token API refuses it before any
    * provider is asked — it would write a token over a credential that is not
-   * one (spec §9). A key store that states no `authType`, or no key store, is
+   * one. A key store that states no `authType`, or no key store, is
    * a 3.x setup, served as before.
    */
   private async statedForTokens(
@@ -419,7 +419,7 @@ export class AuthBroker {
     return means;
   }
 
-  /** The token API on `getProvider`'s provider (spec §7, §9). */
+  /** The token API on `getProvider`'s provider. */
   private async obtainShared(
     destination: string,
     method: 'getTokens' | 'refreshTokens',
@@ -461,7 +461,7 @@ export class AuthBroker {
    * The token API on the consumer's provider, as 3.x: the session read first,
    * then the key store, for `serviceUrl` and the client; every answer — a
    * cache hit included — written, the secret alone, through the broker's one
-   * write path (spec §6, §9).
+   * write path.
    */
   private async obtainFromConsumer(
     destination: string,
@@ -503,7 +503,7 @@ export class AuthBroker {
 
   /**
    * The consumer's provider for the destination, cached per destination as a
-   * promise set before its first read (spec §7) and dropped when it throws, so
+   * promise set before its first read and dropped when it throws, so
    * the next call builds again: a factory's build — handed the client resolved
    * then — or an instance as given, for every destination, handed no client.
    * Either way the binding is fixed here, from the `serviceUrl`, SAP client and
@@ -561,7 +561,7 @@ export class AuthBroker {
   /**
    * The credentials a consumer's factory is built with: the session's own when
    * it holds them, else the service key's, carrying the refresh token the
-   * session stored — the 3.x order (spec §9). A session store of auth-stores 3
+   * session stored — the 3.x order. A session store of auth-stores 3
    * answers no client, so the key store's is what is found.
    */
   private async resolveAuthorizationConfig(
@@ -777,7 +777,7 @@ export class AuthBroker {
       if (grant !== 'none') {
         // A grant that obtains a secret: the row's client (none for
         // saml2_pure), what a secret for this destination is bound to
-        // (§4.5) — written with every secret, and required of a stored one
+        // — written with every secret, and required of a stored one
         // before it seeds — and the stored secret when it is.
         const client =
           grant === 'saml2_pure'
@@ -796,7 +796,7 @@ export class AuthBroker {
         // The expiry is fixed when the result arrives, not when a retry
         // finally writes it — on a copy; the outcome of the write is recorded
         // against the result itself, which the provider also returns to the
-        // token API (spec §9).
+        // token API.
         const onTokens = (result: ITokenResult) =>
           this.writer.submit(destination, {
             result: { ...result, expiresAt: expiryOf(result) },
@@ -835,7 +835,7 @@ export class AuthBroker {
             assertionReplayStore: this.assertionReplayStore,
           });
         } else {
-          // statedGrant admits only the grants of §3.1.
+          // statedGrant admits only the allowed `authType` / `grantType` pairs.
           throw new Error(`unreachable grant ${grant satisfies never}`);
         }
         this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
@@ -869,7 +869,7 @@ export class AuthBroker {
 
   /**
    * The stored secret when it is bound to this destination's resource and
-   * issuer (§4.5), else `null`: the provider is then built as with no session
+   * issuer, else `null`: the provider is then built as with no session
    * and logs in afresh — the refresh token is not spent either. The log line
    * names the destination only: never a URI, never a token.
    */
@@ -902,13 +902,13 @@ export class AuthBroker {
   }
 
   /**
-   * One write of the destination's session secret — and nothing else (spec §6):
+   * One write of the destination's session secret — and nothing else:
    * `{ authorizationToken, expiresAt, refreshToken, issuedFor, issuedBy }` in
    * one `saveSession` — or, for a `saml2_pure` result (`tokenType: 'saml'`),
    * `{ sessionCookies, expiresAt, issuedFor, issuedBy }`: cookies are written
    * as cookies, every other result as a token (`saml2_bearer` included). No means is ever written: not `serviceUrl`, not
    * `authType`, not the client — they live in the key store, which the broker
-   * never writes (H4).
+   * never writes.
    *
    * - `expiresAt`: fixed by `onTokens` when the result arrived — the result's
    *   own, else the `expiresIn` it reports counted from then (the rule the
@@ -917,10 +917,10 @@ export class AuthBroker {
    *   write time, so a result without one does not erase the stored one — for
    *   a provider the broker built, only a stored one bound where this one is:
    *   a refresh token obtained for another resource or from another client is
-   *   not carried into this secret (§4.5). A consumer's provider was seeded
-   *   with whatever the session held (§9), so whatever it holds is carried.
+   *   not carried into this secret. A consumer's provider was seeded
+   *   with whatever the session held, so whatever it holds is carried.
    * - `issuedFor` / `issuedBy`: the binding computed when the provider was
-   *   built (§4.5), each left out when the means lack its source — so the
+   *   built, each left out when the means lack its source — so the
    *   store clears it.
    * - A destination the key store now states as `basic` or `snc` is not
    *   written: those obtain no session secret.

@@ -1,9 +1,9 @@
-// Every package imports only what spec §11 allows, declares it in package.json,
+// Every package imports only what its allowlist below permits, declares it in package.json,
 // imports everything it declares, and never reaches outside its own src with a
 // relative path.
 //   node tools/check-graph.js
 //
-// **Adapted from mcp-abap-adt-interfaces, not copied** (spec §11, plan R1).
+// **Adapted from mcp-abap-adt-interfaces, not copied**.
 // There `src` holds no tests, so every file is runtime code and every import is
 // compared with `dependencies`. Here `src/__tests__` imports what only the
 // tests need (auth-stores, auth-providers, the logger, js-yaml), declared as
@@ -15,7 +15,8 @@
 //   - test files (under __tests__): each import is declared, in
 //     `devDependencies` or `dependencies`; nothing undeclared.
 //
-// H0 — "the library never imports auth-stores" — is the allowlist below: the
+// "The library speaks only the store contracts, never a storage" — it never
+// imports auth-stores — is the allowlist below: the
 // library's runtime may not import it, and may not depend on it.
 const fs = require('node:fs');
 const path = require('node:path');
@@ -75,7 +76,7 @@ const packagesDir = path.join(ROOT, 'packages');
 for (const dir of fs.readdirSync(packagesDir)) {
   if (!fs.existsSync(path.join(packagesDir, dir, 'package.json'))) continue;
   if (!(dir in ALLOWED)) {
-    problems.push(`${dir}: not a package the spec defines`);
+    problems.push(`${dir}: not a package this repository defines`);
     continue;
   }
   const pkgRoot = path.join(packagesDir, dir);

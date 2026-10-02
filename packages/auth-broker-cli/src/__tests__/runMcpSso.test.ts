@@ -1,12 +1,13 @@
 /**
- * `mcp-sso` end to end, one case per row of spec §10's table, against a local
+ * `mcp-sso` end to end, one case per command row of the README's
+ * *What each command writes* table, against a local
  * token endpoint — no browser, no identity provider, no SAP system.
  *
  * Each case pins what the command writes and where:
  * - the means, read back through the key store (`EnvDestinationStore`);
  * - the secret alone in the session store: every session write carries only
  *   the secret and its binding, never a means field and never the client
- *   secret (H4); every key of the output file belongs to one store or the other;
+ *   secret; every key of the output file belongs to one store or the other;
  * - the destination builds: a broker over the output, as a server composes it,
  *   gets a provider from `getProvider` that presents the stored secret without
  *   a new login.

@@ -1,9 +1,9 @@
 /**
- * The token API without a consumer provider (spec §7, §9): `getToken`,
+ * The token API without a consumer provider: `getToken`,
  * `refreshToken` and `createTokenRefresher` ask the very provider
  * `getProvider` hands out for the destination — one per destination, one token,
  * one refresh token, one renewal in flight — and write nothing themselves: the
- * provider's `onTokens` does (spec §6). A failure of that write still reaches
+ * provider's `onTokens` does. A failure of that write still reaches
  * the token API's caller, as in 3.x.
  *
  * The stores are in-memory fakes of the contract; the providers are real
@@ -54,7 +54,7 @@ function client(): IAuthorizationConfig {
   };
 }
 
-/** What a secret obtained for the means below is bound to (spec §4.5). */
+/** What a secret obtained for the means below is bound to. */
 const FOR = 'https://abap.example.com:443';
 const by = () => `${endpoint.url}?client_id=broker-client`;
 

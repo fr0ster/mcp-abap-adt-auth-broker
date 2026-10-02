@@ -1,6 +1,6 @@
 /**
  * The broker's writes of a destination's session secret, retried until the
- * store takes them (spec §6, H3).
+ * store takes them.
  *
  * A store failure is the storage's or a broker bug, never the token's, so it
  * does not fail the authentication: the result stays pending for its

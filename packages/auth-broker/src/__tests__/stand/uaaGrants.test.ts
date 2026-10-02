@@ -38,7 +38,7 @@ const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
 const USER = { username: 'tester', password: 'tester' };
 const CALLBACK = 'http://localhost/callback';
 const SERVICE_URL = 'https://abap.stand.invalid';
-/** SERVICE_URL's canonical URI — what the session's `issuedFor` must hold (spec §4.5). */
+/** SERVICE_URL's canonical URI — what the session's `issuedFor` must hold. */
 const ISSUED_FOR = 'https://abap.stand.invalid:443';
 /** UAA_URL (`http://localhost:<port>/uaa`, already canonical) with the client. */
 const issuedBy = (clientId: string) => `${UAA_URL}?client_id=${clientId}`;

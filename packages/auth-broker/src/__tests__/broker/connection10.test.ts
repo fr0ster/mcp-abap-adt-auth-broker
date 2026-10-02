@@ -1,13 +1,13 @@
 /**
- * End to end through `@mcp-abap-adt/connection` 10, no SAP system (spec §13,
- * the goal's success criterion): a connector built from what `getProvider`
+ * End to end through `@mcp-abap-adt/connection` 10, no SAP system — a
+ * process's connector renews and the renewal is stored: a connector built from what `getProvider`
  * returns, over its real HTTP wire, against a local server that refuses the
  * stored token with a 401 and takes the renewed one; a local token endpoint.
  *
  * The provider renews once in `rejected()`, the connector resends once, the
  * new token is in the session file afterwards — and the token API, on the same
  * broker, answers that very token without asking for another (one provider per
- * destination, spec §7, §9).
+ * destination, shared by `getProvider` and the token API).
  *
  * The stores are auth-stores 3's file stores, as a consumer composes them: the
  * means in an `EnvDestinationStore`, the secret in an `AbapSessionStore`.

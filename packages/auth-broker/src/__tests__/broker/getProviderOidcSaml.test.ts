@@ -1,7 +1,7 @@
 /**
  * getProvider for the OIDC grants — `jwt` / `oidc_authorization_code`,
  * `device_code`, `password`, `token_exchange` — and the SAML grants —
- * `saml` / `saml2_pure`, `saml2_bearer` (spec §4.1, §4.4, §4.5, §5, §6).
+ * `saml` / `saml2_pure`, `saml2_bearer`.
  *
  * The stores are in-memory fakes of the contract; the providers are real
  * (auth-providers 5.2) against a local token endpoint, and are only ever driven
@@ -54,7 +54,7 @@ import {
 
 jest.setTimeout(30_000);
 
-/** Means secrets: they never reach the session (H4), an error or a log line. */
+/** Means secrets: they never reach the session, an error or a log line. */
 const CLIENT_SECRET = 'S3CRET-client-must-not-leak';
 const USER_PASSWORD = 'S3CRET-password-must-not-leak';
 const SUBJECT_TOKEN = 'S3CRET-subject-token-must-not-leak';
@@ -64,7 +64,7 @@ const REDIRECT = 'http://localhost/callback';
 const D = 'DEST';
 const UNAUTHORIZED = { at: 'request', status: 401, error: null } as const;
 
-/** The resource these means name, canonical (spec §4.5). */
+/** The resource these means name, canonical. */
 const FOR = 'https://abap.example.com:443?sap-client=100';
 
 type OidcGrant =

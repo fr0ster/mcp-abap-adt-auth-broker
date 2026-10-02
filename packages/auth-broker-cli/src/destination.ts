@@ -1,6 +1,6 @@
 /**
  * The destination a command writes: its means and its secret, each through its
- * own store, in one `<destination>.env` file (spec §10).
+ * own store, in one `<destination>.env` file.
  *
  * - **The means** — `authType`, `grantType`, the grant's data, the client, the
  *   URL — go through `EnvDestinationStore.setDestination`, the key store's own
@@ -13,7 +13,7 @@
  *
  * Both stores touch only their own keys of the file, so one file holds both
  * roles, as the 2.x session file did; a session store refuses means, so a client
- * secret never reaches it (H4).
+ * secret never reaches it.
  *
  * A command works in a private directory of its own (`workDir.ts`) and copies
  * the file to `--output` only once the secret is stored: a failed login, or a

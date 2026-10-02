@@ -1,6 +1,6 @@
 /**
  * The `generate-env` development script: the grant is a flag, never read from
- * the service key (H1) — 3.x took `client_credentials` from an XSUAA key's URL
+ * the service key — 3.x took `client_credentials` from an XSUAA key's URL
  * and `authorization_code` from anything else. What it writes is a destination
  * the broker builds from, with the secret alone in the session.
  */
