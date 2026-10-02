@@ -62,11 +62,10 @@
   },
   "devDependencies": {
     "@mcp-abap-adt/auth-mocks": "^0.3.0",
-    "@mcp-abap-adt/auth-stores": "^1.2.3",
-    "@mcp-abap-adt/connection": "^10.0.2",
+    "@mcp-abap-adt/auth-stores": "^3.2.0",
+    "@mcp-abap-adt/connection": "^10.0.3",
     "@mcp-abap-adt/logger": "^0.4.0",
     "@types/js-yaml": "^4.0.9",
-    "auth-stores-3": "npm:@mcp-abap-adt/auth-stores@^3.2.0",
     "js-yaml": "^4.1.1",
     "pino": "^10.1.0",
     "pino-pretty": "^13.1.3"

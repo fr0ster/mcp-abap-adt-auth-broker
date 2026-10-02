@@ -1,6 +1,14 @@
 /**
- * AuthBroker against mocked stores and providers, and once against a real
- * AbapSessionStore on disk (no network).
+ * The token API with a consumer's own provider (spec §9): the 3.x behaviour,
+ * against mocked stores and providers, and once against auth-stores 3's real
+ * `AbapSessionStore` and `EnvDestinationStore` on disk (no network).
+ *
+ * What changed from 3.x is what is written: the session secret alone (§6) —
+ * the token or cookies, `expiresAt`, the refresh token, and what the secret is
+ * bound to (`issuedFor` / `issuedBy`, §4.5) — through the broker's one write
+ * path, retried when the store fails; never `serviceUrl`, `authType` or a
+ * client. What a caller observes is as 3.x: the token, the provider asked as
+ * before, the stores read in the 3.x order, a store's failure thrown as raised.
  */
 
 import * as fs from 'node:fs';
@@ -10,7 +18,12 @@ import {
   BrowserAuthError,
   ValidationError,
 } from '@mcp-abap-adt/auth-providers';
-import { AbapSessionStore } from '@mcp-abap-adt/auth-stores';
+import {
+  ABAP_DESTINATION_VARS,
+  ABAP_SESSION_VARS,
+  AbapSessionStore,
+  EnvDestinationStore,
+} from '@mcp-abap-adt/auth-stores';
 import type {
   IRefreshableTokenProvider,
   ITokenResult,
@@ -25,11 +38,15 @@ import type {
 } from '../../stores/interfaces';
 
 const SERVICE_URL = 'https://abap.example.com';
+/** `SERVICE_URL` as the binding writes it: the canonical URI (spec §4.5). */
+const SERVICE_URI = 'https://abap.example.com:443';
 const KEY_AUTH: IAuthorizationConfig = {
   uaaUrl: 'https://uaa.example.com',
   uaaClientId: 'client-id',
   uaaClientSecret: 'client-secret-from-key',
 };
+/** `KEY_AUTH`'s issuer and client as the binding writes them. */
+const KEY_ISSUER = 'https://uaa.example.com:443?client_id=client-id';
 
 type MockProvider = IRefreshableTokenProvider & {
   getTokens: jest.Mock<Promise<ITokenResult>, []>;
@@ -93,6 +110,23 @@ function everythingWritten(store: jest.Mocked<ISessionStore>): string {
   ]);
 }
 
+/**
+ * The fields the last `saveSession` call carried — a field given as
+ * `undefined` is not carried (auth-stores 3) — and proof that nothing went
+ * through another method.
+ */
+function lastWrite(store: jest.Mocked<ISessionStore>): Record<string, unknown> {
+  expect(store.setConnectionConfig).not.toHaveBeenCalled();
+  expect(store.setAuthorizationConfig).not.toHaveBeenCalled();
+  const calls = store.saveSession.mock.calls;
+  expect(calls.length).toBeGreaterThan(0);
+  return Object.fromEntries(
+    Object.entries(calls[calls.length - 1][1] as object).filter(
+      ([, value]) => value !== undefined,
+    ),
+  );
+}
+
 describe('AuthBroker', () => {
   describe('constructor', () => {
     it('takes a provider instance', () => {
@@ -143,7 +177,7 @@ describe('AuthBroker', () => {
       ).not.toThrow();
     });
 
-    it('without a provider, the token API names the provider option', async () => {
+    it('without a provider or a key store, the token API names both options', async () => {
       const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL });
       const broker = new AuthBroker({ sessionStore });
 
@@ -155,6 +189,7 @@ describe('AuthBroker', () => {
         expect(error).toBeInstanceOf(DestinationConfigError);
         expect((error as DestinationConfigError).missingFields).toEqual([
           'provider',
+          'serviceKeyStore',
         ]);
       }
       expect(everythingWritten(sessionStore)).toBe('[[],[],[]]');
@@ -175,7 +210,7 @@ describe('AuthBroker', () => {
   });
 
   describe('getToken', () => {
-    it('asks the provider once and persists a bearer token with its service URL', async () => {
+    it('asks the provider once and writes the bearer token: the secret alone, with the resource it was obtained for', async () => {
       const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL });
       const provider = mockProvider({ refreshToken: 'refresh-1' });
       const broker = new AuthBroker({ sessionStore, provider });
@@ -184,39 +219,60 @@ describe('AuthBroker', () => {
 
       expect(provider.getTokens).toHaveBeenCalledTimes(1);
       expect(provider.refreshTokens).not.toHaveBeenCalled();
-      expect(sessionStore.setConnectionConfig).toHaveBeenCalledWith(
-        'DEST',
-        expect.objectContaining({
-          serviceUrl: SERVICE_URL,
-          authorizationToken: 'cached-token',
-          sessionCookies: undefined,
-          authType: 'jwt',
-        }),
-      );
+      // No serviceUrl, no authType (3.x wrote both); an instance is handed no
+      // client by the broker, so no issuer is claimed for it.
+      expect(lastWrite(sessionStore)).toEqual({
+        authorizationToken: 'cached-token',
+        refreshToken: 'refresh-1',
+        issuedFor: SERVICE_URI,
+      });
     });
 
-    it('persists a SAML result as session cookies', async () => {
+    it('writes a SAML result as session cookies', async () => {
       const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL });
       const provider = mockProvider({
         authorizationToken: 'MYSAPSSO2=abc',
         tokenType: 'saml',
         authType: 'user_token',
+        expiresAt: 1_900_000_000_000,
       });
       const broker = new AuthBroker({ sessionStore, provider });
 
       await broker.getToken('DEST');
 
-      expect(sessionStore.setConnectionConfig).toHaveBeenCalledWith(
-        'DEST',
-        expect.objectContaining({
-          authorizationToken: undefined,
-          sessionCookies: 'MYSAPSSO2=abc',
-          authType: 'saml',
-        }),
-      );
+      expect(lastWrite(sessionStore)).toEqual({
+        sessionCookies: 'MYSAPSSO2=abc',
+        expiresAt: 1_900_000_000_000,
+        issuedFor: SERVICE_URI,
+      });
     });
 
-    it('takes the service URL from the service key when the session has none', async () => {
+    it('takes the service URL from the service key when the session has none, and writes it nowhere', async () => {
+      const sessionStore = mockSessionStore();
+      const factory = jest.fn<
+        IRefreshableTokenProvider,
+        Parameters<TokenProviderFactory>
+      >(() => mockProvider());
+      const broker = new AuthBroker({
+        sessionStore,
+        serviceKeyStore: mockServiceKeyStore(),
+        provider: factory,
+      });
+
+      await broker.getToken('DEST');
+
+      expect(factory.mock.calls[0][2]).toEqual(
+        expect.objectContaining({ serviceUrl: SERVICE_URL }),
+      );
+      // A factory is handed the client: the issuer it is bound to.
+      expect(lastWrite(sessionStore)).toEqual({
+        authorizationToken: 'cached-token',
+        issuedFor: SERVICE_URI,
+        issuedBy: KEY_ISSUER,
+      });
+    });
+
+    it('binds an instance’s token to no issuer: the broker hands an instance no client, whatever the key store states', async () => {
       const sessionStore = mockSessionStore();
       const broker = new AuthBroker({
         sessionStore,
@@ -226,10 +282,10 @@ describe('AuthBroker', () => {
 
       await broker.getToken('DEST');
 
-      expect(sessionStore.setConnectionConfig).toHaveBeenCalledWith(
-        'DEST',
-        expect.objectContaining({ serviceUrl: SERVICE_URL }),
-      );
+      expect(lastWrite(sessionStore)).toEqual({
+        authorizationToken: 'cached-token',
+        issuedFor: SERVICE_URI,
+      });
     });
 
     it('fails without a service URL anywhere, before asking the provider', async () => {
@@ -245,7 +301,7 @@ describe('AuthBroker', () => {
       expect(provider.getTokens).not.toHaveBeenCalled();
     });
 
-    it('updates the refresh token in a session that holds its own credentials', async () => {
+    it('writes a new refresh token as part of the secret, never through the client the session holds', async () => {
       const sessionAuth: IAuthorizationConfig = {
         uaaUrl: 'https://uaa.example.com',
         uaaClientId: 'session-client',
@@ -263,11 +319,12 @@ describe('AuthBroker', () => {
 
       await broker.getToken('DEST');
 
-      expect(sessionStore.setAuthorizationConfig).toHaveBeenCalledWith('DEST', {
-        ...sessionAuth,
+      expect(lastWrite(sessionStore)).toEqual({
+        authorizationToken: 'cached-token',
         refreshToken: 'new-refresh',
+        issuedFor: SERVICE_URI,
       });
-      expect(sessionStore.saveSession).not.toHaveBeenCalled();
+      expect(everythingWritten(sessionStore)).not.toContain('session-secret');
     });
 
     it('never copies the client secret from the service key into the session', async () => {
@@ -286,9 +343,7 @@ describe('AuthBroker', () => {
 
       await broker.getToken('DEST');
 
-      expect(sessionStore.setAuthorizationConfig).not.toHaveBeenCalled();
-      expect(sessionStore.saveSession).toHaveBeenCalledWith(
-        'DEST',
+      expect(lastWrite(sessionStore)).toEqual(
         expect.objectContaining({ refreshToken: 'refresh-1' }),
       );
       expect(everythingWritten(sessionStore)).not.toContain(
@@ -297,14 +352,32 @@ describe('AuthBroker', () => {
       expect(everythingWritten(sessionStore)).not.toContain('uaaClientSecret');
     });
 
-    it('does not erase the stored refresh token when the result has none', async () => {
-      const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL });
+    it('carries the stored refresh token forward when the result has none — wherever the stored session is bound, as the provider was seeded with it', async () => {
+      const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL }, null, {
+        refreshToken: 'stored-refresh',
+        issuedFor: 'https://elsewhere.example.com:443',
+      });
       const broker = new AuthBroker({ sessionStore, provider: mockProvider() });
 
       await broker.getToken('DEST');
 
-      expect(sessionStore.setAuthorizationConfig).not.toHaveBeenCalled();
-      expect(sessionStore.saveSession).not.toHaveBeenCalled();
+      expect(lastWrite(sessionStore)).toEqual({
+        authorizationToken: 'cached-token',
+        refreshToken: 'stored-refresh',
+        issuedFor: SERVICE_URI,
+      });
+    });
+
+    it('writes after every call, cache hits included', async () => {
+      const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL });
+      const provider = mockProvider();
+      const broker = new AuthBroker({ sessionStore, provider });
+
+      await broker.getToken('DEST');
+      await broker.getToken('DEST');
+
+      expect(provider.getTokens).toHaveBeenCalledTimes(2);
+      expect(sessionStore.saveSession).toHaveBeenCalledTimes(2);
     });
 
     it('fails when the provider returns no token', async () => {
@@ -316,6 +389,117 @@ describe('AuthBroker', () => {
       await expect(broker.getToken('DEST')).rejects.toThrow(
         'did not return authorization token',
       );
+    });
+  });
+
+  describe('a destination stated basic or snc (spec §9)', () => {
+    it.each(['basic', 'snc'] as const)(
+      'is refused before any provider is asked, and nothing is written: %s',
+      async (authType) => {
+        const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL });
+        const instance = mockProvider();
+        const factory = jest.fn<
+          IRefreshableTokenProvider,
+          Parameters<TokenProviderFactory>
+        >(() => mockProvider());
+        const keys = mockServiceKeyStore(KEY_AUTH, {
+          serviceUrl: SERVICE_URL,
+          authType,
+          username: 'DEVELOPER',
+        });
+
+        for (const provider of [instance, factory]) {
+          const broker = new AuthBroker({
+            sessionStore,
+            serviceKeyStore: keys,
+            provider,
+          });
+          const refresher = broker.createTokenRefresher('DEST');
+          for (const call of [
+            () => broker.getToken('DEST'),
+            () => broker.refreshToken('DEST'),
+            () => refresher.getToken(),
+            () => refresher.refreshToken(),
+          ]) {
+            const error = await call().catch((e: unknown) => e);
+            expect(error).toBeInstanceOf(DestinationConfigError);
+            expect((error as DestinationConfigError).missingFields).toEqual([
+              'authType',
+            ]);
+            expect(String(error)).not.toContain('DEVELOPER');
+          }
+        }
+        expect(instance.getTokens).not.toHaveBeenCalled();
+        expect(instance.refreshTokens).not.toHaveBeenCalled();
+        expect(factory).not.toHaveBeenCalled();
+        expect(everythingWritten(sessionStore)).toBe('[[],[],[]]');
+      },
+    );
+
+    it('a key store that states no authType — a 3.x setup — is served as in 3.x', async () => {
+      const sessionStore = mockSessionStore();
+      const broker = new AuthBroker({
+        sessionStore,
+        serviceKeyStore: mockServiceKeyStore(KEY_AUTH, {
+          serviceUrl: SERVICE_URL,
+        }),
+        provider: mockProvider(),
+      });
+
+      await expect(broker.getToken('DEST')).resolves.toBe('cached-token');
+    });
+  });
+
+  describe('a write that fails', () => {
+    class StoreDiskError extends Error {}
+
+    beforeEach(() => {
+      jest.useFakeTimers({
+        doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'],
+      });
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it("reaches getToken's caller as the store raised it, and the broker keeps retrying it", async () => {
+      const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL });
+      const disk = new StoreDiskError('disk full');
+      sessionStore.saveSession.mockRejectedValueOnce(disk);
+      const broker = new AuthBroker({
+        sessionStore,
+        provider: mockProvider({ refreshToken: 'refresh-1' }),
+      });
+
+      await expect(broker.getToken('DEST')).rejects.toBe(disk);
+      expect(sessionStore.saveSession).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(1_000);
+
+      expect(sessionStore.saveSession).toHaveBeenCalledTimes(2);
+      expect(sessionStore.saveSession.mock.calls[1]).toEqual(
+        sessionStore.saveSession.mock.calls[0],
+      );
+      await expect(broker.flush()).resolves.toBeUndefined();
+    });
+
+    it('a later write that lands is not reported as the earlier failure', async () => {
+      const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL });
+      sessionStore.saveSession.mockRejectedValueOnce(new StoreDiskError('x'));
+      const result: ITokenResult = {
+        authorizationToken: 'same-object',
+        authType: 'authorization_code',
+      };
+      // An instance answering the very same result object every time.
+      const provider = mockProvider();
+      provider.getTokens.mockResolvedValue(result);
+      const broker = new AuthBroker({ sessionStore, provider });
+
+      await expect(broker.getToken('DEST')).rejects.toBeInstanceOf(
+        StoreDiskError,
+      );
+      await expect(broker.getToken('DEST')).resolves.toBe('same-object');
     });
   });
 
@@ -348,7 +532,7 @@ describe('AuthBroker', () => {
       );
     });
 
-    it("prefers the session's own credentials over the service key's", async () => {
+    it("prefers the session's own credentials over the service key's — a session store that still answers means is read as 3.x read it", async () => {
       const sessionAuth: IAuthorizationConfig = {
         uaaUrl: 'https://uaa.session',
         uaaClientId: 'session-client',
@@ -359,18 +543,30 @@ describe('AuthBroker', () => {
         IRefreshableTokenProvider,
         Parameters<TokenProviderFactory>
       >(() => mockProvider());
+      const sessionStore = mockSessionStore(
+        { serviceUrl: SERVICE_URL, sapClient: '200' },
+        sessionAuth,
+      );
       const broker = new AuthBroker({
-        sessionStore: mockSessionStore(
-          { serviceUrl: SERVICE_URL },
-          sessionAuth,
-        ),
-        serviceKeyStore: mockServiceKeyStore(),
+        sessionStore,
+        serviceKeyStore: mockServiceKeyStore(KEY_AUTH, {
+          serviceUrl: 'https://key.example.com',
+        }),
         provider: factory,
       });
 
       await broker.getToken('DEST');
 
       expect(factory.mock.calls[0][1]).toEqual(sessionAuth);
+      expect(factory.mock.calls[0][2]).toEqual(
+        expect.objectContaining({ serviceUrl: SERVICE_URL, sapClient: '200' }),
+      );
+      // Bound to what the provider was handed: the session's URL and client.
+      expect(lastWrite(sessionStore)).toEqual({
+        authorizationToken: 'cached-token',
+        issuedFor: `${SERVICE_URI}?sap-client=200`,
+        issuedBy: 'https://uaa.session:443?client_id=session-client',
+      });
     });
 
     it('passes null credentials when no store has any', async () => {
@@ -405,6 +601,26 @@ describe('AuthBroker', () => {
 
       expect(factory).toHaveBeenCalledTimes(2);
       expect(factory.mock.calls.map((call) => call[0])).toEqual(['A', 'B']);
+    });
+
+    it('builds once for concurrent first calls (the promise cache, spec §7)', async () => {
+      const factory = jest.fn<
+        IRefreshableTokenProvider,
+        Parameters<TokenProviderFactory>
+      >(() => mockProvider());
+      const broker = new AuthBroker({
+        sessionStore: mockSessionStore({ serviceUrl: SERVICE_URL }),
+        serviceKeyStore: mockServiceKeyStore(),
+        provider: factory,
+      });
+
+      await Promise.all([
+        broker.getToken('A'),
+        broker.refreshToken('A'),
+        broker.getToken('A'),
+      ]);
+
+      expect(factory).toHaveBeenCalledTimes(1);
     });
 
     it('builds again after a factory that threw', async () => {
@@ -454,14 +670,11 @@ describe('AuthBroker', () => {
 
       expect(provider.refreshTokens).toHaveBeenCalledTimes(1);
       expect(provider.getTokens).toHaveBeenCalledTimes(1);
-      expect(sessionStore.setConnectionConfig).toHaveBeenLastCalledWith(
-        'DEST',
-        expect.objectContaining({ authorizationToken: 'fresh-token' }),
-      );
-      expect(sessionStore.saveSession).toHaveBeenLastCalledWith(
-        'DEST',
-        expect.objectContaining({ refreshToken: 'refresh-2' }),
-      );
+      expect(lastWrite(sessionStore)).toEqual({
+        authorizationToken: 'fresh-token',
+        refreshToken: 'refresh-2',
+        issuedFor: SERVICE_URI,
+      });
     });
 
     it('is what createTokenRefresher().refreshToken() calls', async () => {
@@ -499,7 +712,7 @@ describe('AuthBroker', () => {
         expect(thrown).toBeInstanceOf(BrowserAuthError);
         expect(thrown.code).toBe('BROWSER_AUTH_ERROR');
         expect(thrown.cause).toBe(cause);
-        expect(sessionStore.setConnectionConfig).not.toHaveBeenCalled();
+        expect(everythingWritten(sessionStore)).toBe('[[],[],[]]');
       },
     );
 
@@ -721,39 +934,87 @@ describe('AuthBroker', () => {
     });
   });
 
-  describe('with AbapSessionStore on disk', () => {
-    let dir: string;
+  describe('on disk: auth-stores 3 — the means in an EnvDestinationStore, the secret in an AbapSessionStore', () => {
+    let keysDir: string;
+    let sessionsDir: string;
 
     beforeEach(() => {
-      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-broker-'));
+      keysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-broker-keys-'));
+      sessionsDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'auth-broker-sessions-'),
+      );
+      const V = ABAP_DESTINATION_VARS;
+      fs.writeFileSync(
+        path.join(keysDir, 'DEST.env'),
+        [
+          `${V.serviceUrl}=${SERVICE_URL}`,
+          `${V.uaaUrl}=${KEY_AUTH.uaaUrl}`,
+          `${V.uaaClientId}=${KEY_AUTH.uaaClientId}`,
+          `${V.uaaClientSecret}=${KEY_AUTH.uaaClientSecret}`,
+          '',
+        ].join('\n'),
+      );
     });
 
     afterEach(() => {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(keysDir, { recursive: true, force: true });
+      fs.rmSync(sessionsDir, { recursive: true, force: true });
     });
 
-    it('writes no client secret, and the next broker is seeded with the refresh token it wrote', async () => {
-      const serviceKeyStore = mockServiceKeyStore();
+    it('writes the secret alone into the session file, and the next broker is seeded with the refresh token it wrote', async () => {
+      const serviceKeyStore = new EnvDestinationStore(keysDir);
       const first = new AuthBroker({
-        sessionStore: new AbapSessionStore(dir),
+        sessionStore: new AbapSessionStore(sessionsDir),
         serviceKeyStore,
-        provider: mockProvider({ refreshToken: 'refresh-from-login' }),
+        provider: () =>
+          mockProvider({
+            refreshToken: 'refresh-from-login',
+            expiresAt: 1_900_000_000_000,
+          }),
       });
 
       await first.getToken('DEST');
 
-      const file = fs.readFileSync(path.join(dir, 'DEST.env'), 'utf8');
-      expect(file).not.toContain(KEY_AUTH.uaaClientSecret);
-      expect(file).not.toContain('CLIENT_SECRET');
+      const file = fs.readFileSync(path.join(sessionsDir, 'DEST.env'), 'utf8');
+      const keys = file
+        .split('\n')
+        .filter((line) => line.includes('='))
+        .map((line) => line.slice(0, line.indexOf('=')))
+        .sort();
+      const S = ABAP_SESSION_VARS;
+      expect(keys).toEqual(
+        [
+          S.AUTHORIZATION_TOKEN,
+          S.EXPIRES_AT,
+          S.ISSUED_BY,
+          S.ISSUED_FOR,
+          S.REFRESH_TOKEN,
+        ].sort(),
+      );
       expect(file).toContain('refresh-from-login');
+      expect(file).not.toContain(KEY_AUTH.uaaClientSecret);
+      const stored = await new AbapSessionStore(sessionsDir).loadSession(
+        'DEST',
+      );
+      expect(stored).toEqual({
+        authorizationToken: 'cached-token',
+        expiresAt: 1_900_000_000_000,
+        refreshToken: 'refresh-from-login',
+        issuedFor: SERVICE_URI,
+        issuedBy: KEY_ISSUER,
+      });
+      // The key store's file is never written.
+      expect(
+        fs.readFileSync(path.join(keysDir, 'DEST.env'), 'utf8'),
+      ).not.toContain('refresh-from-login');
 
-      // A new process: a new broker over the same file.
+      // A new process: a new broker over the same files.
       const factory = jest.fn<
         IRefreshableTokenProvider,
         Parameters<TokenProviderFactory>
       >(() => mockProvider());
       const second = new AuthBroker({
-        sessionStore: new AbapSessionStore(dir),
+        sessionStore: new AbapSessionStore(sessionsDir),
         serviceKeyStore,
         provider: factory,
       });
@@ -766,6 +1027,7 @@ describe('AuthBroker', () => {
         expect.objectContaining({
           serviceUrl: SERVICE_URL,
           authorizationToken: 'cached-token',
+          expiresAt: 1_900_000_000_000,
         }),
       );
     });

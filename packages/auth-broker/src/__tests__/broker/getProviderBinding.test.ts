@@ -21,6 +21,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { ABAP_SESSION_VARS, AbapSessionStore } from '@mcp-abap-adt/auth-stores';
 import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
@@ -35,7 +36,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { ABAP_SESSION_VARS, AbapSessionStore } from 'auth-stores-3';
 import { AuthBroker, DestinationConfigError } from '../../index';
 import {
   jwtExpiringIn,

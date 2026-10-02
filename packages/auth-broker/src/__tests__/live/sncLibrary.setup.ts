@@ -10,7 +10,7 @@ import {
   DefaultSncLibraryLocator,
   nodeSncSystem,
 } from '@mcp-abap-adt/auth-providers';
-import { EnvDestinationStore } from 'auth-stores-3';
+import { EnvDestinationStore } from '@mcp-abap-adt/auth-stores';
 
 export const SNC_LIBRARY_VARIABLE = 'AUTH_BROKER_LIVE_SNC_LIBRARY';
 

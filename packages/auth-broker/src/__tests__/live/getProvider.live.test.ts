@@ -57,6 +57,12 @@ import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import {
+  AbapServiceKeyStore,
+  AbapSessionStore,
+  EnvDestinationStore,
+  SafeAbapSessionStore,
+} from '@mcp-abap-adt/auth-stores';
 // connection 10 loads without the RFC addon: rfcConversationFrom requires it
 // only when a conversation is opened, so the HTTP case runs where it is absent.
 import {
@@ -73,14 +79,6 @@ import type {
   IAuthRejection,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { IConnectionConfig } from '@mcp-abap-adt/interfaces-auth-broker';
-// auth-stores 3 under an npm alias, for this file only: the library's other
-// suites stay on auth-stores 1.x until step 4e (plan decision D7).
-import {
-  AbapServiceKeyStore,
-  AbapSessionStore,
-  EnvDestinationStore,
-  SafeAbapSessionStore,
-} from 'auth-stores-3';
 import { AuthBroker } from '../../index';
 import { describeWhere, runLog as log } from '../helpers/describeWhere';
 
