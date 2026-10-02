@@ -36,6 +36,7 @@ import type {
   IServiceKeyStore,
   ISessionStore,
 } from '../../stores/interfaces';
+import { jwtExpiringIn } from '../helpers/tokenEndpoint';
 
 const SERVICE_URL = 'https://abap.example.com';
 /** `SERVICE_URL` as the binding writes it: the canonical URI (spec §4.5). */
@@ -450,6 +451,126 @@ describe('AuthBroker', () => {
     });
   });
 
+  describe('the binding is fixed when the provider is built (spec §4.5, §7)', () => {
+    /** A session store over a map: what is written is what a new broker reads. */
+    function mapSessionStore(conn: () => IConnectionConfig | null) {
+      const held = new Map<string, Record<string, unknown>>();
+      const store = mockSessionStore();
+      store.getConnectionConfig.mockImplementation(async () => conn());
+      store.loadSession.mockImplementation(
+        async (d: string) => held.get(d) ?? null,
+      );
+      store.saveSession.mockImplementation(async (d: string, c: unknown) => {
+        held.set(d, { ...(c as Record<string, unknown>) });
+      });
+      return { store, held };
+    }
+
+    it('a changed serviceUrl does not re-label what the cached factory provider obtained, and a fresh broker does not seed it for the new resource', async () => {
+      let serviceUrl = SERVICE_URL;
+      const { store, held } = mapSessionStore(() => ({ serviceUrl }));
+      const token = jwtExpiringIn(3600, { jti: 'obtained-for-A' });
+      const factory = jest.fn<
+        IRefreshableTokenProvider,
+        Parameters<TokenProviderFactory>
+      >(() => mockProvider({ authorizationToken: token }));
+      const broker = new AuthBroker({
+        sessionStore: store,
+        serviceKeyStore: mockServiceKeyStore(),
+        provider: factory,
+      });
+
+      await broker.getToken('DEST');
+      serviceUrl = 'https://other.example.com';
+      await broker.getToken('DEST');
+
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(store.saveSession).toHaveBeenCalledTimes(2);
+      for (const [, written] of store.saveSession.mock.calls) {
+        expect(written).toEqual(
+          expect.objectContaining({
+            authorizationToken: token,
+            issuedFor: SERVICE_URI,
+            issuedBy: KEY_ISSUER,
+          }),
+        );
+      }
+
+      // A new process whose means now name the other resource: the stored
+      // token was obtained for SERVICE_URL, so it is not seeded — a login is
+      // asked for instead.
+      const login = jest.fn(async () => {
+        throw new Error('login refused');
+      });
+      const fresh = new AuthBroker({
+        sessionStore: store,
+        serviceKeyStore: mockServiceKeyStore(KEY_AUTH, {
+          authType: 'jwt',
+          grantType: 'authorization_code',
+          serviceUrl,
+        }),
+        authorization: () => ({ authorize: login }),
+      });
+      const outcome = await (await fresh.getProvider('DEST')).prepare();
+      expect(outcome.ok).toBe(false);
+      expect(login).toHaveBeenCalledTimes(1);
+      expect(held.get('DEST')?.authorizationToken).toBe(token);
+    });
+
+    it('a changed client does not re-label what the cached factory provider obtained', async () => {
+      const keys = mockServiceKeyStore();
+      const store = mockSessionStore({ serviceUrl: SERVICE_URL });
+      const broker = new AuthBroker({
+        sessionStore: store,
+        serviceKeyStore: keys,
+        provider: () => mockProvider(),
+      });
+
+      await broker.getToken('DEST');
+      keys.getAuthorizationConfig.mockResolvedValue({
+        uaaUrl: 'https://other-uaa.example.com',
+        uaaClientId: 'other-client',
+        uaaClientSecret: 'other-secret',
+      });
+      await broker.getToken('DEST');
+
+      expect(store.saveSession).toHaveBeenCalledTimes(2);
+      for (const [, written] of store.saveSession.mock.calls) {
+        expect(written).toEqual(
+          expect.objectContaining({
+            issuedFor: SERVICE_URI,
+            issuedBy: KEY_ISSUER,
+          }),
+        );
+      }
+    });
+
+    it('an instance: the binding is fixed at the destination’s first call', async () => {
+      let conn: IConnectionConfig = {
+        serviceUrl: SERVICE_URL,
+        sapClient: '100',
+      };
+      const store = mockSessionStore();
+      store.getConnectionConfig.mockImplementation(async () => conn);
+      const broker = new AuthBroker({
+        sessionStore: store,
+        provider: mockProvider(),
+      });
+
+      await broker.getToken('DEST');
+      conn = { serviceUrl: 'https://other.example.com', sapClient: '200' };
+      await broker.getToken('DEST');
+
+      for (const [, written] of store.saveSession.mock.calls) {
+        expect(written).toEqual(
+          expect.objectContaining({
+            issuedFor: `${SERVICE_URI}?sap-client=100`,
+          }),
+        );
+      }
+    });
+  });
+
   describe('a write that fails', () => {
     class StoreDiskError extends Error {}
 
@@ -482,6 +603,42 @@ describe('AuthBroker', () => {
         sessionStore.saveSession.mock.calls[0],
       );
       await expect(broker.flush()).resolves.toBeUndefined();
+    });
+
+    it('a write that lands for one destination does not hide a failed write for another (the record is per destination)', async () => {
+      const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL });
+      const diskA = new StoreDiskError('disk full for A');
+      let failA = true;
+      let aFailed!: () => void;
+      const aHasFailed = new Promise<void>((resolve) => {
+        aFailed = resolve;
+      });
+      sessionStore.saveSession.mockImplementation(async (d: string) => {
+        if (d === 'A' && failA) {
+          failA = false;
+          aFailed();
+          throw diskA;
+        }
+        // B lands after A failed: it must not clear A's record.
+        if (d === 'B') await aHasFailed;
+      });
+      const shared: ITokenResult = {
+        authorizationToken: 'shared-object',
+        authType: 'authorization_code',
+      };
+      const provider = mockProvider();
+      provider.getTokens.mockResolvedValue(shared);
+      const broker = new AuthBroker({ sessionStore, provider });
+
+      const [a, b] = await Promise.allSettled([
+        broker.getToken('A'),
+        broker.getToken('B'),
+      ]);
+
+      expect(a).toEqual({ status: 'rejected', reason: diskA });
+      expect(b).toEqual({ status: 'fulfilled', value: 'shared-object' });
+      // A later write for A lands: A's record is cleared.
+      await expect(broker.getToken('A')).resolves.toBe('shared-object');
     });
 
     it('a later write that lands is not reported as the earlier failure', async () => {

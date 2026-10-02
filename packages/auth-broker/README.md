@@ -541,7 +541,10 @@ see *A Secret Is Bound to Its Resource and Issuer*). Never `serviceUrl`,
   included, through the same write path. `issuedFor` is the `serviceUrl` it
   resolved, with the SAP client; `issuedBy` the client a factory was handed —
   an instance is handed none, so what it obtains is bound to no issuer and
-  `getProvider` never seeds from it.
+  `getProvider` never seeds from it. Both are fixed when your provider is
+  built for the destination (an instance: at its first call for it) and kept
+  with it: a URL or client changed later never re-labels a token that
+  provider obtained — a new broker picks the change up.
 
 **A write that fails** reaches the caller: `getToken()` / `refreshToken()`
 throw the store's error, as raised, for the token they received — and the

@@ -186,10 +186,18 @@ interface BoundResult {
   carry: 'bound' | 'any';
 }
 
-/** A consumer provider built for one destination, with the client it was handed. */
+/**
+ * A consumer's provider as taken into use for one destination, with the
+ * binding fixed then (spec §4.5, §7): the resource and the issuer it was built
+ * — or, for an instance, first asked — for. Every result it answers for this
+ * destination is written with this binding, never one recomputed from means
+ * read later: a changed URL or client does not re-label a secret obtained
+ * before it; like any other change to a destination, it is picked up by a new
+ * broker (§7).
+ */
 interface ConsumerBuilt {
   provider: IRefreshableTokenProvider;
-  client: IAuthorizationConfig | null;
+  binding: Binding;
 }
 
 /** A provider `getProvider` built that obtains tokens: a token provider. */
@@ -250,13 +258,14 @@ export class AuthBroker {
   private readonly built = new Map<string, Promise<IAuthProvider>>();
   /**
    * The write that failed for a result, keyed on the result the provider
-   * handed over and returns (spec §9): the token API throws it to its caller,
-   * as 3.x did, while the broker keeps retrying. Dropped once a write of that
-   * result lands.
+   * handed over and returns (spec §9), then on the destination it was written
+   * for: the token API throws it to its caller, as 3.x did, while the broker
+   * keeps retrying. Dropped once a write of that result for that destination
+   * lands.
    */
   private readonly failedWrites = new WeakMap<
     ITokenResult,
-    { error: unknown }
+    Map<string, { error: unknown }>
   >();
   private readonly authorization: AuthBrokerConfig['authorization'];
   private readonly oidcAuthorization: AuthBrokerConfig['oidcAuthorization'];
@@ -329,10 +338,18 @@ export class AuthBroker {
       try {
         await this.writeSecret(destination, bound);
       } catch (error) {
-        this.failedWrites.set(bound.original, { error });
+        // Per destination: one result object may be answered for several
+        // (an instance serves every destination), and a write that lands for
+        // one says nothing about another's.
+        let failures = this.failedWrites.get(bound.original);
+        if (!failures) {
+          failures = new Map();
+          this.failedWrites.set(bound.original, failures);
+        }
+        failures.set(destination, { error });
         throw error;
       }
-      this.failedWrites.delete(bound.original);
+      this.failedWrites.get(bound.original)?.delete(destination);
     }, this.logger);
     this.logger.debug('[AuthBroker] Broker initialized', {
       hasServiceKeyStore: !!serviceKeyStore,
@@ -443,7 +460,7 @@ export class AuthBroker {
     this.logger.debug(`[AuthBroker] ${method} for ${destination}`);
     const result = checked(destination, await provider[method]());
     // onTokens wrote it, or failed to: the failure is this caller's too.
-    this.throwFailedWrite(result);
+    this.throwFailedWrite(destination, result);
     return result;
   }
 
@@ -464,10 +481,11 @@ export class AuthBroker {
       () => this.sessionStore.getConnectionConfig(destination),
     );
     const serviceUrl = await this.resolveServiceUrl(destination, connConfig);
-    const { provider, client } = await this.consumerProviderFor(
+    const { provider, binding } = await this.consumerProviderFor(
       destination,
       serviceUrl,
       connConfig,
+      means,
     );
 
     this.logger.debug(`[AuthBroker] ${method} for ${destination}`);
@@ -475,49 +493,52 @@ export class AuthBroker {
     await this.writer.submit(destination, {
       result: { ...result, expiresAt: expiryOf(result) },
       original: result,
-      binding: consumerBinding(
-        serviceUrl,
-        present(connConfig?.sapClient)
-          ? connConfig.sapClient
-          : means?.sapClient,
-        client,
-      ),
+      binding,
       carry: 'any',
     });
-    this.throwFailedWrite(result);
+    this.throwFailedWrite(destination, result);
     return result;
   }
 
-  /** The failure recorded for this result's write, thrown as the store raised it. */
-  private throwFailedWrite(result: ITokenResult): void {
-    const failed = this.failedWrites.get(result);
+  /** The failure recorded for this result's write here, thrown as the store raised it. */
+  private throwFailedWrite(destination: string, result: ITokenResult): void {
+    const failed = this.failedWrites.get(result)?.get(destination);
     if (failed) {
       throw failed.error;
     }
   }
 
   /**
-   * The consumer's provider for the destination: an instance as given, for
-   * every destination (handed no client); a factory's build cached per
-   * destination as a promise set before its first read (spec §7) and dropped
-   * when it throws, so the next call builds again.
+   * The consumer's provider for the destination, cached per destination as a
+   * promise set before its first read (spec §7) and dropped when it throws, so
+   * the next call builds again: a factory's build — handed the client resolved
+   * then — or an instance as given, for every destination, handed no client.
+   * Either way the binding is fixed here, from the `serviceUrl`, SAP client and
+   * client of this first call, and kept with the provider.
    */
   private consumerProviderFor(
     destination: string,
     serviceUrl: string,
     connConfig: IConnectionConfig | null,
+    means: IConnectionConfig | null,
   ): Promise<ConsumerBuilt> {
-    const provider = this.provider as
-      | IRefreshableTokenProvider
-      | TokenProviderFactory;
-    if (typeof provider !== 'function') {
-      return Promise.resolve({ provider, client: null });
-    }
     const cached = this.consumerBuilt.get(destination);
     if (cached) {
       return cached;
     }
-    const build = Promise.resolve().then(async () => {
+    const provider = this.provider as
+      | IRefreshableTokenProvider
+      | TokenProviderFactory;
+    const sapClient = present(connConfig?.sapClient)
+      ? connConfig.sapClient
+      : means?.sapClient;
+    const build = Promise.resolve().then(async (): Promise<ConsumerBuilt> => {
+      if (typeof provider !== 'function') {
+        return {
+          provider,
+          binding: consumerBinding(serviceUrl, sapClient, null),
+        };
+      }
       const client = await this.resolveAuthorizationConfig(destination);
       const built = provider(destination, client, {
         ...(connConfig ?? {}),
@@ -530,7 +551,10 @@ export class AuthBroker {
           connConfig?.authorizationToken || connConfig?.sessionCookies
         ),
       });
-      return { provider: built, client };
+      return {
+        provider: built,
+        binding: consumerBinding(serviceUrl, sapClient, client),
+      };
     });
     this.consumerBuilt.set(destination, build);
     build.catch(() => {

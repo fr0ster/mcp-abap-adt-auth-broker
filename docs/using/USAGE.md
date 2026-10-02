@@ -586,8 +586,10 @@ wants a token and nothing else. They have two sources:
   nothing themselves: the provider's `onTokens` does.
 - **A `provider` option** — yours, as in 3.x, with 3.x's reads; every answer
   is written, cache hits included, as the secret alone through the same write
-  path (retried, flushed). `issuedFor` is the URL it resolved with the SAP
-  client; `issuedBy` the client a factory was handed — none for an instance.
+  path (retried, flushed). `issuedFor` is the URL with the SAP client and
+  `issuedBy` the client a factory was handed (none for an instance), both
+  fixed when the provider is built for the destination and kept with it — a
+  later change of URL or client does not re-label what it obtained.
   `getProvider` does not use it, so a process that also calls `getProvider`
   for that destination has two token sources for it; use one per destination,
   or hand yours to a connector as

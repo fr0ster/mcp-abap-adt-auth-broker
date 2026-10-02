@@ -240,7 +240,10 @@ collaborators instead of a provider.
   (the session's, else the key store's); `issuedBy` is the client a factory
   was handed (`uaaUrl` with `client_id`) — an instance is handed no client,
   so its tokens are bound to no issuer and `getProvider` never seeds from
-  them. A failed write is thrown to the caller as the store raised it, as in
+  them. Both are fixed when the provider is built for the destination (an
+  instance: at its first call for it) and kept with it, so a URL or client
+  changed later never re-labels a token obtained before the change; a new
+  broker picks the change up. A failed write is thrown to the caller as the store raised it, as in
   3.x, and retried.
 - The token API's reads are 3.x's, and so are its answers: the session first,
   then the key store, for `serviceUrl` and the client a factory is seeded
