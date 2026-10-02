@@ -735,7 +735,12 @@ describe('getProvider — the OIDC grants', () => {
 
     const outcome = await (await broker.getProvider(D)).prepare();
 
-    expect(outcome.ok).toBe(false);
+    // auth-providers' fixed wording, with the label it allows for a class
+    // that is not its own: "unknown error" — never the thrown message.
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: { reason: expect.stringContaining('(unknown error)') },
+    });
     const said = JSON.stringify([
       outcome,
       logger.info.mock.calls,
@@ -1378,7 +1383,12 @@ describe('getProvider — the SAML grants', () => {
 
     const outcome = await (await broker.getProvider(D)).prepare();
 
-    expect(outcome.ok).toBe(false);
+    // auth-providers' fixed wording, with the label it allows for a class
+    // that is not its own: "unknown error" — never the thrown message.
+    expect(outcome).toEqual({
+      ok: false,
+      refusal: { reason: expect.stringContaining('(unknown error)') },
+    });
     const said = JSON.stringify([
       outcome,
       logger.info.mock.calls,
