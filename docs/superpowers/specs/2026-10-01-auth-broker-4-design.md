@@ -423,19 +423,25 @@ interface IConnectionConfig {
    (`new BtpSessionStore(dir, serviceUrl)`, `auth-stores` 2.0.0
    `src/stores/xsuaa/XsuaaSessionStore.ts:50`); 3.0.0 removed it from the
    session stores (`auth-stores` 3.0.0 `XsuaaSessionStore.ts:43`) without
-   moving it anywhere. It moves to the key store:
+   moving it anywhere. The grant moves to the key store; the URL does not
+   (decided 2026-10-02, as 3.1.0 shipped):
    - `new AbapServiceKeyStore(dir, { grantType?, log? })` — an ABAP
      environment key carries the ABAP URL (`abap.url`,
-     `AbapServiceKeyStore.ts:172-178`), so only the grant is an option;
-   - `new XsuaaServiceKeyStore(dir, { serviceUrl?, grantType?, log? })`.
+     `AbapServiceKeyStore.ts:172-178`);
+   - `new XsuaaServiceKeyStore(dir, { grantType?, log? })` — **no
+     `serviceUrl` option.** The resource URL is means of the destination,
+     not of the key: it is stated in an `EnvDestinationStore`
+     (`setDestination(name, { serviceUrl })`; `XSUAA_MCP_URL` with
+     `XSUAA_DESTINATION_VARS`) with the service key store as its fallback, or
+     answered by a key store the consumer writes.
 
-   An option given is what `getConnectionConfig` answers for that field;
-   absent, the 3.0.0 answer is unchanged (no `grantType`; for XSUAA the key's
-   own reading of `serviceUrl`, `XsuaaServiceKeyStore.ts:154-156`, which takes
-   a `url` without `authentication` in it as the resource URL — an inference
-   recorded here, not changed by 3.1.0). Stated by whoever builds the store,
-   so nothing is inferred (H1). Keeping `(dir, log)` working beside the new
-   options object is 3.1.0's to do — a minor must.
+   `grantType` given is what `getConnectionConfig` answers for every
+   destination with a key; absent, the 3.0.0 answer is unchanged (no
+   `grantType`; for XSUAA the key's own reading of `serviceUrl`,
+   `XsuaaServiceKeyStore.ts:154-156`, which takes a `url` without
+   `authentication` in it as the resource URL — an inference recorded here,
+   not changed by 3.1.0). Stated by whoever builds the store, so nothing is
+   inferred (H1). `(dir, log)` keeps working beside the new options object.
 2. **The session stores keep `issuedFor` and `issuedBy` with the secret**
    (D9): the ABAP stores under `SAP_ISSUED_FOR` / `SAP_ISSUED_BY`, the XSUAA
    stores under `XSUAA_ISSUED_FOR` / `XSUAA_ISSUED_BY`, the in-memory ones as
@@ -471,7 +477,17 @@ interface IConnectionConfig {
    by hand before its first renewal under the binding answers a binding
    nobody checked — the secret would be presented to the edited URL. The same
    holds for a file whose token a 3.0.0 store rewrote (it keeps the other
-   lines) after the means had moved elsewhere. The first renewal writes
+   lines) after the means had moved elsewhere. **How 3.1.0 composes them**
+   (as shipped): the parameter is appended to the URL as written — `?`, or
+   `&` after an existing query — with its value percent-encoded
+   (`encodeURIComponent`); case, port, path and a trailing `/` stay as
+   written. Not canonicalised: the broker's canonicaliser parses both sides
+   with `URL` / `URLSearchParams` and re-encodes the one parameter it keeps,
+   so `client_id=sb-a%21b` and `client_id=sb-a!b` compare equal and the
+   encoding round-trips. The XSUAA store's legacy client is `XSUAA_CLIENT`.
+   A 3.1.0 file store writes both keys with every credential, empty when
+   the write gives none; the broker takes `''` as no binding. The first
+   renewal writes
    `SAP_ISSUED_FOR` and `SAP_ISSUED_BY`, and from then on the file's
    `SAP_URL` and `SAP_UAA_*` are not read for them. The same holds for a
    hand-edited `SAP_UAA_URL` / `SAP_UAA_CLIENT_ID`.
@@ -627,10 +643,15 @@ src/serviceKey/IServiceKeyStore.ts:17`, `:25-27`, `:35`;
   src/lib/stores/index.ts:34-97`, `detectStoreType`). An ABAP environment key
   carries the ABAP URL; an XSUAA/BTP key carries only the authorizing
   service, so its resource URL was passed separately — in 2.x to the session
-  store, `new BtpSessionStore(dir, serviceUrl)` — and under auth-stores 3.1.0
-  to the key store: `new XsuaaServiceKeyStore(dir, { serviceUrl, grantType })`,
-  `new AbapServiceKeyStore(dir, { grantType })` (§1.5). The grant likewise: a
-  SAP key cannot state it; whoever builds the store does.
+  store, `new BtpSessionStore(dir, serviceUrl)`. Under auth-stores 3.1.0 it
+  is **means of the destination, not of the key** (decided 2026-10-02, as
+  3.1.0 shipped): no key store takes a `serviceUrl` option; the URL is stated
+  in an `EnvDestinationStore` (`SAP_URL`, or `XSUAA_MCP_URL` with
+  `XSUAA_DESTINATION_VARS`) with the service key store as its fallback, or
+  answered by a key store the consumer writes. The grant, which a SAP key
+  cannot state either, is the one option the service key stores take:
+  `new AbapServiceKeyStore(dir, { grantType })`,
+  `new XsuaaServiceKeyStore(dir, { grantType })` (§1.5).
 - **The secret — from the session store only**, through `loadSession`, whose
   `IConfig` carries all four fields (`interfaces-auth-broker
   src/auth/IConfig.ts:9-10`): `authorizationToken` or `sessionCookies`,
@@ -1342,9 +1363,13 @@ provider reads it; a connector takes its URL from the consumer's key store.
   destination store's write method; nothing is written to the session before
   the first login. **Its key stores state what a key cannot** (D8, auth-stores
 3.1.0): `detectStoreType` (`server src/lib/stores/index.ts:34-97`) passes
-`{ grantType: 'authorization_code' }` to `AbapServiceKeyStore`, and
-`{ serviceUrl, grantType }` to `XsuaaServiceKeyStore` — the resource URL it
-passed to `BtpSessionStore` in 2.x (today `''`, `:84`, `:172`). Its sessions
+`{ grantType: 'authorization_code' }` to `AbapServiceKeyStore` and
+`{ grantType }` to `XsuaaServiceKeyStore`. The resource URL it passed to
+`BtpSessionStore` in 2.x (today `''`, `:84`, `:172`) is means of the
+destination, not an option of any key store: it states it in an
+`EnvDestinationStore` (`XSUAA_MCP_URL` with `XSUAA_DESTINATION_VARS`) whose
+fallback is the service key store, or answers it from a key store of its
+own. Its sessions
 keep working: a legacy file's `SAP_URL` (+ `SAP_CLIENT`) is read as the
 secret's `issuedFor` and its `SAP_UAA_URL` + `SAP_UAA_CLIENT_ID` as its
 `issuedBy` (§1.5 item 3), so a stored token whose URL and client are the
@@ -1549,7 +1574,7 @@ writes (§10 table); `readManualInput` honours the abort; the smoke check.
 | Hold | Met by |
 |---|---|
 | H0 the broker speaks only the store contracts | §3.3, §8.2 (every means field reachable through `IServiceKeyStore`, every secret through `ISessionStore`; the binding the contract lacked is added to it, `issuedFor` and `issuedBy`, §1.4), §1.1, §1.2 (stores implement the split; a 2.x file's mapping is the store's), §1.5 (a legacy file's `issuedFor` is the store's reading), §3.2, §11 `check-graph` |
-| H1 the configuration states the provider; nothing inferred | §3.1 (`authType` + `grantType` from the key store, no broker-level grant, `none` stated), §3.2 (one source, no fallback by presence), §1.2 item 3 (a SAP key states no grant rather than one inferred), §1.5 item 1 (the grant and the resource URL stated by whoever builds the key store, D8) |
+| H1 the configuration states the provider; nothing inferred | §3.1 (`authType` + `grantType` from the key store, no broker-level grant, `none` stated), §3.2 (one source, no fallback by presence), §1.2 item 3 (a SAP key states no grant rather than one inferred), §1.5 item 1 (the grant stated by whoever builds the key store, the resource URL as means in a destination store — no `serviceUrl` option, D8) |
 | H2 no implicit defaults | §5, §4.1, §4.4 (a missing collaborator is an error, never a default) |
 | H3 what a provider obtains reaches the session store | §6, §4.3, §13 |
 | H4 no secret the broker was not given to store | §6 rule 2 (follows from the split: the broker writes only the session secret, never the read-only key store), §10 (the CLI's own writes of means), §13; and no stored secret presented to a resource it was not obtained for, nor one from another issuer or client seeded — §4.5 (D9), §6 (`issuedFor` and `issuedBy` written with the secret), §1.5 item 3 (the legacy reading and its stated risk), §12 *Binding* |
