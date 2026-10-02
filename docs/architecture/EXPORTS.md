@@ -1,11 +1,11 @@
 # Exported Entities
 
-This document lists the public exports of `@mcp-abap-adt/auth-broker` and how they relate.
+This document lists the public exports of `@mcp-abap-adt/auth-broker` 4.0.0 and how they relate.
 
 ## Primary Exports
 
 ### `AuthBroker`
-Main orchestrator for token retrieval and refresh.
+The credential a destination states (`getProvider`), its persistence, and the token API.
 
 **Export**:
 ```typescript
@@ -89,8 +89,10 @@ class DestinationConfigError extends Error {
 
 These are the stable interfaces consumers should use. The store contracts
 (`IConnectionConfig`, `IServiceKeyStore`, `ISessionStore`, and `IConfig` below)
-come from `@mcp-abap-adt/interfaces-auth-broker` 1.0.0; `IAuthorizationConfig`
-from `@mcp-abap-adt/interfaces-auth-sap` 2.0.0.
+come from `@mcp-abap-adt/interfaces-auth-broker` 1.1 (1.1.0 added `issuedFor`
+and `issuedBy` to `IConnectionConfig`); `IAuthorizationConfig` from
+`@mcp-abap-adt/interfaces-auth-sap` 2. Up to 3.x the store contracts came from
+`interfaces-auth-sap`; the names re-exported here are unchanged.
 
 ```typescript
 export type {
@@ -107,7 +109,9 @@ export type { IConfig } from './types';
 
 ### Provider Interface
 
-`IRefreshableTokenProvider` is what the broker requires; `ITokenProvider` is its base.
+`IRefreshableTokenProvider` is what the token API requires of a `provider` you
+give it; `ITokenProvider` is its base. `getProvider` hands out an `IAuthProvider`
+(not re-exported: take it from `@mcp-abap-adt/interfaces-auth`).
 
 ```typescript
 export type {
@@ -143,11 +147,13 @@ export type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 
 Concrete implementations are **not** in this package:
 - Stores live in `@mcp-abap-adt/auth-stores`.
-- Providers live in `@mcp-abap-adt/auth-providers` — a runtime dependency,
+- Providers live in `@mcp-abap-adt/auth-providers` 5 — a runtime dependency,
   since `getProvider` builds `BasicAuthProvider`, `SncLogonProvider`,
   `TokenAuthProvider`, `SamlAuthProvider`, `AuthorizationCodeProvider`,
-  `ClientCredentialsProvider` and `UaaPasscodeProvider`; none of them is
-  re-exported.
+  `ClientCredentialsProvider`, `UaaPasscodeProvider`, `OidcBrowserProvider`,
+  `OidcDeviceFlowProvider`, `OidcPasswordProvider`,
+  `OidcTokenExchangeProvider`, `Saml2PureProvider` and `Saml2BearerProvider`
+  (with the SAML validators it composes); none of them is re-exported.
 
 ## Minimal Relationship Diagram
 
@@ -157,9 +163,8 @@ flowchart TD
   AB --> SK[IServiceKeyStore]
   AB --> TP[IRefreshableTokenProvider]
   AB -->|getProvider| AP[IAuthProvider]
-  SS --> IConn[IConnectionConfig]
-  SS --> IAuth[IAuthorizationConfig]
-  SK --> IConn
-  SK --> IAuth
+  SS -->|the secret| ICfg[IConfig]
+  SK -->|the means| IConn[IConnectionConfig]
+  SK -->|the client| IAuth[IAuthorizationConfig]
   TP --> IToken[ITokenResult]
 ```

@@ -1,14 +1,15 @@
 # Architecture
 
-This document describes the architecture and design decisions of the `@mcp-abap-adt/auth-broker` package.
+This document describes the architecture and design decisions of the `@mcp-abap-adt/auth-broker` package (4.0.0) and its commands, `@mcp-abap-adt/auth-broker-cli` (2.0.0).
 
 ## Overview
 
-`auth-broker` orchestrates JWT token management for SAP ABAP ADT and BTP scenarios. It delegates storage to session/service-key stores and delegates token acquisition/refresh to injected token providers.
+For a destination name, `auth-broker` builds the `IAuthProvider` the destination states — from the means in its service key store and the secret in its session store — for a `@mcp-abap-adt/connection` 10 connector, and stores back every secret that provider obtains or renews. The token API (`getToken`, `refreshToken`, `createTokenRefresher`) serves a consumer that wants a token and nothing else, on that same provider or on one the consumer injects. Storage is the stores'; token acquisition, refresh and how a login is conducted are the providers' and their collaborators'.
 
-Supported authentication styles:
-- **ABAP/BTP**: authorization_code (browser or refresh token)
-- **XSUAA**: client_credentials (no browser)
+Supported destinations (`authType` / `grantType`):
+- **`basic`**, **`snc`** — a user and password; passwordless RFC logon through an SNC product
+- **`jwt`** — the UAA grants (`authorization_code`, `client_credentials`, `passcode`), the OIDC grants (`oidc_authorization_code`, `device_code`, `password`, `token_exchange`), or `none` (a token handed over)
+- **`saml`** — `saml2_pure` (session cookies), `saml2_bearer` (a token), or `none` (cookies handed over)
 
 ## Repository Layout
 
@@ -36,8 +37,8 @@ tools/                     check-graph.js, check-packed.js, publish-changed.js,
   `interfaces-auth-broker`, `interfaces-utils`) and `auth-providers` — never
   `auth-stores`; the CLI's, the library, the stores, the providers, the
   contracts and the logger.
-- Releases are tagged per package, `<dir>-v<version>` (`auth-broker-v3.1.0`,
-  `auth-broker-cli-v1.0.0`); `npm run release:publish` publishes exactly the
+- Releases are tagged per package, `<dir>-v<version>` (`auth-broker-v4.0.0`,
+  `auth-broker-cli-v2.0.0`); `npm run release:publish` publishes exactly the
   versions the registry lacks, and refuses one without its tag.
 
 ## Core Principles
@@ -53,7 +54,7 @@ tools/                     check-graph.js, check-packed.js, publish-changed.js,
 ### AuthBroker
 
 `AuthBroker` orchestrates, nothing more:
-- Builds one provider per destination — the one the destination states (`getProvider`) — in one promise cache, which `getProvider` and the token API share when no `provider` option is given (spec §7).
+- Builds one provider per destination — the one the destination states (`getProvider`) — in one promise cache, which `getProvider` and the token API share when no `provider` option is given.
 - With a `provider` option, the token API keeps 3.x's reads: `serviceUrl` (session, else service key), the UAA credentials (session, else service key) and the stored token and refresh token, seeding a factory once per destination (promise-cached) or using an instance as given.
 - Asks the provider once — `getTokens()` for `getToken()`, `refreshTokens()` for `refreshToken()` — with no retry and no fallback.
 - Writes what a provider obtains through one path, `SessionWriter`: the secret alone with its binding, retried until the store takes it — `onTokens` for its own providers, the token API after each answer of a consumer's.
@@ -67,7 +68,7 @@ connector takes:
 - `basic` → `BasicAuthProvider(username, password)`; `snc` →
   `SncLogonProvider.forSecureLoginClient(…)` from the four SNC fields — neither
   reads the session;
-- `jwt` / `saml` need a `grantType` from the table (spec §3.1); `none` reads the
+- `jwt` / `saml` need a `grantType` from the allowed pairs; `none` reads the
   session (`loadSession`) and hands over its token (`TokenAuthProvider.fixed`)
   or cookies (`SamlAuthProvider`);
 - `jwt` / `authorization_code`, `client_credentials`, `passcode` →
@@ -103,7 +104,7 @@ connector takes:
 ### The binding (`src/binding.ts`)
 
 A stored secret is used only for the resource it was obtained for, from the
-issuer and client that issued it (spec §4.5). `getProvider` computes, from the
+issuer and client that issued it. `getProvider` computes, from the
 means, `issuedFor` (`serviceUrl` + `sapClient`) and `issuedBy` (`uaaUrl` +
 `uaaClientId` for the UAA grants and `saml2_bearer`; `oidcIssuerUrl`, else
 `uaaUrl`, + `uaaClientId` for the OIDC grants; `samlAcsUrl` for `saml2_pure`;
@@ -140,34 +141,31 @@ attempt and rejects naming the destinations still failing.
 
 ### Stores
 
-Stores provide configuration data:
-- `ISessionStore` exposes stored tokens and connection info (`IConnectionConfig`), and the refresh token.
-- `IServiceKeyStore` exposes authorization config (`IAuthorizationConfig`) and connection config.
+Each store has one role (contracts from `@mcp-abap-adt/interfaces-auth-broker`):
+- `IServiceKeyStore` answers the means — `getConnectionConfig` (`authType`, `grantType`, `serviceUrl`, `sapClient`, user and password, the SNC, OIDC and SAML fields) and `getAuthorizationConfig` (the client). It is read-only: the broker never writes means.
+- `ISessionStore` holds the secret — `loadSession` / `saveSession` of the token or cookies, `expiresAt`, the refresh token, `issuedFor` and `issuedBy`. It must take a write of the secret alone.
 
-Concrete stores live in `@mcp-abap-adt/auth-stores` (ABAP, XSUAA, safe in-memory variants).
+Concrete stores live in `@mcp-abap-adt/auth-stores` 3 (`EnvDestinationStore`, the SAP service key stores with a `grantType` option, the ABAP and XSUAA session stores and their in-memory variants); the library never imports it, and any implementation of the contracts serves.
 
 ### Providers
 
-Providers live in `@mcp-abap-adt/auth-providers` and implement `IRefreshableTokenProvider` (from 4.2.0):
-- `AuthorizationCodeProvider` for ABAP/BTP (authorization_code + refresh token).
-- `ClientCredentialsProvider` for XSUAA (client_credentials).
-- The OIDC and SAML providers built by `SsoProviderFactory`.
+Providers live in `@mcp-abap-adt/auth-providers` 5, a runtime dependency: `getProvider` constructs the one a destination states (above) and hands it out as `IAuthProvider`; the token providers among them also implement `IRefreshableTokenProvider`, which is what the token API asks. A consumer's own `provider` is any `IRefreshableTokenProvider`.
 
-`getTokens()` answers the cache while valid, else refreshes, else logs in. `refreshTokens()` always obtains a new token (decision 39 in `@mcp-abap-adt/interfaces`' DECISIONS.md: a forced refresh is its own interface, not a flag).
+`getTokens()` answers the cache while valid, else refreshes, else logs in. `refreshTokens()` always obtains a new token (decision 39 in the `mcp-abap-adt-interfaces` repository's `docs/architecture/DECISIONS.md`: a forced refresh is its own interface, not a flag).
 
 ## Authentication Flow
 
 **`getToken(destination)`**
 1. Read the destination's `authType` from the key store: `basic` or `snc` → `DestinationConfigError` (`authType`) before any provider is asked.
 2. **No `provider` option:** a `none` destination → `DestinationConfigError` (`provider`); else `await getProvider(destination)` — the shared cache — and `provider.getTokens()`. Nothing is written here: `onTokens` wrote anything new before `getTokens()` answered.
-3. **A `provider` option:** resolve `serviceUrl` (without one, fail before asking the provider); build (factory, first call for the destination) or reuse the provider — the factory receives the credentials with the stored refresh token, and the connection config with the stored token; `provider.getTokens()`; submit the result to `SessionWriter` — the secret alone (`sessionCookies` when `tokenType` is `'saml'`, else `authorizationToken`; `expiresAt`; the refresh token, the stored one carried forward; `issuedFor` from the URL and SAP client, `issuedBy` from a factory's client — both fixed when the provider is built for the destination and kept with it, so a later change of URL or client never re-labels a secret obtained before it; a new broker picks the change up, §7) — and await that attempt.
+3. **A `provider` option:** resolve `serviceUrl` (without one, fail before asking the provider); build (factory, first call for the destination) or reuse the provider — the factory receives the credentials with the stored refresh token, and the connection config with the stored token; `provider.getTokens()`; submit the result to `SessionWriter` — the secret alone (`sessionCookies` when `tokenType` is `'saml'`, else `authorizationToken`; `expiresAt`; the refresh token, the stored one carried forward; `issuedFor` from the URL and SAP client, `issuedBy` from a factory's client — both fixed when the provider is built for the destination and kept with it, so a later change of URL or client never re-labels a secret obtained before it; a new broker picks the change up) — and await that attempt.
 4. If the write of the result received failed, throw the store's error (the retry goes on); else return the token.
 
 The write's outcome is found by the result object: `SessionWriter`'s write records a failure in a `WeakMap<ITokenResult, Map<destination, …>>` keyed on the result the provider handed to `onTokens` — which `BaseTokenProvider` also returns from `getTokens()` / `refreshTokens()` — never on the copy it writes (whose `expiresAt` is fixed on arrival), and drops it when a write of that result for that destination lands — one result object answered for two destinations (an instance) keeps a failure of one when the other's write lands.
 
 **`refreshToken(destination)`** is the same with `provider.refreshTokens()` — a new token, never the cached one; on the shared provider a renewal in flight (a connector's `rejected()`) is joined — and backs `ITokenRefresher.refreshToken()` from `createTokenRefresher()`.
 
-**Headless processes** configure the provider with an authorization strategy that refuses and catch the error it throws; there is no broker switch for it.
+**Headless processes** give the broker collaborators that refuse (then `prepare()` / `rejected()` answer Oops when a login is needed), or — with a `provider` of their own — configure it with an authorization strategy that refuses and catch the error it throws; there is no broker switch for it.
 
 ## Secrets
 
@@ -186,5 +184,5 @@ Everything the broker writes is the secret alone, in one `saveSession` (see *Per
 ## Responsibilities Split
 
 - **AuthBroker**: orchestration and persistence.
-- **Stores**: reading/writing config and tokens.
+- **Stores**: the means (read-only to the broker) and the secret.
 - **Providers**: token lifecycle, OAuth/SAML flows, how a login is conducted.

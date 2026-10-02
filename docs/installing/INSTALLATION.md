@@ -1,6 +1,8 @@
 # Installation Guide
 
-This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` package.
+This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` package (4.0.0)
+and its commands, `@mcp-abap-adt/auth-broker-cli` (2.0.0). Upgrading from 3.x: see
+*Migrating from 3.x* in the [library README](../../packages/auth-broker/README.md#migrating-from-3x).
 
 ## Prerequisites
 
@@ -13,8 +15,15 @@ This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` pa
 ### NPM Installation
 
 ```bash
-npm install @mcp-abap-adt/auth-broker
+npm install @mcp-abap-adt/auth-broker @mcp-abap-adt/auth-stores @mcp-abap-adt/auth-providers
 ```
+
+The library brings `@mcp-abap-adt/auth-providers` 5 as a dependency, but not
+the stores: install `@mcp-abap-adt/auth-stores` 3 or later (or bring stores of
+your own on the `@mcp-abap-adt/interfaces-auth-broker` contracts) — the
+session store must take a write of the secret alone, which auth-stores 1.x and
+2.x do not. Declare `@mcp-abap-adt/auth-providers` yourself when your code
+imports it (strategies, presenters, a provider of your own).
 
 The `mcp-auth` and `mcp-sso` commands are not part of this package from 3.1.0
 on: they are `@mcp-abap-adt/auth-broker-cli`, in the same repository.
@@ -23,7 +32,7 @@ on: they are `@mcp-abap-adt/auth-broker-cli`, in the same repository.
 npm install -g @mcp-abap-adt/auth-broker-cli
 ```
 
-Its 2.0.0, released with the library's 4.0.0, writes a complete 4.0 destination
+Its 2.0.0, on the library's 4.0.0, writes a complete 4.0 destination
 — the means through `EnvDestinationStore`, the secret through the broker — to
 the file it always wrote, and `flush()`es before it writes the output (exit 1
 when the secret is not stored); see its
@@ -62,71 +71,62 @@ Example: `TRIAL.json`
 }
 ```
 
+A service key holds the client and the URL, never which grant the
+destination uses: whoever builds the key store states it —
+`new AbapServiceKeyStore(dir, { grantType: 'authorization_code' })`.
+
 ### Environment File Setup
 
-The package automatically creates `{destination}.env` files after authentication. You can also create them manually:
+A destination may also be stated in `{destination}.env` — what `mcp-auth` /
+`mcp-sso` write, or a file you write yourself. With auth-stores 3 the file has
+two roles: the means, read by `EnvDestinationStore`, and the secret, written
+by the broker through a session store (`AbapSessionStore`); each touches only
+its own keys.
 
 Example: `TRIAL.env`
 ```env
+# the means — you (or the CLI) write these; the broker never does
 SAP_URL=https://your-system.abap.us10.hana.ondemand.com
 SAP_CLIENT=100
 SAP_AUTH_TYPE=jwt
-SAP_JWT_TOKEN=your_jwt_token
-SAP_REFRESH_TOKEN=your_refresh_token
+SAP_GRANT_TYPE=authorization_code
 SAP_UAA_URL=https://your-account.authentication.us10.hana.ondemand.com
 SAP_UAA_CLIENT_ID=your_client_id
 SAP_UAA_CLIENT_SECRET=your_client_secret
+# the secret — the broker writes these after a login
+SAP_JWT_TOKEN=...
+SAP_EXPIRES_AT=...
+SAP_REFRESH_TOKEN=...
+SAP_ISSUED_FOR=...
+SAP_ISSUED_BY=...
 ```
 
 ## File Locations
 
-### Default Locations
+Where files live is the stores' concern (`@mcp-abap-adt/auth-stores`), not the
+broker's: each store takes its directory in its constructor, with no default,
+and the broker reads no environment variable for it.
 
-By default, files are searched in the current working directory:
-- `{destination}.env` - Environment file with tokens
-- `{destination}.json` - Service key file
-
-### Custom Locations
-
-You can specify custom search paths:
-
-**Option 1: Store Constructor**
-
-Where files live is the stores' concern (`@mcp-abap-adt/auth-stores`), not the broker's:
 ```typescript
-import { AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-stores';
+import {
+  AbapServiceKeyStore,
+  AbapSessionStore,
+  EnvDestinationStore,
+} from '@mcp-abap-adt/auth-stores';
 
-const serviceKeyStore = new AbapServiceKeyStore('/path/to/keys');
+// The means: <destinations>/<destination>.env, falling back to the SAP service key
+const serviceKeyStore = new EnvDestinationStore('/path/to/destinations', {
+  fallback: new AbapServiceKeyStore('/path/to/keys', { grantType: 'authorization_code' }),
+});
+// The secret: <sessions>/<destination>.env (the same directory as the means is fine)
 const sessionStore = new AbapSessionStore('/path/to/sessions');
 ```
 
-**Option 2: Environment Variable**
-```bash
-export AUTH_BROKER_PATH=/path/to/destinations:/another/path
-```
-
-**Option 3: Multiple Paths**
-```bash
-# Linux/macOS
-export AUTH_BROKER_PATH=/path1:/path2:/path3
-
-# Windows
-set AUTH_BROKER_PATH=C:\path1;C:\path2;C:\path3
-```
-
-## Search Path Priority
-
-Files are searched in the following order (highest to lowest priority):
-
-1. Constructor parameter paths
-2. `AUTH_BROKER_PATH` environment variable paths
-3. Current working directory
-
 ## Quick Start
 
-1. **Install Package**:
+1. **Install Packages**:
    ```bash
-   npm install @mcp-abap-adt/auth-broker
+   npm install @mcp-abap-adt/auth-broker @mcp-abap-adt/auth-stores @mcp-abap-adt/auth-providers
    ```
 
 2. **Create Service Key File**:
@@ -177,7 +177,7 @@ Files are searched in the following order (highest to lowest priority):
    const provider = await broker.getProvider('TRIAL'); // the same provider
    ```
 
-4. **First Run**: On first run, browser will open for authentication. After authentication, `TRIAL.env` will be created automatically.
+4. **First Run**: On first run, the browser opens for the login. After it, the session store holds the secret — with `AbapSessionStore`, in `TRIAL.env` beside the key. Call `await broker.flush()` before the process exits to know it was stored.
 
 ## Security Considerations
 
@@ -208,12 +208,11 @@ Add to `.gitignore`:
 !package-lock.json
 ```
 
-### Environment Variables
+### Rotating Credentials
 
-If using `AUTH_BROKER_PATH`, ensure it's set securely:
-- Don't expose in logs
-- Use environment-specific values
-- Rotate service keys regularly
+Rotate service keys regularly. A changed URL, SAP client, UAA or client costs
+one fresh login: the stored secret is bound to the ones it was obtained for and
+is not reused elsewhere.
 
 ## Troubleshooting
 
@@ -222,7 +221,7 @@ If using `AUTH_BROKER_PATH`, ensure it's set securely:
 If you see "file not found" errors:
 
 1. **Check File Location**: Verify files are in the expected directory
-2. **Check Search Paths**: Review constructor parameters and `AUTH_BROKER_PATH`
+2. **Check Directories**: Review the directories given to each store's constructor
 3. **Check File Names**: Ensure files are named `{destination}.env` and `{destination}.json`
 
 ### Browser Authentication Issues
@@ -234,6 +233,14 @@ If browser doesn't open:
    `@mcp-abap-adt/auth-providers` (currently `61001`) unless overridden — with the `mcp-auth`/
    `mcp-sso` CLIs, via `--redirect-port`. Ensure whichever port is actually in use is free.
 3. **Check Firewall**: Ensure localhost connections are allowed
+
+### `DestinationConfigError`
+
+`getProvider` (and the token API) name what a destination lacks in
+`missingFields` — a field of the key store (`authType`, `grantType`, `uaaUrl`,
+…), a session field (`issuedFor`, `authorizationToken` for a `none`
+destination), or a collaborator option (`authorization`, …). A 3.x `jwt` /
+`saml` file that states no `SAP_GRANT_TYPE` is refused naming `grantType`.
 
 ### Token Refresh Issues
 

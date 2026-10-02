@@ -1,11 +1,11 @@
 /**
  * What `mcp-auth` does once its arguments are parsed, importable by tests.
  *
- * A run writes a complete destination (spec §10): first its means — `jwt`, the
+ * A run writes a complete destination: first its means — `jwt`, the
  * grant (`authorization_code`, or `client_credentials` with `--credential`), the
  * client and `serviceUrl` from the service key — through the key store's own
  * write method; then the login through the broker's token API with this
- * command's own provider (spec §9), which writes the secret it obtains — the
+ * command's own provider, which writes the secret it obtains — the
  * secret alone — to the session store. `flush()` before the output is written.
  */
 
@@ -68,7 +68,7 @@ function present(value: unknown): value is string {
 /**
  * An XSUAA destination may state no URL: its token is for the services that
  * trust the XSUAA instance, not for one system. The token API with a
- * consumer's provider still requires a `serviceUrl` (spec §9, the 3.x order),
+ * consumer's provider still requires a `serviceUrl` (the 3.x order),
  * so the broker's view of the key store answers a placeholder — never written
  * to the destination, and no binding is computed from it (it does not parse).
  */

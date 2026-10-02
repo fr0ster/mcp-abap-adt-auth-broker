@@ -6,7 +6,7 @@
  * through the destination store's own write method, then a login through the
  * provider the broker builds for that destination, whose secret reaches the
  * session store through the broker's persistence. The grant is never read from
- * the key (H1): a key holds a client, and a client may serve several grants.
+ * the key: a key holds a client, and a client may serve several grants.
  *
  * Like the commands, it works on a copy in a private directory and replaces
  * the session file only once `flush()` reports the secret stored: a refused or

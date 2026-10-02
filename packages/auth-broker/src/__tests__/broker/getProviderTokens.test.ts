@@ -2,7 +2,7 @@ import { inspect } from 'node:util';
 /**
  * getProvider for the UAA grants — `jwt` / `authorization_code`,
  * `client_credentials`, `passcode` — and the persistence every token provider
- * the broker builds gets through `onTokens` (spec §4.1, §4.4, §5, §6).
+ * the broker builds gets through `onTokens`.
  *
  * The stores are in-memory fakes of the contract; the providers are real
  * (auth-providers 5.1) against a local token endpoint, and are only ever driven
@@ -36,7 +36,7 @@ import {
   type TokenEndpoint,
 } from '../helpers/tokenEndpoint';
 
-/** The client secret: means, never to reach the session (H4) or an error. */
+/** The client secret: means, never to reach the session or an error. */
 const CLIENT_SECRET = 'S3CRET-client-must-not-leak';
 const SERVICE_URL = 'https://abap.example.com';
 const REDIRECT = 'http://localhost/callback';
@@ -82,7 +82,7 @@ function client(
 }
 
 /**
- * What a secret obtained for these means is bound to (spec §4.5): written
+ * What a secret obtained for these means is bound to: written
  * out literally, never computed by the broker's function.
  */
 const FOR = 'https://abap.example.com:443?sap-client=100';
@@ -402,7 +402,7 @@ describe('getProvider — the UAA grants', () => {
       expect(everything).not.toContain(CLIENT_SECRET);
     });
 
-    it('is not seeded: the row takes the client alone (spec §4.1)', async () => {
+    it('is not seeded: the row takes the client alone', async () => {
       const { broker } = brokerFor('client_credentials', {
         session: { authorizationToken: jwtExpiringIn(3600) },
       });
@@ -455,12 +455,12 @@ describe('getProvider — the UAA grants', () => {
     },
   );
 
-  // Plan D8: the resource URL is not authorization data. No UAA provider
+  // The resource URL is not authorization data. No UAA provider
   // reads it — the client and uaaUrl are all a grant needs — so a destination
   // whose means state no serviceUrl still gets its provider, and it obtains a
   // token. The connector needs the URL; the consumer takes it from its key
   // store.
-  describe('the resource URL is not authorization data (D8)', () => {
+  describe('the resource URL is not authorization data', () => {
     it.each(
       (
         ['authorization_code', 'client_credentials', 'passcode'] as const
@@ -557,7 +557,7 @@ describe('getProvider — the UAA grants', () => {
   });
 });
 
-describe('persistence through onTokens (spec §6)', () => {
+describe('persistence through onTokens', () => {
   /** A destination seeded with a token the server will refuse, and a refresh token. */
   function seeded(grant: UaaGrant = 'authorization_code', logger?: ILogger) {
     const refused = jwtExpiringIn(3600, { jti: 'refused' });
@@ -591,7 +591,7 @@ describe('persistence through onTokens (spec §6)', () => {
     expect(await bearer(provider)).toBe(endpoint.issued[0]);
   });
 
-  it('writes the secret and its binding, nothing else: no client secret, no serviceUrl, no authType (H4)', async () => {
+  it('writes the secret and its binding, nothing else: no client secret, no serviceUrl, no authType', async () => {
     const { broker, store } = seeded();
     const provider = await broker.getProvider(D);
     const before = Date.now();

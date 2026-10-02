@@ -1,16 +1,23 @@
 # @mcp-abap-adt/auth-broker
 [![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/StandWithUkraine.svg)](https://stand-with-ukraine.pp.ua)
 
-A per-destination token broker for SAP BTP and ABAP systems. For a destination — a name, such as
-`TRIAL` — it reads the session and the service key from the stores it is given, hands them to
-a token provider, and saves what the provider returns back to the session: a JWT or, for SAML,
-session cookies, with the refresh token. It decides nothing about tokens itself: whether the
-cached token is still good, when to refresh and when to log in is the provider's call
-(`@mcp-abap-adt/auth-providers`), and where sessions live is the stores' (`@mcp-abap-adt/auth-stores`).
+A per-destination credential broker for SAP BTP and ABAP systems. For a destination — a name,
+such as `TRIAL` — `getProvider` builds the `IAuthProvider` the destination states (basic, SNC, a
+UAA, OIDC or SAML grant, or a credential handed over) from the *means* in the service key store
+and the *secret* in the session store, ready for a `@mcp-abap-adt/connection` 10 connector, and
+stores back every token or set of SAML session cookies that provider obtains or renews. The
+token API (`getToken`, `refreshToken`, `createTokenRefresher`) serves whoever wants a token and
+nothing else. It decides nothing about tokens itself: whether the cached token is still good,
+when to refresh and when to log in is the provider's call (`@mcp-abap-adt/auth-providers`), and
+where means and secrets live is the stores' (`@mcp-abap-adt/auth-stores`, or your own).
 
-The `mcp-auth` and `mcp-sso` commands that write session files are in
-[`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md), in the same
-repository. Up to 3.0.4 they shipped in this package; from 3.1.0 this package
+**Upgrading from 3.x?** See [*Migrating from 3.x*](#migrating-from-3x) — 4.0.0 needs a session
+store that takes the secret alone (auth-stores 3 or later), means stated in a key store, and
+the contracts of `interfaces-auth` 3.
+
+The `mcp-auth` and `mcp-sso` commands that write destination files are in
+[`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md) (2.0.0, on this
+version), in the same repository. Up to 3.0.4 they shipped in this package; from 3.1.0 this package
 has no `bin`. Install the commands with
 `npm i -g @mcp-abap-adt/auth-broker-cli` — after
 `npm uninstall -g @mcp-abap-adt/auth-broker` if you had installed this one
@@ -110,10 +117,10 @@ const broker = new AuthBroker({
 });
 ```
 
-> `AuthorizationCodeProvider` and the other `@mcp-abap-adt/auth-providers`
+> `AuthorizationCodeProvider` and the other `@mcp-abap-adt/auth-providers` 5
 > providers implement `IRefreshableTokenProvider` (from `@mcp-abap-adt/interfaces-auth`
-> 3.0.0) as of auth-providers 5.1.0. Since auth-providers 5 the interactive ones
-> take their `authorization` strategy explicitly — none is built for you.
+> 3). Since auth-providers 5 the interactive ones take their `authorization`
+> strategy explicitly — none is built for you.
 
 ### A Provider for a Connector: `getProvider`
 
@@ -607,6 +614,43 @@ const newToken = await tokenRefresher.refreshToken();
 A `@mcp-abap-adt/connection` 10 connector takes an `IAuthProvider` instead:
 give it `await broker.getProvider('TRIAL')`.
 
+## Migrating from 3.x
+
+4.0.0 is a major: what a 3.x consumer must do, in short (the full list is the
+[CHANGELOG](CHANGELOG.md)'s 4.0.0 entry).
+
+1. **Session store: `@mcp-abap-adt/auth-stores` 3 or later** (`^3.1.0` for
+   the binding), or one of your own on the
+   `@mcp-abap-adt/interfaces-auth-broker` contract. The broker writes the
+   secret alone — token or cookies, `expiresAt`, refresh token, `issuedFor`,
+   `issuedBy` — and auth-stores 1.x/2.x's session stores refuse such a write
+   (their `AbapSessionStore` throws without `serviceUrl`): they are not
+   supported. A custom store must keep `issuedFor` and `issuedBy`.
+2. **State the means in a key store**, not in the session: `authType`, and
+   for `jwt` / `saml` a `grantType`; the client; the URL. For a SAP service
+   key, `new AbapServiceKeyStore(dir, { grantType: 'authorization_code' })`
+   (or `XsuaaServiceKeyStore`); otherwise `EnvDestinationStore(dir, {
+   fallback })`. A 3.x session file is a readable destination as it is once
+   it states `SAP_AUTH_TYPE` (and `SAP_GRANT_TYPE` for `jwt` / `saml`).
+3. **A connector of `@mcp-abap-adt/connection` 10** takes `await
+   broker.getProvider(destination)` — no `getToken` before connecting, no
+   token refresher. Give the broker the collaborators its grants need
+   (`authorization`, `oidcAuthorization`, `deviceCodePresenter`,
+   `samlCookies`, `assertionReplayStore`); there is no default.
+4. **The token API** keeps its calls, signatures and 3.x reads with a
+   `provider` of yours; it writes the secret alone, refuses a destination
+   stated `basic` or `snc`, and throws a failed write while the broker retries
+   it.
+5. **`getConnectionConfig` / `getAuthorizationConfig`** compose the key
+   store's means with the session's secret; a URL or client kept only in the
+   session store is not found any more.
+6. **New:** catch `DestinationConfigError`; call `flush()` on shutdown;
+   write `bindingOf(means)` beside a credential you hand over yourself.
+7. **Contracts:** `interfaces-auth` 3, `interfaces-auth-sap` 2,
+   `interfaces-auth-broker` 1.1 (the store contracts moved there from
+   `interfaces-auth-sap`), auth-providers 5. The commands are
+   `@mcp-abap-adt/auth-broker-cli` 2.0.0.
+
 ## Migrating from 2.2.0
 
 1. `tokenProvider` is now `provider`, and the `browser` argument is gone:
@@ -633,111 +677,72 @@ give it `await broker.getProvider('TRIAL')`.
 
 ### Environment Variables
 
-#### Configuration Variables
+The library reads no environment variable: the stores take their directories
+from their constructors, and the providers their settings from the
+destination's means and the collaborators you give the broker. (In the
+repository's test suites, `DEBUG_BROKER=true` — or `DEBUG_AUTH_BROKER=true`,
+`DEBUG=broker` — turns on the test logger, its level from `AUTH_LOG_LEVEL`.)
 
-- `AUTH_BROKER_PATH` - Colon/semicolon-separated paths for searching `.env` and `.json` files (default: current working directory)
+### Logging
 
-#### Debugging Variables
+Pass an `ILogger` as the constructor's second argument (for instance
+`DefaultLogger` from `@mcp-abap-adt/logger`); without one, nothing is logged.
 
-- `DEBUG_BROKER` - Enable debug logging for `auth-broker` package (short name)
-  - Set to `true` to enable logging (default: `false`)
-  - When enabled, logs authentication steps, token operations, and error details
-  - Can be explicitly disabled by setting to `false`
-  - Example: `DEBUG_BROKER=true npm test`
-  
-- `DEBUG_AUTH_BROKER` - Long name (backward compatibility)
-  - Same as `DEBUG_BROKER`, but longer name
-  - Example: `DEBUG_AUTH_BROKER=true npm test`
-  
-- `LOG_LEVEL` - Control log verbosity level
-  - Values: `debug`, `info`, `warn`, `error` (default: `info`)
-  - `debug` - All messages including detailed debug information
-  - `info` - Informational messages, warnings, and errors
-  - `warn` - Warnings and errors only
-  - `error` - Errors only
-  - Example: `LOG_LEVEL=debug DEBUG_BROKER=true npm test`
+**What is logged:** the broker's initialization (whether a key store is
+given; the `provider` option: `none`, `factory` or `instance`), each provider build (the destination's `authType` and grant, whether
+it was seeded), each session secret saved (token or cookies, whether a
+refresh token came back, the expiry), a stored secret discarded because it is
+bound elsewhere (the destination only), and each failed write with the error's
+class name.
 
-- `DEBUG` - Alternative way to enable debugging
-  - Set to `true` to enable all debug logging
-  - Or set to a string containing `broker` or `auth-broker` to enable only this package
-  - Example: `DEBUG=true npm test` or `DEBUG=broker npm test` or `DEBUG=auth-broker npm test`
+**What is never logged:** any part of a token, refresh token, password or
+secret — not a prefix, not a suffix — nor a store error's message, which may
+quote what was being written.
 
-**Note**: For debugging related packages:
-- `DEBUG_STORES` (short) or `DEBUG_AUTH_STORES` (long) - Enable logging for `@mcp-abap-adt/auth-stores` package
-- `DEBUG_PROVIDER` (short) or `DEBUG_AUTH_PROVIDERS` (long) - Enable logging for `@mcp-abap-adt/auth-providers` package
+With `DefaultLogger` at `info`:
 
-**Legacy Support**: `DEBUG_AUTH_LOG` is still supported for backward compatibility (equivalent to `DEBUG_BROKER=true LOG_LEVEL=debug`)
-
-### Logging Features
-
-When logging is enabled (via `DEBUG_BROKER=true` or `DEBUG_AUTH_BROKER=true`), the broker provides detailed structured logging:
-
-**What is logged:** broker initialization (which stores, instance or factory),
-provider builds (whether credentials, a refresh token and a stored token were
-there), and each token saved (token type, grant, whether a refresh token came
-back, expiry). Store read failures are logged as warnings.
-
-**What is never logged:** any part of a token, refresh token or secret — not a
-prefix, not a suffix. A log line says whether a token is there, never what it is.
-
-Example output with `DEBUG_BROKER=true LOG_LEVEL=info`:
 ```
-[INFO] ℹ️ [AUTH-BROKER] [AuthBroker] Token saved for TRIAL: tokenType(jwt), authType(authorization_code), hasRefreshToken(true), expiresAt(2026-09-26T20:15:30.000Z)
+[INFO] ℹ️ [AuthBroker] Session secret saved for TRIAL
+{"credential":"token","hasRefreshToken":true,"expiresAt":1790000000000}
 ```
-
-**Note**: Logging only works when a logger is explicitly provided to the broker constructor. The broker will not output anything to console if no logger is passed.
 
 ### File Structure
 
-#### Environment File for ABAP (`{destination}.env`)
-
-For ABAP connections, use `SAP_*` environment variables:
+With `@mcp-abap-adt/auth-stores` 3 one `<destination>.env` file can hold a
+destination whole, each store reading and writing only its own keys — the
+means through `EnvDestinationStore`, the secret through `AbapSessionStore`
+(or both in separate directories, as you compose them):
 
 ```env
+# The means — EnvDestinationStore (ABAP_DESTINATION_VARS); the broker never writes them
 SAP_URL=https://your-system.abap.us10.hana.ondemand.com
 SAP_CLIENT=100
-SAP_JWT_TOKEN=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
-SAP_REFRESH_TOKEN=refresh_token_string
+SAP_AUTH_TYPE=jwt
+SAP_GRANT_TYPE=authorization_code
 SAP_UAA_URL=https://your-account.authentication.us10.hana.ondemand.com
 SAP_UAA_CLIENT_ID=client_id
 SAP_UAA_CLIENT_SECRET=client_secret
+
+# The secret — AbapSessionStore (ABAP_SESSION_VARS); what the broker writes
+SAP_JWT_TOKEN=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+SAP_EXPIRES_AT=1790000000000
+SAP_REFRESH_TOKEN=refresh_token_string
+SAP_ISSUED_FOR=https://your-system.abap.us10.hana.ondemand.com:443?sap-client=100
+SAP_ISSUED_BY=https://your-account.authentication.us10.hana.ondemand.com:443?client_id=client_id
 ```
 
-#### Environment File for XSUAA (`{destination}.env`)
+SAML cookies are `SAP_SESSION_COOKIES_B64` in place of `SAP_JWT_TOKEN`. The
+XSUAA stores use the same names with `XSUAA_` (`XSUAA_DESTINATION_VARS`,
+`XSUAA_SESSION_VARS`; the URL is `XSUAA_MCP_URL`). Every means key
+(`SAP_USERNAME`, `SAP_SNC_*`, `SAP_OIDC_*`, `SAP_SAML_*`, …) is listed in
+[USAGE.md](../../docs/using/USAGE.md#environment-variables).
 
-For XSUAA connections (reduced scope), use `XSUAA_*` environment variables:
+#### Service Key File (`{destination}.json`)
 
-```env
-XSUAA_MCP_URL=https://your-mcp-server.cfapps.eu10.hana.ondemand.com
-XSUAA_JWT_TOKEN=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
-XSUAA_REFRESH_TOKEN=refresh_token_string
-XSUAA_UAA_URL=https://your-account.authentication.eu10.hana.ondemand.com
-XSUAA_UAA_CLIENT_ID=client_id
-XSUAA_UAA_CLIENT_SECRET=client_secret
-```
-
-**Note**: `XSUAA_MCP_URL` is optional - it's not part of authentication, only needed for making requests. The token and UAA credentials are sufficient for authentication.
-
-#### Environment File for BTP (`{destination}.env`)
-
-For BTP connections (full scope for ABAP systems), use `BTP_*` environment variables:
-
-```env
-BTP_ABAP_URL=https://your-system.abap.us10.hana.ondemand.com
-BTP_JWT_TOKEN=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
-BTP_REFRESH_TOKEN=refresh_token_string
-BTP_UAA_URL=https://your-account.authentication.eu10.hana.ondemand.com
-BTP_UAA_CLIENT_ID=client_id
-BTP_UAA_CLIENT_SECRET=client_secret
-BTP_SAP_CLIENT=100
-BTP_LANGUAGE=EN
-```
-
-**Note**: `BTP_ABAP_URL` is required - it's the ABAP system URL. All parameters (except tokens) come from service key.
-
-#### Service Key File for ABAP (`{destination}.json`)
-
-Standard ABAP service key format:
+A SAP service key, read by `AbapServiceKeyStore` (an ABAP environment key:
+the client and the ABAP URL) or `XsuaaServiceKeyStore` (an XSUAA key: the
+client). A key cannot state which grant the destination uses, so the store is
+told: `new AbapServiceKeyStore(dir, { grantType: 'authorization_code' })`.
 
 ```json
 {
@@ -750,40 +755,9 @@ Standard ABAP service key format:
 }
 ```
 
-#### Service Key File for XSUAA (`{destination}.json`)
-
-Direct XSUAA service key format (from BTP):
-
-```json
-{
-  "url": "https://your-account.authentication.eu10.hana.ondemand.com",
-  "apiurl": "https://api.authentication.eu10.hana.ondemand.com",
-  "clientid": "your_client_id",
-  "clientsecret": "your_client_secret"
-}
-```
-
-**Note**: For XSUAA service keys, `apiurl` is prioritized over `url` for UAA authorization if present.
-
-## XSUAA vs BTP Authentication
-
-This package supports two types of BTP authentication:
-
-### XSUAA (Reduced Scope)
-- **Purpose**: Access BTP services with limited scopes
-- **Service Key**: Contains only UAA credentials (no ABAP URL)
-- **Session Store**: `XsuaaSessionStore` (uses `XSUAA_*` environment variables)
-- **Authentication**: Client credentials grant type (no browser required)
-- **MCP URL**: Optional, provided separately (from YAML config `mcp_url`, parameter, or request header)
-- **Use Case**: Accessing BTP services like MCP servers with reduced permissions
-
-### BTP (Full Scope for ABAP)
-- **Purpose**: Access ABAP systems with full roles and scopes
-- **Service Key**: Contains UAA credentials and ABAP URL
-- **Session Store**: `BtpSessionStore` (uses `BTP_*` environment variables)
-- **Authentication**: Browser-based OAuth2 (like ABAP) or refresh token
-- **ABAP URL**: Required, from service key or YAML configuration
-- **Use Case**: Accessing ABAP systems in BTP with full permissions
+An XSUAA key carries no URL of the resource it authorizes for: state it as
+means in an `EnvDestinationStore` (`XSUAA_MCP_URL`, with
+`XSUAA_DESTINATION_VARS`) whose `fallback` is the `XsuaaServiceKeyStore`.
 
 ## Responsibilities and Design Principles
 
@@ -792,7 +766,7 @@ This package supports two types of BTP authentication:
 **Interface-Only Communication**: This package follows a fundamental development principle: **all interactions with external dependencies happen ONLY through interfaces**. The code knows **NOTHING beyond what is defined in the interfaces**.
 
 This means:
-- Does not know about concrete implementation classes (e.g., `AbapSessionStore`, `AuthorizationCodeProvider`)
+- Does not know about concrete store classes (e.g., `AbapSessionStore`); the provider classes it knows only to construct the one a destination states, and hands out as `IAuthProvider`
 - Does not know about internal data structures or methods not defined in interfaces
 - Does not make assumptions about implementation behavior beyond interface contracts
 - Does not access properties or methods not explicitly defined in interfaces
@@ -827,10 +801,11 @@ The `@mcp-abap-adt/auth-broker` package defines **interfaces** and provides **or
 
 The **consumer** (application using `AuthBroker`) is responsible for:
 
-1. **Selecting appropriate implementations**: Choose the correct `IServiceKeyStore`, `ISessionStore`, and `IRefreshableTokenProvider` implementations based on the use case:
-   - **ABAP systems**: Use `AbapServiceKeyStore`, `AbapSessionStore` (or `SafeAbapSessionStore`), and `AuthorizationCodeProvider`
-   - **BTP systems**: Use `AbapServiceKeyStore`, `BtpSessionStore` (or `SafeBtpSessionStore`), and `AuthorizationCodeProvider`
-   - **XSUAA services**: Use `XsuaaServiceKeyStore`, `XsuaaSessionStore` (or `SafeXsuaaSessionStore`), and `ClientCredentialsProvider`
+1. **Composing the stores and collaborators**: an `IServiceKeyStore` for the means and an `ISessionStore` for the secret — with auth-stores 3:
+   - **ABAP systems (a SAP service key)**: `AbapServiceKeyStore(dir, { grantType })`, alone or as the `fallback` of an `EnvDestinationStore`, and `AbapSessionStore` (or `SafeAbapSessionStore`, in memory)
+   - **Destinations without a key** (basic, SNC, OIDC, SAML, `none`): `EnvDestinationStore(dir)` and `AbapSessionStore`
+   - **XSUAA services**: `EnvDestinationStore(dir, { variables: XSUAA_DESTINATION_VARS, fallback: new XsuaaServiceKeyStore(keys, { grantType }) })` and `XsuaaSessionStore` (or `SafeXsuaaSessionStore`)
+   - the collaborator options the destinations' grants need — or, for the token API the 3.x way, an `IRefreshableTokenProvider` of your own
 
 2. **Stating the means in the key store**: `authType`, `grantType` and the fields its row reads, the client, and `serviceUrl` — for the token API with a `provider` of yours, the service URL comes from the session, else the key store.
 
@@ -856,7 +831,7 @@ Concrete `IRefreshableTokenProvider` implementations are responsible for:
 ### Design Principles
 
 1. **Interface-Only Communication** (Core Principle): All interactions with external dependencies happen **ONLY through interfaces**. The code knows **NOTHING beyond what is defined in the interfaces** (see [Core Development Principle](#core-development-principle) above)
-2. **Dependency Inversion Principle (DIP)**: `AuthBroker` depends on abstractions (`IServiceKeyStore`, `ISessionStore`, `IRefreshableTokenProvider`), not concrete implementations
+2. **Dependency Inversion Principle (DIP)**: `AuthBroker` depends on abstractions (`IServiceKeyStore`, `ISessionStore`, `IAuthProvider`, `IRefreshableTokenProvider`), not concrete store implementations; the providers it builds it hands out as `IAuthProvider`
 3. **Single Responsibility**: Each component has a single, well-defined responsibility:
    - `AuthBroker`: Orchestration — resolving, asking, persisting
    - `ISessionStore`: Session data storage and retrieval
@@ -1064,26 +1039,18 @@ reads to seed the next process's provider.
 
 ### Token Providers
 
-The package uses the `ITokenProvider` interface for token acquisition. Provider implementations live in `@mcp-abap-adt/auth-providers`:
+Provider implementations live in `@mcp-abap-adt/auth-providers` 5. `getProvider`
+builds the one the destination states (see *A Provider for a Connector*); for
+the token API the 3.x way you pass one yourself — an `IRefreshableTokenProvider`
+or a factory:
 
-- **`ClientCredentialsProvider`** - For XSUAA authentication (reduced scope)
-  - Uses client_credentials grant type
-  - No browser interaction required
-  - No refresh token provided
-
-- **`AuthorizationCodeProvider`** - For BTP/ABAP authentication (full scope)
-  - How the login is conducted is an `authorization?: IAuthorizationStrategy<string>`, not a
-    provider field. Omitted, it defaults to a browser callback on port `61001`
-  - `browserCallbackStrategy({ browser?, port?, timeoutMs? })` from `@mcp-abap-adt/auth-providers`
-    builds the ready-made strategy; pass `port` to avoid conflicts when running alongside other
-    services (e.g. a proxy server) or to match a redirect URI registered at the identity provider
-  - The callback port is held only for the duration of a login and released when it ends —
-    by success, failure, timeout, or cancellation
-  - Uses browser-based OAuth2 flow (if no refresh token)
-  - Uses refresh token if available
-  - Provides refresh token for future use
-
-**Example Usage:**
+- **`ClientCredentialsProvider`** — `client_credentials`: no user, no browser,
+  no refresh token.
+- **`AuthorizationCodeProvider`** — `authorization_code`: refreshes by the
+  stored refresh token, and logs in through the `authorization` strategy you
+  give it — there is no default. `browserCallbackStrategy({ browser?, port?,
+  timeoutMs? })` builds the usual one (callback port `61001` unless `port` is
+  given; held only for the duration of a login).
 
 ```typescript
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
@@ -1149,8 +1116,7 @@ integration case, and the run reaches no system.
 Complete documentation is available in the repository's [`docs/`](../../docs/) directory:
 
 - **[Architecture](../../docs/architecture/ARCHITECTURE.md)** - System architecture and design decisions
-- **[Development](../../docs/development/)** - Testing methodology and development roadmap
-- **[Development Roadmap](../../docs/development/DEVELOPMENT_ROADMAP.md)** - Development roadmap and future plans
+- **[Testing](../../docs/development/TESTING.md)** - Where the suites live, what they need, the release checks
 - **[Installation](../../docs/installing/INSTALLATION.md)** - Installation and setup guide
 - **[Usage](../../docs/using/USAGE.md)** - API reference and usage examples
 

@@ -43,7 +43,7 @@ const KEYCLOAK_URL = process.env.KEYCLOAK_URL?.replace(/\/+$/, '');
 const USER = { username: 'tester', password: 'tester' };
 const CALLBACK = 'http://localhost/callback';
 const SERVICE_URL = 'https://abap.stand.invalid';
-/** SERVICE_URL's canonical URI — what the session's `issuedFor` must hold (spec §4.5). */
+/** SERVICE_URL's canonical URI — what the session's `issuedFor` must hold. */
 const ISSUED_FOR = 'https://abap.stand.invalid:443';
 /** KEYCLOAK_URL (`http://localhost:<port>/realms/test`, already canonical) with the client. */
 const issuedBy = (clientId: string) => `${KEYCLOAK_URL}?client_id=${clientId}`;

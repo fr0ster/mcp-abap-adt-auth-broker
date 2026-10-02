@@ -1,5 +1,5 @@
 /**
- * getProvider against real systems (spec §13 *Live*, H6): the provider a
+ * getProvider against real systems: the provider a
  * destination states, handed to a `@mcp-abap-adt/connection` 10 connector,
  * logs on and is answered.
  *
@@ -32,12 +32,12 @@
  * 3's `AbapServiceKeyStore`: the client (`uaa.*`), the ABAP URL and client. The
  * grant is stated by whoever builds the store, never read from the key (a SAP
  * key cannot state one): `new AbapServiceKeyStore(dir, { grantType:
- * 'authorization_code' })` (auth-stores 3.1.0, plan D8). The URL the
- * connector dials is the key's; `getProvider` needs none (D8). Its session —
+ * 'authorization_code' })` (auth-stores 3.1.0). The URL the
+ * connector dials is the key's; `getProvider` needs none. Its session —
  * `<destination>.env` in AUTH_BROKER_LIVE_SESSIONS_DIR, read by auth-stores 3's
  * `AbapSessionStore`, which reads a 2.x/3.x file's secret keys only — must hold
- * a refresh token from an earlier login, and its binding must be the key's
- * (spec §4.5): a file written before auth-stores 3.1.0 answers `issuedFor`
+ * a refresh token from an earlier login, and its binding must be the key's:
+ * a file written before auth-stores 3.1.0 answers `issuedFor`
  * from its `SAP_URL` (+ `SAP_CLIENT`) and `issuedBy` from `SAP_UAA_URL` +
  * `SAP_UAA_CLIENT_ID`, which the 3.x CLI wrote from that same key. The case
  * copies that file to a temporary directory and never writes the original; it

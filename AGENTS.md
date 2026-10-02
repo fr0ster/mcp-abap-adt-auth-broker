@@ -2,8 +2,8 @@
 
 ## Project Structure & Module Organization
 - npm workspace (the `mcp-abap-adt-interfaces` layout); the root `package.json` is private and lists the packages in dependency order.
-- `packages/auth-broker/` — `@mcp-abap-adt/auth-broker`: `src/` (core `AuthBroker`, providers, stores, types), `src/__tests__/` (Jest), `tests/test-config.yaml.template`, `tests/stand/` (UAA and Keycloak in Docker for the token-grant suites).
-- `packages/auth-broker-cli/` — `@mcp-abap-adt/auth-broker-cli`: `src/` (`mcp-auth`, `mcp-sso` and their helpers; `generate-env-from-service-key.ts`), `src/__tests__/`, `tests/keycloak` and `tests/sso-demo` (interactive stands).
+- `packages/auth-broker/` — `@mcp-abap-adt/auth-broker`: `src/` (`AuthBroker`; `destinations.ts` — the provider each destination states; `binding.ts` / `bindingOf.ts` — what a secret is bound to; `SessionWriter.ts` — the retried session writes; `DestinationConfigError`; the re-exported contract types), `src/__tests__/` (Jest), `tests/test-config.yaml.template`, `tests/stand/` (UAA and Keycloak in Docker for the token-grant suites).
+- `packages/auth-broker-cli/` — `@mcp-abap-adt/auth-broker-cli`: `src/` (`mcp-auth`, `mcp-sso`, what each run does — `runMcpAuth.ts`, `runMcpSso.ts`, `destination.ts` — and their helpers; `generate-env-from-service-key.ts`), `src/__tests__/`, `tests/keycloak` and `tests/sso-demo` (interactive stands).
 - `tools/` — `check-graph.js`, `check-packed.js`, `publish-changed.js`, `test-publish-changed.js`, `version-stats.sh`.
 - `dist/` in each package is build output (generated).
 - `docs/` includes architecture, installation, usage, and development references.
@@ -23,7 +23,7 @@ Run from the repository root.
 
 ## Coding Style & Naming Conventions
 - Indentation: 2 spaces, single quotes, semicolons (Biome).
-- TypeScript across each package's `src/`; keep files small and focused by concern (`providers/`, `stores/`).
+- TypeScript across each package's `src/`; keep files small and focused by concern.
 - Tests use `*.test.ts` in the package's `src/__tests__/`.
 - Run `npm run lint` before committing to keep style consistent.
 
@@ -41,5 +41,5 @@ Run from the repository root.
 
 ## Security & Configuration Tips
 - Do not commit `.env` or service key files; keep credentials in local paths.
-- Use `AUTH_BROKER_PATH` to point to local destination config directories.
-- For debugging, prefer `DEBUG_BROKER=true` with `LOG_LEVEL=debug`.
+- Stores take their directory explicitly; the library reads no environment variable and logs only through the `ILogger` it is given.
+- In the test suites, `DEBUG_BROKER=true` turns on the test logger (level from `AUTH_LOG_LEVEL`).

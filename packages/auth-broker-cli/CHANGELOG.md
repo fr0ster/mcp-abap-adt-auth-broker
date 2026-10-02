@@ -7,15 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The version after 1.0.0 is **2.0.0** (major), set in the release that publishes
-it with `@mcp-abap-adt/auth-broker` 4.0.0, together with the dependency
-`@mcp-abap-adt/auth-broker` `^4.0.0`. Major by this package's own surface: a
-flag goes (`--authn-request-id`), a flag changes meaning (`--passcode`, `--cookie`),
+## [2.0.0] - 2026-10-02
+
+The commands on `@mcp-abap-adt/auth-broker` 4.0.0 (`^4.0.0`, released
+together). Major by this package's own surface: a flag goes
+(`--authn-request-id`), flags change meaning (`--passcode`, `--cookie`),
 invocations that worked now fail (`--passcode` without `--uaa-url`, `bearer`
 without a client, `generate-env` without `--grant`), and what a reader of the
 output finds changes (the means keys, a public client's empty secret, no
-`SAP_UAA_URL` for an OIDC run without `--uaa-url`). See *Migrating from 1.0.0*
-in the README.
+`SAP_UAA_URL` for an OIDC run without `--uaa-url`).
+
+### Breaking — in short
+
+- Every command writes a complete 4.0 destination: the means through
+  `EnvDestinationStore`, the secret through the broker, into the same
+  `<destination>.env`; the output is written only once the secret is stored.
+- `--flow password --passcode` is the UAA passcode grant; `--cookie` is a
+  `saml` / `none` destination; `bearer` needs its client; `--authn-request-id`
+  is refused; `generate-env` needs `--grant`.
+- A public client is `SAP_UAA_CLIENT_SECRET=` (empty); OIDC endpoints are
+  under `SAP_OIDC_*`, not `SAP_UAA_URL`.
+
+### Migrating from 1.0.0
+
+- **Install:** `npm i -g @mcp-abap-adt/auth-broker-cli@2` — it brings
+  `@mcp-abap-adt/auth-broker` 4, `@mcp-abap-adt/auth-stores` 3 and
+  `@mcp-abap-adt/auth-providers` 5.
+- **Flags:** replace `--authn-request-id` with `--idp-initiated` or a request
+  `mcp-sso` sends; give `--passcode` a `--uaa-url` (or `--service-key`) and
+  `--client-id`; give `bearer` `--uaa-url` and `--client-id` (or
+  `--service-key`); give `generate-env` `--grant authorization_code` or
+  `--grant client_credentials`; pass `--issuer` to an OIDC run whose token a
+  server should reuse.
+- **Files:** a file written by 1.0.0 and passed with `--env` is read where it
+  is and restated by the run. Whatever reads the output (a server on
+  `@mcp-abap-adt/auth-broker` 4) composes `EnvDestinationStore` and a session
+  store over the same directory; a reader of the 1.x keys finds them under the
+  same names, plus `SAP_AUTH_TYPE`, `SAP_GRANT_TYPE`, `SAP_EXPIRES_AT`,
+  `SAP_ISSUED_FOR` / `SAP_ISSUED_BY` and the grant's `SAP_OIDC_*` /
+  `SAP_SAML_*`.
+- **Exit codes:** still `0` success, `1` failure — and now `1`, with
+  `--output` left as it was, when the broker's `flush()` reports the secret not
+  stored.
+
+Details, per change:
 
 ### Changed — breaking
 
@@ -30,8 +65,8 @@ in the README.
   `getProvider` builds for the destination, `mcp-auth` through the token API
   with its own provider. Both stores share `<destination>.env` (`XSUAA_*` with
   `--type xsuaa`), each touching its own keys. 1.0.0 wrote the client into the
-  session (`setAuthorizationConfig`), which the 3.x session stores refuse; no
-  session write carries means or the client secret now (H4). The grant-specific
+  session (`setAuthorizationConfig`), which auth-stores 3's session stores refuse; no
+  session write carries means or the client secret now. The grant-specific
   means a run does not state are removed from a file passed with `--env`.
 - **`broker.flush()` before the output is written.** A command works in a
   private temporary directory and copies the destination to `--output` only
@@ -66,7 +101,8 @@ in the README.
   issuer, so `getProvider` does not reuse it: pass `--issuer`.
 - **`generate-env` takes the grant from `--grant`** (`authorization_code` or
   `client_credentials`) and refuses without it; 1.0.0 chose
-  `client_credentials` for a key whose URL named `authentication` (H1). It
+  `client_credentials` for a key whose URL named `authentication`, inferring the
+  grant from the key's shape. It
   writes the means and the secret as the commands do, through `getProvider`,
   on a copy in a private temporary directory, and replaces the session file
   (the exact session path given) only after `flush()` succeeds: a refused or
@@ -81,17 +117,16 @@ in the README.
   `authorization` (the passcode and SAML strategies), `oidcAuthorization`,
   `deviceCodePresenter` (`consoleDeviceCodePresenter` on this CLI's logger),
   `samlCookies` and `assertionReplayStore` (`defaultReplayStore`); `mcp-auth`
-  states its browser callback strategy. The broker supplies none (H2).
+  states its browser callback strategy. The broker supplies none.
 - **The SAML validator is built by the broker** from the trust the destination
   states (`SAP_SAML_IDP_CERTIFICATES_B64`, `SAP_SAML_IDP_ENTITY_ID`) —
   `createSignedResponseValidator` for pure, `createSignedAssertionValidator`
   for bearer; `mcp-sso` writes the trust it collects and still refuses missing
   trust before anything is written.
-- **`@mcp-abap-adt/auth-stores` `^3.2.0`** (was `^1.2.3`, decision D7) and
-  **`@mcp-abap-adt/auth-providers` `^5.2.1`** (was `^5.1.0`). The dependency on
-  `@mcp-abap-adt/auth-broker` stays `^3.1.0` in the tree — the workspace builds
-  against the library's 4.0 code — until the release sets `^4.0.0`.
-- From 4a, carried into this version: the manual SAML strategy reads through
+- **`@mcp-abap-adt/auth-broker` `^4.0.0`** (was `^3.1.0`),
+  **`@mcp-abap-adt/auth-stores` `^3.2.0`** (was `^1.2.3`) and
+  **`@mcp-abap-adt/auth-providers` `^5.2.1`** (was `^5.1.0`).
+- The manual SAML strategy reads through
   `read(prompt, signal)`, and `readManualInput` rejects and closes its
   `readline` when the signal aborts.
 

@@ -1,9 +1,9 @@
 /**
- * What a destination states, and the provider it states (spec §3.1, §4.1).
+ * What a destination states, and the provider it states.
  *
  * Two fields choose the provider — `authType` and, for `jwt` and `saml`,
  * `grantType` — and nothing else: no field's presence or absence is ever
- * read to pick a row (H1). Both come from the key store's means.
+ * read to pick a row. Both come from the key store's means.
  */
 
 import {
@@ -45,7 +45,7 @@ import { DestinationConfigError } from './DestinationConfigError';
 
 type StatedAuthType = NonNullable<IConnectionConfig['authType']>;
 
-/** The pairs of spec §3.1. `basic` and `snc` read no grant. */
+/** The allowed `authType` / `grantType` pairs. `basic` and `snc` read no grant. */
 const GRANTS: Readonly<Record<'jwt' | 'saml', readonly DestinationGrant[]>> = {
   jwt: [
     'authorization_code',
@@ -62,7 +62,7 @@ const GRANTS: Readonly<Record<'jwt' | 'saml', readonly DestinationGrant[]>> = {
 
 const AUTH_TYPES: readonly StatedAuthType[] = ['basic', 'jwt', 'saml', 'snc'];
 
-/** A stored string that counts as present: `''` is missing (spec §4.4). */
+/** A stored string that counts as present: `''` is missing. */
 function present(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
 }
@@ -194,7 +194,7 @@ export function sncProvider(
  * required. Read from the secret alone — the means are not a seed.
  *
  * The broker did not obtain it and cannot obtain it again, so a binding that
- * does not match is refused, never discarded (spec §4.5 item 4): `issuedFor`
+ * does not match is refused, never discarded: `issuedFor`
  * must always equal the destination's resource — it is what stops the
  * credential going to another one; `issuedBy` is compared only when the means
  * state an issuer.
@@ -244,7 +244,7 @@ export function isUaaGrant(grant: DestinationGrant): grant is UaaGrant {
   );
 }
 
-/** What a UAA row is built from (spec §4.1). */
+/** What a UAA row is built from. */
 export interface UaaRow {
   destination: string;
   grant: UaaGrant;
@@ -271,7 +271,7 @@ export interface UaaRow {
  *
  * Every field and option the row lacks is named in one error, before the
  * consumer's `authorization` is called. `serviceUrl` is not among them: the
- * providers read the client and `uaaUrl` only (plan D8). `uaaClientSecret: ''` is a public
+ * providers read the client and `uaaUrl` only. `uaaClientSecret: ''` is a public
  * client: `passcode` takes it as no secret; the other two rows' providers
  * require a secret, so for them `''` is missing.
  */
@@ -389,7 +389,7 @@ const OIDC_ENDPOINTS: Readonly<
   token_exchange: ['oidcTokenEndpoint'],
 };
 
-/** What an OIDC row is built from (spec §4.1). */
+/** What an OIDC row is built from. */
 export interface OidcRow {
   destination: string;
   grant: OidcGrant;
@@ -515,7 +515,7 @@ export function isSamlGrant(grant: DestinationGrant): grant is SamlGrant {
   return grant === 'saml2_pure' || grant === 'saml2_bearer';
 }
 
-/** What a SAML row is built from (spec §4.1). */
+/** What a SAML row is built from. */
 export interface SamlRow {
   destination: string;
   grant: SamlGrant;

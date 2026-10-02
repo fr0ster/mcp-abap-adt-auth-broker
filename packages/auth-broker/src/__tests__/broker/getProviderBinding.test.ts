@@ -1,6 +1,6 @@
 /**
  * A stored secret is bound to the resource it was obtained for and to the
- * issuer and client that issued it (spec §4.5, §6, §13; plan D9).
+ * issuer and client that issued it.
  *
  * The broker computes `issuedFor` (from `serviceUrl` and `sapClient`) and
  * `issuedBy` (from `uaaUrl` and `uaaClientId`) from the key store's means,

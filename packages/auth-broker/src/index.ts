@@ -1,7 +1,9 @@
 /**
  * @mcp-abap-adt/auth-broker
- * Per-destination token broker: sessions and service keys from stores,
- * tokens from an injected provider, results persisted.
+ * Per-destination credential broker: `getProvider` builds the `IAuthProvider`
+ * a destination states from its key store's means and its session store's
+ * secret, and stores back what that provider obtains; the token API serves a
+ * token from the same provider, or from one the consumer injects.
  */
 
 // Contract types re-exported for convenience, each from the package that

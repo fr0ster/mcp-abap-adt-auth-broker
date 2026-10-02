@@ -1,7 +1,7 @@
 /**
  * getProvider for the destinations that renew nothing — `basic`, `snc`,
  * `jwt`/`none`, `saml`/`none` — and the error a destination that lacks what
- * its type needs gets (spec §3, §4.1, §4.4, §7).
+ * its type needs gets.
  *
  * The stores are in-memory fakes of the contract; the providers are real
  * (auth-providers 5.1) and are only ever driven through `IAuthProvider`:
@@ -31,7 +31,7 @@ const SENTINEL = 'S3NTINEL-must-not-leak';
 
 const OK: AuthOutcome = { ok: true };
 
-/** A `none` destination's resource, and the canonical `issuedFor` its session holds (spec §4.5). */
+/** A `none` destination's resource, and the canonical `issuedFor` its session holds. */
 const RESOURCE = 'https://abap.example.com';
 const BOUND_TO = 'https://abap.example.com:443';
 
@@ -201,7 +201,7 @@ describe('getProvider', () => {
     });
 
     it('never reads the session: a stored token beside it is not presented', async () => {
-      // H1: the type the destination states decides, not the fields beside it.
+      // The type the destination states decides, not the fields beside it.
       const store = sessionStore({
         authorizationToken: 'stray-token',
         sessionCookies: 'stray=cookie',

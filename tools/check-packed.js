@@ -1,10 +1,10 @@
-// The bin smoke check (spec §10): what a user installs from npm, not what the
+// The bin smoke check: what a user installs from npm, not what the
 // workspace links.
 //
 // Packs every workspace, installs the tarballs into an empty project outside
 // the repository, and checks there that
 //   - each tarball ships its `dist` and names no sibling by path;
-//   - the library has no `bin` and does not depend on auth-stores (H0) — the
+//   - the library has no `bin` and does not depend on auth-stores — the
 //     commands are the CLI's;
 //   - the CLI resolves the PACKED library, not a copy of its own from the
 //     registry;
@@ -118,7 +118,7 @@ try {
         );
       if ('@mcp-abap-adt/auth-stores' in (manifest.dependencies ?? {}))
         problems.push(
-          `${label}: depends on @mcp-abap-adt/auth-stores; the library speaks only the store contracts (H0)`,
+          `${label}: depends on @mcp-abap-adt/auth-stores; the library speaks only the store contracts`,
         );
       for (const f of ['package/dist/index.js', 'package/dist/index.d.ts'])
         if (!listing.includes(f)) problems.push(`${label}: no ${f.slice(8)}`);

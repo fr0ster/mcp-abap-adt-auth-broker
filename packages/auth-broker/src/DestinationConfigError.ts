@@ -1,5 +1,5 @@
 /**
- * A destination that lacks what its type needs (spec §4.4).
+ * A destination that lacks what its type needs.
  *
  * Thrown by `getProvider` before any provider is asked: a missing field is a
  * fault no renewal cures, so it surfaces where the consumer builds its

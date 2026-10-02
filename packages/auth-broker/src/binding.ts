@@ -1,6 +1,5 @@
 /**
- * A secret is bound to the resource it was obtained for and to who issued it
- * (spec §1.4, §4.5; plan D9).
+ * A secret is bound to the resource it was obtained for and to who issued it.
  *
  * The session store keeps two strings beside the secret — `issuedFor`, the
  * resource, and `issuedBy`, the issuer and its client — and the broker uses a
@@ -181,7 +180,7 @@ export function samlPureBinding(means: IConnectionConfig): Binding {
 }
 
 /**
- * The token API with a consumer's provider (spec §9): what the broker handed
+ * The token API with a consumer's provider: what the broker handed
  * that provider — the `serviceUrl` it resolved, with the SAP client, and for a
  * factory the client it resolved (`uaaUrl` with `uaaClientId`). An instance is
  * handed no client, so no issuer is claimed for what it obtains: `issuedBy` is

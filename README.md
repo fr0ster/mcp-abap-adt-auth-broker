@@ -23,12 +23,16 @@ The commands:
 npm install -g @mcp-abap-adt/auth-broker-cli
 ```
 
+The current versions are the library's 4.0.0 and the CLI's 2.0.0, which
+depends on it (`^4.0.0`). What a 3.x consumer of the library must change is
+*Migrating from 3.x* in its
+[CHANGELOG](packages/auth-broker/CHANGELOG.md#400---2026-10-02); what changes
+for a user of the CLI's 1.0.0 is in its
+[README](packages/auth-broker-cli/README.md#migrating-from-100).
+
 Up to 3.0.4 the commands shipped in the library package; from 3.1.0 they are
-`@mcp-abap-adt/auth-broker-cli` (1.0.0 on), which depends on the library
-`^3.1.0`. Its 2.0.0 is released with the library's 4.0.0 (`^4.0.0`) and writes
-a complete 4.0 destination; what changes for a 1.0.0 user is in its
-[README](packages/auth-broker-cli/README.md#migrating-from-100). If you
-installed the library globally for the commands:
+`@mcp-abap-adt/auth-broker-cli`. If you installed the library globally for the
+commands:
 
 ```bash
 npm uninstall -g @mcp-abap-adt/auth-broker && npm i -g @mcp-abap-adt/auth-broker-cli
@@ -67,8 +71,8 @@ what each needs: [`docs/development/TESTING.md`](docs/development/TESTING.md).
 
 ## Releasing
 
-Each package is tagged `<dir>-v<version>`: `auth-broker-v3.1.0`,
-`auth-broker-cli-v1.0.0`. The `v*` tags are the library's history up to 3.0.4,
+Each package is tagged `<dir>-v<version>`: `auth-broker-v4.0.0`,
+`auth-broker-cli-v2.0.0`. The `v*` tags are the library's history up to 3.0.4,
 when it was the only package here.
 
 `npm run release:publish` publishes exactly the versions the registry does not
@@ -81,7 +85,7 @@ plan and changes nothing.
 
 A version with no tag is refused, which is why `release:publish` fails for the
 whole repository between a version bump and its tags: tag the merge commit
-(`auth-broker-v3.1.0`, `auth-broker-cli-v1.0.0`), then publish.
+(`auth-broker-v4.0.0`, `auth-broker-cli-v2.0.0`), then publish.
 
 Pushing a tag also runs `.github/workflows/release.yml`, which packs the
 package the tag names and attaches the tarball to a GitHub release.

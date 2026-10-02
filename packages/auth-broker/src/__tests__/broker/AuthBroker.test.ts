@@ -1,11 +1,11 @@
 /**
- * The token API with a consumer's own provider (spec §9): the 3.x behaviour,
+ * The token API with a consumer's own provider: the 3.x behaviour,
  * against mocked stores and providers, and once against auth-stores 3's real
  * `AbapSessionStore` and `EnvDestinationStore` on disk (no network).
  *
- * What changed from 3.x is what is written: the session secret alone (§6) —
+ * What changed from 3.x is what is written: the session secret alone —
  * the token or cookies, `expiresAt`, the refresh token, and what the secret is
- * bound to (`issuedFor` / `issuedBy`, §4.5) — through the broker's one write
+ * bound to (`issuedFor` / `issuedBy`) — through the broker's one write
  * path, retried when the store fails; never `serviceUrl`, `authType` or a
  * client. What a caller observes is as 3.x: the token, the provider asked as
  * before, the stores read in the 3.x order, a store's failure thrown as raised.
@@ -39,7 +39,7 @@ import type {
 import { jwtExpiringIn } from '../helpers/tokenEndpoint';
 
 const SERVICE_URL = 'https://abap.example.com';
-/** `SERVICE_URL` as the binding writes it: the canonical URI (spec §4.5). */
+/** `SERVICE_URL` as the binding writes it: the canonical URI. */
 const SERVICE_URI = 'https://abap.example.com:443';
 const KEY_AUTH: IAuthorizationConfig = {
   uaaUrl: 'https://uaa.example.com',
@@ -194,6 +194,33 @@ describe('AuthBroker', () => {
         ]);
       }
       expect(everythingWritten(sessionStore)).toBe('[[],[],[]]');
+    });
+
+    it('logs the provider option as it is: none, factory or instance', () => {
+      const forms: Array<[string, unknown]> = [
+        ['none', undefined],
+        ['factory', (() => mockProvider()) as TokenProviderFactory],
+        ['instance', mockProvider()],
+      ];
+      for (const [form, provider] of forms) {
+        const logger = {
+          debug: jest.fn(),
+          info: jest.fn(),
+          warn: jest.fn(),
+          error: jest.fn(),
+        };
+        new AuthBroker(
+          {
+            sessionStore: mockSessionStore(),
+            provider: provider as IRefreshableTokenProvider | undefined,
+          },
+          logger,
+        );
+        expect(logger.debug).toHaveBeenCalledWith(
+          '[AuthBroker] Broker initialized',
+          expect.objectContaining({ providerForm: form }),
+        );
+      }
     });
 
     it('refuses a service key store missing a method', () => {
@@ -393,7 +420,7 @@ describe('AuthBroker', () => {
     });
   });
 
-  describe('a destination stated basic or snc (spec §9)', () => {
+  describe('a destination stated basic or snc', () => {
     it.each(['basic', 'snc'] as const)(
       'is refused before any provider is asked, and nothing is written: %s',
       async (authType) => {
@@ -451,7 +478,7 @@ describe('AuthBroker', () => {
     });
   });
 
-  describe('the binding is fixed when the provider is built (spec §4.5, §7)', () => {
+  describe('the binding is fixed when the provider is built', () => {
     /** A session store over a map: what is written is what a new broker reads. */
     function mapSessionStore(conn: () => IConnectionConfig | null) {
       const held = new Map<string, Record<string, unknown>>();
@@ -760,7 +787,7 @@ describe('AuthBroker', () => {
       expect(factory.mock.calls.map((call) => call[0])).toEqual(['A', 'B']);
     });
 
-    it('builds once for concurrent first calls (the promise cache, spec §7)', async () => {
+    it('builds once for concurrent first calls (the promise cache)', async () => {
       const factory = jest.fn<
         IRefreshableTokenProvider,
         Parameters<TokenProviderFactory>

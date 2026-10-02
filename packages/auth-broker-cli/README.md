@@ -12,9 +12,9 @@ and write it — the destination's means and the session's secret — to one
 
 Up to `@mcp-abap-adt/auth-broker` 3.0.4 these commands shipped in the library
 package; its CHANGELOG holds their history. This package carries them from
-1.0.0 on. The version after 1.0.0 (2.0.0, released with
-`@mcp-abap-adt/auth-broker` 4.0.0) writes a complete 4.0 destination — see
-*What each command writes, and where* and *Migrating from 1.0.0*.
+1.0.0 on. 2.0.0, released with `@mcp-abap-adt/auth-broker` 4.0.0, writes a
+complete 4.0 destination — see *What each command writes, and where* and, if
+you used 1.0.0, *Migrating from 1.0.0*.
 
 ## Installation
 
@@ -22,10 +22,10 @@ package; its CHANGELOG holds their history. This package carries them from
 npm install -g @mcp-abap-adt/auth-broker-cli
 ```
 
-1.0.0 depends on `@mcp-abap-adt/auth-broker` `^3.1.0`, the first library
-version without the commands; 2.0.0 on `^4.0.0` (the range moves in the release
-that publishes both), with `@mcp-abap-adt/auth-stores` `^3.2.0` and
-`@mcp-abap-adt/auth-providers` `^5.2.1`. If you installed the library globally to
+2.0.0 depends on `@mcp-abap-adt/auth-broker` `^4.0.0`,
+`@mcp-abap-adt/auth-stores` `^3.2.0` and `@mcp-abap-adt/auth-providers`
+`^5.2.1` (1.0.0 depended on the library `^3.1.0`, the first version without
+the commands). If you installed the library globally to
 get the commands (3.0.4 or earlier), swap it for this package:
 
 ```bash
@@ -369,7 +369,7 @@ A SAML config file carries the trust inline:
 #### Migrating `mcp-sso` SAML runs from 2.2.0
 
 2.2.0 used `@mcp-abap-adt/auth-providers` 2.x, which trusted any SAML payload it was handed.
-With 4.x every `mcp-sso` SAML run (`bearer`, `saml2 --flow pure`, and `mcp-auth saml2-pure` /
+From auth-providers 4 on every `mcp-sso` SAML run (`bearer`, `saml2 --flow pure`, and `mcp-auth saml2-pure` /
 `saml2-bearer`, which call it) fails before login until you add:
 
 1. `--idp-metadata <url|path>`, or `--idp-cert <path>` and `--idp-entity-id <id>` (or

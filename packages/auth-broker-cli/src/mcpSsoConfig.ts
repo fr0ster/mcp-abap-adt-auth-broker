@@ -436,7 +436,7 @@ function resolveOidcTokenEndpoint(options: McpSsoOptions): string | undefined {
 /** A grant a destination states (`@mcp-abap-adt/interfaces-auth-broker`). */
 export type DestinationGrant = NonNullable<DestinationMeans['grantType']>;
 
-/** The row of spec §10 a run is: what the destination states. */
+/** The row a run is: what the destination states (`authType` / `grantType`). */
 export interface SsoRow {
   authType: 'jwt' | 'saml';
   grantType: DestinationGrant;
@@ -456,7 +456,7 @@ function isPasscodeRun(options: McpSsoOptions): boolean {
 }
 
 /**
- * The destination a run states (spec §10): `authType` and `grantType` from the
+ * The destination a run states: `authType` and `grantType` from the
  * protocol and flow — never from which fields happen to be present, beyond the
  * two flags that name a different way in (`--passcode`, `--cookie`).
  */
@@ -569,7 +569,7 @@ function samlCommon(options: McpSsoOptions): DestinationMeans {
 }
 
 /**
- * The means a run writes to the key store (spec §10 table): `authType`,
+ * The means a run writes to the key store (one row per command and flow): `authType`,
  * `grantType`, the grant's data and the client, and `serviceUrl` when given.
  * The means secrets the user gave — a password, a subject or actor token, a
  * client secret — are written here because the user asked for a destination
@@ -800,7 +800,7 @@ export type SsoCollaborators = Required<
 
 /**
  * Every collaborator a provider the broker builds may need, stated by this CLI
- * — the broker supplies none (H2): the interactive strategy of the passcode and
+ * — the broker supplies none: the interactive strategy of the passcode and
  * SAML grants, the OIDC browser strategy, the device-code presenter writing to
  * this CLI's logger, the SAML cookie function and the process-wide replay
  * store the assertion validators share. The broker calls only the ones the

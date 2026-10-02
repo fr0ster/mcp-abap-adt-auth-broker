@@ -1,6 +1,6 @@
 /**
  * getProvider's SAML grants with Keycloak as the identity provider and UAA as
- * the service provider, both started by tests/stand/up.sh (plan D5).
+ * the service provider, both started by tests/stand/up.sh.
  *
  * - `saml2_pure` end to end: Keycloak issues a signed SAMLResponse for UAA's
  *   web SSO ACS; the broker's provider validates it; the consumer's

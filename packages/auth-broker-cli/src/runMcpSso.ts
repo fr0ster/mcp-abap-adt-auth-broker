@@ -1,7 +1,7 @@
 /**
  * What `mcp-sso` does once its arguments are parsed, importable by tests.
  *
- * A run writes a complete destination (spec §10): first its means, through the
+ * A run writes a complete destination: first its means, through the
  * key store's own write method — `authType`, `grantType`, the grant's data, the
  * client — then the login, through the provider the broker builds for that
  * destination with the collaborators this CLI states, whose secret reaches the

@@ -4,7 +4,7 @@
  *
  * Each case pins what the command writes and where: the means (`jwt`, the
  * grant, the client and URL from the service key) read back through the key
- * store; the secret alone in the session store, never the client secret (H4);
+ * store; the secret alone in the session store, never the client secret;
  * and the destination a server builds from the output with `getProvider`,
  * which presents the stored token without a new login.
  */

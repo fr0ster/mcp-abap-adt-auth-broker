@@ -1,6 +1,6 @@
 # Usage Guide
 
-This guide provides API documentation and usage examples for the `@mcp-abap-adt/auth-broker` package.
+This guide provides API documentation and usage examples for the `@mcp-abap-adt/auth-broker` package (4.0.0) and its commands (`@mcp-abap-adt/auth-broker-cli` 2.0.0). Coming from 3.x: *Migrating from 3.x* in the [library README](../../packages/auth-broker/README.md#migrating-from-3x).
 
 ## Basic Usage
 
@@ -83,8 +83,8 @@ const memoryBroker = new AuthBroker({
 });
 ```
 
-`@mcp-abap-adt/auth-providers` providers implement `IRefreshableTokenProvider`
-from 4.2.0.
+`@mcp-abap-adt/auth-providers` 5 providers implement `IRefreshableTokenProvider`
+(from `@mcp-abap-adt/interfaces-auth` 3).
 
 ## A Provider for a Connector: `getProvider`
 
@@ -731,8 +731,10 @@ The broker writes the session secret alone — the token (or session cookies),
 `expiresAt`, the refresh token, `issuedFor` and `issuedBy`, in one
 `saveSession` — for a `getProvider` provider and for the token API alike;
 never the client secret, `serviceUrl` or `authType`, which are means and live
-in the key store. The CLI's commands of auth-broker-cli 1.0.0 still write a
-self-contained session file, means and secret together, on purpose.
+in the key store. The commands of `@mcp-abap-adt/auth-broker-cli` 2.0.0 write
+the means themselves, through `EnvDestinationStore`, and leave the secret to
+the broker — both into one `<destination>.env`, each store touching its own
+keys.
 
 The stored refresh token comes back through `loadSession()`, which the broker
 reads to seed the next process's provider.
@@ -741,10 +743,13 @@ reads to seed the next process's provider.
 
 Pass an `ILogger` as the constructor's second argument (for instance
 `DefaultLogger` from `@mcp-abap-adt/logger`). The broker logs its
-initialization, each provider build (whether credentials, a refresh token and
-a stored token were there), each saved token (type, grant, expiry, whether a
-refresh token came back) and store read failures. It never logs any part of a
-token or secret.
+initialization, each provider build (for `getProvider`'s: the `authType`,
+grant and whether it was seeded; for a factory's: whether credentials, a
+refresh token and a stored token were there), each session secret saved
+(token or cookies, whether a refresh token came back, the expiry), a stored
+secret discarded because it is bound elsewhere, failed writes (by error class)
+and store read failures. It never logs any part of a token or secret, nor a
+store error's message.
 
 ## Best Practices
 

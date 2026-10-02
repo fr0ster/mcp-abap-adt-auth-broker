@@ -1,5 +1,5 @@
 /**
- * What a destination's means bind its secret to (spec §4.5, plan D9): the one
+ * What a destination's means bind its secret to: the one
  * place the broker chooses which binding a destination has. `getProvider`
  * builds each provider with it, and `persist` writes what it gives beside every
  * secret; `bindingOf` hands the same to a consumer.
@@ -23,7 +23,7 @@ import { isOidcGrant } from './destinations';
  * The binding of a `jwt` or `saml` destination with the grant it states: the
  * UAA grants and `saml2_bearer` by `uaaUrl` and the client, the OIDC grants by
  * the issuer and the client, `saml2_pure` by its ACS, and `none` by what the
- * means state (§4.5 item 4).
+ * means state.
  */
 export function destinationBinding(
   authType: 'jwt' | 'saml',
