@@ -152,10 +152,14 @@ export function readManualInput(
   });
 }
 
-export function normalizeProviderConfig(raw: any): SsoProviderConfig | null {
-  if (!raw || typeof raw !== 'object') {
+export function normalizeProviderConfig(
+  input: unknown,
+): SsoProviderConfig | null {
+  if (!input || typeof input !== 'object') {
     return null;
   }
+  // A parsed JSON file: read as a record, its shape checked field by field.
+  const raw = input as Record<string, unknown>;
   if (raw.provider) {
     return raw.provider as SsoProviderConfig;
   }
