@@ -437,6 +437,36 @@ describe('getProvider — the OIDC grants', () => {
     });
   });
 
+  describe('jwt / device_code with an issuer and one explicit endpoint', () => {
+    // auth-providers 5.2.1 discovers the endpoint not given; 5.2.0 skipped
+    // discovery unless both were missing, and prepare() refused before any
+    // request — the broker builds the row the same either way.
+    it.each([
+      [
+        'the token endpoint',
+        () => ({ oidcDeviceAuthorizationEndpoint: `${endpoint.url}/device` }),
+      ],
+      [
+        'the device endpoint',
+        () => ({ oidcTokenEndpoint: `${endpoint.url}/oauth/token` }),
+      ],
+    ])(
+      'discovers %s it was not given, shows the code and obtains a token',
+      async (_missing, explicit) => {
+        const { broker, device, held } = oidcBroker('device_code', {
+          conn: oidcMeans('device_code', explicit()),
+        });
+
+        const provider = await broker.getProvider(D);
+        expect(await provider.prepare()).toEqual({ ok: true });
+
+        expect(endpoint.deviceRequests).toHaveLength(1);
+        expect(device.prompts).toHaveLength(1);
+        expect(held()?.authorizationToken).toBe(endpoint.issued[0]);
+      },
+    );
+  });
+
   describe('jwt / token_exchange', () => {
     it('exchanges the stored subject and actor tokens, with the scopes joined by a space', async () => {
       const conn = oidcMeans('token_exchange', {

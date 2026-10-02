@@ -209,10 +209,10 @@ const broker = new AuthBroker({
 
 **The OIDC grants.** The client is the key store's `getAuthorizationConfig`
 again: `uaaClientId`, and `uaaClientSecret` — `''` is a public client, sent
-with no secret. (A key store answers a client only when it holds one:
-auth-stores' `EnvDestinationStore` answers it when all three client fields
-are stated, so an OIDC destination there states `uaaUrl` too — the issuer,
-as `mcp-sso` writes it — and `uaaClientSecret: ''` for a public client.)
+with no secret. (A key store answers a client when it holds one: from
+auth-stores 3.2.0, `EnvDestinationStore` answers one whenever `uaaClientId`
+is stated, a missing `uaaUrl` or secret as `''` — so an OIDC destination
+states its issuer in `oidcIssuerUrl` alone, and a public client no secret.)
 The endpoints come from `oidcIssuerUrl`, which the provider discovers them
 from, or — without it — from every explicit endpoint the row reads
 (`oidcAuthorizationEndpoint`, `oidcDeviceAuthorizationEndpoint`,
