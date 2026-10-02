@@ -44,9 +44,18 @@ packages/auth-broker/src/__tests__/
                                          # the local token endpoint
 
 packages/auth-broker-cli/src/__tests__/
-├── mcpSsoConfig.test.ts                 # CLI flags and --config merged into a provider config
-├── mcpSsoSamlProviders.test.ts          # those configs handed to the real auth-providers SAML providers
+├── mcpSsoConfig.test.ts                 # CLI flags and --config merged; the means each flow
+│                                        # states; every collaborator it hands the broker
+├── mcpSsoSamlProviders.test.ts          # the SAML destinations, written and built by the real
+│                                        # broker into the real providers: the trust reaches the validator
+├── runMcpSso.test.ts                    # mcp-sso end to end, one case per row of the CLI's table:
+│                                        # means read back through the key store, the secret alone
+│                                        # in every session write, getProvider over the output, flush
+├── runMcpAuth.test.ts                   # mcp-auth end to end: the stated strategy, --env refresh,
+│                                        # JSON, the XSUAA keys, a write the store refuses
+├── generateEnv.test.ts                  # generate-env: --grant required, never inferred
 ├── samlMetadata.test.ts                 # IdP and SP metadata read into the SAML trust
+├── helpers/                             # the local token endpoint, reading what a run wrote
 └── fixtures/                            # metadata documents with their identities replaced
 ```
 

@@ -18,14 +18,16 @@ if [ "$READY" != "yes" ]; then
   exit 1
 fi
 
-echo "Running SAML pure flow (manual login, no copy/paste)..."
+echo "Running SAML pure flow, IdP-initiated (manual login, no copy/paste)..."
 SAML_OUT="/tmp/keycloak-saml-response.txt"
 rm -f "$SAML_OUT"
 
 node "$ROOT_DIR/tests/keycloak/saml-acs.js" &
 ACS_PID=$!
 
-SAML_URL="$(node "$ROOT_DIR/tests/keycloak/saml-sp.js")"
+# IdP-initiated: Keycloak posts the assertion to the ACS the realm names for
+# this client; no AuthnRequest, so the destination needs no request ID.
+SAML_URL="http://localhost:8080/realms/mcp-sso/protocol/saml/clients/mcp-sso-saml"
 
 echo "Open in browser and login:"
 echo "  $SAML_URL"
@@ -56,7 +58,7 @@ node "$ROOT_DIR/dist/mcp-sso.js" \
   --acs-url http://localhost:3002/acs \
   --assertion "$SAML_RESPONSE" \
   --idp-metadata http://localhost:8080/realms/mcp-sso/protocol/saml/descriptor \
-  --authn-request-id "$(cat /tmp/keycloak-saml-request-id.txt)" \
+  --idp-initiated \
   --assertion-flow assertion \
   --output /tmp/keycloak-saml.env \
   --type abap \

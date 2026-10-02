@@ -31,30 +31,12 @@
  *   mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp-signing.pem --idp-entity-id https://idp/metadata --cookie "SAP_SESSION=..." --output ./sso.env --type abap
  */
 
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-import {
-  type SsoProviderConfig,
-  SsoProviderFactory,
-} from '@mcp-abap-adt/auth-providers';
-import {
-  AbapServiceKeyStore,
-  AbapSessionStore,
-  XsuaaServiceKeyStore,
-  XsuaaSessionStore,
-} from '@mcp-abap-adt/auth-stores';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
 import * as fs from 'fs';
 import * as path from 'path';
-import {
-  applyFileConfig,
-  buildProviderConfig,
-  type McpSsoOptions,
-  normalizeProviderConfig,
-  parseSamlTrustArg,
-  readManualInput,
-} from './mcpSsoConfig';
-import { applySamlMetadata } from './samlMetadata';
+import { type McpSsoOptions, parseSamlTrustArg } from './mcpSsoConfig';
+import { runMcpSso } from './runMcpSso';
 import { createWorkDir } from './workDir';
 
 function getVersion(): string {
@@ -125,7 +107,10 @@ function showHelp(): void {
   console.log('  --username <value>        Username for password flow');
   console.log('  --password <value>        Password for password flow');
   console.log(
-    '  --passcode <value>        Passcode (alias for password, username=passcode)',
+    '  --passcode <value>        UAA one-time passcode: the passcode grant (needs --uaa-url or --service-key).',
+  );
+  console.log(
+    '                            --flow password with neither --password nor --username asks for one',
   );
   console.log('  --subject-token <token>   Subject token for token exchange');
   console.log(
@@ -167,7 +152,7 @@ function showHelp(): void {
     '                             against UAA/XSUAA). Use with --assertion or --assertion-flow manual',
   );
   console.log(
-    '  --authn-request-id <id>    AuthnRequest ID an --assertion answers (SP-initiated, request sent elsewhere)',
+    '  --authn-request-id <id>    Refused since 2.0.0: a destination cannot state a request ID',
   );
   console.log(
     '  --saml-metadata <path>     XSUAA SP metadata; bearer reads it for the token alias, --acs-url and',
@@ -180,7 +165,9 @@ function showHelp(): void {
     '  --assertion-flow <flow>    browser|manual|assertion (default: browser; manual with --idp-initiated)',
   );
   console.log('  --assertion <base64>       SAMLResponse (base64)');
-  console.log('  --cookie <value>           Session cookies (for pure SAML)');
+  console.log(
+    '  --cookie <value>           Session cookies handed over (pure SAML): stored as they are, no login',
+  );
   console.log(
     '  --token-endpoint <url>     Token endpoint for SAML bearer exchange',
   );
@@ -192,9 +179,24 @@ function showHelp(): void {
     '  and --idp-entity-id, or --idp-metadata (or idpCertificates/idpEntityId in --config). An --assertion',
   );
   console.log(
-    '  also needs --idp-initiated or --authn-request-id; the browser and manual flows',
+    '  also needs --idp-initiated; the browser and manual flows send their own request',
   );
-  console.log('  send their own request unless --idp-initiated is given.');
+  console.log('  unless --idp-initiated is given.');
+  console.log('');
+  console.log('What is written (one .env file, two roles):');
+  console.log(
+    '  the means — SAP_AUTH_TYPE, SAP_GRANT_TYPE, the client (SAP_UAA_*), SAP_OIDC_* / SAP_SAML_*,',
+  );
+  console.log(
+    '  SAP_URL — through the destination store; the secret — the token or cookies, SAP_EXPIRES_AT,',
+  );
+  console.log(
+    '  the refresh token, SAP_ISSUED_FOR / SAP_ISSUED_BY — through the session store, as the broker',
+  );
+  console.log(
+    '  stores what the login obtains (XSUAA_* keys with --type xsuaa). The output is written only once',
+  );
+  console.log('  the secret is stored; otherwise the command exits 1.');
   console.log('');
   console.log('  version, --version, -v     Show version number');
   console.log('  help, --help, -h           Show this help message');
@@ -581,367 +583,13 @@ async function main() {
   if (!options) {
     return;
   }
-  const logger = createCliLogger();
-
-  if (!options.outputFile) {
-    console.error('❌ Missing required --output');
-    process.exit(1);
-  }
-
-  const resolvedOutputPath = path.resolve(options.outputFile);
-  const resolvedEnvPath = options.envFilePath
-    ? path.resolve(options.envFilePath)
-    : undefined;
-
-  let destination = options.destination;
-  if (options.serviceKeyPath) {
-    const resolvedServiceKeyPath = path.resolve(options.serviceKeyPath);
-    if (!fs.existsSync(resolvedServiceKeyPath)) {
-      console.error(`❌ Service key file not found: ${resolvedServiceKeyPath}`);
-      process.exit(1);
-    }
-    const serviceKeyFileName = path.basename(
-      resolvedServiceKeyPath,
-      path.extname(resolvedServiceKeyPath),
-    );
-    if (destination && destination !== serviceKeyFileName) {
-      console.error(
-        `❌ Destination mismatch: service key (${serviceKeyFileName}) vs output (${destination})`,
-      );
-      process.exit(1);
-    }
-    destination = serviceKeyFileName;
-  }
-  if (!destination) {
-    destination = path.basename(
-      resolvedOutputPath,
-      path.extname(resolvedOutputPath),
-    );
-  }
-
-  if (resolvedEnvPath) {
-    const envName = path.basename(
-      resolvedEnvPath,
-      path.extname(resolvedEnvPath),
-    );
-    if (destination && envName !== destination) {
-      console.error(
-        `❌ Destination mismatch: env file (${envName}) vs output (${destination})`,
-      );
-      process.exit(1);
-    }
-  }
-
-  const allowTokenEndpointWithServiceKey =
-    options.protocol === 'saml2' && options.flow === 'bearer';
-  const serviceKeyConflicts =
-    options.serviceKeyPath &&
-    (options.configPath ||
-      options.issuerUrl ||
-      options.authorizationEndpoint ||
-      (!allowTokenEndpointWithServiceKey && options.tokenEndpoint) ||
-      options.deviceAuthorizationEndpoint ||
-      options.clientId ||
-      options.clientSecret ||
-      options.uaaUrl);
-  if (serviceKeyConflicts) {
-    console.error(
-      '❌ Use either --service-key or explicit OIDC/SAML parameters (issuer/token/client/uaa).',
-    );
-    process.exit(1);
-  }
-
-  if (options.serviceKeyPath && options.authType !== 'xsuaa') {
-    console.error('❌ --service-key is supported only for XSUAA flows.');
-    process.exit(1);
-  }
-
-  let providerConfigFromFile: ReturnType<typeof normalizeProviderConfig> = null;
-  if (options.configPath) {
-    const resolvedConfigPath = path.resolve(options.configPath);
-    if (!fs.existsSync(resolvedConfigPath)) {
-      console.error(`❌ Config file not found: ${resolvedConfigPath}`);
-      process.exit(1);
-    }
-    const raw = JSON.parse(fs.readFileSync(resolvedConfigPath, 'utf8'));
-    providerConfigFromFile = normalizeProviderConfig(raw);
-    if (!providerConfigFromFile) {
-      console.error(`❌ Config file does not contain provider config`);
-      process.exit(1);
-    }
-  }
-
-  // Merge the file into `options` *before* anything downstream reads
-  // options.protocol/flow or builds a strategy from them — a run driven by
-  // --config alone must reach exactly the same validation and
-  // strategy-building code a --protocol/--flow run does, or a field the file
-  // carries (including a legacy one 2.0.0 removed) can reach the provider
-  // untouched with no error and no warning. CLI flags already parsed above
-  // are left alone; the file only fills what they didn't set. A no-op when
-  // --config wasn't given.
-  applyFileConfig(options, providerConfigFromFile);
-
-  // The user's own --token-endpoint, before a service key sets the plain
-  // /oauth/token, which a saml2-bearer grant must not use.
-  const explicitTokenEndpoint = options.tokenEndpoint;
-
-  if (options.serviceKeyPath) {
-    const resolvedServiceKeyPath = path.resolve(options.serviceKeyPath);
-    const serviceKeyDir = path.dirname(resolvedServiceKeyPath);
-    const serviceKeyStore = new XsuaaServiceKeyStore(serviceKeyDir);
-    const authConfig =
-      await serviceKeyStore.getAuthorizationConfig(destination);
-    if (!authConfig) {
-      console.error(
-        `❌ Authorization config not found for ${destination}. Service key must contain clientid, clientsecret, and url fields.`,
-      );
-      process.exit(1);
-    }
-    const uaaUrl = authConfig.uaaUrl;
-    if (!uaaUrl) {
-      console.error(`❌ Service key missing UAA URL for ${destination}.`);
-      process.exit(1);
-    }
-    options.uaaUrl = uaaUrl;
-    options.clientId = authConfig.uaaClientId;
-    options.clientSecret = authConfig.uaaClientSecret;
-    if (!options.issuerUrl) {
-      options.issuerUrl = uaaUrl;
-    }
-    if (!options.tokenEndpoint) {
-      options.tokenEndpoint = `${uaaUrl.replace(/\/+$/, '')}/oauth/token`;
-    }
-    if (!options.authorizationEndpoint) {
-      options.authorizationEndpoint = `${uaaUrl.replace(/\/+$/, '')}/oauth/authorize`;
-    }
-  }
-
-  // What the SAML metadata states and the caller did not: the identity
-  // provider's trust from --idp-metadata, and for saml2-bearer the Audience,
-  // Recipient and token endpoint from XSUAA's own metadata (--saml-metadata,
-  // else <uaa.url>/saml/metadata from the service key).
-  try {
-    await applySamlMetadata(options, explicitTokenEndpoint);
-  } catch (error) {
-    console.error(
-      `❌ SAML metadata: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    process.exit(1);
-  }
-
-  if (options.protocol === 'oidc' && options.flow === 'password') {
-    if (options.uaaUrl && !options.tokenEndpoint) {
-      options.tokenEndpoint = `${options.uaaUrl.replace(/\/+$/, '')}/oauth/token`;
-    }
-  }
-
-  if (options.protocol === 'oidc' && options.flow) {
-    const valid = ['browser', 'device', 'password', 'token_exchange'];
-    if (!valid.includes(options.flow)) {
-      console.error(
-        `❌ Invalid OIDC flow: ${options.flow}. Use one of: ${valid.join(', ')}`,
-      );
-      process.exit(1);
-    }
-  }
-  if (options.protocol === 'saml2' && options.flow) {
-    const valid = ['bearer', 'pure'];
-    if (!valid.includes(options.flow)) {
-      console.error(
-        `❌ Invalid SAML flow: ${options.flow}. Use one of: ${valid.join(', ')}`,
-      );
-      process.exit(1);
-    }
-  }
-
-  if (options.protocol === 'oidc' && options.flow === 'password') {
-    if (!options.passcode && !options.password) {
-      options.passcode = await readManualInput('Paste passcode: ');
-    }
-  }
-
   // Removed on any exit, error and signal included: it holds the secret.
-  const tempSessionDir = createWorkDir('mcp-sso');
-
-  if (resolvedEnvPath && fs.existsSync(resolvedEnvPath)) {
-    const tempEnvPath = path.join(tempSessionDir, `${destination}.env`);
-    fs.copyFileSync(resolvedEnvPath, tempEnvPath);
-  }
-
-  const placeholderServiceUrl = '<SERVICE_URL>';
-  const defaultServiceUrl =
-    options.authType === 'xsuaa'
-      ? options.serviceUrl || placeholderServiceUrl
-      : options.serviceUrl || '';
-  const sessionStore =
-    options.authType === 'xsuaa'
-      ? new XsuaaSessionStore(tempSessionDir, defaultServiceUrl)
-      : new AbapSessionStore(tempSessionDir, undefined, options.serviceUrl);
-
-  const existingConn = await sessionStore.getConnectionConfig(destination);
-  const existingAuth = await sessionStore.getAuthorizationConfig(destination);
-
-  const serviceUrl = options.serviceUrl || existingConn?.serviceUrl;
-  if (options.authType === 'abap' && !serviceUrl) {
-    console.error(
-      '❌ ABAP requires --service-url or existing env with SAP URL',
-    );
-    process.exit(1);
-  }
-
-  if (
-    options.protocol === 'saml2' &&
-    options.flow === 'pure' &&
-    options.authType === 'xsuaa'
-  ) {
-    console.error(
-      '❌ SAML pure flow is only supported for ABAP sessions (cookies)',
-    );
-    process.exit(1);
-  }
-
-  const isSamlPureAbap =
-    options.authType === 'abap' &&
-    options.protocol === 'saml2' &&
-    options.flow === 'pure';
-
-  await sessionStore.setConnectionConfig(destination, {
-    serviceUrl:
-      serviceUrl ||
-      (options.authType === 'xsuaa' ? defaultServiceUrl : undefined),
-    authorizationToken: isSamlPureAbap
-      ? existingConn?.authorizationToken || '__init__'
-      : existingConn?.authorizationToken,
-    sessionCookies: existingConn?.sessionCookies,
+  const workDir = createWorkDir('mcp-sso');
+  const code = await runMcpSso(options, {
+    logger: createCliLogger(),
+    workDir,
   });
-
-  let stripClientSecret = false;
-  const authUaaUrl =
-    options.uaaUrl || options.tokenEndpoint || options.issuerUrl || undefined;
-  if (options.clientId && authUaaUrl) {
-    let clientSecret = options.clientSecret;
-    if (!clientSecret) {
-      clientSecret = '__public__';
-      stripClientSecret = true;
-    }
-    await sessionStore.setAuthorizationConfig(destination, {
-      uaaUrl: authUaaUrl,
-      uaaClientId: options.clientId,
-      uaaClientSecret: clientSecret,
-      refreshToken: existingAuth?.refreshToken,
-    });
-  }
-
-  const withLogger = (config: SsoProviderConfig): SsoProviderConfig =>
-    (config as any).config
-      ? ({
-          ...config,
-          config: {
-            ...(config as any).config,
-            logger: (config as any).config?.logger ?? logger,
-          },
-        } as SsoProviderConfig)
-      : config;
-
-  const tokenProvider = SsoProviderFactory.create(
-    withLogger(
-      buildProviderConfig(options, existingAuth, existingConn, logger),
-    ),
-  );
-  const broker = new AuthBroker(
-    {
-      sessionStore,
-      provider: tokenProvider,
-    },
-    logger,
-  );
-
-  console.log(`🔐 Getting token for destination "${destination}"...`);
-  await broker.getToken(destination);
-  console.log(`✅ Token obtained successfully`);
-
-  const connConfig = await sessionStore.getConnectionConfig(destination);
-  const authConfig = await sessionStore.getAuthorizationConfig(destination);
-
-  if (!connConfig) {
-    throw new Error('Connection config not found after authentication');
-  }
-
-  const isSaml = !!connConfig.sessionCookies && !connConfig.authorizationToken;
-  const token = isSaml
-    ? connConfig.sessionCookies
-    : connConfig.authorizationToken;
-  if (!token) {
-    throw new Error('Token provider did not return authorization token');
-  }
-
-  if (options.format === 'env') {
-    const tempEnvPath = path.join(tempSessionDir, `${destination}.env`);
-    if (!fs.existsSync(tempEnvPath)) {
-      throw new Error(`Temp env file not found: ${tempEnvPath}`);
-    }
-
-    const outputDir = path.dirname(resolvedOutputPath);
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-    let envContent = fs.readFileSync(tempEnvPath, 'utf8');
-    if (options.authType === 'xsuaa' && !serviceUrl) {
-      const lines = envContent
-        .split('\n')
-        .filter((line) => !line.startsWith('XSUAA_MCP_URL='));
-      envContent = `${lines.join('\n')}\n`;
-    }
-    if (stripClientSecret) {
-      const lines = envContent
-        .split('\n')
-        .filter(
-          (line) =>
-            !line.startsWith('XSUAA_UAA_CLIENT_SECRET=') &&
-            !line.startsWith('SAP_UAA_CLIENT_SECRET='),
-        );
-      envContent = `${lines.join('\n')}\n`;
-    }
-    fs.writeFileSync(resolvedOutputPath, envContent, 'utf8');
-    console.log(`✅ .env file created: ${resolvedOutputPath}`);
-  } else {
-    const outputData: Record<string, unknown> = {
-      tokenType: isSaml ? 'saml' : 'jwt',
-    };
-    if (isSaml) {
-      outputData.sessionCookies = token;
-    } else {
-      outputData.accessToken = token;
-    }
-    if (authConfig?.refreshToken) {
-      outputData.refreshToken = authConfig.refreshToken;
-    }
-    if (serviceUrl) {
-      outputData.serviceUrl = serviceUrl;
-    }
-    if (authConfig?.uaaUrl) {
-      outputData.uaaUrl = authConfig.uaaUrl;
-    }
-    if (authConfig?.uaaClientId) {
-      outputData.uaaClientId = authConfig.uaaClientId;
-    }
-    if (authConfig?.uaaClientSecret) {
-      if (!stripClientSecret) {
-        outputData.uaaClientSecret = authConfig.uaaClientSecret;
-      }
-    }
-
-    const outputDir = path.dirname(resolvedOutputPath);
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-    fs.writeFileSync(
-      resolvedOutputPath,
-      JSON.stringify(outputData, null, 2),
-      'utf8',
-    );
-    console.log(`✅ JSON file created: ${resolvedOutputPath}`);
-  }
+  process.exit(code);
 }
 
 main().catch((error) => {

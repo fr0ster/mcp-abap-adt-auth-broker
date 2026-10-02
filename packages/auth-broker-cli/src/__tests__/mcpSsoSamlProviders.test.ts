@@ -1,17 +1,17 @@
 /**
- * The configs mcpSsoConfig.ts builds, handed to the real auth-providers
- * SAML providers — no mock of the package. What this pins, without an
- * identity provider:
+ * The SAML destinations mcp-sso writes, built by the real broker into the real
+ * auth-providers SAML providers — no mock of either package. What this pins,
+ * without an identity provider:
  *
- * - missing trust material fails before construction with a ValidationError
- *   naming what is missing: since auth-providers 5 the CLI builds the
- *   assertion validator itself, from the trust it collects;
+ * - missing trust material fails before anything is written, with a
+ *   ValidationError naming what is missing;
  * - with --idp-initiated the CLI's strategy never calls
  *   buildAuthorizationUrl, which auth-providers refuses for an IdP-initiated
  *   login: the login gets as far as validating the pasted assertion;
- * - the validator each flow gets checks the signature against the trusted
- *   certificates, and is the kind its flow needs: bearer requires the
- *   Assertion signed, pure the Response.
+ * - the trust the CLI writes reaches the validator the broker builds: the
+ *   signature is checked against the certificates written, and the validator
+ *   is the kind the flow needs — bearer requires the Assertion signed, pure
+ *   the Response.
  */
 
 // The IdP-initiated strategy reads the pasted SAMLResponse through
@@ -39,6 +39,7 @@ jest.mock('node:readline', () => ({
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
   generateKeyMaterial,
   type KeyMaterial,
@@ -46,13 +47,17 @@ import {
 } from '@mcp-abap-adt/auth-mocks';
 import {
   AssertionValidationError,
-  Saml2BearerProvider,
-  Saml2PureProvider,
   ValidationError,
 } from '@mcp-abap-adt/auth-providers';
 import {
-  buildSamlBearerConfig,
-  buildSamlPureConfig,
+  AbapSessionStore,
+  EnvDestinationStore,
+} from '@mcp-abap-adt/auth-stores';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { completeMeans } from '../destination';
+import {
+  buildCollaborators,
+  buildDestinationMeans,
   type McpSsoOptions,
 } from '../mcpSsoConfig';
 
@@ -87,16 +92,61 @@ function samlOptions(overrides: Partial<McpSsoOptions> = {}): McpSsoOptions {
     spEntityId: 'https://uaa.example/entity',
     acsUrl: 'https://uaa.example/oauth/token/alias/x',
     tokenEndpoint: 'https://uaa.invalid/oauth/token',
+    uaaUrl: 'https://uaa.invalid',
+    clientId: 'bearer-client',
     ...overrides,
   };
 }
 
-const construct = {
-  bearer: (options: McpSsoOptions) =>
-    new Saml2BearerProvider(buildSamlBearerConfig(options)),
-  pure: (options: McpSsoOptions) =>
-    new Saml2PureProvider(buildSamlPureConfig(options)),
+const silentLogger: ILogger = {
+  info: () => {},
+  error: () => {},
+  warn: () => {},
+  debug: () => {},
 };
+
+/**
+ * What a run does up to the login: the destination written through the key
+ * store, then the provider the broker builds for it with the CLI's
+ * collaborators.
+ */
+async function providerFor(
+  flow: 'bearer' | 'pure',
+  options: McpSsoOptions,
+): Promise<{ getTokens: () => Promise<unknown> }> {
+  const run = { ...options, flow };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-sso-dest-'));
+  dirs.push(dir);
+  const keyStore = new EnvDestinationStore(dir);
+  await keyStore.setDestination(
+    'dest',
+    completeMeans(buildDestinationMeans(run)),
+  );
+  const broker = new AuthBroker({
+    sessionStore: new AbapSessionStore(dir),
+    serviceKeyStore: keyStore,
+    ...buildCollaborators(run, silentLogger),
+  });
+  return (await broker.getProvider('dest')) as never;
+}
+
+const dirs: string[] = [];
+
+/**
+ * An `AssertionValidationError` from the provider the broker built. The
+ * workspace installs auth-providers once per package, so the class the broker
+ * throws is not the one this file imports: the name and `check` identify it.
+ */
+function expectAssertionRefusal(refusal: unknown): AssertionValidationError {
+  expect((refusal as Error)?.constructor?.name).toBe(
+    AssertionValidationError.name,
+  );
+  expect(typeof (refusal as AssertionValidationError).check).toBe('string');
+  return refusal as AssertionValidationError;
+}
+afterAll(() => {
+  for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
+});
 
 describe.each([['bearer' as const], ['pure' as const]])(
   'mcp-sso %s config against the real SAML provider',
@@ -114,10 +164,10 @@ describe.each([['bearer' as const], ['pure' as const]])(
       fs.rmSync(tempDir, { recursive: true, force: true });
     });
 
-    it('without trust material, construction fails with the provider ValidationError', () => {
+    it('without trust material, the run fails with a ValidationError naming each field', async () => {
       let caught: unknown;
       try {
-        construct[flow](samlOptions());
+        await providerFor(flow, samlOptions());
       } catch (error) {
         caught = error;
       }
@@ -128,29 +178,18 @@ describe.each([['bearer' as const], ['pure' as const]])(
       ]);
     });
 
-    it('without trust material, no validator is built and no provider constructed', () => {
-      expect(() =>
-        construct[flow](
+    it('without certificates, nothing is built', async () => {
+      await expect(
+        providerFor(
+          flow,
           samlOptions({ idpEntityId: 'https://idp.example/metadata' }),
         ),
-      ).toThrow('missing idpCertificates');
-    });
-
-    it('with --idp-initiated and --authn-request-id, construction fails in the provider', () => {
-      expect(() =>
-        construct[flow](
-          samlOptions({
-            idpCertificateFiles: [certFile],
-            idpEntityId: 'https://idp.example/metadata',
-            idpInitiated: true,
-            authnRequestId: '_req1',
-          }),
-        ),
-      ).toThrow(ValidationError);
+      ).rejects.toThrow('missing idpCertificates');
     });
 
     it('with --idp-cert, --idp-entity-id and --idp-initiated, the login reaches assertion validation', async () => {
-      const provider = construct[flow](
+      const provider = await providerFor(
+        flow,
         samlOptions({
           idpCertificateFiles: [certFile],
           idpEntityId: 'https://idp.example/metadata',
@@ -162,11 +201,57 @@ describe.each([['bearer' as const], ['pure' as const]])(
       // authorization URL; the pasted document is refused by the validator
       // instead, before anything is sent anywhere.
       const refusal = await provider.getTokens().catch((error) => error);
-      expect(refusal).toBeInstanceOf(AssertionValidationError);
-      expect((refusal as AssertionValidationError).check).toBe('document');
+      expect(expectAssertionRefusal(refusal).check).toBe('document');
     });
   },
 );
+
+describe.each([
+  ['bearer' as const, 'saml2_bearer'],
+  ['pure' as const, 'saml2_pure'],
+])('the %s destination, read back through the key store', (flow, grant) => {
+  it('holds saml / its grant, the trust and the request settings mcp-sso stated', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-sso-means-'));
+    dirs.push(dir);
+    const keyStore = new EnvDestinationStore(dir);
+    await keyStore.setDestination(
+      'dest',
+      completeMeans(
+        buildDestinationMeans(
+          samlOptions({
+            flow,
+            idpCertificates: [TEST_IDP_CERT.trim()],
+            idpEntityId: 'https://idp.example/metadata',
+            idpInitiated: true,
+            relayState: 'rs',
+          }),
+        ),
+      ),
+    );
+    const means = await keyStore.getConnectionConfig('dest');
+    expect(means).toEqual(
+      expect.objectContaining({
+        authType: 'saml',
+        grantType: grant,
+        samlIdpSsoUrl: 'https://idp.example/sso',
+        samlSpEntityId: 'https://uaa.example/entity',
+        samlAcsUrl: 'https://uaa.example/oauth/token/alias/x',
+        samlIdpEntityId: 'https://idp.example/metadata',
+        samlIdpCertificates: [TEST_IDP_CERT.trim()],
+        samlIdpInitiated: true,
+        samlRelayState: 'rs',
+      }),
+    );
+    if (flow === 'bearer') {
+      expect(means?.samlTokenUrl).toBe('https://uaa.invalid/oauth/token');
+      expect(await keyStore.getAuthorizationConfig('dest')).toEqual({
+        uaaUrl: 'https://uaa.invalid',
+        uaaClientId: 'bearer-client',
+        uaaClientSecret: '',
+      });
+    }
+  });
+});
 
 const IDP_ENTITY_ID = 'https://idp.example/metadata';
 
@@ -186,7 +271,7 @@ function assertionSignedResponse(key: KeyMaterial): string {
   return Buffer.from(signXml(xml, key)).toString('base64');
 }
 
-describe('the validator mcp-sso builds, against a signed assertion', () => {
+describe('the validator the broker builds from the trust mcp-sso writes, against a signed assertion', () => {
   let tempDir: string;
   let trusted: KeyMaterial;
   let other: KeyMaterial;
@@ -209,7 +294,8 @@ describe('the validator mcp-sso builds, against a signed assertion', () => {
     signedBy: KeyMaterial,
   ): Promise<AssertionValidationError> {
     mockPasted.value = assertionSignedResponse(signedBy);
-    const provider = construct[flow](
+    const provider = await providerFor(
+      flow,
       samlOptions({
         idpCertificateFiles: [trustedCertFile],
         idpEntityId: IDP_ENTITY_ID,
@@ -218,8 +304,7 @@ describe('the validator mcp-sso builds, against a signed assertion', () => {
       }),
     );
     const refusal = await provider.getTokens().catch((error) => error);
-    expect(refusal).toBeInstanceOf(AssertionValidationError);
-    return refusal as AssertionValidationError;
+    return expectAssertionRefusal(refusal);
   }
 
   it.each([['bearer' as const], ['pure' as const]])(

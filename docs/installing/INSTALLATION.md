@@ -23,6 +23,13 @@ on: they are `@mcp-abap-adt/auth-broker-cli`, in the same repository.
 npm install -g @mcp-abap-adt/auth-broker-cli
 ```
 
+Its 2.0.0, released with the library's 4.0.0, writes a complete 4.0 destination
+— the means through `EnvDestinationStore`, the secret through the broker — to
+the file it always wrote, and `flush()`es before it writes the output (exit 1
+when the secret is not stored); see its
+[README](../../packages/auth-broker-cli/README.md#what-each-command-writes-and-where)
+and *Migrating from 1.0.0* there.
+
 If you installed `@mcp-abap-adt/auth-broker` globally for the commands (3.0.4
 or earlier), swap it:
 

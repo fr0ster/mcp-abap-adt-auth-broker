@@ -340,6 +340,25 @@ canonicalised on **both** sides, with what the session holds:
   Means that state no issuer leave `issuedBy` uncompared.
 - **The binding does not check the token.** Its audience stays the
   resource's to enforce; the broker compares two strings and parses no token.
+- **`bindingOf(means, client?)` — for a consumer that hands over a
+  credential.** A `none` destination presents a token or cookies the broker
+  cannot obtain; whoever writes them to the session store must write the
+  binding beside them. `bindingOf` answers exactly what the broker computes for
+  those means — the one function `getProvider` checks against and `persist`
+  writes (`issuedFor` from `serviceUrl` + `sapClient`, `issuedBy` from the
+  issuer, client or ACS the grant uses) — so a consumer never canonicalises a
+  URI itself:
+
+  ```typescript
+  const means = await keyStore.getConnectionConfig('DEV'); // saml / none
+  await sessionStore.saveSession('DEV', {
+    sessionCookies: cookies,
+    ...bindingOf(means ?? {}), // { issuedFor: 'https://dev.example.com:443?sap-client=100' }
+  });
+  ```
+
+  A destination that states no `jwt` / `saml` type or no grant binds nothing
+  (`{}`). `mcp-sso … --cookie` writes its cookies this way.
 
 **What you meet:**
 

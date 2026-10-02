@@ -4,34 +4,29 @@
  *
  * mcp-sso.ts itself cannot be `import`ed safely: it calls `main()` at the
  * bottom of the file, which parses the test runner's argv and exits. So
- * anything that needs unit coverage — building an `SsoProviderConfig` from
- * CLI options and an optional `--config` file, and merging the two — lives
- * here instead.
+ * anything that needs unit coverage — the destination a run states (its
+ * means, written to the key store), the collaborators it hands the broker,
+ * and merging CLI options with an optional `--config` file — lives here.
  */
 
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { createInterface } from 'node:readline';
+import type { AuthBrokerConfig } from '@mcp-abap-adt/auth-broker';
 import {
   asOidcResult,
   consoleDeviceCodePresenter,
-  createSignedAssertionValidator,
-  createSignedResponseValidator,
   DEFAULT_CALLBACK_PORT,
   defaultReplayStore,
+  manualPasscodeStrategy,
   manualSamlResponseStrategy,
-  type OidcBrowserProviderConfig,
-  type OidcDeviceFlowProviderConfig,
-  type OidcPasswordProviderConfig,
-  type OidcTokenExchangeProviderConfig,
   oidcCallbackStrategy,
-  type Saml2BearerProviderConfig,
-  type Saml2PureProviderConfig,
   type SsoProviderConfig,
   samlCallbackStrategy,
   staticCodeStrategy,
   ValidationError,
 } from '@mcp-abap-adt/auth-providers';
+import type { DestinationMeans } from '@mcp-abap-adt/auth-stores';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 
 /**
@@ -438,12 +433,240 @@ function resolveOidcTokenEndpoint(options: McpSsoOptions): string | undefined {
   );
 }
 
+/** A grant a destination states (`@mcp-abap-adt/interfaces-auth-broker`). */
+export type DestinationGrant = NonNullable<DestinationMeans['grantType']>;
+
+/** The row of spec §10 a run is: what the destination states. */
+export interface SsoRow {
+  authType: 'jwt' | 'saml';
+  grantType: DestinationGrant;
+}
+
+/**
+ * `--flow password` is the password grant when a password is given. With
+ * `--passcode` — or with neither a password nor a user, when the passcode is
+ * asked for — it is the UAA `passcode` grant: a one-time code cannot log in
+ * twice, so a destination that stored it as a password could never renew.
+ */
+function isPasscodeRun(options: McpSsoOptions): boolean {
+  return (
+    !!options.passcode ||
+    (options.password === undefined && options.username === undefined)
+  );
+}
+
+/**
+ * The destination a run states (spec §10): `authType` and `grantType` from the
+ * protocol and flow — never from which fields happen to be present, beyond the
+ * two flags that name a different way in (`--passcode`, `--cookie`).
+ */
+export function ssoRow(options: McpSsoOptions): SsoRow {
+  if (options.protocol === 'oidc') {
+    switch (options.flow) {
+      case 'browser':
+        return { authType: 'jwt', grantType: 'oidc_authorization_code' };
+      case 'device':
+        return { authType: 'jwt', grantType: 'device_code' };
+      case 'password':
+        return {
+          authType: 'jwt',
+          grantType: isPasscodeRun(options) ? 'passcode' : 'password',
+        };
+      case 'token_exchange':
+        return { authType: 'jwt', grantType: 'token_exchange' };
+      default:
+        throw new Error(`Unsupported OIDC flow: ${options.flow}`);
+    }
+  }
+  if (options.protocol === 'saml2') {
+    switch (options.flow) {
+      case 'bearer':
+        return { authType: 'saml', grantType: 'saml2_bearer' };
+      case 'pure':
+        // The user hands the cookies over: nothing obtains them, so the
+        // destination presents what it holds.
+        return {
+          authType: 'saml',
+          grantType: options.cookie ? 'none' : 'saml2_pure',
+        };
+      default:
+        throw new Error(`Unsupported SAML flow: ${options.flow}`);
+    }
+  }
+  throw new Error(
+    options.protocol
+      ? `Unsupported protocol: ${options.protocol}`
+      : 'Provider config is missing. Use --config or --protocol/--flow options.',
+  );
+}
+
+/** Scopes as the store keeps them: one per entry, none with whitespace. */
+function scopeList(scopes: unknown): string[] | undefined {
+  const list = Array.isArray(scopes)
+    ? scopes
+    : typeof scopes === 'string'
+      ? [scopes]
+      : [];
+  const split = list
+    .flatMap((entry) => String(entry).split(/[,\s]+/))
+    .filter(Boolean);
+  return split.length > 0 ? split : undefined;
+}
+
+/** The client of an OIDC row: an id, a secret (`''` a public client), a UAA URL when given. */
+function oidcClient(options: McpSsoOptions): DestinationMeans {
+  return {
+    uaaUrl: options.uaaUrl ?? null,
+    uaaClientId: requireOption(options.clientId, '--client-id'),
+    uaaClientSecret: options.clientSecret ?? '',
+  };
+}
+
+/**
+ * The SAML trust a destination states: the identity provider's signing
+ * certificates and its entityID. The broker builds the assertion validator its
+ * grant requires from them (`createSignedResponseValidator` for pure,
+ * `createSignedAssertionValidator` for bearer). Missing trust is refused here,
+ * naming each field, before anything is written.
+ */
+function buildSamlTrust(options: McpSsoOptions): DestinationMeans {
+  const idpCertificates = resolveIdpCertificates(options);
+  const missing: string[] = [];
+  if (!idpCertificates) missing.push('idpCertificates');
+  if (!options.idpEntityId) missing.push('idpEntityId');
+  if (missing.length > 0) {
+    throw new ValidationError(
+      `The assertion validator needs the identity provider to trust: missing ${missing.join(', ')}. ` +
+        'Supply --idp-cert and --idp-entity-id, or --idp-metadata.',
+      missing,
+    );
+  }
+  if (options.authnRequestId) {
+    // A destination has no field for it, and the broker builds the SAML
+    // provider from the destination alone.
+    console.error(
+      '❌ --authn-request-id cannot be stated in a destination: the broker builds the SAML provider ' +
+        'out of the destination alone, which holds no request ID. Use --idp-initiated, or let mcp-sso send the request ' +
+        '(--assertion-flow browser or manual).',
+    );
+    process.exit(1);
+  }
+  return {
+    samlIdpCertificates: idpCertificates,
+    samlIdpEntityId: options.idpEntityId,
+  };
+}
+
+function samlCommon(options: McpSsoOptions): DestinationMeans {
+  return {
+    samlIdpSsoUrl: requireOption(options.idpSsoUrl, '--idp-sso-url'),
+    samlSpEntityId: requireOption(options.spEntityId, '--sp-entity-id'),
+    samlAcsUrl: options.acsUrl,
+    samlRelayState: options.relayState,
+    samlIdpInitiated: options.idpInitiated === true ? true : undefined,
+    ...buildSamlTrust(options),
+  };
+}
+
+/**
+ * The means a run writes to the key store (spec §10 table): `authType`,
+ * `grantType`, the grant's data and the client, and `serviceUrl` when given.
+ * The means secrets the user gave — a password, a subject or actor token, a
+ * client secret — are written here because the user asked for a destination
+ * that can renew; the broker never writes them. A public client is a secret of
+ * `''`. Nothing obtained by a login is means: the passcode, the code, the
+ * assertion and the cookies are not written here.
+ */
+export function buildDestinationMeans(
+  options: McpSsoOptions,
+): DestinationMeans {
+  const row = ssoRow(options);
+  const base: DestinationMeans = {
+    authType: row.authType,
+    grantType: row.grantType,
+    serviceUrl: options.serviceUrl,
+  };
+  switch (row.grantType) {
+    case 'oidc_authorization_code':
+      return {
+        ...base,
+        ...oidcClient(options),
+        oidcIssuerUrl: options.issuerUrl,
+        oidcAuthorizationEndpoint: options.authorizationEndpoint,
+        oidcTokenEndpoint: resolveOidcTokenEndpoint(options),
+        oidcScopes: scopeList(options.scopes),
+      };
+    case 'device_code':
+      return {
+        ...base,
+        ...oidcClient(options),
+        oidcIssuerUrl: options.issuerUrl,
+        oidcDeviceAuthorizationEndpoint: options.deviceAuthorizationEndpoint,
+        oidcTokenEndpoint: resolveOidcTokenEndpoint(options),
+        oidcScopes: scopeList(options.scopes),
+      };
+    case 'password':
+      return {
+        ...base,
+        ...oidcClient(options),
+        oidcIssuerUrl: options.issuerUrl,
+        oidcTokenEndpoint: resolveOidcTokenEndpoint(options),
+        oidcScopes: scopeList(options.scopes),
+        username: requireOption(options.username, '--username'),
+        password: requireOption(options.password, '--password'),
+      };
+    case 'passcode':
+      // The UAA passcode grant: `<uaaUrl>/oauth/token`, the client alone.
+      return {
+        ...base,
+        uaaUrl: requireOption(options.uaaUrl, '--uaa-url (or --service-key)'),
+        uaaClientId: requireOption(options.clientId, '--client-id'),
+        uaaClientSecret: options.clientSecret ?? '',
+      };
+    case 'token_exchange':
+      return {
+        ...base,
+        ...oidcClient(options),
+        oidcIssuerUrl: options.issuerUrl,
+        oidcTokenEndpoint: resolveOidcTokenEndpoint(options),
+        oidcScopes: scopeList(options.scope ?? options.scopes),
+        oidcSubjectToken: requireOption(
+          options.subjectToken,
+          '--subject-token',
+        ),
+        oidcSubjectTokenType:
+          options.subjectTokenType ||
+          'urn:ietf:params:oauth:token-type:access_token',
+        oidcAudience: options.audience,
+        oidcActorToken: options.actorToken,
+        oidcActorTokenType: options.actorTokenType,
+      };
+    case 'saml2_bearer':
+      return {
+        ...base,
+        ...samlCommon(options),
+        samlTokenUrl: options.tokenEndpoint,
+        uaaUrl: requireOption(options.uaaUrl, '--uaa-url (or --service-key)'),
+        uaaClientId: requireOption(options.clientId, '--client-id'),
+        uaaClientSecret: options.clientSecret ?? '',
+      };
+    case 'saml2_pure':
+      return { ...base, ...samlCommon(options) };
+    case 'none':
+      // The cookies the user handed over are the secret; the destination
+      // states only where they are presented.
+      return base;
+    default:
+      throw new Error(`unreachable grant ${row.grantType}`);
+  }
+}
+
 /**
  * Only the OIDC 'browser' flow opens a browser; routes `--browser`,
  * `--redirect-port` and manual/OOB code paste into the strategy that
  * replaces them.
  */
-function buildOidcBrowserAuthorization(options: McpSsoOptions) {
+export function buildOidcBrowserAuthorization(options: McpSsoOptions) {
   if (options.code) {
     // The consumer already holds the code (manual paste / OOB redirect
     // URI); no callback server is opened at all.
@@ -463,77 +686,18 @@ function buildOidcBrowserAuthorization(options: McpSsoOptions) {
   });
 }
 
-function buildOidcCommon(options: McpSsoOptions) {
-  return {
-    issuerUrl: options.issuerUrl,
-    clientId: requireOption(options.clientId, '--client-id'),
-    clientSecret: options.clientSecret,
-  };
-}
-
-export function buildOidcBrowserConfig(
-  options: McpSsoOptions,
-): OidcBrowserProviderConfig {
-  return {
-    ...buildOidcCommon(options),
-    authorizationEndpoint: options.authorizationEndpoint,
-    tokenEndpoint: resolveOidcTokenEndpoint(options),
-    scopes: options.scopes,
-    authorization: buildOidcBrowserAuthorization(options),
-  };
-}
-
-export function buildOidcDeviceConfig(
-  options: McpSsoOptions,
-  logger?: ILogger,
-): OidcDeviceFlowProviderConfig {
-  // Device flow never opens a browser from this process; --browser and
-  // --redirect-port have nothing to attach to here. Where to go and what to
-  // enter goes to this CLI's logger (stderr without one), as auth-providers 4
-  // did by default.
-  return {
-    ...buildOidcCommon(options),
-    deviceAuthorizationEndpoint: options.deviceAuthorizationEndpoint,
-    tokenEndpoint: resolveOidcTokenEndpoint(options),
-    scopes: options.scopes,
-    presenter: consoleDeviceCodePresenter(logger),
-  };
-}
-
-export function buildOidcPasswordConfig(
-  options: McpSsoOptions,
-): OidcPasswordProviderConfig {
-  // Password flow never opens a browser; --browser and --redirect-port are
-  // not meaningful here either.
-  const passcode = options.passcode;
-  const username = options.username || (passcode ? 'passcode' : undefined);
-  const password = options.password || passcode;
-  return {
-    ...buildOidcCommon(options),
-    username: requireOption(username, '--username (or --passcode)'),
-    password: requireOption(password, '--password (or --passcode)'),
-    tokenEndpoint: resolveOidcTokenEndpoint(options),
-    scopes: options.scopes,
-  };
-}
-
-export function buildOidcTokenExchangeConfig(
-  options: McpSsoOptions,
-): OidcTokenExchangeProviderConfig {
-  // Token exchange never opens a browser; --browser and --redirect-port are
-  // not meaningful here either.
-  return {
-    ...buildOidcCommon(options),
-    subjectToken: requireOption(options.subjectToken, '--subject-token'),
-    subjectTokenType:
-      options.subjectTokenType ||
-      'urn:ietf:params:oauth:token-type:access_token',
-    scope: options.scope,
-    audience: options.audience,
-    actorToken: options.actorToken,
-    actorTokenType: options.actorTokenType,
-    tokenEndpoint: resolveOidcTokenEndpoint(options),
-  };
+/**
+ * The UAA passcode: `--passcode` when given, else read from this terminal —
+ * the strategy shows where to fetch one (`<uaa>/passcode`).
+ */
+export function buildPasscodeAuthorization(options: McpSsoOptions) {
+  if (options.passcode) {
+    return staticCodeStrategy({ payload: options.passcode });
+  }
+  return manualPasscodeStrategy({
+    read: (prompt, signal) => readManualInput(prompt, signal),
+    timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+  });
 }
 
 /**
@@ -541,7 +705,7 @@ export function buildOidcTokenExchangeConfig(
  * `--redirect-port` and the manual/static assertion options into the
  * strategy that replaces them.
  */
-function buildSamlAuthorization(options: McpSsoOptions) {
+export function buildSamlAuthorization(options: McpSsoOptions) {
   if (options.assertion) {
     // The consumer already holds the assertion; nothing is opened or asked.
     return staticCodeStrategy({
@@ -604,15 +768,17 @@ function buildIdpInitiatedAuthorization(options: McpSsoOptions) {
   };
 }
 
-function buildSamlCookieProvider(
+/**
+ * `saml2_pure`: the system's session cookies for the SAMLResponse. With
+ * `--assertion-flow assertion` the response itself is presented; otherwise the
+ * user pastes the cookies the system set.
+ */
+export function buildSamlCookieProvider(
   options: McpSsoOptions,
 ): (samlResponse: string) => Promise<string> {
   const assertionFlow =
     options.assertionFlow || (options.assertion ? 'assertion' : 'browser');
   return async (samlResponse: string) => {
-    if (options.cookie) {
-      return options.cookie;
-    }
     if (assertionFlow === 'assertion') {
       return `SAMLResponse=${samlResponse}`;
     }
@@ -620,168 +786,46 @@ function buildSamlCookieProvider(
   };
 }
 
-/**
- * The assertion validator and the trust settings a SAML provider takes.
- *
- * auth-providers 5 builds no validator of its own: this CLI builds the
- * shipped one its flow needs from the trust it collected — bearer sends the
- * Assertion alone to the token endpoint, so the Assertion must be signed;
- * pure reads the whole Response, so the Response must be. Replays are
- * refused through the process-wide `defaultReplayStore`. Missing trust is
- * refused here, naming each field, as the 4.x provider did at construction.
- */
-function buildSamlTrust(options: McpSsoOptions, flow: 'bearer' | 'pure') {
-  const idpCertificates = resolveIdpCertificates(options);
-  const missing: string[] = [];
-  if (!idpCertificates) missing.push('idpCertificates');
-  if (!options.idpEntityId) missing.push('idpEntityId');
-  if (missing.length > 0 || !idpCertificates) {
-    throw new ValidationError(
-      `The assertion validator needs the identity provider to trust: missing ${missing.join(', ')}. ` +
-        'Supply --idp-cert and --idp-entity-id, or --idp-metadata.',
-      missing,
-    );
-  }
-  const createValidator =
-    flow === 'bearer'
-      ? createSignedAssertionValidator
-      : createSignedResponseValidator;
-  return {
-    assertionValidator: createValidator({
-      idpCertificates,
-      replayStore: defaultReplayStore,
-    }),
-    idpEntityId: options.idpEntityId,
-    idpInitiated: options.idpInitiated,
-    authnRequestId: options.authnRequestId,
-  };
-}
-
-export function buildSamlBearerConfig(
-  options: McpSsoOptions,
-): Saml2BearerProviderConfig {
-  return {
-    idpSsoUrl: requireOption(options.idpSsoUrl, '--idp-sso-url'),
-    spEntityId: requireOption(options.spEntityId, '--sp-entity-id'),
-    acsUrl: options.acsUrl,
-    relayState: options.relayState,
-    ...buildSamlTrust(options, 'bearer'),
-    tokenUrl: options.tokenEndpoint,
-    uaaUrl: options.uaaUrl,
-    clientId: options.clientId,
-    clientSecret: options.clientSecret,
-    authorization: buildSamlAuthorization(options),
-  };
-}
-
-export function buildSamlPureConfig(
-  options: McpSsoOptions,
-): Saml2PureProviderConfig {
-  return {
-    idpSsoUrl: requireOption(options.idpSsoUrl, '--idp-sso-url'),
-    spEntityId: requireOption(options.spEntityId, '--sp-entity-id'),
-    acsUrl: options.acsUrl,
-    relayState: options.relayState,
-    ...buildSamlTrust(options, 'pure'),
-    authorization: buildSamlAuthorization(options),
-    cookieProvider: buildSamlCookieProvider(options),
-  };
-}
+/** The broker options through which a run's collaborators reach its provider. */
+export type SsoCollaborators = Required<
+  Pick<
+    AuthBrokerConfig,
+    | 'authorization'
+    | 'oidcAuthorization'
+    | 'deviceCodePresenter'
+    | 'samlCookies'
+    | 'assertionReplayStore'
+  >
+>;
 
 /**
- * Builds the effective `SsoProviderConfig` from `options` alone.
- *
- * `options` must already be the *merged* view — `--config` file fields
- * backfilled beneath whatever the CLI flags set, via `applyFileConfig` — so
- * this never needs a separate file/CLI merge step, and required-field
- * validation (`requireOption`, inside each builder above) sees the same
- * merged data regardless of whether a value came from the file or a flag.
+ * Every collaborator a provider the broker builds may need, stated by this CLI
+ * — the broker supplies none (H2): the interactive strategy of the passcode and
+ * SAML grants, the OIDC browser strategy, the device-code presenter writing to
+ * this CLI's logger, the SAML cookie function and the process-wide replay
+ * store the assertion validators share. The broker calls only the ones the
+ * destination's grant uses, once, when it builds the provider.
  */
-export function buildProviderConfig(
+export function buildCollaborators(
   options: McpSsoOptions,
-  existingAuth: { refreshToken?: string } | null,
-  existingConn: { authorizationToken?: string } | null,
-  logger?: ILogger,
-): SsoProviderConfig {
-  if (!options.protocol || !options.flow) {
-    throw new Error(
-      'Provider config is missing. Use --config or --protocol/--flow options.',
-    );
-  }
-
-  let result: SsoProviderConfig;
-  if (options.protocol === 'oidc') {
-    switch (options.flow) {
-      case 'browser':
-        result = {
-          protocol: 'oidc',
-          flow: 'browser',
-          config: buildOidcBrowserConfig(options),
-        };
-        break;
-      case 'device':
-        result = {
-          protocol: 'oidc',
-          flow: 'device',
-          config: buildOidcDeviceConfig(options, logger),
-        };
-        break;
-      case 'password':
-        result = {
-          protocol: 'oidc',
-          flow: 'password',
-          config: buildOidcPasswordConfig(options),
-        };
-        break;
-      case 'token_exchange':
-        result = {
-          protocol: 'oidc',
-          flow: 'token_exchange',
-          config: buildOidcTokenExchangeConfig(options),
-        };
-        break;
-      default:
-        throw new Error(`Unsupported OIDC flow: ${options.flow}`);
-    }
-  } else if (options.protocol === 'saml2') {
-    switch (options.flow) {
-      case 'bearer':
-        result = {
-          protocol: 'saml2',
-          flow: 'bearer',
-          config: buildSamlBearerConfig(options),
-        };
-        break;
-      case 'pure':
-        result = {
-          protocol: 'saml2',
-          flow: 'pure',
-          config: buildSamlPureConfig(options),
-        };
-        break;
-      default:
-        throw new Error(`Unsupported SAML flow: ${options.flow}`);
-    }
-  } else {
-    throw new Error(`Unsupported protocol: ${options.protocol}`);
-  }
-
-  const accessToken = existingConn?.authorizationToken;
-  const refreshToken = existingAuth?.refreshToken;
-  if (
-    (result.protocol === 'oidc' ||
-      (result.protocol === 'saml2' && result.flow === 'bearer')) &&
-    (accessToken || refreshToken)
-  ) {
-    result = {
-      ...result,
-      config: {
-        ...(result as unknown as { config: Record<string, unknown> }).config,
-        accessToken,
-        refreshToken,
-      },
-    } as unknown as SsoProviderConfig;
-  }
-
-  return result;
+  logger: ILogger,
+): SsoCollaborators {
+  return {
+    authorization: (_destination, grant) => {
+      switch (grant) {
+        case 'passcode':
+          return buildPasscodeAuthorization(options);
+        case 'saml2_pure':
+        case 'saml2_bearer':
+          return buildSamlAuthorization(options);
+        default:
+          // mcp-sso states no authorization_code destination: that is mcp-auth's.
+          throw new Error(`mcp-sso has no interactive strategy for ${grant}`);
+      }
+    },
+    oidcAuthorization: () => buildOidcBrowserAuthorization(options),
+    deviceCodePresenter: () => consoleDeviceCodePresenter(logger),
+    samlCookies: () => buildSamlCookieProvider(options),
+    assertionReplayStore: () => defaultReplayStore,
+  };
 }

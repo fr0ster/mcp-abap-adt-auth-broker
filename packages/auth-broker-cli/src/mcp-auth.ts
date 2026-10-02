@@ -20,27 +20,11 @@
  *   mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap
  */
 
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-import {
-  AuthorizationCodeProvider,
-  browserCallbackStrategy,
-  ClientCredentialsProvider,
-  DEFAULT_CALLBACK_PORT,
-} from '@mcp-abap-adt/auth-providers';
-import {
-  ABAP_AUTHORIZATION_VARS,
-  ABAP_CONNECTION_VARS,
-  AbapServiceKeyStore,
-  AbapSessionStore,
-  JsonFileHandler,
-  XSUAA_AUTHORIZATION_VARS,
-  XSUAA_CONNECTION_VARS,
-  XsuaaServiceKeyStore,
-  XsuaaSessionStore,
-} from '@mcp-abap-adt/auth-stores';
+import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { type McpAuthOptions, runMcpAuth } from './runMcpAuth';
 import { createWorkDir } from './workDir';
 
 /**
@@ -48,20 +32,6 @@ import { createWorkDir } from './workDir';
  * (30s) is sized for an unattended caller instead.
  */
 const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
-
-interface McpAuthOptions {
-  serviceKeyPath?: string; // Optional if env file is provided
-  envFilePath?: string;
-  outputFile: string;
-  authType: 'abap' | 'xsuaa';
-  browser: string; // Browser for authorization_code flow (default: 'auto')
-  credential: boolean; // Use client_credentials instead of authorization_code
-  format: 'json' | 'env';
-  serviceUrl?: string;
-  // The callback port is the provider's own choice (`auth-providers`'
-  // DEFAULT_CALLBACK_PORT); this only overrides it when the user asks.
-  redirectPort?: number;
-}
 
 function getVersion(): string {
   // This package's own manifest: dist/<bin>.js and src/<bin>.ts both sit one
@@ -267,7 +237,19 @@ function showHelp(): void {
     '  - For ABAP, serviceUrl (SAP URL) is required - can be provided via --service-url or service key',
   );
   console.log(
-    '  - SAP_URL/XSUAA_MCP_URL is written to .env (from --service-url, service key, or placeholder)',
+    '  - SAP_URL/XSUAA_MCP_URL is written to .env when known (--service-url or the service key)',
+  );
+  console.log(
+    '  - The .env file holds two roles: the means (SAP_AUTH_TYPE=jwt, SAP_GRANT_TYPE, SAP_UAA_*,',
+  );
+  console.log(
+    '    SAP_URL) through the destination store, and the secret (SAP_JWT_TOKEN, SAP_EXPIRES_AT,',
+  );
+  console.log(
+    '    SAP_REFRESH_TOKEN, SAP_ISSUED_FOR, SAP_ISSUED_BY) through the session store; XSUAA_* with',
+  );
+  console.log(
+    '    --type xsuaa. It is written only once the secret is stored; otherwise the command exits 1.',
   );
 }
 
@@ -409,121 +391,6 @@ function parseArgs(
   };
 }
 
-function writeEnvFile(
-  outputPath: string,
-  authType: 'abap' | 'xsuaa',
-  token: string,
-  refreshToken?: string,
-  serviceUrl?: string,
-  uaaUrl?: string,
-  uaaClientId?: string,
-  uaaClientSecret?: string,
-): void {
-  const lines: string[] = [];
-
-  if (authType === 'abap') {
-    // ABAP format
-    if (serviceUrl) {
-      lines.push(`${ABAP_CONNECTION_VARS.SERVICE_URL}=${serviceUrl}`);
-    }
-    lines.push(`${ABAP_CONNECTION_VARS.AUTHORIZATION_TOKEN}=${token}`);
-
-    if (refreshToken) {
-      lines.push(`${ABAP_AUTHORIZATION_VARS.REFRESH_TOKEN}=${refreshToken}`);
-    }
-
-    if (uaaUrl) {
-      lines.push(`${ABAP_AUTHORIZATION_VARS.UAA_URL}=${uaaUrl}`);
-    }
-
-    if (uaaClientId) {
-      lines.push(`${ABAP_AUTHORIZATION_VARS.UAA_CLIENT_ID}=${uaaClientId}`);
-    }
-
-    if (uaaClientSecret) {
-      lines.push(
-        `${ABAP_AUTHORIZATION_VARS.UAA_CLIENT_SECRET}=${uaaClientSecret}`,
-      );
-    }
-  } else {
-    // XSUAA format
-    if (serviceUrl) {
-      lines.push(`XSUAA_MCP_URL=${serviceUrl}`);
-    }
-    lines.push(`${XSUAA_CONNECTION_VARS.AUTHORIZATION_TOKEN}=${token}`);
-
-    if (refreshToken) {
-      lines.push(`${XSUAA_AUTHORIZATION_VARS.REFRESH_TOKEN}=${refreshToken}`);
-    }
-
-    if (uaaUrl) {
-      lines.push(`${XSUAA_AUTHORIZATION_VARS.UAA_URL}=${uaaUrl}`);
-    }
-
-    if (uaaClientId) {
-      lines.push(`${XSUAA_AUTHORIZATION_VARS.UAA_CLIENT_ID}=${uaaClientId}`);
-    }
-
-    if (uaaClientSecret) {
-      lines.push(
-        `${XSUAA_AUTHORIZATION_VARS.UAA_CLIENT_SECRET}=${uaaClientSecret}`,
-      );
-    }
-  }
-
-  // Ensure output directory exists
-  const outputDir = path.dirname(outputPath);
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
-
-  // Write to file
-  fs.writeFileSync(outputPath, lines.join('\n') + '\n', 'utf8');
-}
-
-function writeJsonFile(
-  outputPath: string,
-  token: string,
-  refreshToken?: string,
-  serviceUrl?: string,
-  uaaUrl?: string,
-  uaaClientId?: string,
-  uaaClientSecret?: string,
-): void {
-  const outputData: Record<string, string> = {
-    accessToken: token,
-  };
-
-  if (refreshToken) {
-    outputData.refreshToken = refreshToken;
-  }
-
-  if (serviceUrl) {
-    outputData.serviceUrl = serviceUrl;
-  }
-
-  if (uaaUrl) {
-    outputData.uaaUrl = uaaUrl;
-  }
-
-  if (uaaClientId) {
-    outputData.uaaClientId = uaaClientId;
-  }
-
-  if (uaaClientSecret) {
-    outputData.uaaClientSecret = uaaClientSecret;
-  }
-
-  // Ensure output directory exists
-  const outputDir = path.dirname(outputPath);
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
-
-  // Write to file
-  fs.writeFileSync(outputPath, JSON.stringify(outputData, null, 2), 'utf8');
-}
-
 function runMcpSso(args: string[]): void {
   const mcpSsoPath = path.resolve(__dirname, 'mcp-sso.js');
   const result = spawnSync(process.execPath, [mcpSsoPath, ...args], {
@@ -533,13 +400,6 @@ function runMcpSso(args: string[]): void {
     throw result.error;
   }
   process.exit(result.status ?? 1);
-}
-
-/** The run's private working directory, created on first use and removed on any exit. */
-let runWorkDir: string | undefined;
-function workDir(): string {
-  runWorkDir ??= createWorkDir('mcp-auth');
-  return runWorkDir;
 }
 
 async function main() {
@@ -621,358 +481,23 @@ async function main() {
     return;
   }
 
-  // Resolve paths
-  const resolvedOutputPath = path.resolve(options.outputFile);
-  const resolvedEnvPath = options.envFilePath
-    ? path.resolve(options.envFilePath)
-    : undefined;
-
-  // If service key is provided, use it; optionally read session from env
-  let serviceKeyStore: any = null;
-  let destination: string | undefined;
-  const envExists = resolvedEnvPath ? fs.existsSync(resolvedEnvPath) : false;
-
-  if (resolvedEnvPath) {
-    destination = path.basename(resolvedEnvPath, path.extname(resolvedEnvPath));
-  }
-
-  // Store raw service key JSON for fallback parsing
-  let rawServiceKeyJson: any = null;
-
-  if (options.serviceKeyPath) {
-    const resolvedServiceKeyPath = path.resolve(options.serviceKeyPath);
-    let serviceKeyDir = path.dirname(resolvedServiceKeyPath);
-
-    // Check if service key file exists
-    if (!fs.existsSync(resolvedServiceKeyPath)) {
-      console.error(`❌ Service key file not found: ${resolvedServiceKeyPath}`);
-      process.exit(1);
-    }
-
-    const serviceKeyFileName = path.basename(resolvedServiceKeyPath, '.json');
-    if (destination && destination !== serviceKeyFileName) {
-      console.error(
-        `❌ Destination mismatch: env file (${destination}) vs service key (${serviceKeyFileName})`,
-      );
-      process.exit(1);
-    }
-    destination = serviceKeyFileName;
-
-    // Determine which store to use based on service key content
-    // ABAP format has nested "uaa" object, XSUAA format has flat structure
-    let isAbapFormat = options.authType === 'abap'; // default fallback
-    try {
-      // Use JsonFileHandler to ensure consistent parsing behavior
-      const json = await JsonFileHandler.load(
-        path.basename(resolvedServiceKeyPath),
-        serviceKeyDir,
-      );
-
-      let effectiveJson: Record<string, unknown> | null = json as Record<
-        string,
-        unknown
-      >;
-      if (json && (json as Record<string, unknown>).credentials) {
-        console.log(
-          '🔍 Detected "credentials" wrapper -> unwrapping to temp file',
-        );
-        effectiveJson = (json as Record<string, unknown>).credentials as Record<
-          string,
-          unknown
-        >;
-
-        // Create temp file with unwrapped content to make it compatible with standard stores
-        const tempDir = workDir();
-        const tempKeyPath = path.join(tempDir, `${destination}.json`);
-        fs.writeFileSync(tempKeyPath, JSON.stringify(effectiveJson, null, 2));
-
-        // Point store to temp directory so it reads the unwrapped file
-        serviceKeyDir = tempDir;
-      }
-
-      // Store raw JSON for fallback parsing
-      rawServiceKeyJson = effectiveJson;
-
-      if (effectiveJson) {
-        // If it has uaa property (even if null/string/object), XSUAA parser rejects it.
-        // So we must use ABAP store which expects uaa object.
-        if (effectiveJson.uaa) {
-          isAbapFormat = true;
-        } else {
-          isAbapFormat = false;
-        }
-      }
-    } catch (e: any) {
-      // If parsing fails here, let the store handle the error
-    }
-
-    // Create appropriate stores based on detected format
-    serviceKeyStore = isAbapFormat
-      ? new AbapServiceKeyStore(serviceKeyDir)
-      : new XsuaaServiceKeyStore(serviceKeyDir);
-
-    // Patch serviceKeyStore for XSUAA to ensure serviceUrl is present (AuthBroker requirement)
-    // even if not in the file. XSUAA doesn't strictly need it, but AuthBroker enforces it.
-    if (options.authType === 'xsuaa') {
-      const originalGetConnectionConfig =
-        serviceKeyStore.getConnectionConfig.bind(serviceKeyStore);
-      serviceKeyStore.getConnectionConfig = async (dest: string) => {
-        const config = await originalGetConnectionConfig(dest);
-        if (config && !config.serviceUrl) {
-          config.serviceUrl = '<SERVICE_URL>';
-        }
-        return config;
-      };
-    }
-  }
-
-  if (!destination) {
-    console.error('❌ Destination could not be determined from inputs');
-    process.exit(1);
-  }
-
-  console.log(`📁 Output file: ${resolvedOutputPath}`);
-  if (resolvedEnvPath) {
-    console.log(
-      `📁 Env file: ${resolvedEnvPath} (${envExists ? 'found' : 'not found'})`,
-    );
-  }
-  if (options.serviceKeyPath) {
-    console.log(`📁 Service key: ${path.resolve(options.serviceKeyPath)}`);
-  }
-  console.log(`🔐 Auth type: ${options.authType}`);
-  console.log(
-    `🔑 Flow: ${options.credential ? 'client_credentials' : 'authorization_code'}`,
-  );
-  if (!options.credential) {
-    console.log(`🌐 Browser: ${options.browser}`);
-  }
-  console.log(`📄 Format: ${options.format}`);
-  if (options.serviceUrl) {
-    console.log(`🔗 Service URL: ${options.serviceUrl}`);
-  }
-
+  // Removed on any exit, error and signal included: it holds the secret.
+  const workDir = createWorkDir('mcp-auth');
   try {
-    if (!envExists && !serviceKeyStore) {
-      throw new Error('Env file not found and no service key provided.');
-    }
-
-    // Create temporary session store (work off a temp copy of env file)
-    const tempSessionDir = workDir();
-    if (envExists && resolvedEnvPath) {
-      const tempEnvPath = path.join(tempSessionDir, `${destination}.env`);
-      fs.copyFileSync(resolvedEnvPath, tempEnvPath);
-    }
-
-    // Resolve serviceUrl from service key if not provided explicitly
-    let actualServiceUrl = options.serviceUrl;
-    if (!actualServiceUrl && serviceKeyStore) {
-      try {
-        const serviceKeyConn =
-          await serviceKeyStore.getConnectionConfig(destination);
-        actualServiceUrl = serviceKeyConn?.serviceUrl;
-      } catch {
-        // For XSUAA, serviceUrl is optional and may not exist in service key
-        // This is expected - continue without serviceUrl
-      }
-    }
-
-    // For XSUAA, serviceUrl is optional - use placeholder only for AuthBroker internal work
-    const brokerServiceUrl = actualServiceUrl || '<SERVICE_URL>';
-
-    const sessionStore =
-      options.authType === 'xsuaa'
-        ? new XsuaaSessionStore(tempSessionDir, brokerServiceUrl)
-        : new AbapSessionStore(tempSessionDir, undefined, actualServiceUrl);
-
-    const sessionAuthConfig =
-      await sessionStore.getAuthorizationConfig(destination);
-    let serviceKeyAuthConfig = null;
-    if (serviceKeyStore?.getAuthorizationConfig) {
-      try {
-        serviceKeyAuthConfig =
-          await serviceKeyStore.getAuthorizationConfig(destination);
-      } catch (e: any) {
-        // Service key parsing might fail - try fallback parsing from raw JSON
-        console.log(
-          `ℹ️  Store could not parse service key, using fallback parsing`,
-        );
-      }
-    }
-
-    // Fallback: if stores failed, try to construct authConfig from raw service key JSON
-    let fallbackAuthConfig = null;
-    if (!sessionAuthConfig && !serviceKeyAuthConfig && rawServiceKeyJson) {
-      // XSUAA format: clientid, clientsecret, url at top level
-      // ABAP format: uaa.clientid, uaa.clientsecret, uaa.url
-      const uaa = rawServiceKeyJson.uaa || rawServiceKeyJson;
-      if (uaa.clientid && uaa.clientsecret && uaa.url) {
-        fallbackAuthConfig = {
-          uaaUrl: uaa.url,
-          uaaClientId: uaa.clientid,
-          uaaClientSecret: uaa.clientsecret,
-        };
-        console.log(`✅ Constructed auth config from raw service key`);
-      }
-    }
-
-    const authConfig =
-      sessionAuthConfig || serviceKeyAuthConfig || fallbackAuthConfig;
-    if (!authConfig) {
-      throw new Error(
-        `Authorization config not found for ${destination}. Service key must contain clientid, clientsecret, and url fields.`,
-      );
-    }
-
-    // Default: authorization_code flow with browser
-    // --credential: client_credentials flow (no browser needed)
-    // The callback port is the provider's own choice (DEFAULT_CALLBACK_PORT,
-    // currently 61001) unless the user overrides it with --redirect-port.
-    // Only resolved to a concrete number here for the URL preview below —
-    // the strategy itself re-derives the same default independently when
-    // `port` is left undefined.
-    const redirectPort = options.redirectPort ?? DEFAULT_CALLBACK_PORT;
-
-    // Log authorization URL for debugging
-    if (!options.credential) {
-      const redirectUri = `http://localhost:${redirectPort}/callback`;
-      const authorizationUrl = `${authConfig.uaaUrl}/oauth/authorize?client_id=${encodeURIComponent(authConfig.uaaClientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`;
-      console.log(`🔗 Authorization URL: ${authorizationUrl}`);
-      console.log(`📍 Redirect URI: ${redirectUri}`);
-    }
-
-    const tokenProvider = options.credential
-      ? new ClientCredentialsProvider({
-          uaaUrl: authConfig.uaaUrl,
-          clientId: authConfig.uaaClientId,
-          clientSecret: authConfig.uaaClientSecret,
-        })
-      : new AuthorizationCodeProvider({
-          uaaUrl: authConfig.uaaUrl,
-          clientId: authConfig.uaaClientId,
-          clientSecret: authConfig.uaaClientSecret,
-          refreshToken: authConfig.refreshToken,
-          // Passing `options.redirectPort` (not the resolved `redirectPort`
-          // above) so an omitted --redirect-port lets the strategy bind its
-          // own default rather than this CLI pinning a number it doesn't own.
-          authorization: browserCallbackStrategy({
-            browser: options.browser,
-            port: options.redirectPort,
-            timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
-          }),
-        });
-
-    // The output file is a self-contained session: whoever reads it refreshes
-    // the token with the UAA credentials it carries, and has no service key.
-    // So this CLI writes the credentials into its temporary session itself —
-    // its own decision about its own output. The broker no longer copies the
-    // client secret into a session store, and without these the refresh token
-    // the login obtains would not be readable back below.
-    if (!sessionAuthConfig) {
-      await sessionStore.setAuthorizationConfig(destination, authConfig);
-    }
-
-    const broker = new AuthBroker({
-      sessionStore,
-      serviceKeyStore: serviceKeyStore || undefined,
-      provider: tokenProvider,
+    const code = await runMcpAuth(options, {
+      workDir,
+      // Passing `options.redirectPort` as given, so an omitted
+      // --redirect-port lets the strategy bind its own default rather than
+      // this CLI pinning a number it doesn't own.
+      authorization: (run) =>
+        browserCallbackStrategy({
+          browser: run.browser,
+          port: run.redirectPort,
+          timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+        }),
     });
-
-    console.log(`🔐 Getting token for destination "${destination}"...`);
-    const token = await broker.getToken(destination);
-    console.log(`✅ Token obtained successfully`);
-
-    const connConfig = await sessionStore.getConnectionConfig(destination);
-    // What the login left in the session, not what was known before it:
-    // `authConfig` came from the service key, which holds no refresh token,
-    // and the refresh token the login obtained went into the session store.
-    // Writing `authConfig` dropped it with the temporary session directory.
-    const savedAuthConfig =
-      (await sessionStore.getAuthorizationConfig(destination)) ?? authConfig;
-
-    if (!token) {
-      throw new Error(
-        `Token provider did not return authorization token for destination "${destination}"`,
-      );
-    }
-
-    const outputServiceUrl =
-      options.serviceUrl || connConfig?.serviceUrl || actualServiceUrl;
-
-    // Filter out placeholder service URL
-    const finalServiceUrl =
-      outputServiceUrl === '<SERVICE_URL>' ? undefined : outputServiceUrl;
-
-    // Write output file based on format
-    if (options.format === 'env') {
-      writeEnvFile(
-        resolvedOutputPath,
-        options.authType,
-        token,
-        savedAuthConfig?.refreshToken,
-        finalServiceUrl,
-        savedAuthConfig?.uaaUrl,
-        savedAuthConfig?.uaaClientId,
-        savedAuthConfig?.uaaClientSecret,
-      );
-
-      console.log(`✅ .env file created: ${resolvedOutputPath}`);
-
-      // Show what was written
-      console.log(`📋 .env file contains:`);
-      if (options.authType === 'abap') {
-        if (finalServiceUrl) {
-          console.log(
-            `   - ${ABAP_CONNECTION_VARS.SERVICE_URL}=${finalServiceUrl}`,
-          );
-        }
-        console.log(
-          `   - ${ABAP_CONNECTION_VARS.AUTHORIZATION_TOKEN}=<redacted, ${token.length} chars>`,
-        );
-        if (savedAuthConfig?.refreshToken) {
-          console.log(
-            `   - ${ABAP_AUTHORIZATION_VARS.REFRESH_TOKEN}=<redacted, ${savedAuthConfig.refreshToken.length} chars>`,
-          );
-        }
-      } else {
-        if (finalServiceUrl) {
-          console.log(`   - XSUAA_MCP_URL=${finalServiceUrl}`);
-        }
-        console.log(
-          `   - ${XSUAA_CONNECTION_VARS.AUTHORIZATION_TOKEN}=<redacted, ${token.length} chars>`,
-        );
-        if (savedAuthConfig?.refreshToken) {
-          console.log(
-            `   - ${XSUAA_AUTHORIZATION_VARS.REFRESH_TOKEN}=<redacted, ${savedAuthConfig.refreshToken.length} chars>`,
-          );
-        }
-      }
-    } else {
-      writeJsonFile(
-        resolvedOutputPath,
-        token,
-        savedAuthConfig?.refreshToken,
-        finalServiceUrl,
-        savedAuthConfig?.uaaUrl,
-        savedAuthConfig?.uaaClientId,
-        savedAuthConfig?.uaaClientSecret,
-      );
-
-      console.log(`✅ JSON file created: ${resolvedOutputPath}`);
-      console.log(`📋 Output contains:`);
-      console.log(`   - accessToken: <redacted, ${token.length} chars>`);
-      if (savedAuthConfig?.refreshToken) {
-        console.log(
-          `   - refreshToken: <redacted, ${savedAuthConfig.refreshToken.length} chars>`,
-        );
-      }
-      if (finalServiceUrl) {
-        console.log(`   - serviceUrl: ${finalServiceUrl}`);
-      }
-    }
-
     // Exit explicitly to close any open handles (e.g., OAuth callback server)
-    process.exit(0);
+    process.exit(code);
   } catch (error: any) {
     console.error(`❌ Error: ${error.message}`);
     if (error.stack) {

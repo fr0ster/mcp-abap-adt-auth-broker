@@ -44,6 +44,25 @@ from `@mcp-abap-adt/auth-providers` — none is re-exported here.
 - `createTokenRefresher(destination: string): ITokenRefresher` — `getToken` / `refreshToken` bound to one destination; unchanged since 3.x, not deprecated
 - `flush(): Promise<void>` — one more attempt for every session write left pending (by `getProvider`'s providers or the token API); rejects with an `AggregateError` naming the destinations still failing
 
+### `bindingOf`
+
+**Export**:
+```typescript
+export { bindingOf, type SecretBinding } from './bindingOf';
+
+function bindingOf(
+  means: IConnectionConfig,
+  client?: IAuthorizationConfig | null,
+): SecretBinding; // { issuedFor?: string; issuedBy?: string }
+```
+
+For a consumer that hands over a credential (a `none` destination's token or
+cookies) and writes it to the session store itself: the binding to write beside
+it — canonical, and computed by the same function `getProvider` checks against
+and `persist` writes, so the two cannot diverge. `means` are the key store's;
+`client` its client, when the destination has one. `{}` for a destination that
+states no `jwt` / `saml` type or no grant.
+
 ### `DestinationConfigError`
 What `getProvider` and the token API throw for a destination that lacks what
 its type needs — and the token API for one stated `basic` or `snc`

@@ -1,15 +1,13 @@
 /**
- * Coverage for the CLI/config merge in mcpSsoConfig.ts.
+ * Coverage for the CLI/config merge in mcpSsoConfig.ts, and for what a run
+ * states: the destination's means and the collaborators it hands the broker.
  *
- * This is the code `mcp-sso`'s `main()` uses to reconcile `--protocol`/
- * `--flow`/flag options with an optional `--config <path.json>` file before
- * building the strategy a provider will use. Before this file existed, a
- * `--config`-only run never touched the strategy-building code at all: a
+ * This is the code `mcp-sso` uses to reconcile `--protocol`/`--flow`/flag
+ * options with an optional `--config <path.json>` file before building the
+ * destination and the strategies the broker's provider will use. A
  * `browser`/`redirectPort`/`authorizationCode`/`assertionFlow` serialized in
- * the file reached `SsoProviderFactory.create()` untouched, silently
- * ignored by the 2.0.0 provider. These tests pin that a file's fields reach
- * the strategy, that a CLI flag overrides them, and that every legacy field
- * either converts or refuses — never neither.
+ * the file must reach the strategy, a CLI flag overrides it, and every legacy
+ * field either converts or refuses — never neither.
  */
 
 const oidcCallbackStrategy = jest.fn((options: unknown) => ({
@@ -28,6 +26,10 @@ const manualSamlResponseStrategy = jest.fn((options: unknown) => ({
   __kind: 'manualSamlResponseStrategy',
   options,
 }));
+const manualPasscodeStrategy = jest.fn((options: unknown) => ({
+  __kind: 'manualPasscodeStrategy',
+  options,
+}));
 const asOidcResult = jest.fn((inner: unknown) => ({
   __kind: 'asOidcResult',
   inner,
@@ -37,14 +39,6 @@ const asOidcResult = jest.fn((inner: unknown) => ({
 const consoleDeviceCodePresenter = jest.fn((logger: unknown) => ({
   __kind: 'consoleDeviceCodePresenter',
   logger,
-}));
-const createSignedResponseValidator = jest.fn((options: unknown) => ({
-  __kind: 'signedResponseValidator',
-  options,
-}));
-const createSignedAssertionValidator = jest.fn((options: unknown) => ({
-  __kind: 'signedAssertionValidator',
-  options,
 }));
 const defaultReplayStore = { __kind: 'defaultReplayStore' };
 
@@ -58,13 +52,11 @@ jest.mock('@mcp-abap-adt/auth-providers', () => ({
     (staticCodeStrategy as any)(...args),
   manualSamlResponseStrategy: (...args: unknown[]) =>
     (manualSamlResponseStrategy as any)(...args),
+  manualPasscodeStrategy: (...args: unknown[]) =>
+    (manualPasscodeStrategy as any)(...args),
   asOidcResult: (...args: unknown[]) => (asOidcResult as any)(...args),
   consoleDeviceCodePresenter: (...args: unknown[]) =>
     (consoleDeviceCodePresenter as any)(...args),
-  createSignedResponseValidator: (...args: unknown[]) =>
-    (createSignedResponseValidator as any)(...args),
-  createSignedAssertionValidator: (...args: unknown[]) =>
-    (createSignedAssertionValidator as any)(...args),
   defaultReplayStore,
   ValidationError: jest.requireActual('@mcp-abap-adt/auth-providers')
     .ValidationError,
@@ -114,7 +106,8 @@ import { ValidationError } from '@mcp-abap-adt/auth-providers';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   applyFileConfig,
-  buildProviderConfig,
+  buildCollaborators,
+  buildDestinationMeans,
   type McpSsoOptions,
   normalizeProviderConfig,
   parseSamlTrustArg,
@@ -137,6 +130,35 @@ function baseOptions(overrides: Partial<McpSsoOptions> = {}): McpSsoOptions {
     format: 'env',
     ...overrides,
   };
+}
+
+const silentLogger: ILogger = {
+  info: () => {},
+  error: () => {},
+  warn: () => {},
+  debug: () => {},
+};
+
+/**
+ * What a run hands the broker, as the broker uses it: each collaborator is
+ * called for the grant the destination states — the destination's means are
+ * built first, as `runMcpSso` does, so a required field still refuses.
+ */
+function collaboratorsOf(options: McpSsoOptions, logger = silentLogger) {
+  buildDestinationMeans(options);
+  return buildCollaborators(options, logger);
+}
+
+/** The interactive strategy the broker gets for this run's grant. */
+function strategyOf(options: McpSsoOptions): unknown {
+  const collaborators = collaboratorsOf(options);
+  if (options.protocol === 'oidc' && options.flow === 'browser') {
+    return collaborators.oidcAuthorization('dest');
+  }
+  return collaborators.authorization(
+    'dest',
+    options.flow === 'pure' ? 'saml2_pure' : 'saml2_bearer',
+  );
 }
 
 describe('mcp-sso CLI/config merge', () => {
@@ -180,7 +202,7 @@ describe('mcp-sso CLI/config merge', () => {
       expect(options.flow).toBe('browser');
       expect(options.clientId).toBe('file-client');
 
-      buildProviderConfig(options, null, null);
+      strategyOf(options);
 
       expect(oidcCallbackStrategy).toHaveBeenCalledTimes(1);
       expect(oidcCallbackStrategy).toHaveBeenCalledWith(
@@ -206,7 +228,7 @@ describe('mcp-sso CLI/config merge', () => {
 
       expect(options.redirectPort).toBe(9999);
 
-      buildProviderConfig(options, null, null);
+      strategyOf(options);
 
       expect(oidcCallbackStrategy).toHaveBeenCalledWith(
         expect.objectContaining({ port: 9999 }),
@@ -240,9 +262,7 @@ describe('mcp-sso CLI/config merge', () => {
       const options = baseOptions();
       applyFileConfig(options, fileConfig);
 
-      expect(() => buildProviderConfig(options, null, null)).toThrow(
-        'process.exit(1)',
-      );
+      expect(() => strategyOf(options)).toThrow('process.exit(1)');
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining('--client-id'),
       );
@@ -263,7 +283,7 @@ describe('mcp-sso CLI/config merge', () => {
       const options = baseOptions({ protocol: 'oidc', flow: 'browser' });
       applyFileConfig(options, fileConfig);
 
-      expect(() => buildProviderConfig(options, null, null)).not.toThrow();
+      expect(() => strategyOf(options)).not.toThrow();
       expect(exitSpy).not.toHaveBeenCalled();
     });
   });
@@ -275,13 +295,15 @@ describe('mcp-sso CLI/config merge', () => {
         flow: 'bearer',
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
+        uaaUrl: 'https://uaa.example',
+        clientId: 'bearer-client',
         browser: 'firefox',
         ...FILE_TRUST,
       });
 
       const options = baseOptions();
       applyFileConfig(options, fileConfig);
-      buildProviderConfig(options, null, null);
+      strategyOf(options);
 
       expect(samlCallbackStrategy).toHaveBeenCalledWith(
         expect.objectContaining({ browser: 'firefox' }),
@@ -294,13 +316,15 @@ describe('mcp-sso CLI/config merge', () => {
         flow: 'bearer',
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
+        uaaUrl: 'https://uaa.example',
+        clientId: 'bearer-client',
         redirectPort: 5005,
         ...FILE_TRUST,
       });
 
       const options = baseOptions();
       applyFileConfig(options, fileConfig);
-      buildProviderConfig(options, null, null);
+      strategyOf(options);
 
       expect(samlCallbackStrategy).toHaveBeenCalledWith(
         expect.objectContaining({ port: 5005 }),
@@ -321,7 +345,7 @@ describe('mcp-sso CLI/config merge', () => {
 
       expect(options.code).toBe('legacy-code-value');
 
-      buildProviderConfig(options, null, null);
+      strategyOf(options);
 
       expect(staticCodeStrategy).toHaveBeenCalledWith(
         expect.objectContaining({ payload: 'legacy-code-value' }),
@@ -343,7 +367,7 @@ describe('mcp-sso CLI/config merge', () => {
 
       const options = baseOptions();
       applyFileConfig(options, fileConfig);
-      buildProviderConfig(options, null, null);
+      strategyOf(options);
 
       expect(manualSamlResponseStrategy).toHaveBeenCalledTimes(1);
       expect(samlCallbackStrategy).not.toHaveBeenCalled();
@@ -384,39 +408,97 @@ describe('mcp-sso CLI/config merge', () => {
     });
 
     it('the device flow gets the console presenter, writing to the CLI logger', () => {
-      const config = (
-        buildProviderConfig(
-          baseOptions({
-            protocol: 'oidc',
-            flow: 'device',
-            clientId: 'cli-client',
-            issuerUrl: 'https://issuer.example',
-          }),
-          null,
-          null,
-          logger,
-        ) as unknown as { config: Record<string, unknown> }
-      ).config;
-      expect(consoleDeviceCodePresenter).toHaveBeenCalledTimes(1);
-      expect(consoleDeviceCodePresenter).toHaveBeenCalledWith(logger);
-      expect(config.presenter).toEqual({
+      const collaborators = collaboratorsOf(
+        baseOptions({
+          protocol: 'oidc',
+          flow: 'device',
+          clientId: 'cli-client',
+          issuerUrl: 'https://issuer.example',
+        }),
+        logger,
+      );
+      expect(collaborators.deviceCodePresenter('dest')).toEqual({
         __kind: 'consoleDeviceCodePresenter',
         logger,
       });
+      expect(consoleDeviceCodePresenter).toHaveBeenCalledWith(logger);
+    });
+
+    it('states every collaborator the broker may ask for; the broker supplies none', () => {
+      const collaborators = collaboratorsOf(
+        baseOptions({
+          protocol: 'oidc',
+          flow: 'device',
+          clientId: 'cli-client',
+          issuerUrl: 'https://issuer.example',
+        }),
+        logger,
+      );
+      expect(Object.keys(collaborators).sort()).toEqual([
+        'assertionReplayStore',
+        'authorization',
+        'deviceCodePresenter',
+        'oidcAuthorization',
+        'samlCookies',
+      ]);
+      // The SAML validators share the process-wide replay store.
+      expect(collaborators.assertionReplayStore('dest')).toBe(
+        defaultReplayStore,
+      );
+      expect(typeof collaborators.samlCookies('dest')).toBe('function');
+      // mcp-sso states no authorization_code destination: mcp-auth does.
+      expect(() =>
+        collaborators.authorization('dest', 'authorization_code'),
+      ).toThrow('no interactive strategy for authorization_code');
+    });
+
+    it('the passcode grant gets --passcode as a static code, else a manual read that honours the signal', async () => {
+      const given = collaboratorsOf(
+        baseOptions({
+          protocol: 'oidc',
+          flow: 'password',
+          uaaUrl: 'https://uaa.example',
+          clientId: 'cf',
+          passcode: 'ONE-TIME',
+        }),
+      );
+      expect(given.authorization('dest', 'passcode')).toEqual({
+        __kind: 'staticCodeStrategy',
+        options: { payload: 'ONE-TIME' },
+      });
+
+      const asked = collaboratorsOf(
+        baseOptions({
+          protocol: 'oidc',
+          flow: 'password',
+          uaaUrl: 'https://uaa.example',
+          clientId: 'cf',
+        }),
+      );
+      asked.authorization('dest', 'passcode');
+      const { read } = manualPasscodeStrategy.mock.calls[0][0] as {
+        read: (prompt: string, signal: AbortSignal) => Promise<string>;
+      };
+      pastedInput.value = undefined;
+      const controller = new AbortController();
+      const rejected = expect(
+        read('Passcode: ', controller.signal),
+      ).rejects.toThrow('input abandoned at "Passcode:"');
+      controller.abort();
+      await rejected;
     });
 
     it("the manual SAML strategy's read passes the strategy's signal on", async () => {
-      buildProviderConfig(
+      strategyOf(
         baseOptions({
           protocol: 'saml2',
           flow: 'pure',
+          authType: 'abap',
           idpSsoUrl: 'https://idp.example/sso',
           spEntityId: 'sp-entity',
           assertionFlow: 'manual',
           ...FILE_TRUST,
         }),
-        null,
-        null,
       );
       const { read } = manualSamlResponseStrategy.mock.calls[0][0] as {
         read: (prompt: string, signal: AbortSignal) => Promise<string>;
@@ -460,18 +542,25 @@ describe('mcp-sso CLI/config merge', () => {
       return baseOptions({
         protocol: 'saml2',
         flow,
+        authType: flow === 'pure' ? 'abap' : 'xsuaa',
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
+        // bearer's client: the token endpoint's UAA and client id.
+        uaaUrl: 'https://uaa.example',
+        clientId: 'bearer-client',
         ...overrides,
       });
     }
 
-    function samlConfigOf(options: McpSsoOptions): Record<string, unknown> {
-      return (
-        buildProviderConfig(options, null, null) as unknown as {
-          config: Record<string, unknown>;
-        }
-      ).config;
+    /** The means a SAML run writes, and the strategy the broker gets for it. */
+    function samlMeansOf(options: McpSsoOptions): Record<string, unknown> {
+      return buildDestinationMeans(options) as Record<string, unknown>;
+    }
+
+    function samlStrategyOf(options: McpSsoOptions): {
+      authorize: (request: unknown) => Promise<unknown>;
+    } {
+      return strategyOf(options) as never;
     }
 
     describe('parsing', () => {
@@ -638,51 +727,28 @@ describe('mcp-sso CLI/config merge', () => {
       });
     });
 
-    const VALIDATOR_KIND = {
-      bearer: 'signedAssertionValidator',
-      pure: 'signedResponseValidator',
-    } as const;
-
     describe.each([['bearer' as const], ['pure' as const]])(
-      'passing into the %s config',
+      'into the %s destination',
       (flow) => {
-        it('builds the validator from inline and file certificates; carries entity id and request settings', () => {
+        it('states every certificate — inline and from files — and the entity id; the broker builds the validator', () => {
           const file = writeFile('rotated.pem', PEM_B);
-          const config = samlConfigOf(
+          const means = samlMeansOf(
             samlOptions(flow, {
               idpCertificates: [PEM_A],
               idpCertificateFiles: [file],
               idpEntityId: 'https://idp/meta',
-              authnRequestId: '_req1',
             }),
           );
-          expect(config).toEqual(
+          expect(means).toEqual(
             expect.objectContaining({
-              idpEntityId: 'https://idp/meta',
-              authnRequestId: '_req1',
-              spEntityId: 'sp-entity',
+              authType: 'saml',
+              grantType: flow === 'pure' ? 'saml2_pure' : 'saml2_bearer',
+              samlIdpCertificates: [PEM_A, PEM_B],
+              samlIdpEntityId: 'https://idp/meta',
+              samlIdpSsoUrl: 'https://idp.example/sso',
+              samlSpEntityId: 'sp-entity',
             }),
           );
-          // auth-providers 5 takes no certificates on the provider: the
-          // validator holds them.
-          expect(config.idpCertificates).toBeUndefined();
-          expect(config.assertionValidator).toEqual({
-            __kind: VALIDATOR_KIND[flow],
-            options: {
-              idpCertificates: [PEM_A, PEM_B],
-              replayStore: defaultReplayStore,
-            },
-          });
-        });
-
-        it('builds the validator its flow requires, and only that one', () => {
-          samlConfigOf(samlOptions(flow, FILE_TRUST));
-          const [wanted, other] =
-            flow === 'pure'
-              ? [createSignedResponseValidator, createSignedAssertionValidator]
-              : [createSignedAssertionValidator, createSignedResponseValidator];
-          expect(wanted).toHaveBeenCalledTimes(1);
-          expect(other).not.toHaveBeenCalled();
         });
 
         it.each([
@@ -690,45 +756,48 @@ describe('mcp-sso CLI/config merge', () => {
           [{ idpEntityId: 'https://idp/meta' }, ['idpCertificates']],
           [{ idpCertificates: [PEM_A] }, ['idpEntityId']],
         ])(
-          'without trust (%p), refuses naming %p and builds no validator',
+          'without trust (%p), refuses naming %p before anything is written',
           (trust, missing) => {
             let caught: unknown;
             try {
-              samlConfigOf(samlOptions(flow, trust));
+              samlMeansOf(samlOptions(flow, trust));
             } catch (error) {
               caught = error;
             }
             expect(caught).toBeInstanceOf(ValidationError);
             expect((caught as ValidationError).missingFields).toEqual(missing);
-            expect(createSignedResponseValidator).not.toHaveBeenCalled();
-            expect(createSignedAssertionValidator).not.toHaveBeenCalled();
           },
         );
 
         it('invents no request settings: absent stays absent', () => {
-          const config = samlConfigOf(samlOptions(flow, FILE_TRUST));
-          expect(config.idpInitiated).toBeUndefined();
-          expect(config.authnRequestId).toBeUndefined();
+          const means = samlMeansOf(samlOptions(flow, FILE_TRUST));
+          expect(means.samlIdpInitiated).toBeUndefined();
+        });
+
+        it('refuses --authn-request-id: a destination cannot state it', () => {
+          expect(() =>
+            samlMeansOf(
+              samlOptions(flow, { ...FILE_TRUST, authnRequestId: '_req1' }),
+            ),
+          ).toThrow('process.exit(1)');
+          expect(errorSpy).toHaveBeenCalledWith(
+            expect.stringContaining('--authn-request-id'),
+          );
         });
 
         it('with --idp-initiated, the strategy never asks for an authorization URL', async () => {
-          const config = samlConfigOf(
-            samlOptions(flow, {
-              ...FILE_TRUST,
-              idpInitiated: true,
-              acsUrl: 'https://uaa.example/saml/SSO/alias/x',
-            }),
-          );
-          expect(config.idpInitiated).toBe(true);
+          const options = samlOptions(flow, {
+            ...FILE_TRUST,
+            idpInitiated: true,
+            acsUrl: 'https://uaa.example/saml/SSO/alias/x',
+          });
+          expect(samlMeansOf(options).samlIdpInitiated).toBe(true);
+          const strategy = samlStrategyOf(options);
           expect(samlCallbackStrategy).not.toHaveBeenCalled();
           expect(manualSamlResponseStrategy).not.toHaveBeenCalled();
 
           const buildAuthorizationUrl = jest.fn();
-          const outcome = await (
-            config.authorization as {
-              authorize: (request: unknown) => Promise<unknown>;
-            }
-          ).authorize({ buildAuthorizationUrl });
+          const outcome = await strategy.authorize({ buildAuthorizationUrl });
           expect(buildAuthorizationUrl).not.toHaveBeenCalled();
           expect(outcome).toEqual({
             payload: 'PASTED-SAML-RESPONSE',
@@ -737,19 +806,17 @@ describe('mcp-sso CLI/config merge', () => {
         });
 
         it('with --idp-initiated and no --acs-url, names the default callback as the ACS', async () => {
-          const config = samlConfigOf(
+          const strategy = samlStrategyOf(
             samlOptions(flow, { ...FILE_TRUST, idpInitiated: true }),
           );
-          const outcome = await (
-            config.authorization as {
-              authorize: (request: unknown) => Promise<{ redirectUri: string }>;
-            }
-          ).authorize({ buildAuthorizationUrl: jest.fn() });
+          const outcome = (await strategy.authorize({
+            buildAuthorizationUrl: jest.fn(),
+          })) as { redirectUri: string };
           expect(outcome.redirectUri).toBe('http://localhost:61001/callback');
         });
 
         it('with --idp-initiated and --assertion, uses the static strategy', () => {
-          samlConfigOf(
+          samlStrategyOf(
             samlOptions(flow, {
               ...FILE_TRUST,
               idpInitiated: true,
@@ -763,7 +830,7 @@ describe('mcp-sso CLI/config merge', () => {
 
         it('refuses --idp-initiated with --assertion-flow browser', () => {
           expect(() =>
-            samlConfigOf(
+            samlStrategyOf(
               samlOptions(flow, {
                 ...FILE_TRUST,
                 idpInitiated: true,
