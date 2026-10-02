@@ -60,8 +60,8 @@
   },
   "dependencies": {
     "@mcp-abap-adt/auth-broker": "^3.1.0",
-    "@mcp-abap-adt/auth-providers": "^5.1.0",
-    "@mcp-abap-adt/auth-stores": "^1.2.3",
+    "@mcp-abap-adt/auth-providers": "^5.2.1",
+    "@mcp-abap-adt/auth-stores": "^3.2.0",
     "@mcp-abap-adt/interfaces-utils": "^1.1.0",
     "@mcp-abap-adt/logger": "^0.4.0"
   },
