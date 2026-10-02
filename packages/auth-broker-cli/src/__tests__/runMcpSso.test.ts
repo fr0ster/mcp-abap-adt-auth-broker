@@ -309,6 +309,48 @@ describe('mcp-sso oidc --flow password', () => {
   });
 });
 
+describe('mcp-sso --env with a destination written for another grant', () => {
+  it("keeps none of the other grant's means: the password goes when the grant changes", async () => {
+    server.answer('/token', tokenAnswer('pw'));
+    await run(
+      options({
+        protocol: 'oidc',
+        flow: 'password',
+        clientId: 'cli',
+        issuerUrl: server.url,
+        tokenEndpoint: `${server.url}/token`,
+        username: 'alice',
+        password: 'alice-password',
+      }),
+    );
+    const previous = path.join(root, `${DEST}.env`);
+    fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
+    fs.rmSync(workDir, { recursive: true });
+    fs.mkdirSync(workDir);
+
+    server.answer('/tx', tokenAnswer('tx'));
+    await expect(
+      run(
+        options({
+          envFilePath: previous,
+          protocol: 'oidc',
+          flow: 'token_exchange',
+          clientId: 'cli',
+          tokenEndpoint: `${server.url}/tx`,
+          subjectToken: 'the-subject-token',
+        }),
+      ),
+    ).resolves.toBe(0);
+    const keys = readEnvKeys(path.join(outDir, `${DEST}.env`));
+    expect(keys.SAP_GRANT_TYPE).toBe('token_exchange');
+    expect(keys).not.toHaveProperty('SAP_PASSWORD');
+    expect(keys).not.toHaveProperty('SAP_USERNAME');
+    expect(keys).not.toHaveProperty('SAP_OIDC_ISSUER_URL');
+    // The system's own means stay.
+    expect(keys.SAP_URL).toBe(SERVICE_URL);
+  });
+});
+
 describe('mcp-sso oidc --flow password --passcode', () => {
   it('writes jwt / passcode: the client only, never the one-time code', async () => {
     server.answer('/oauth/token', tokenAnswer('passcode'));
