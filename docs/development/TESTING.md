@@ -184,7 +184,7 @@ realm with `client_id`), renewed after a 401 (by refresh, or for
 broker.
 
 The SAML grants, Keycloak as identity provider and UAA as service provider
-(`samlGrants.test.ts`, plan D5): `saml2_pure` end to end — Keycloak's signed
+(`samlGrants.test.ts`): `saml2_pure` end to end — Keycloak's signed
 SAMLResponse, validated by the provider, posted by the test's `samlCookies`
 to UAA's web SSO ACS, whose session cookie is checked to be a real UAA login;
 written as cookies (`SAP_SESSION_COOKIES_B64`, `SAP_ISSUED_BY` the ACS),
@@ -263,11 +263,12 @@ as BTP gives it, read by auth-stores 3's `AbapServiceKeyStore`: the client
 (`uaa.url`, `uaa.clientid`, `uaa.clientsecret`) and the ABAP URL the connector
 dials. A SAP key cannot state a grant, so the grant is stated by whoever
 builds the store: `new AbapServiceKeyStore(dir, { grantType:
-'authorization_code' })` (auth-stores 3.1.0). No provider reads the URL (plan
-D8): the connector takes it from the key, and the broker reads it only for the
+'authorization_code' })` (auth-stores 3.1.0). No provider reads the URL: the
+connector takes it from the key, and the broker reads it only for the
 binding.
 
-**The binding.** The session must be bound to the key (spec §4.5): a file
+**The binding.** The session must be bound to the key (`issuedFor` /
+`issuedBy`, see the library README): a file
 written before auth-stores 3.1.0 answers `issuedFor` from its `SAP_URL` (+
 `SAP_CLIENT`) and `issuedBy` from `SAP_UAA_URL` + `SAP_UAA_CLIENT_ID`, which
 the 3.x CLI wrote from the same key. The case writes its refused token under

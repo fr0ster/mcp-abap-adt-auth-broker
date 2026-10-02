@@ -1,8 +1,10 @@
 # Documentation
 
 Complete documentation for the `@mcp-abap-adt/auth-broker` repository: the library
-(`packages/auth-broker`) and its commands, `@mcp-abap-adt/auth-broker-cli`
-(`packages/auth-broker-cli`).
+(`packages/auth-broker`, 4.0.0) and its commands, `@mcp-abap-adt/auth-broker-cli`
+(`packages/auth-broker-cli`, 2.0.0). Upgrading: *Migrating from 3.x* in the
+[library README](../packages/auth-broker/README.md#migrating-from-3x) and
+*Migrating from 1.0.0* in the [CLI README](../packages/auth-broker-cli/README.md#migrating-from-100).
 
 ## Quick Start
 
@@ -22,7 +24,9 @@ docs/
 │   └── EXPORTS.md              # Exported entities and object diagrams
 ├── development/
 │   ├── TESTING.md              # Where the suites live, how to run them, the checks
-│   └── DEVELOPMENT_ROADMAP.md  # Development roadmap and future plans
+│   ├── DEVELOPMENT_ROADMAP.md  # The 0.x roadmap — historical
+│   ├── MIGRATION_GUIDE_v0.2.0.md # The 0.2.0 migration — historical
+│   └── archive/                # Older analyses — historical
 ├── installing/
 │   └── INSTALLATION.md         # Installation and setup guide
 └── using/
@@ -39,7 +43,7 @@ Technical documentation about the system architecture, design decisions, and int
 ### [Development](development/)
 Documentation for developers:
 - **[TESTING.md](development/TESTING.md)** - Where the suites live, what they need, the release checks
-- **[DEVELOPMENT_ROADMAP.md](development/DEVELOPMENT_ROADMAP.md)** - Development roadmap and future plans
+- **[DEVELOPMENT_ROADMAP.md](development/DEVELOPMENT_ROADMAP.md)** - The roadmap written for 0.1.0; historical, not a description of 4.0.0
 
 ### [Installing](installing/INSTALLATION.md)
 Installation and setup guide:
@@ -60,21 +64,16 @@ API reference and usage examples:
 
 ### AuthBroker Class
 
-The main class for managing JWT authentication tokens:
-- **getToken()** - The provider's current token for the destination (cached while valid, else refreshed or logged in), persisted to the session store
-- **refreshToken()** - A new token from the provider, never the cached one (`refreshTokens()`), persisted
-- **createTokenRefresher()** - `ITokenRefresher` for one destination, for injection into a connection
+For a destination name:
+- **getProvider()** - The `IAuthProvider` the destination states (basic, SNC, a UAA, OIDC or SAML grant, a credential handed over), built from the key store's means and the session store's secret, for a `@mcp-abap-adt/connection` 10 connector; everything it obtains is stored back
+- **getToken()** - The destination's current token (cached while valid, else refreshed or logged in) — from `getProvider`'s provider, or from a `provider` you give the broker
+- **refreshToken()** - A new token, never the cached one (`refreshTokens()`)
+- **createTokenRefresher()** - `ITokenRefresher` for one destination, for injection into a connection of your own
+- **flush()** - Whether every session write has landed; call it on shutdown
 
-### File-Based Configuration
+### Two Stores, Two Roles
 
-The package uses file-based configuration:
-- **{destination}.env** - Environment file with tokens and connection parameters
-- **{destination}.json** - Service key file for OAuth authentication
+- **The service key store** (`IServiceKeyStore`) answers the *means*: `authType`, `grantType`, the client, user and password, the SNC, OIDC and SAML settings, the URL. The broker never writes it.
+- **The session store** (`ISessionStore`) holds the *secret*: the token or cookies, its expiry, the refresh token, and what it is bound to (`issuedFor`, `issuedBy`). The broker writes the secret alone.
 
-### Multi-Path Search
-
-Files are searched in multiple paths with priority:
-1. Constructor parameter (highest priority)
-2. `AUTH_BROKER_PATH` environment variable
-3. Current working directory (lowest priority)
-
+Where they live is the stores' business: `@mcp-abap-adt/auth-stores` 3 keeps both in `{destination}.env` files (and reads SAP service keys, `{destination}.json`), in the directories you give each store's constructor; any implementation of the contracts serves.
