@@ -28,7 +28,7 @@ called with (`'authorization_code' | 'passcode' | 'saml2_pure' | 'saml2_bearer'`
 — this version builds the first two).
 
 **Key methods**:
-- `getProvider(destination: string): Promise<IAuthProvider>` — the provider the destination states, from the key store's means and the session's secret; cached per destination
+- `getProvider(destination: string): Promise<IAuthProvider>` — the provider the destination states, from the key store's means and the session's secret — the secret used only when its `issuedFor` / `issuedBy` are the destination's; cached per destination
 - `getToken(destination: string): Promise<string>`
 - `refreshToken(destination: string): Promise<string>` — a forced refresh (`provider.refreshTokens()`)
 - `getAuthorizationConfig(destination: string): Promise<IAuthorizationConfig | null>` — the key store's client with the session's refresh token

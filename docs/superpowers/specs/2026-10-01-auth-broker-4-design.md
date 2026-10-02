@@ -1502,7 +1502,7 @@ printing why. No configuration framework.
 | Case | Where it runs |
 |---|---|
 | `basic` over HTTP and over RFC (`rfcConversationFrom`, needs `@mcp-abap-adt/sap-rfc-lite` and the NW RFC SDK) | an on-premise system |
-| a `jwt` / `authorization_code` destination over HTTP, seeded with a well-formed JWT the system refuses (future `exp`, so the provider trusts it): the first request is a 401, the renewal happens in `rejected()`, and the new token is in the session file afterwards. Its means come from the SAP service key through `AbapServiceKeyStore` with `grantType: 'authorization_code'` (`AUTH_BROKER_LIVE_SERVICE_KEYS_DIR`; a test-only wrapper adds the grant until auth-stores 3.1.0), its session from a temporary copy of the file in `AUTH_BROKER_LIVE_SESSIONS_DIR` | BTP ABAP environment (trial) |
+| a `jwt` / `authorization_code` destination over HTTP, seeded with a well-formed JWT the system refuses (future `exp`, so the provider trusts it): the first request is a 401, the renewal happens in `rejected()`, and the new token is in the session file afterwards. Its means come from the SAP service key through `AbapServiceKeyStore` with `grantType: 'authorization_code'` (`AUTH_BROKER_LIVE_SERVICE_KEYS_DIR`; auth-stores 3.1.0's option, in place of 4c's test-only wrapper), its session from a temporary copy of the file in `AUTH_BROKER_LIVE_SESSIONS_DIR`, whose binding (a legacy file's `SAP_URL` + `SAP_CLIENT` and `SAP_UAA_URL` + `SAP_UAA_CLIENT_ID`) must be the key's (§4.5) | BTP ABAP environment (trial) |
 | `snc` over RFC | Windows or macOS with the SAP Secure Login Client logged on; on Linux the case skips stating that the Secure Login Client exists only there |
 
 **Load-bearing:** each rule is broken once on purpose (`persist` writing one

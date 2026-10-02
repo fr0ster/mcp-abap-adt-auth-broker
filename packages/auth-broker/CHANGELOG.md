@@ -37,7 +37,8 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   client alone. `uaaClientSecret: ''` is a public client, which `passcode`
   takes as no secret. No row needs `serviceUrl`: the resource URL is not
   authorization data — no token provider reads it — so the connector takes it
-  from the key store, and `getProvider` neither requires nor passes it.
+  from the key store, and `getProvider` neither requires it nor passes it to a
+  provider; it reads it only to bind a stored secret (below).
 - **The `authorization` option is used**: `(destination, grant) =>
   IAuthorizationStrategy<string>`, the interactive half of
   `authorization_code` and `passcode` (for `passcode` the strategy is handed
@@ -47,10 +48,36 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   the broker builds gets `onTokens`, so a token obtained at `prepare()`, on
   expiry, or in `rejected()` after a 401 is in the session store before the
   provider answers. The write is the session secret alone — one
-  `saveSession(destination, { authorizationToken, expiresAt, refreshToken })`,
-  the stored refresh token carried forward when the result has none — and
-  never a means field (no `serviceUrl`, no `authType`, no client secret). A
-  destination the key store states as `basic` or `snc` is not written.
+  `saveSession(destination, { authorizationToken, expiresAt, refreshToken,
+  issuedFor, issuedBy })`, the stored refresh token carried forward when the
+  result has none and the stored session is bound where the new secret is —
+  and never a means field (no `serviceUrl`, no `authType`, no client secret).
+  A destination the key store states as `basic` or `snc` is not written.
+- **A stored secret is used only where it is bound** (`issuedFor` /
+  `issuedBy`, `@mcp-abap-adt/interfaces-auth-broker` 1.1.0). The broker
+  computes from the means the resource a secret is for (`serviceUrl` with
+  `sap-client`) and who issued it to which client (`uaaUrl` with
+  `client_id`), canonicalises them and the session's values with one function
+  — scheme and host lower-cased, the port explicit (`443` / `80`), the path
+  without a trailing `/`, only `sap-client` (the means' `sapClient` first) or
+  `client_id` kept and re-encoded, so percent-encoding compares equal — and
+  writes both with every secret, each left out when the means lack its source.
+  The UAA grants are seeded only when both stored values match; otherwise the
+  stored secret, refresh token included, is not used: the provider logs in
+  afresh and the log says only `<destination>: secret bound to another
+  resource, discarded`. A `none` destination is refused instead: a
+  `DestinationConfigError` naming `issuedFor` when the stored resource is not
+  the destination's or is absent, and naming `issuedBy` when the means state
+  an issuer (`oidcIssuerUrl` or the client for `jwt`, `samlAcsUrl` for `saml`)
+  and the stored one is not it. **What a consumer meets:** a custom
+  `ISessionStore` must persist both fields beside the secret, else every
+  process start is a fresh login; a headless process whose strategy refuses
+  logins answers Oops on a mismatch instead of presenting a foreign secret; a
+  changed URL, SAP client, UAA or client costs one login. Session files
+  written before `@mcp-abap-adt/auth-stores` 3.1.0 keep working: its stores
+  answer the binding from the file's `SAP_URL` (+ `SAP_CLIENT`) and
+  `SAP_UAA_URL` + `SAP_UAA_CLIENT_ID`; XSUAA sessions written with an empty
+  URL have none and log in once.
 - **A failed session write does not fail the authentication**: it stays
   pending for its destination and the broker retries it on its own — one
   second, doubling, capped at one minute, on a timer that does not keep the
@@ -68,7 +95,8 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   table, a missing field of its row (`''` counts as missing; for the UAA
   grants `uaaUrl`, `uaaClientId`, and `uaaClientSecret` for
   `authorization_code` / `client_credentials`), a missing collaborator option
-  (`authorization`), or a provider
+  (`authorization`), a `none` credential not bound to the destination
+  (`issuedFor`, `issuedBy`), or a provider
   constructor's own `ValidationError` (an `sncQop` outside `1|2|3|8|9`, named
   as the store field; the provider's error, which quotes the value, is not
   kept). It names fields and options, never a stored value.
@@ -78,8 +106,9 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   the UAA grants; the others are declared for the OIDC and SAML grants.
 - **The broker's own test stand** (`tests/stand/`, `npm run test:stand`):
   Cloud Foundry UAA and Keycloak in Docker, copied from auth-providers' stand,
-  with suites running the UAA grants end to end through auth-stores 3's file
-  stores; a CI workflow runs the build-and-test gate and the stand on every
+  with suites running the UAA grants end to end through auth-stores 3.1.0's
+  file stores — the binding asserted in the session file, and a session bound
+  to another URL not reused; a CI workflow runs the build-and-test gate and the stand on every
   push and pull request. Not shipped in the package.
 
 ### Changed
@@ -98,7 +127,8 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   store gets them from a key store now.
 - **Contracts from their 2026-10 packages.** `@mcp-abap-adt/interfaces-auth`
   `^3.0.0` (was `^2.1.0`), `@mcp-abap-adt/interfaces-auth-sap` `^2.0.0` (was
-  `^1.0.1`), and `@mcp-abap-adt/interfaces-auth-broker` `^1.0.0` (new). The
+  `^1.0.1`), and `@mcp-abap-adt/interfaces-auth-broker` `^1.1.0` (new; 1.1.0
+  for `issuedFor` / `issuedBy`). The
   store contracts — `IConfig`, `IConnectionConfig`, `ISessionStore`,
   `IServiceKeyStore` — moved out of `interfaces-auth-sap` into
   `interfaces-auth-broker`; this package now takes them from there.
@@ -115,7 +145,10 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   provider). The dev dependency `@mcp-abap-adt/auth-stores` stays `^1.2.3`: 3.0.0's session
   stores hold the secret alone and refuse the `serviceUrl` and `authType`
   this version's `getToken` writes into the session, so the tests move to it
-  with the change that writes the secret alone.
+  with the change that writes the secret alone. The suites that need 3.x —
+  the stand, the live checks, the binding's legacy file — use it through the
+  dev alias `auth-stores-3` (`^3.1.0`); the live `jwt` case states its grant
+  with `AbapServiceKeyStore(dir, { grantType })`.
 - Comments no longer name `@mcp-abap-adt/auth-stores-btp` / `-xsuaa` (which do
   not exist) or the deleted `@mcp-abap-adt/interfaces` facade.
 

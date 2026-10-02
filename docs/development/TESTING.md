@@ -19,6 +19,9 @@ packages/auth-broker/src/__tests__/
 │   │                                    # driven only through IAuthProvider
 │   ├── getProviderTokens.test.ts        # the UAA grants and their persistence: fake stores,
 │   │                                    # real token providers, a local token endpoint
+│   ├── getProviderBinding.test.ts       # a stored secret used only where it is bound (issuedFor,
+│   │                                    # issuedBy): fake stores and auth-stores 3.1.0's
+│   │                                    # AbapSessionStore over a 3.x-shaped file
 │   └── AuthBroker.integration.test.ts   # real service keys, sessions and providers
 ├── stand/
 │   ├── uaaGrants.test.ts                # the UAA grants against UAA in Docker;
@@ -45,7 +48,8 @@ defined). The library's `jest.config.js` ignores `__tests__/live/`;
 ## What each suite needs
 
 - **`AuthBroker.test.ts`**, **`getProvider.test.ts`**,
-  **`getProviderTokens.test.ts`** and **every CLI suite**: nothing — no
+  **`getProviderTokens.test.ts`**, **`getProviderBinding.test.ts`** and
+  **every CLI suite**: nothing — no
   network beyond the loopback, no configuration, no browser. The SNC case
   writes a 64-byte ELF header for the host's architecture into a temporary
   directory as its `sncLib`: the locator reads only the header, so no SNC
@@ -129,8 +133,11 @@ npm run stand:down                   # … and stop it
 
 What it covers today: `jwt` / `client_credentials`, `authorization_code`
 (UAA's login form) and `passcode` (`/passcode`) — each obtained, written to the
-session file as the secret alone, and the two interactive ones renewed by
-refresh after a 401. Keycloak and the test IdP are there for the OIDC and SAML
+session file as the secret alone with its binding (`SAP_ISSUED_FOR`,
+`SAP_ISSUED_BY`, asserted by value), and the two interactive ones renewed by
+refresh after a 401; and a session bound to another URL is not reused — the
+destination's `serviceUrl` changed, the next broker logs in through UAA's form
+again and writes the new binding. Keycloak and the test IdP are there for the OIDC and SAML
 grants, which join with their providers.
 
 ## Live checks: getProvider against real systems
@@ -185,11 +192,20 @@ The destination's means are its SAP service key — `<destination>.json` in
 as BTP gives it, read by auth-stores 3's `AbapServiceKeyStore`: the client
 (`uaa.url`, `uaa.clientid`, `uaa.clientsecret`) and the ABAP URL the connector
 dials. A SAP key cannot state a grant, so the grant is stated by whoever
-builds the store: auth-stores 3.1.0 gives `AbapServiceKeyStore` a `grantType`
-option; until then the case wraps the 3.0.0 store in a test-only key store
-that adds `grantType: 'authorization_code'` (`withGrant`, replaced when the
-broker moves to 3.1.0). `getProvider` reads no URL (plan D8): the connector
-takes it from the key.
+builds the store: `new AbapServiceKeyStore(dir, { grantType:
+'authorization_code' })` (auth-stores 3.1.0). No provider reads the URL (plan
+D8): the connector takes it from the key, and the broker reads it only for the
+binding.
+
+**The binding.** The session must be bound to the key (spec §4.5): a file
+written before auth-stores 3.1.0 answers `issuedFor` from its `SAP_URL` (+
+`SAP_CLIENT`) and `issuedBy` from `SAP_UAA_URL` + `SAP_UAA_CLIENT_ID`, which
+the 3.x CLI wrote from the same key. The case writes its refused token under
+the binding the file answered, and after the renewal expects the session to
+hold `issuedFor` and `issuedBy` again. A file that answers no binding fails the
+case before any request, naming the keys; one whose binding is not the key's
+is discarded by the broker, the refusing strategy then fails the login, and
+the case fails — log in again with the CLI.
 
 **The destinations.** `AUTH_BROKER_LIVE_KEYS_DIR` is a directory of
 `<destination>.env` files read by auth-stores 3's `EnvDestinationStore` — the
