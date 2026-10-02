@@ -18,7 +18,8 @@ export {
 ```
 
 **Constructor**: `new AuthBroker({ sessionStore, serviceKeyStore?, provider?, …collaborators }, logger?)`, where
-`provider` — the token API's source, not used by `getProvider` — is an
+`provider` — a token API source of your own, optional, never used by
+`getProvider`; without it the token API asks `getProvider`'s provider — is an
 `IRefreshableTokenProvider` or a `TokenProviderFactory`
 `(destination, authConfig, connConfig) => IRefreshableTokenProvider`. The
 collaborator options (`authorization`, `oidcAuthorization`,
@@ -36,16 +37,18 @@ from `@mcp-abap-adt/auth-providers` — none is re-exported here.
 
 **Key methods**:
 - `getProvider(destination: string): Promise<IAuthProvider>` — the provider the destination states, from the key store's means and the session's secret — the secret used only when its `issuedFor` / `issuedBy` are the destination's; cached per destination
-- `getToken(destination: string): Promise<string>`
-- `refreshToken(destination: string): Promise<string>` — a forced refresh (`provider.refreshTokens()`)
+- `getToken(destination: string): Promise<string>` — the token of the destination's provider (`getProvider`'s, shared; or the `provider` option's); refuses a destination stated `basic` or `snc`
+- `refreshToken(destination: string): Promise<string>` — a forced refresh (`provider.refreshTokens()`), joining a renewal in flight
 - `getAuthorizationConfig(destination: string): Promise<IAuthorizationConfig | null>` — the key store's client with the session's refresh token
 - `getConnectionConfig(destination: string): Promise<IConnectionConfig | null>` — the key store's means with the session's secret and its binding (`issuedFor`, `issuedBy`)
-- `createTokenRefresher(destination: string): ITokenRefresher`
-- `flush(): Promise<void>` — one more attempt for every session write `getProvider`'s providers left pending; rejects with an `AggregateError` naming the destinations still failing
+- `createTokenRefresher(destination: string): ITokenRefresher` — `getToken` / `refreshToken` bound to one destination; unchanged since 3.x, not deprecated
+- `flush(): Promise<void>` — one more attempt for every session write left pending (by `getProvider`'s providers or the token API); rejects with an `AggregateError` naming the destinations still failing
 
 ### `DestinationConfigError`
-What `getProvider` (and the token API without a `provider`) throws for a
-destination that lacks what its type needs.
+What `getProvider` and the token API throw for a destination that lacks what
+its type needs — and the token API for one stated `basic` or `snc`
+(`authType`), a `none` one without a `provider` option (`provider`), or
+neither a `provider` nor a `serviceKeyStore` (both).
 
 **Export**:
 ```typescript
