@@ -73,8 +73,9 @@ export class SessionWriter {
 
   /**
    * One more attempt for every pending result; resolves when all are written,
-   * rejects naming the destinations still pending. The retries go on after a
-   * rejection.
+   * rejects naming the destinations still pending — each failure as its
+   * destination and its error's class only, never the store's message. The
+   * retries go on after a rejection.
    */
   async flush(): Promise<void> {
     const queues = [...this.queues];
@@ -87,8 +88,13 @@ export class SessionWriter {
     );
     const failed = queues.filter(([, queue]) => queue.pending !== undefined);
     if (failed.length > 0) {
+      // The stores' own errors are not carried: their messages, causes and
+      // properties are foreign text that may quote what was being written.
       throw new AggregateError(
-        failed.map(([, queue]) => queue.lastError),
+        failed.map(
+          ([destination, queue]) =>
+            new Error(`"${destination}": ${classLabel(queue.lastError)}`),
+        ),
         `Session writes still failing for ${failed
           .map(([destination]) => `"${destination}"`)
           .join(', ')}; the broker keeps retrying them`,

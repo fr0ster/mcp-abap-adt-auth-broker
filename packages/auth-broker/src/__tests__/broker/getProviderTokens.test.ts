@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 /**
  * getProvider for the UAA grants — `jwt` / `authorization_code`,
  * `client_credentials`, `passcode` — and the persistence every token provider
@@ -795,6 +796,24 @@ describe('persistence through onTokens (spec §6)', () => {
       expect(store.saveSession).toHaveBeenCalledTimes(2);
       store.saveSession.mockResolvedValue(undefined);
       await expect(broker.flush()).resolves.toBeUndefined();
+    });
+
+    it("carries no store message: each failure is the destination and the error's class", async () => {
+      const { broker, store } = seeded();
+      store.saveSession.mockRejectedValue(
+        new StoreDiskError('cannot save TOKEN_SENTINEL'),
+      );
+      await (await broker.getProvider(D)).rejected(UNAUTHORIZED);
+
+      const flushed = (await broker.flush().catch((e: unknown) => e)) as
+        | AggregateError
+        | undefined;
+
+      expect(flushed).toBeInstanceOf(AggregateError);
+      expect(inspect(flushed, { depth: 10 })).not.toContain('TOKEN_SENTINEL');
+      expect(flushed?.errors.map((e: Error) => e.message)).toEqual([
+        `"${D}": StoreDiskError`,
+      ]);
     });
 
     it('the retry timer does not keep the process alive', async () => {

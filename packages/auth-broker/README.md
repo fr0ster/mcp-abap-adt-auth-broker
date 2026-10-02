@@ -227,8 +227,10 @@ connector resends.
   replaces the pending one; writes for one destination never overlap. Each
   failure is logged by its class name, never its message.
 - **`flush()`** gives every pending write one more attempt, resolves when all
-  have landed, and rejects (an `AggregateError` naming the destinations, with
-  the store errors) when the store still refuses — the broker keeps retrying.
+  have landed, and rejects (an `AggregateError` naming the destinations; each
+  of its `errors` is `"<destination>": <error class>` — never the store's own
+  message, which may quote what was being written) when the store still
+  refuses — the broker keeps retrying.
   Call it on shutdown — on `SIGTERM`, before a stdio transport closes — to
   know whether every token is stored.
 
@@ -664,8 +666,8 @@ passes a store failure other than absence on as the store raised it.
 
 Every session write still pending gets one more attempt. Resolves when all
 have landed; rejects with an `AggregateError` naming the destinations whose
-store still refuses (its `errors` are the store errors) — the broker keeps
-retrying them. See *Persistence and `flush()`*.
+store still refuses (its `errors` carry each destination and the store
+error's class only, never its message) — the broker keeps retrying them. See *Persistence and `flush()`*.
 
 ##### `getToken(destination: string): Promise<string>`
 
