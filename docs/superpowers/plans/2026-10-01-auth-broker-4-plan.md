@@ -566,10 +566,12 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   canonicalised, equal them; otherwise the secret — refresh token included —
   is not used, the provider logs in afresh, and the log says only "secret
   bound to another resource, discarded". `persist` writes both with every
-  secret (each absent when the means lack its source). The `none` rows apply
-  it too (decided 2026-10-02): a mismatch is a `DestinationConfigError`
-  naming `issuedFor` or `issuedBy` — with spec §4.5 item 4's point decided
-  first (a `none` destination's means state no issuer today). The live case's
+  secret (each absent when the means lack its source). For these obtained
+  secrets both fields are mandatory and must both match. The `none` rows
+  (decided 2026-10-02): `issuedFor` always required to match, `issuedBy`
+  compared only when the means state an issuer (the client or OIDC issuer for
+  `jwt` / `none`, `samlAcsUrl` for `saml` / `none`); a mismatch is a
+  `DestinationConfigError` naming the field, never a discard. The live case's
   `withGrant` wrapper is replaced by `new AbapServiceKeyStore(dir,
   { grantType: 'authorization_code' })`.
 - **Tests first** (spec §13): a mismatched `issuedFor` — a different host, a
@@ -581,15 +583,19 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   with this destination's `issuedFor` and `issuedBy`. Variants that
   canonicalise equal are seeded: host case, scheme case, explicit default
   port, trailing `/`, `sapClient` against `?sap-client=` in the URL; `uaaUrl`
-  case, port and trailing `/`. A `none` destination with either mismatch is
-  the error naming the field. The field-set test now expects `issuedFor` and
+  case, port and trailing `/`. The `none` rows: no issuer in the means and
+  a matching `issuedFor` → seeded (presented); an issuer stated and `issuedBy`
+  mismatched → `DestinationConfigError` naming `issuedBy`; an `issuedFor`
+  mismatch → `DestinationConfigError` naming `issuedFor`. The field-set test now expects `issuedFor` and
   `issuedBy` beside the secret. The stand suite runs the binding
   against UAA with auth-stores 3.1.0's file stores: a session file bound to
   another URL is not reused.
 - **Load-bearing:** seed regardless of `issuedFor`; seed regardless of
   `issuedBy`; compare without canonicalising; drop the SAP client from
   `issuedFor`; drop the path; drop `client_id` from `issuedBy`; write either
-  field not at all; let a `none` mismatch through — each red alone.
+  field not at all; let a `none` mismatch through; compare `issuedBy` for a
+  `none` row even when the means state no issuer (the "no issuer → seeded"
+  test goes red) — each red alone.
 - **Docs:** library README (the binding; the consumer impact of spec §12
   *Binding* — a custom session store must keep both fields, a headless
   refusing strategy answers Oops on a mismatch, one fresh login after a
@@ -895,10 +901,14 @@ dependency on `auth-broker` `^4.0.0` alone does not decide it.
   computed ones (both sides canonicalised) — otherwise (either different, or
   absent) the secret, refresh token included, is not used, the provider logs
   in afresh, and the log says only "secret bound to another resource,
-  discarded", no values. The `none` rows apply the same, and a mismatch there
-  is a `DestinationConfigError` naming the field — decided 2026-10-02: the
-  broker cannot log in there, so an honest refusal beats a leak (open for
-  4c3: a `none` destination's means state no issuer today, spec §4.5 item 4).
+  discarded", no values. For obtained secrets (the UAA, OIDC and SAML grant
+  rows) both fields are mandatory and must both match. **`none` rows:
+  `issuedFor` always, `issuedBy` only when stated — decided 2026-10-02:**
+  `issuedFor` is always required to match (it is what stops the leak);
+  `issuedBy` is compared only when the means state an issuer, and then must
+  match (a consumer who wants it strict states the issuer); a mismatch is a
+  `DestinationConfigError` naming the field — the broker cannot log in
+  there, so an honest refusal beats a leak.
   Why both: `issuedFor` stops a secret going to another resource, `issuedBy`
   stops a secret from another issuer or client being seeded in place of this
   one (a changed UAA, client or system). For XSUAA a token is accepted by

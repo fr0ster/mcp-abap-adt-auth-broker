@@ -766,8 +766,10 @@ option, e.g. `deviceCodePresenter`). **Not** for a destination without
 kept until then): no provider reads it (fact 7), and where the connector
 connects is the consumer's, from the key store; a token destination without
 one gets its provider, and only its stored secret is not reused (§4.5). A
-`none` destination whose stored `issuedFor` or `issuedBy` does not match is
-this error, naming the field (§4.5 item 4). A provider
+`none` destination whose stored `issuedFor` does not match (or is absent) is
+this error naming `issuedFor`; one whose means state an issuer and whose
+stored `issuedBy` does not match is this error naming `issuedBy` (§4.5 item
+4). A provider
 constructor's own `ValidationError` (an `sncQop` outside `1|2|3|8|9`,
 `SncLogonProvider.ts:90-96`; `idpInitiated` with a request ID) becomes a
 `DestinationConfigError` naming the store field, with the original as `cause`.
@@ -804,16 +806,22 @@ destination's means:
    the destination name — never a URI, never a token.
 4. **The rows it applies to:** every row that takes a seed (§4.1) —
    `authorization_code`, `passcode`, the OIDC grants, `saml2_pure`,
-   `saml2_bearer`; `client_credentials` reads no session. **The `none` rows
-   apply it too — decided 2026-10-02:** the broker cannot log in there, so an
-   honest refusal beats a leak; a mismatch is the §4.4 error naming
-   `issuedFor` or `issuedBy` (never a value). *Point for 4c3:* a `none`
-   destination's means state no client, issuer or ACS today (§4.1: `authType`,
-   `grantType`, the URL), so its `issuedBy` computed from the means is absent
-   and rule 2 would refuse every `none` destination. Before 4c3 the user
-   decides between the `none` rows stating their issuer in the means (the CLI
-   that writes the handed-over credential writes it, §10) and comparing
-   `issuedBy` there only when the means state an issuer.
+   `saml2_bearer`; `client_credentials` reads no session. For these
+   **obtained** secrets both fields are mandatory and must both match.
+   **The `none` rows — `issuedFor` always, `issuedBy` only when stated
+   (decided 2026-10-02):** `TokenAuthProvider.fixed` / `SamlAuthProvider`
+   present a credential handed over, which the broker did not obtain and
+   cannot obtain again, so a mismatch is never a silent discard but the §4.4
+   error naming the field (never a value) — an honest refusal beats a leak.
+   - `issuedFor` is always required to match: it is what stops the leak. A
+     stored `issuedFor` that differs, or is absent, or no `serviceUrl` in the
+     means → the error naming `issuedFor`.
+   - `issuedBy` is compared only when the means state an issuer — the client
+     (`uaaUrl` + `uaaClientId`) or `oidcIssuerUrl` for `jwt` / `none`,
+     `samlAcsUrl` for `saml` / `none`; then it must match, else the error
+     naming `issuedBy`. A `none` destination's means usually state no issuer
+     (§4.1: `authType`, `grantType`, the URL), and then `issuedBy` is not
+     compared; a consumer who wants it strict states the issuer.
 5. **Why the broker and not the provider:** the providers take a seed and
    know no resource (fact 7); the broker is what pairs a session with a
    destination's means.
@@ -1434,8 +1442,11 @@ providers real, token endpoints local):**
   Variants that canonicalise equal are seeded: host case, scheme case, an
   explicit default port against none, a trailing `/`, the client as
   `sapClient` against `?sap-client=` in the URL; for `issuedBy`, `uaaUrl`
-  case, port and trailing `/`, an ACS with a query. A `none` destination
-  with a mismatch is the error naming the field. `persist` writes both with
+  case, port and trailing `/`, an ACS with a query. The `none` rows:
+  no issuer in the means and a matching `issuedFor` → presented (seeded),
+  whatever `issuedBy` the session holds or lacks; an issuer stated and
+  `issuedBy` mismatched → `DestinationConfigError` naming `issuedBy`; an
+  `issuedFor` mismatch → `DestinationConfigError` naming `issuedFor`. `persist` writes both with
   every secret, each absent when the means lack what it is computed from.
 
 **Through `connection` 10** (dev dependency), no SAP system: an
@@ -1476,7 +1487,8 @@ carried forward; the `basic`/`snc` guard; the promise cache; the broker's own
 retry of a failed write; the pair table; `serviceUrl` required again; the
 binding — seed regardless of `issuedFor`, then of `issuedBy`, compare without
 canonicalising, drop the SAP client from `issuedFor`, drop the path, drop
-`client_id` from `issuedBy`, each alone) and its test must go
+`client_id` from `issuedBy`, compare `issuedBy` for a `none` row whose
+means state no issuer, each alone) and its test must go
 red, then restored.
 
 **CLI package:** today's `mcpSsoConfig` / `samlMetadata` / `mcpSsoSamlProviders`
