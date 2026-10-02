@@ -1,12 +1,17 @@
 /**
  * What the `generate-env` development script does, importable by tests.
  *
- * It writes a destination from a SAP service key into a sessions directory:
- * the means — `jwt`, the grant `--grant` states, the key's client and URL —
+ * It writes a destination from a SAP service key to the session path: the
+ * means — `jwt`, the grant `--grant` states, the key's client and URL —
  * through the destination store's own write method, then a login through the
  * provider the broker builds for that destination, whose secret reaches the
  * session store through the broker's persistence. The grant is never read from
  * the key (H1): a key holds a client, and a client may serve several grants.
+ *
+ * Like the commands, it works on a copy in a private directory and replaces
+ * the session file only once `flush()` reports the secret stored: a refused or
+ * cancelled login, or a secret the store did not take, leaves the file byte
+ * for byte as it was.
  */
 
 import * as fs from 'node:fs';
@@ -16,7 +21,12 @@ import {
   AbapServiceKeyStore,
   XsuaaServiceKeyStore,
 } from '@mcp-abap-adt/auth-stores';
-import { completeMeans, flushed, openDestination } from './destination';
+import {
+  completeMeans,
+  flushed,
+  openDestination,
+  writeOutputFile,
+} from './destination';
 import type { AuthorizationStrategy } from './runMcpAuth';
 
 /** The grants a SAP service key's client alone serves. */
@@ -29,12 +39,14 @@ export const GENERATE_ENV_USAGE =
 export interface GenerateEnvContext {
   /** The interactive strategy of the authorization code grant, stated by the caller. */
   authorization: () => AuthorizationStrategy;
+  /** The run's private directory (`createWorkDir`), removed by its creator. */
+  workDir: string;
 }
 
 /** Runs the script; resolves the exit code. */
 export async function runGenerateEnv(
   args: string[],
-  { authorization }: GenerateEnvContext,
+  { authorization, workDir }: GenerateEnvContext,
 ): Promise<number> {
   const positional: string[] = [];
   let grant: string | undefined;
@@ -69,7 +81,6 @@ export async function runGenerateEnv(
     positional[2] || path.join(process.cwd(), `${destination}.env`),
   );
   const serviceKeyDir = path.dirname(resolvedServiceKeyPath);
-  const sessionDir = path.dirname(resolvedSessionPath);
 
   if (!fs.existsSync(resolvedServiceKeyPath)) {
     console.error(`❌ Service key file not found: ${resolvedServiceKeyPath}`);
@@ -77,9 +88,7 @@ export async function runGenerateEnv(
   }
 
   console.log(`📁 Service key: ${resolvedServiceKeyPath}`);
-  console.log(
-    `📁 Session file: ${path.join(sessionDir, `${destination}.env`)}`,
-  );
+  console.log(`📁 Session file: ${resolvedSessionPath}`);
 
   // The key's format decides its parser and the file's key names: an ABAP
   // key nests the client under `uaa`, an XSUAA key holds it flat.
@@ -104,10 +113,12 @@ export async function runGenerateEnv(
     // An XSUAA key may carry no URL.
   }
 
+  // A copy of the session file, if there is one: it is replaced only below.
   const files = openDestination(
-    sessionDir,
+    workDir,
     destination,
     isXsuaa ? 'xsuaa' : 'abap',
+    resolvedSessionPath,
   );
   await files.keyStore.setDestination(
     destination,
@@ -128,15 +139,25 @@ export async function runGenerateEnv(
   });
 
   console.log(`🔐 Getting token for destination "${destination}" (${grant})`);
-  const provider = (await broker.getProvider(destination)) as unknown as {
-    getTokens: () => Promise<unknown>;
-  };
-  await provider.getTokens();
+  try {
+    const provider = (await broker.getProvider(destination)) as unknown as {
+      getTokens: () => Promise<unknown>;
+    };
+    await provider.getTokens();
+  } catch (error) {
+    console.error(
+      `❌ Login failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    console.error(`   ${resolvedSessionPath} is unchanged.`);
+    return 1;
+  }
   console.log(`✅ Token obtained successfully`);
 
   if (!(await flushed(broker, (line) => console.error(line)))) {
+    console.error(`   ${resolvedSessionPath} is unchanged.`);
     return 1;
   }
-  console.log(`✅ Session file written: ${files.file}`);
+  writeOutputFile(files, resolvedSessionPath);
+  console.log(`✅ Session file written: ${resolvedSessionPath}`);
   return 0;
 }

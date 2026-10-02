@@ -68,7 +68,7 @@ subject token, an old trust) are removed, the URL, `SAP_CLIENT` and
 | `mcp-sso oidc --flow password --passcode` (or neither `--password` nor `--username`) | `jwt` / `passcode` | the client: `--uaa-url` (or `--service-key`), `--client-id` — never the one-time code | the same |
 | `mcp-sso oidc --flow token_exchange` | `jwt` / `token_exchange` | `SAP_OIDC_SUBJECT_TOKEN`, `…_SUBJECT_TOKEN_TYPE`, `…_AUDIENCE`, `…_ACTOR_TOKEN(_TYPE)`, `…_TOKEN_ENDPOINT`, `…_SCOPES` (`--scope`), the client | the same |
 | `mcp-sso saml2 --flow pure` | `saml` / `saml2_pure` | `SAP_SAML_IDP_SSO_URL`, `…_IDP_ENTITY_ID`, `…_IDP_CERTIFICATES_B64`, `…_SP_ENTITY_ID`, `…_ACS_URL`, `…_RELAY_STATE`, `…_IDP_INITIATED` | cookies, expiry, binding |
-| `mcp-sso saml2 --flow pure --cookie …` | `saml` / `none` | `SAP_URL` only | the cookies you handed over, bound to `SAP_URL` — stored by the command, since no login obtains them |
+| `mcp-sso saml2 --flow pure --cookie …` | `saml` / `none` | `SAP_URL` only | the cookies you handed over, bound to the resource (`SAP_URL` with `SAP_CLIENT` when the file states one) by the broker's `bindingOf` — stored by the command, since no login obtains them |
 | `mcp-sso bearer` | `saml` / `saml2_bearer` | the `SAP_SAML_*` fields above, `SAP_SAML_TOKEN_URL`, the client (`--uaa-url`, `--client-id`, or `--service-key`) | token, refresh token, expiry, binding |
 
 The client secret you give (a service key's, or `--client-id` with
@@ -396,9 +396,12 @@ npm run generate-env -w @mcp-abap-adt/auth-broker-cli -- <destination> [service-
 `--grant` is required: a service key holds a client, and a client may serve
 several grants, so the script never reads the grant from the key (up to 1.0.0
 it chose `client_credentials` for a key whose URL named `authentication`). It
-writes the destination into the session path's directory — the means (`jwt`,
-the grant, the key's client and URL) through the destination store, the secret
-through the broker — and exits `1` when the secret is not stored.
+writes the destination to the session path — the means (`jwt`, the grant, the
+key's client and URL) through the destination store, the secret through the
+broker — working on a copy in a private temporary directory, as the commands
+do: the session file is replaced only once the secret is stored. A refused or
+cancelled login, or a secret the store does not take, exits `1` and leaves the
+file byte for byte as it was.
 `authorization_code` opens the system browser.
 
 npm runs a workspace's script in that workspace's directory, so relative paths

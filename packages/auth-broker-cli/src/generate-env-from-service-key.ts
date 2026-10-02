@@ -18,6 +18,7 @@
 
 import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
 import { runGenerateEnv } from './generateEnv';
+import { createWorkDir } from './workDir';
 
 /**
  * A person completes this login at a browser; the provider's own default
@@ -26,6 +27,8 @@ import { runGenerateEnv } from './generateEnv';
 const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 runGenerateEnv(process.argv.slice(2), {
+  // Removed on any exit, error and signal included: it holds the secret.
+  workDir: createWorkDir('generate-env'),
   // No port override: this script has no `--redirect-port` flag, so the
   // callback port is the strategy's own choice.
   authorization: () =>

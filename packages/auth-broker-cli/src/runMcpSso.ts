@@ -11,7 +11,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { AuthBroker, bindingOf } from '@mcp-abap-adt/auth-broker';
 import { XsuaaServiceKeyStore } from '@mcp-abap-adt/auth-stores';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
@@ -256,11 +256,13 @@ export async function runMcpSso(
 
   if (row.grantType === 'none') {
     // The cookies were handed over, not obtained: the CLI writes them, with
-    // the resource they are for — the broker presents them nowhere else.
+    // the binding the broker computes for this destination's means — the
+    // resource with its SAP client — so the broker presents them there and
+    // nowhere else. The CLI composes no binding of its own.
     const stated = await files.keyStore.getConnectionConfig(destination);
     await files.sessionStore.saveSession(destination, {
       sessionCookies: options.cookie,
-      issuedFor: stated?.serviceUrl,
+      ...bindingOf(stated ?? {}),
     });
     // The destination as the broker will read it: refused here, not later.
     await broker.getProvider(destination);

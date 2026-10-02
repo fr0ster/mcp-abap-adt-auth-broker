@@ -46,7 +46,9 @@ in the README.
   `passcode` and stored it as a password, which a one-time code cannot renew.
 - **`mcp-sso saml2 --flow pure --cookie`** is a `saml` / `none` destination:
   `SAP_URL` as means, the handed-over cookies stored by the command itself
-  (no provider obtains them), bound to the URL (`SAP_ISSUED_FOR`). No SAML
+  (no provider obtains them), with the binding the broker's `bindingOf`
+  computes from the destination's means — the resource with its SAP client
+  (`SAP_ISSUED_FOR`); the CLI composes no binding of its own. No SAML
   login runs, and no trust is required.
 - **`mcp-sso bearer`** writes its client (`SAP_UAA_URL`, `SAP_UAA_CLIENT_ID`,
   `SAP_UAA_CLIENT_SECRET`), which the broker requires: `--uaa-url` and
@@ -66,7 +68,10 @@ in the README.
   `client_credentials`) and refuses without it; 1.0.0 chose
   `client_credentials` for a key whose URL named `authentication` (H1). It
   writes the means and the secret as the commands do, through `getProvider`,
-  and `flush()`es.
+  on a copy in a private temporary directory, and replaces the session file
+  (the exact session path given) only after `flush()` succeeds: a refused or
+  cancelled login leaves it byte for byte as it was. 1.0.0 wrote into the
+  sessions directory as it went.
 - **`--format json`** is rendered from the two stores after the secret is
   stored: the 1.x fields, `uaaUrl` being the client's (see above).
 

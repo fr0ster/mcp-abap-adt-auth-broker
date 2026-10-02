@@ -72,8 +72,16 @@ function abapKey(): string {
   return file;
 }
 
+let workDir: string;
+beforeEach(() => {
+  workDir = fs.mkdtempSync(path.join(root, 'work-'));
+});
+
 const noBrowser = {
   authorization: () => staticCodeStrategy({ payload: 'the-code' }),
+  get workDir() {
+    return workDir;
+  },
 };
 
 describe('generate-env', () => {
@@ -173,5 +181,86 @@ describe('generate-env', () => {
     expect(console.error).toHaveBeenCalledWith(
       expect.stringContaining('The session was not stored'),
     );
+  });
+
+  describe('the session file is changed only once the secret is stored', () => {
+    const before = [
+      'SAP_URL=https://old.example.com',
+      'SAP_AUTH_TYPE=jwt',
+      'SAP_GRANT_TYPE=password',
+      'SAP_USERNAME=alice',
+      "SAP_PASSWORD='old-password'",
+      'SAP_JWT_TOKEN=old-token',
+      '',
+    ].join('\n');
+    let session: string;
+    beforeEach(() => {
+      session = path.join(root, 'sessions', 'TRIAL.env');
+      fs.mkdirSync(path.dirname(session), { recursive: true });
+      fs.writeFileSync(session, before);
+    });
+
+    it('a refused or cancelled authorization: exit 1, the file byte for byte as it was', async () => {
+      const cancelled = {
+        authorization: () => ({
+          authorize: async () => {
+            throw new Error('the user cancelled the login');
+          },
+        }),
+        workDir,
+      };
+      await expect(
+        runGenerateEnv(
+          ['TRIAL', abapKey(), session, '--grant', 'authorization_code'],
+          cancelled,
+        ),
+      ).resolves.toBe(1);
+      expect(fs.readFileSync(session, 'utf8')).toBe(before);
+    });
+
+    it('a token endpoint that refuses: exit 1, the file unchanged', async () => {
+      server.answer('/oauth/token', {
+        status: 401,
+        body: { error: 'invalid_client' },
+      });
+      await expect(
+        runGenerateEnv(
+          ['TRIAL', abapKey(), session, '--grant', 'client_credentials'],
+          noBrowser,
+        ),
+      ).resolves.toBe(1);
+      expect(fs.readFileSync(session, 'utf8')).toBe(before);
+    });
+
+    it('a secret the store does not take: exit 1, the file unchanged', async () => {
+      server.answer('/oauth/token', tokenAnswer('cc', false));
+      const spy = jest
+        .spyOn(AbapSessionStore.prototype, 'saveSession')
+        .mockRejectedValue(new Error('disk full'));
+      try {
+        await expect(
+          runGenerateEnv(
+            ['TRIAL', abapKey(), session, '--grant', 'client_credentials'],
+            noBrowser,
+          ),
+        ).resolves.toBe(1);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(fs.readFileSync(session, 'utf8')).toBe(before);
+    });
+
+    it('success replaces the means and writes the secret', async () => {
+      server.answer('/oauth/token', tokenAnswer('cc', false));
+      await expect(
+        runGenerateEnv(
+          ['TRIAL', abapKey(), session, '--grant', 'client_credentials'],
+          noBrowser,
+        ),
+      ).resolves.toBe(0);
+      const after = fs.readFileSync(session, 'utf8');
+      expect(after).toContain('SAP_GRANT_TYPE=client_credentials');
+      expect(after).not.toContain('old-password');
+    });
   });
 });

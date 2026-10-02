@@ -313,3 +313,20 @@ describe('a secret the store does not take', () => {
     );
   });
 });
+
+describe('a refused login', () => {
+  it('leaves an existing output byte for byte as it was', async () => {
+    const output = path.join(outDir, `${DEST}.env`);
+    fs.mkdirSync(outDir, { recursive: true });
+    const before = 'SAP_URL=https://old.example.com\nSAP_JWT_TOKEN=old\n';
+    fs.writeFileSync(output, before);
+    server.answer('/oauth/token', {
+      status: 401,
+      body: { error: 'invalid_client' },
+    });
+    await expect(
+      run(options({ serviceKeyPath: abapKey(), credential: true })),
+    ).rejects.toThrow();
+    expect(fs.readFileSync(output, 'utf8')).toBe(before);
+  });
+});

@@ -441,7 +441,7 @@ describe('mcp-sso saml2 --flow pure --cookie', () => {
     expect(sessionWrites.map((w) => w.config)).toEqual([
       {
         sessionCookies: 'SAP_SESSIONID=abc; MYSAPSSO2=def',
-        issuedFor: SERVICE_URL,
+        issuedFor: 'https://abap.example.com:443',
       },
     ]);
     await expectSplit('abap');
@@ -460,6 +460,35 @@ describe('mcp-sso saml2 --flow pure --cookie', () => {
       },
     } as never);
     expect(Object.values(headers).join(' ')).toContain('SAP_SESSIONID=abc');
+  });
+});
+
+describe('mcp-sso saml2 --flow pure --cookie, the SAP client stated in --env', () => {
+  it('binds the cookies to the resource with its client: getProvider presents them', async () => {
+    const previous = path.join(root, `${DEST}.env`);
+    fs.writeFileSync(previous, `SAP_URL=${SERVICE_URL}\nSAP_CLIENT=100\n`);
+    const code = await run(
+      options({
+        envFilePath: previous,
+        serviceUrl: undefined,
+        protocol: 'saml2',
+        flow: 'pure',
+        cookie: 'SAP_SESSIONID=abc',
+      }),
+    );
+    expect(code).toBe(0);
+    // The binding the broker computes — never one the CLI composes.
+    expect(sessionWrites.map((w) => w.config)).toEqual([
+      {
+        sessionCookies: 'SAP_SESSIONID=abc',
+        issuedFor: 'https://abap.example.com:443?sap-client=100',
+      },
+    ]);
+    const broker = new AuthBroker({
+      sessionStore: sessionStoreOf('abap'),
+      serviceKeyStore: keyStoreOf('abap'),
+    });
+    await expect(broker.getProvider(DEST)).resolves.toBeDefined();
   });
 });
 
@@ -485,5 +514,28 @@ describe('a secret the store does not take', () => {
     expect(console.error).toHaveBeenCalledWith(
       expect.stringContaining('The session was not stored'),
     );
+  });
+});
+
+describe('a refused login', () => {
+  it('leaves an existing output byte for byte as it was', async () => {
+    const output = path.join(outDir, `${DEST}.env`);
+    fs.mkdirSync(outDir, { recursive: true });
+    const before = "SAP_URL=https://old.example.com\nSAP_PASSWORD='old'\n";
+    fs.writeFileSync(output, before);
+    server.answer('/token', { status: 401, body: { error: 'invalid_grant' } });
+    await expect(
+      run(
+        options({
+          protocol: 'oidc',
+          flow: 'password',
+          clientId: 'cli',
+          tokenEndpoint: `${server.url}/token`,
+          username: 'alice',
+          password: 'wrong',
+        }),
+      ),
+    ).rejects.toThrow();
+    expect(fs.readFileSync(output, 'utf8')).toBe(before);
   });
 });
