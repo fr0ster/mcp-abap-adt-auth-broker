@@ -56,6 +56,15 @@ collaborators instead of a provider.
 
 ### Added
 
+- **`bindingOf(means, client?)`** — the binding (`issuedFor`, `issuedBy`) the
+  broker writes beside a secret for a destination with those means, for a
+  consumer that hands over a credential (a `none` destination's token or
+  cookies) and writes it to the session store itself. It is the same function
+  `getProvider` checks a stored secret against and `persist` writes
+  (`destinationBinding`, `src/bindingOf.ts`), so what a consumer writes and
+  what the broker expects cannot diverge, and no consumer canonicalises a URI.
+  `@mcp-abap-adt/auth-broker-cli`'s `--cookie` uses it.
+
 - **`getProvider(destination): Promise<IAuthProvider>`** — the credential the
   destination states, for a `@mcp-abap-adt/connection` 10 connector. The
   destination's `authType` (and `grantType`, for `jwt` and `saml`) chooses the

@@ -36,7 +36,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { AuthBroker, DestinationConfigError } from '../../index';
+import { AuthBroker, bindingOf, DestinationConfigError } from '../../index';
 import {
   jwtExpiringIn,
   startTokenEndpoint,
@@ -935,5 +935,88 @@ describe('the none rows: a handed-over credential is refused, never discarded', 
       );
       expect(error.missingFields).toEqual(['issuedFor']);
     });
+  });
+});
+
+describe('bindingOf: the binding a consumer writes beside a credential it hands over', () => {
+  // One function behind persist and getProvider's check: these cases pin that
+  // what bindingOf answers is what persist writes and what the check accepts.
+  it.each([['client_credentials'], ['authorization_code'], ['passcode']])(
+    '%s: equals the binding persist writes for the same means and client',
+    async (grant) => {
+      const { broker: b, store } = broker(grant, null);
+      await (await b.getProvider(D)).prepare();
+      await b.flush();
+      const [, written] = store.saveSession.mock.calls[0] as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(bindingOf(means(grant), client())).toEqual({
+        issuedFor: written.issuedFor,
+        issuedBy: written.issuedBy,
+      });
+    },
+  );
+
+  it('a none destination: the SAP client is part of the resource', () => {
+    expect(
+      bindingOf({
+        authType: 'saml',
+        grantType: 'none',
+        serviceUrl: SERVICE_URL,
+        sapClient: '100',
+      }),
+    ).toEqual({ issuedFor: FOR });
+  });
+
+  it.each([
+    ['saml', { authType: 'saml' as const }],
+    [
+      'jwt with a client',
+      { authType: 'jwt' as const, oidcIssuerUrl: undefined },
+    ],
+  ])(
+    'a none %s credential written with it is presented by getProvider',
+    async (_, extra) => {
+      const stated = means('none', extra);
+      const auth = extra.authType === 'jwt' ? client() : null;
+      const credential =
+        extra.authType === 'jwt'
+          ? { authorizationToken: jwtExpiringIn(3600) }
+          : { sessionCookies: 'SAP_SESSIONID=abc' };
+      const { broker: b } = broker(
+        'none',
+        {
+          ...credential,
+          ...bindingOf(stated, auth),
+        },
+        { conn: stated, auth },
+      );
+      await expect(b.getProvider(D)).resolves.toBeDefined();
+    },
+  );
+
+  it('a none credential bound without the SAP client is refused, naming issuedFor', async () => {
+    const stated = means('none', { authType: 'saml' });
+    const { broker: b } = broker(
+      'none',
+      {
+        sessionCookies: 'SAP_SESSIONID=abc',
+        ...bindingOf({ ...stated, sapClient: undefined }),
+      },
+      { conn: stated, auth: null },
+    );
+    const refusal = await b.getProvider(D).catch((error) => error);
+    expect(refusal).toBeInstanceOf(DestinationConfigError);
+    expect((refusal as DestinationConfigError).missingFields).toEqual([
+      'issuedFor',
+    ]);
+  });
+
+  it('a destination that states no jwt / saml grant binds nothing', () => {
+    expect(bindingOf({ authType: 'basic', serviceUrl: SERVICE_URL })).toEqual(
+      {},
+    );
+    expect(bindingOf({ authType: 'jwt', serviceUrl: SERVICE_URL })).toEqual({});
   });
 });

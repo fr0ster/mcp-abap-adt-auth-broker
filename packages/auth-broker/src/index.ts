@@ -17,6 +17,7 @@ export {
   type StrategyGrant,
   type TokenProviderFactory,
 } from './AuthBroker';
+export { bindingOf, type SecretBinding } from './bindingOf';
 export { DestinationConfigError } from './DestinationConfigError';
 // Token provider interface
 export type {

@@ -34,15 +34,8 @@ import type {
 import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
 import type { IConfig } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import {
-  type Binding,
-  boundHere,
-  consumerBinding,
-  handedOverBinding,
-  oidcBinding,
-  samlPureBinding,
-  uaaBinding,
-} from './binding';
+import { type Binding, boundHere, consumerBinding } from './binding';
+import { destinationBinding } from './bindingOf';
 import { DestinationConfigError } from './DestinationConfigError';
 import {
   basicProvider,
@@ -792,11 +785,7 @@ export class AuthBroker {
             : await this.read(destination, 'client', () =>
                 serviceKeyStore.getAuthorizationConfig(destination),
               );
-        const binding = isOidcGrant(grant)
-          ? oidcBinding(stated, client)
-          : grant === 'saml2_pure'
-            ? samlPureBinding(stated)
-            : uaaBinding(stated, client);
+        const binding = destinationBinding(authType, grant, stated, client);
         const stored =
           grant === 'client_credentials'
             ? null
@@ -869,7 +858,7 @@ export class AuthBroker {
         destination,
         authType,
         secret,
-        handedOverBinding(authType, stated, client),
+        destinationBinding(authType, 'none', stated, client),
       );
     }
     this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
