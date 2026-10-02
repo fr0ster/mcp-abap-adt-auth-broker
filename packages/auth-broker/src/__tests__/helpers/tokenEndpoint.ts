@@ -1,11 +1,16 @@
 /**
- * A local UAA token endpoint: `POST <url>/oauth/token`, on 127.0.0.1 and an
- * ephemeral port. It records every request — the grant, the form parameters,
- * the client authentication — and answers each with a fresh token, or with what
- * a test queued for the next request.
+ * A local token endpoint: `POST <url>/oauth/token` (and `<url>/oauth/token/…`,
+ * as a SAML bearer alias), on 127.0.0.1 and an ephemeral port. It records every
+ * request — the grant, the form parameters, the client
+ * authentication, and apart the path — and answers each with a fresh token, or with what a test
+ * queued for the next request.
  *
- * Enough for the UAA grants auth-providers speaks (authorization_code,
- * client_credentials, password with a passcode, refresh_token). Not a UAA.
+ * Enough for the grants auth-providers speaks: the UAA ones (authorization_code,
+ * client_credentials, password with a passcode, refresh_token) and the OIDC and
+ * SAML ones (password, token exchange, device code, saml2-bearer). For OIDC it
+ * also serves a discovery document at `<url>/.well-known/openid-configuration`
+ * naming its own endpoints, and a device authorization endpoint at
+ * `<url>/device`. Not a UAA, not an OpenID provider.
  */
 
 import * as http from 'node:http';
@@ -27,6 +32,10 @@ export interface TokenEndpoint {
   /** The base URL, as a key store states `uaaUrl`. */
   url: string;
   requests: TokenRequest[];
+  /** The path each token request was posted to: `/oauth/token`, or an alias below it. */
+  paths: string[];
+  /** The form parameters of each device authorization request, in order. */
+  deviceRequests: Record<string, string>[];
   /** The tokens issued, in order. */
   issued: string[];
   /** Answer the next request with this instead of a fresh token. */
@@ -55,7 +64,10 @@ export function jwtExpiringIn(
 
 export async function startTokenEndpoint(): Promise<TokenEndpoint> {
   const requests: TokenRequest[] = [];
+  const paths: string[] = [];
+  const deviceRequests: Record<string, string>[] = [];
   const issued: string[] = [];
+  let base = '';
   const queued: TokenAnswer[] = [];
 
   const server = http.createServer((req, res) => {
@@ -64,11 +76,48 @@ export async function startTokenEndpoint(): Promise<TokenEndpoint> {
       raw += chunk;
     });
     req.on('end', () => {
-      if (req.method !== 'POST' || req.url !== '/oauth/token') {
+      const path = req.url ?? '';
+      if (
+        req.method === 'GET' &&
+        path === '/.well-known/openid-configuration'
+      ) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            issuer: base,
+            authorization_endpoint: `${base}/authorize`,
+            token_endpoint: `${base}/oauth/token`,
+            device_authorization_endpoint: `${base}/device`,
+          }),
+        );
+        return;
+      }
+      if (req.method === 'POST' && path === '/device') {
+        const n = deviceRequests.push(
+          Object.fromEntries(new URLSearchParams(raw)),
+        );
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            device_code: `device-${n}`,
+            user_code: `USER-${n}`,
+            verification_uri: `${base}/verify`,
+            verification_uri_complete: `${base}/verify?user_code=USER-${n}`,
+            expires_in: 600,
+            interval: 1,
+          }),
+        );
+        return;
+      }
+      if (
+        req.method !== 'POST' ||
+        !(path === '/oauth/token' || path.startsWith('/oauth/token/'))
+      ) {
         res.writeHead(404).end();
         return;
       }
       const params = Object.fromEntries(new URLSearchParams(raw));
+      paths.push(path);
       requests.push({
         grantType: params.grant_type ?? '',
         params,
@@ -102,10 +151,13 @@ export async function startTokenEndpoint(): Promise<TokenEndpoint> {
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
+  base = `http://127.0.0.1:${port}`;
 
   return {
-    url: `http://127.0.0.1:${port}`,
+    url: base,
     requests,
+    paths,
+    deviceRequests,
     issued,
     answerNext: (answer) => {
       queued.push(answer);
