@@ -364,13 +364,6 @@ describe('AuthBroker Integration', () => {
         logger.warn(`Scenario 3: Failed to decode expired token: ${e}`);
       }
 
-      // Save expired token to session to simulate expired session
-      await sessionStore.setConnectionConfig(destination, {
-        serviceUrl: serviceKeyConnConfig.serviceUrl,
-        authorizationToken: expiredToken, // Expired token in session
-        authType: 'jwt',
-      });
-
       // Get refresh token from YAML config (real refresh token) or from previous scenarios
       // Priority: 1. YAML config, 2. Previous scenario session, 3. Invalid (for testing)
       const refreshTokenFromConfig = getRefreshToken(config);
@@ -384,10 +377,10 @@ describe('AuthBroker Integration', () => {
         `Scenario 3: Refresh token: ${refreshTokenFromConfig ? 'from YAML config' : refreshTokenFromSession ? 'from previous scenario' : 'not available (will use invalid)'}`,
       );
 
-      await sessionStore.setAuthorizationConfig(destination, {
-        uaaUrl: authConfig.uaaUrl,
-        uaaClientId: authConfig.uaaClientId,
-        uaaClientSecret: authConfig.uaaClientSecret,
+      // An expired session: the secret alone — the client stays in the service
+      // key (auth-stores 3 refuses means in a session).
+      await sessionStore.saveSession(destination, {
+        authorizationToken: expiredToken,
         refreshToken: validRefreshToken || 'invalid-expired-refresh-token', // Use valid if available
       });
 

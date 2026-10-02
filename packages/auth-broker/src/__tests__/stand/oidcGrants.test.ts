@@ -23,17 +23,17 @@ import {
   type IDeviceCodePresenter,
   type OidcCallbackResult,
 } from '@mcp-abap-adt/auth-providers';
-import type {
-  IAuthorizationStrategy,
-  IAuthProvider,
-  IRequestTarget,
-} from '@mcp-abap-adt/interfaces-auth';
 import {
   ABAP_SESSION_VARS,
   AbapSessionStore,
   type DestinationMeans,
   EnvDestinationStore,
-} from 'auth-stores-3';
+} from '@mcp-abap-adt/auth-stores';
+import type {
+  IAuthorizationStrategy,
+  IAuthProvider,
+  IRequestTarget,
+} from '@mcp-abap-adt/interfaces-auth';
 import { AuthBroker } from '../../index';
 import { describeWhere } from '../helpers/describeWhere';
 import { approveDevice, authorizeByForm } from './formLogin';

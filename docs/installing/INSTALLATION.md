@@ -153,6 +153,23 @@ Files are searched in the following order (highest to lowest priority):
    const token = await broker.getToken('TRIAL');
    ```
 
+   Or let the destination state its provider, and give the broker no
+   `provider`: the token API then asks the provider `getProvider` builds —
+   the one a `@mcp-abap-adt/connection` 10 connector takes — and the two share
+   one token:
+
+   ```typescript
+   const broker = new AuthBroker({
+     serviceKeyStore: new AbapServiceKeyStore(process.cwd(), {
+       grantType: 'authorization_code',
+     }),
+     sessionStore: new AbapSessionStore(process.cwd()),
+     authorization: () => browserCallbackStrategy({ browser: 'system' }),
+   });
+   const token = await broker.getToken('TRIAL');
+   const provider = await broker.getProvider('TRIAL'); // the same provider
+   ```
+
 4. **First Run**: On first run, browser will open for authentication. After authentication, `TRIAL.env` will be created automatically.
 
 ## Security Considerations

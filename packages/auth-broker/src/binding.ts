@@ -181,6 +181,21 @@ export function samlPureBinding(means: IConnectionConfig): Binding {
 }
 
 /**
+ * The token API with a consumer's provider (spec §9): what the broker handed
+ * that provider — the `serviceUrl` it resolved, with the SAP client, and for a
+ * factory the client it resolved (`uaaUrl` with `uaaClientId`). An instance is
+ * handed no client, so no issuer is claimed for what it obtains: `issuedBy` is
+ * then absent, and `getProvider` never seeds from that secret.
+ */
+export function consumerBinding(
+  serviceUrl: string,
+  sapClient: string | undefined,
+  client: IAuthorizationConfig | null,
+): Binding {
+  return uaaBinding({ serviceUrl, sapClient }, client);
+}
+
+/**
  * A `none` row: the resource always; the issuer only when the means state one
  * — `oidcIssuerUrl` (with `uaaClientId` when stated) or the client (`uaaUrl`
  * and `uaaClientId`) for `jwt`, `samlAcsUrl` for `saml`.

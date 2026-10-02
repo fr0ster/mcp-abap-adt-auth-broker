@@ -12,16 +12,20 @@ import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 
 ### Create AuthBroker Instance
 
-The broker takes a session store, an optional service key store, and a
-provider implementing `IRefreshableTokenProvider` — or a factory building one
-per destination. Stores come from `@mcp-abap-adt/auth-stores`, providers from
-`@mcp-abap-adt/auth-providers`.
+For the token API with a provider of your own (the 3.x way, which keeps
+working), the broker takes a session store, an optional service key store,
+and a provider implementing `IRefreshableTokenProvider` — or a factory
+building one per destination. Stores come from `@mcp-abap-adt/auth-stores`
+(3.x: the means in a key store, the secret alone in a session store),
+providers from `@mcp-abap-adt/auth-providers`. Without a provider, see *A
+Provider for a Connector* and *The token API*.
 
 ```typescript
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
   AbapServiceKeyStore,
   AbapSessionStore,
+  EnvDestinationStore,
   SafeAbapSessionStore,
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
@@ -54,7 +58,7 @@ const abapBroker = new AuthBroker({
 // XSUAA (client_credentials)
 const xsuaaBroker = new AuthBroker({
   serviceKeyStore: new XsuaaServiceKeyStore('/path/to/keys'),
-  sessionStore: new XsuaaSessionStore('/path/to/sessions', 'https://mcp.example.com'),
+  sessionStore: new XsuaaSessionStore('/path/to/sessions'),
   provider: (destination, authConfig) => {
     if (!authConfig) throw new Error(`No UAA credentials for ${destination}`);
     return new ClientCredentialsProvider({
@@ -65,9 +69,11 @@ const xsuaaBroker = new AuthBroker({
   },
 });
 
-// In-memory session store (nothing on disk, lost on restart), provider instance
+// In-memory session store (nothing on disk, lost on restart), provider
+// instance; the URL is means, stated in <keys>/<destination>.env as SAP_URL.
 const memoryBroker = new AuthBroker({
-  sessionStore: new SafeAbapSessionStore(undefined, 'https://abap.example.com'),
+  serviceKeyStore: new EnvDestinationStore('/path/to/destinations'),
+  sessionStore: new SafeAbapSessionStore(),
   provider: new AuthorizationCodeProvider({
     uaaUrl: 'https://auth.example.com',
     clientId: '...',
@@ -87,7 +93,9 @@ for a `@mcp-abap-adt/connection` 10 connector. The **service key store**
 answers the means — `authType`, `grantType`, the user and password, the SNC
 fields, the UAA client — and the **session store** the secret; neither is read for the
 other's fields, and nothing is inferred from which fields are present. No
-`provider` option is needed: that one is the token API's.
+`provider` option is needed: that one is the token API's, and `getProvider`
+never uses it. Without it, the token API asks the provider `getProvider`
+builds (see *The token API*).
 
 With auth-stores 3.0.0, the means of a destination that has no SAP service key
 live in `EnvDestinationStore` (`<directory>/<destination>.env`):
@@ -280,74 +288,48 @@ try {
 
 ## Store Methods
 
-Stores provide methods to access configuration values through standardized interfaces:
+Stores answer through the contracts of `@mcp-abap-adt/interfaces-auth-broker`,
+each for its role (auth-stores 3):
 
 ```typescript
-import { XsuaaSessionStore } from '@mcp-abap-adt/auth-stores';
+import { XsuaaServiceKeyStore, XsuaaSessionStore } from '@mcp-abap-adt/auth-stores';
 
-const store = new XsuaaSessionStore('/path/to/sessions', 'https://mcp.example.com');
+const keys = new XsuaaServiceKeyStore('/path/to/keys', {
+  grantType: 'client_credentials',
+});
+const sessions = new XsuaaSessionStore('/path/to/sessions');
 
-// Get authorization config (for token refresh)
-const authConfig = await store.getAuthorizationConfig('mcp');
-if (authConfig) {
-  // authConfig.uaaUrl, authConfig.uaaClientId, authConfig.uaaClientSecret
-  // authConfig.refreshToken (optional)
-}
+// The means: the client and the destination's connection fields.
+const client = await keys.getAuthorizationConfig('mcp');
+// client.uaaUrl, client.uaaClientId, client.uaaClientSecret
+const means = await keys.getConnectionConfig('mcp');
+// means.authType, means.grantType, means.serviceUrl (XSUAA: the key's url)
 
-// Get connection config (for making requests)
-const connConfig = await store.getConnectionConfig('mcp');
-if (connConfig) {
-  // connConfig.authorizationToken
-  // connConfig.serviceUrl (may be undefined for XSUAA)
-  // connConfig.sapClient, connConfig.language (for ABAP/BTP)
-}
-
-// Load complete config (may contain both authorization and connection)
-const config = await store.loadSession('mcp');
-if (config) {
-  // Check for specific fields
-  if (config.uaaUrl) {
-    // Authorization config present
-  }
-  if (config.authorizationToken) {
-    // Connection config present
-  }
-}
+// The secret: the token, its expiry, the refresh token, and its binding.
+const secret = await sessions.loadSession('mcp');
+// secret.authorizationToken, secret.expiresAt, secret.refreshToken,
+// secret.issuedFor, secret.issuedBy — and no client, no URL
 ```
 
 ### Environment Variables
 
-Stores use the following environment variables internally (not exported as constants):
+auth-stores 3 exports its key names, each table for one role:
 
-**ABAP Environment Variables** (used by `AbapSessionStore`):
-- `SAP_URL` - SAP system URL
-- `SAP_JWT_TOKEN` - JWT token for authorization
-- `SAP_REFRESH_TOKEN` - Refresh token for token renewal
-- `SAP_UAA_URL` - UAA URL for token refresh
-- `SAP_UAA_CLIENT_ID` - UAA client ID
-- `SAP_UAA_CLIENT_SECRET` - UAA client secret
-- `SAP_CLIENT` - SAP client number
-- `SAP_LANGUAGE` - Language
+- **The secret** — `ABAP_SESSION_VARS` (`AbapSessionStore`,
+  `EnvFileSessionStore`): `SAP_JWT_TOKEN`, `SAP_SESSION_COOKIES_B64`,
+  `SAP_EXPIRES_AT`, `SAP_REFRESH_TOKEN`, `SAP_ISSUED_FOR`, `SAP_ISSUED_BY`;
+  `XSUAA_SESSION_VARS` (`XsuaaSessionStore`) the `XSUAA_*` equivalents. The
+  broker writes these and nothing else.
+- **The means** — `ABAP_DESTINATION_VARS` (`EnvDestinationStore`): `SAP_URL`,
+  `SAP_CLIENT`, `SAP_LANGUAGE`, `SAP_AUTH_TYPE`, `SAP_GRANT_TYPE`, the user
+  and password, the `SAP_SNC_*`, `SAP_OIDC_*` and `SAP_SAML_*` fields, and the
+  client (`SAP_UAA_URL`, `SAP_UAA_CLIENT_ID`, `SAP_UAA_CLIENT_SECRET`);
+  `XSUAA_DESTINATION_VARS` for the `XSUAA_*` files. The broker never writes
+  them.
 
-**XSUAA Environment Variables** (used by `XsuaaSessionStore`):
-- `XSUAA_MCP_URL` - MCP server URL (optional, not part of authentication)
-- `XSUAA_JWT_TOKEN` - JWT token for `Authorization: Bearer` header
-- `XSUAA_REFRESH_TOKEN` - Refresh token for token renewal
-- `XSUAA_UAA_URL` - UAA URL for token refresh
-- `XSUAA_UAA_CLIENT_ID` - UAA client ID
-- `XSUAA_UAA_CLIENT_SECRET` - UAA client secret
-
-**BTP Environment Variables** (used by `BtpSessionStore`):
-- `BTP_ABAP_URL` - ABAP system URL (required, from service key or YAML)
-- `BTP_JWT_TOKEN` - JWT token for `Authorization: Bearer` header
-- `BTP_REFRESH_TOKEN` - Refresh token for token renewal
-- `BTP_UAA_URL` - UAA URL for token refresh
-- `BTP_UAA_CLIENT_ID` - UAA client ID
-- `BTP_UAA_CLIENT_SECRET` - UAA client secret
-- `BTP_SAP_CLIENT` - SAP client number (optional)
-- `BTP_LANGUAGE` - Language (optional)
-
-**Note**: Constants are internal implementation details and are not exported. Consumers should use store methods (`getAuthorizationConfig()`, `getConnectionConfig()`) to access configuration values.
+A session file written by the 3.x broker or CLI holds both in one file; point
+an `EnvDestinationStore` at it for the means, and a session store for the
+secret.
 
 ## CLI: mcp-auth
 
@@ -449,7 +431,7 @@ constructor(
   config: {
     sessionStore: ISessionStore;
     serviceKeyStore?: IServiceKeyStore;  // getProvider needs it
-    provider?: IRefreshableTokenProvider | TokenProviderFactory; // the token API needs it
+    provider?: IRefreshableTokenProvider | TokenProviderFactory; // the token API's own, optional
     // collaborators, each a function of the destination:
     authorization?,        // (destination, grant) — authorization_code, passcode, saml2_pure, saml2_bearer
     oidcAuthorization?,    // (destination) — oidc_authorization_code
@@ -469,14 +451,20 @@ type TokenProviderFactory = (
 
 **Parameters**:
 - `config.sessionStore` — the session secret: the token or cookies,
-  `expiresAt`, the refresh token.
+  `expiresAt`, the refresh token, and what it is bound to (`issuedFor`,
+  `issuedBy`). It must take a write of the secret alone (auth-stores 3 does;
+  auth-stores 1.x/2.x's `AbapSessionStore` and `SafeAbapSessionStore` refuse
+  one without `serviceUrl`).
 - `config.serviceKeyStore` — the means: `authType`, `grantType`, the client,
   user and password, the SNC, OIDC and SAML fields, `serviceUrl`. Required by
   `getProvider`.
-- `config.provider` — the token API's source, not used by `getProvider`;
-  without it `getToken` / `refreshToken` throw `DestinationConfigError`
-  naming `provider`. A provider instance, used as given for every destination,
-  or a factory called once per destination and seeded with:
+- `config.provider` — a token API source of your own, not used by
+  `getProvider`; without it the token API asks the provider `getProvider`
+  builds for the destination, and with neither it nor a `serviceKeyStore`
+  `getToken` / `refreshToken` throw `DestinationConfigError` naming both. A
+  provider instance, used as given for every destination, or a factory called
+  once per destination (concurrent first calls build once) and seeded — 3.x's
+  reads, the session first — with:
   - `authConfig`: the session's UAA credentials, else the service key's,
     carrying the refresh token the session stored; `null` when neither store
     has credentials;
@@ -533,14 +521,21 @@ still refuses (the broker keeps retrying them). Call it on shutdown.
 async getToken(destination: string): Promise<string>
 ```
 
-1. Resolves `serviceUrl` from the session, else the service key — an error if
-   neither has one, before the provider is asked.
-2. Builds the provider on first use (factory) or uses the instance.
-3. Calls `provider.getTokens()` once: the provider answers its cached token
-   while valid, else refreshes, else logs in.
-4. Persists the result: `sessionCookies` when `tokenType` is `'saml'`, else
-   `authorizationToken`; the refresh token when the result carries one.
-5. Returns the token.
+1. Reads the destination's `authType` from the key store: `basic` or `snc` is
+   a `DestinationConfigError` naming `authType`, before any provider is asked.
+2. Without a `provider` option: takes the provider `getProvider` hands out
+   for the destination — the same one, from the same cache — and calls
+   `getTokens()` once; its `onTokens` has written anything new. A `none`
+   destination is a `DestinationConfigError` naming `provider`.
+3. With one: resolves `serviceUrl` from the session, else the service key (an
+   error if neither has one, before the provider is asked), builds the
+   provider on first use (factory) or uses the instance, calls `getTokens()`
+   once, and writes the result — the secret alone (`sessionCookies` when
+   `tokenType` is `'saml'`, else `authorizationToken`; `expiresAt`; the
+   refresh token, the stored one carried forward when the result has none;
+   `issuedFor`, `issuedBy`) — through the broker's write path.
+4. Throws the store's error if the write of this token failed — the broker
+   keeps retrying it — else returns the token.
 
 #### refreshToken()
 
@@ -549,7 +544,9 @@ async refreshToken(destination: string): Promise<string>
 ```
 
 The same with `provider.refreshTokens()`: a new token, never the cached one.
-Use it when the server refused the token `getToken()` returned (401/403).
+Use it when the server refused the token `getToken()` returned (401/403). A
+renewal already in flight for the destination — a connector's, in
+`rejected()` — is joined, not repeated.
 
 #### getAuthorizationConfig() / getConnectionConfig()
 
@@ -574,7 +571,33 @@ createTokenRefresher(destination: string): ITokenRefresher
 ```
 
 `getToken()` and `refreshToken()` bound to one destination, for injection into
-a connection that refreshes on 401.
+a connection of your own that refreshes on 401. Unchanged since 3.x and not
+deprecated; a `@mcp-abap-adt/connection` 10 connector takes `getProvider`'s
+`IAuthProvider` instead.
+
+### The token API
+
+`getToken`, `refreshToken` and `createTokenRefresher` are for a consumer that
+wants a token and nothing else. They have two sources:
+
+- **No `provider` option** — the destination's own provider, the one
+  `getProvider` hands out: one provider per destination, so a connector and
+  the token API share one token, one refresh token and one renewal. They write
+  nothing themselves: the provider's `onTokens` does.
+- **A `provider` option** — yours, as in 3.x, with 3.x's reads; every answer
+  is written, cache hits included, as the secret alone through the same write
+  path (retried, flushed). `issuedFor` is the URL with the SAP client and
+  `issuedBy` the client a factory was handed (none for an instance), both
+  fixed when the provider is built for the destination and kept with it — a
+  later change of URL or client does not re-label what it obtained.
+  `getProvider` does not use it, so a process that also calls `getProvider`
+  for that destination has two token sources for it; use one per destination,
+  or hand yours to a connector as
+  `TokenAuthProvider.from(broker.createTokenRefresher(d))`.
+
+Either way a destination stated `basic` or `snc` is refused before any
+provider is asked, and a failed write reaches the caller as the store raised
+it while the broker retries it.
 
 ## Usage Examples
 
@@ -650,8 +673,11 @@ const tokens = await Promise.all(
   errors (`ECONNREFUSED`, `ETIMEDOUT`, `ENOTFOUND`), and whatever the
   authorization strategy throws. The broker does not retry.
 - **`DestinationConfigError`** (`code: 'DESTINATION_CONFIG'`) — a destination
-  that lacks what its type needs, from `getProvider`; or no `provider` option,
-  from the token API. `missingFields` names fields or options, never a value.
+  that lacks what its type needs, from `getProvider` and from the token API;
+  from the token API also a destination stated `basic` or `snc` (`authType`),
+  a `none` destination without a `provider` option (`provider`), and neither
+  a `provider` nor a `serviceKeyStore` (both). `missingFields` names fields or
+  options, never a value.
   A provider constructor's refusal (an `sncQop` outside `1`, `2`, `3`, `8`,
   `9`) is mapped to the store field's name; its own error is not kept, since
   its message quotes the value it refused.
@@ -661,9 +687,9 @@ const tokens = await Promise.all(
   authorization token for destination "<name>"`.
 - **Store reads**: `null` or `FILE_NOT_FOUND` means absent and the broker tries
   the next source; any other store failure (an invalid or unreadable service
-  key, for instance) is thrown unchanged. **Store writes** that fail propagate
-  from the token API; a `getProvider` provider's write is retried instead and
-  reported by `flush()`.
+  key, for instance) is thrown unchanged. **Store writes** that fail reach the
+  token API's caller as the store raised them, and are retried all the same;
+  a `getProvider` provider's write is retried and reported by `flush()`.
 
 ```typescript
 import { ValidationError } from '@mcp-abap-adt/auth-providers';
@@ -680,16 +706,15 @@ try {
 
 ## Secrets
 
-The broker writes the token (or session cookies) and the refresh token to the
-session store, never the client secret: credentials from the service key stay
-there. A session holding credentials of its own keeps them; only its refresh
-token is updated. `mcp-auth`, `mcp-sso` and `npm run generate-env` do write the
-secret into the file they produce, on purpose: that file is a self-contained
-session read with no service key beside it.
+The broker writes the session secret alone — the token (or session cookies),
+`expiresAt`, the refresh token, `issuedFor` and `issuedBy`, in one
+`saveSession` — for a `getProvider` provider and for the token API alike;
+never the client secret, `serviceUrl` or `authType`, which are means and live
+in the key store. The CLI's commands of auth-broker-cli 1.0.0 still write a
+self-contained session file, means and secret together, on purpose.
 
-The session stores return a refresh token stored without credentials through
-`loadSession()`, which the broker reads — the XSUAA stores from auth-stores
-1.2.3.
+The stored refresh token comes back through `loadSession()`, which the broker
+reads to seed the next process's provider.
 
 ## Logging
 
@@ -702,13 +727,16 @@ token or secret.
 
 ## Best Practices
 
-1. **Pass a factory** when the stores hold the credentials, so the provider is
-   seeded with the stored refresh token and token instead of logging in again.
+1. **State the destination in the key store and give no `provider`**: the
+   token API then serves the provider the destination states, shared with
+   `getProvider`. With a `provider` of your own, **pass a factory** when the
+   stores hold the credentials, so it is seeded with the stored refresh token
+   and token instead of logging in again.
 2. **Headless**: give the provider a refusing strategy and catch your own error.
 3. **On 401**: call `refreshToken()`, not `getToken()`.
-4. **Storage**: use `AbapSessionStore`/`XsuaaSessionStore` for persistence
-   across restarts, `SafeAbapSessionStore`/`SafeXsuaaSessionStore` to keep
-   tokens in memory only.
+4. **Storage**: auth-stores 3 — `AbapSessionStore`/`XsuaaSessionStore` for
+   persistence across restarts, `SafeAbapSessionStore`/`SafeXsuaaSessionStore`
+   to keep tokens in memory only — and call `flush()` on shutdown.
 5. **Never commit** `.env` or service key `.json` files.
 
 ## Next Steps

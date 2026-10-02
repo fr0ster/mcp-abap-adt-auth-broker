@@ -11,6 +11,49 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
 
 ## [Unreleased]
 
+### Migration — the token API (`getToken`, `refreshToken`, `createTokenRefresher`)
+
+**What stays.** A consumer that passes its own `provider` (an instance or a
+`TokenProviderFactory`) calls the same methods with the same signatures and
+gets the same answers: the provider is asked as before, seeded from the same
+reads in the same order (the session first, then the key store), and its
+errors — and a store's — reach the caller unchanged. `createTokenRefresher`
+is unchanged and stays supported (calm-server injects it into its own
+connection).
+
+**What changes for it.**
+
+1. **The session gets the secret alone** — the token or cookies, `expiresAt`,
+   the refresh token, and what the secret is bound to (`issuedFor`,
+   `issuedBy`) — in one `saveSession`. No `serviceUrl`, `authType` or client
+   is written back any more, so a wrapper that only kept the written-back
+   `serviceUrl` out of the session (calm-server's `TargetUrlSessionStore`)
+   has nothing left to filter. A store that merges a write into what it holds
+   — auth-stores 3, and auth-stores 1.x/2.x's `XsuaaSessionStore` and
+   `EnvFileSessionStore` (measured on 1.2.4 and 2.0.0) — keeps what it holds.
+2. **The session store must accept a write of the secret alone.**
+   Measured: auth-stores **1.2.3, 1.2.4 and 2.0.0**'s `AbapSessionStore`
+   throws a `TypeError` on a `saveSession` without `serviceUrl`, and their
+   `SafeAbapSessionStore` refuses it (`missing required field: serviceUrl`) —
+   even when the session already holds its URL. On those stores `getToken`
+   obtains a token and then throws the store's error, and the broker's retry
+   cannot succeed. Use auth-stores **3** (`^3.1.0` for the binding) — or a
+   store of your own that takes the secret alone. (1.x/2.x's
+   `SafeXsuaaSessionStore` replaces the session with what is written: the
+   URL or client it held in memory is gone after the first token, so state
+   them in the key store.)
+3. **A destination the key store states as `basic` or `snc` is refused**
+   (`DestinationConfigError`, `missingFields: ['authType']`) instead of
+   getting a token written over its credential.
+4. **A failed write is retried.** It still reaches `getToken`'s caller; the
+   broker then retries it on its own, and `flush()` reports what is still
+   pending — call it on shutdown.
+
+**Without a `provider`,** the token API serves what the destination states,
+on the provider `getProvider` builds for it (see *Added*): the consumer
+composes the key store (the means, `grantType` included) and the
+collaborators instead of a provider.
+
 ### Added
 
 - **`getProvider(destination): Promise<IAuthProvider>`** — the credential the
@@ -144,6 +187,18 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   constructor's own `ValidationError` (an `sncQop` outside `1|2|3|8|9`, named
   as the store field; the provider's error, which quotes the value, is not
   kept). It names fields and options, never a stored value.
+- **The token API shares `getProvider`'s provider.** Without a consumer
+  `provider`, `getToken`, `refreshToken` and `createTokenRefresher` ask the
+  very provider `getProvider` hands out for the destination — one per
+  destination, so one token, one refresh token and one renewal in flight
+  serve the connector and the token API alike (a `refreshToken()` during a
+  renewal in `rejected()` joins it). They write nothing themselves: the
+  provider's `onTokens` does, as for any `getProvider` provider. They serve the
+  destinations whose provider obtains a token — every grant but `none` — and
+  throw `DestinationConfigError` naming `provider` for a `none` destination,
+  before any provider is built. A failed write still reaches the caller:
+  `getToken` / `refreshToken` throw the store's error for the token they
+  received — as 3.x did — while the broker keeps retrying the write.
 - The collaborator options `authorization`, `oidcAuthorization`,
   `deviceCodePresenter`, `samlCookies`, `assertionReplayStore` on
   `AuthBrokerConfig`, and the `StrategyGrant` type.
@@ -159,9 +214,45 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
 
 ### Changed
 
-- **`provider` is optional.** It is the token API's source and `getProvider`
-  does not use it. Without it, `getToken` and `refreshToken` throw
-  `DestinationConfigError` naming `provider`.
+- **`provider` is optional.** `getProvider` does not use it. With it, the
+  token API asks it, as in 3.x; without it, the token API asks
+  `getProvider`'s provider (above). With neither a `provider` nor a
+  `serviceKeyStore`, `getToken` and `refreshToken` throw
+  `DestinationConfigError` naming both.
+- **Breaking: the token API refuses a destination stated `basic` or `snc`.**
+  It reads the destination's `authType` from the key store first and, for
+  `basic` or `snc`, throws `DestinationConfigError` naming `authType` before
+  any provider is asked — 3.x asked the provider and wrote `authType: 'jwt'`
+  and a token over the session of a destination that holds no token. A key
+  store that states no `authType` (a 3.x setup with a consumer `provider`),
+  or no key store at all, is served as before.
+- **Breaking: the token API writes the session secret alone.** With a
+  consumer `provider` it still writes after every `getTokens()` /
+  `refreshTokens()`, cache hits included, but through the same write path as
+  `getProvider`'s providers: one `saveSession(destination, {
+  authorizationToken | sessionCookies, expiresAt, refreshToken, issuedFor,
+  issuedBy })`, retried when the store fails and awaited by `flush()`. 3.x
+  wrote the session's connection config back with `serviceUrl` and a derived
+  `authType` (`setConnectionConfig`), and a client the session held with the
+  new refresh token (`setAuthorizationConfig`); neither method is called any
+  more. A result without a refresh token carries the stored one forward.
+  `issuedFor` is the `serviceUrl` the token API resolved, with the SAP client
+  (the session's, else the key store's); `issuedBy` is the client a factory
+  was handed (`uaaUrl` with `client_id`) — an instance is handed no client,
+  so its tokens are bound to no issuer and `getProvider` never seeds from
+  them. Both are fixed when the provider is built for the destination (an
+  instance: at its first call for it) and kept with it, so a URL or client
+  changed later never re-labels a token obtained before the change; a new
+  broker picks the change up. A failed write is thrown to the caller as the store raised it, as in
+  3.x, and retried.
+- The token API's reads are 3.x's, and so are its answers: the session first,
+  then the key store, for `serviceUrl` and the client a factory is seeded
+  with; the factory called once per destination — now cached as the promise
+  of its build, so concurrent first calls build once — and again after one
+  that threw; an instance used for every destination; the provider's errors
+  and a store's failures propagate unchanged; a result without a token is an
+  error. `createTokenRefresher(destination)` is unchanged and not
+  deprecated.
 - **Breaking: `getConnectionConfig` / `getAuthorizationConfig` compose the two
   stores** instead of answering the session's configuration whole (and the
   key's only when the session had none). `getConnectionConfig` is the key
@@ -188,13 +279,15 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
   re-exported. 5.2.0 because `ClientCredentialsProvider` takes a `logger`
   from it: the broker passes its own, so a `client_credentials` destination's
   token lifecycle is logged like the other grants' (tokens redacted by the
-  provider). The dev dependency `@mcp-abap-adt/auth-stores` stays `^1.2.3`: 3.0.0's session
-  stores hold the secret alone and refuse the `serviceUrl` and `authType`
-  this version's `getToken` writes into the session, so the tests move to it
-  with the change that writes the secret alone. The suites that need 3.x —
-  the stand, the live checks, the binding's legacy file — use it through the
-  dev alias `auth-stores-3` (`^3.1.0`); the live `jwt` case states its grant
-  with `AbapServiceKeyStore(dir, { grantType })`.
+  provider). The library's tests run against `@mcp-abap-adt/auth-stores`
+  `^3.2.0` (a dev dependency, was `^1.2.3`; the `auth-stores-3` alias the
+  stand, live and binding suites used is gone): its session stores hold the
+  secret alone, which is all the broker writes now. The carried-over on-disk
+  case reads the means from an `EnvDestinationStore` and asserts the session
+  file holds the secret and its binding and nothing else. Dev dependency
+  `@mcp-abap-adt/connection` `^10.0.3` (was `^10.0.2`), for the end-to-end
+  test: a connector built from `getProvider`, a 401 renewed in `rejected()`,
+  the new token in the session file, and the token API answering it.
 - Comments no longer name `@mcp-abap-adt/auth-stores-btp` / `-xsuaa` (which do
   not exist) or the deleted `@mcp-abap-adt/interfaces` facade.
 - Dev dependency `@mcp-abap-adt/auth-mocks` `^0.3.0` (new): the SAML grants'

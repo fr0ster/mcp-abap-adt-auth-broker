@@ -13,8 +13,14 @@ dependencies are installed.
 ```
 packages/auth-broker/src/__tests__/
 ├── broker/
-│   ├── AuthBroker.test.ts               # the broker against fake stores and providers,
-│   │                                    # and once against a real AbapSessionStore on disk
+│   ├── AuthBroker.test.ts               # the token API with a consumer provider (the 3.x
+│   │                                    # suite): fake stores and providers, and once
+│   │                                    # auth-stores 3's EnvDestinationStore + AbapSessionStore
+│   ├── tokenApiShared.test.ts           # the token API on getProvider's provider: one cache,
+│   │                                    # one renewal; basic/snc/none refused; write failures
+│   ├── connection10.test.ts             # end to end: AdtCloudConnector from getProvider,
+│   │                                    # a local 401-then-200 server and token endpoint,
+│   │                                    # the token in the session file, then getToken
 │   ├── getProvider.test.ts              # getProvider: fake stores, real auth-providers credentials,
 │   │                                    # driven only through IAuthProvider
 │   ├── getProviderTokens.test.ts        # the UAA grants and their persistence: fake stores,
@@ -51,7 +57,8 @@ defined). The library's `jest.config.js` ignores `__tests__/live/`;
 
 ## What each suite needs
 
-- **`AuthBroker.test.ts`**, **`getProvider.test.ts`**,
+- **`AuthBroker.test.ts`**, **`tokenApiShared.test.ts`**,
+  **`connection10.test.ts`**, **`getProvider.test.ts`**,
   **`getProviderTokens.test.ts`**, **`getProviderBinding.test.ts`**,
   **`getProviderOidcSaml.test.ts`** and **every CLI suite**: nothing — no
   network beyond the loopback, no configuration, no browser. The SNC case
@@ -66,7 +73,13 @@ defined). The library's `jest.config.js` ignores `__tests__/live/`;
   `@mcp-abap-adt/auth-mocks`' identity provider (a dev dependency), started on
   `127.0.0.1` with a key generated per run — one signing the Response, one
   the Assertion alone — and fetched by a test strategy as a browser would;
-  nothing in the suite signs a document itself.
+  nothing in the suite signs a document itself. `connection10.test.ts` runs
+  `@mcp-abap-adt/connection` 10 (a dev dependency) over its real HTTP wire
+  against a server the test starts on `127.0.0.1`, which answers like ABAP
+  Cloud (a session resource, a CSRF token) and refuses with a 401 any bearer
+  token the local token endpoint did not issue. The suites that read or write
+  files use `@mcp-abap-adt/auth-stores` 3.2 (a dev dependency) in temporary
+  directories.
 - **`stand/uaaGrants.test.ts`**, **`stand/oidcGrants.test.ts`**,
   **`stand/samlGrants.test.ts`**: the stand (below). Without `UAA_URL` /
   `KEYCLOAK_URL` each is skipped, printing why.
@@ -74,7 +87,8 @@ defined). The library's `jest.config.js` ignores `__tests__/live/`;
   `packages/auth-broker/tests/test-config.yaml`; without it the template
   (`test-config.yaml.template`) is read, its placeholders disable every case,
   and each case returns at once. With it, the cases read the service keys and
-  sessions it points at and may open a browser for a login. Copy the template
+  sessions it points at and may open a browser for a login; its stores are
+  auth-stores 3's, so a session it seeds holds the secret alone. Copy the template
   and fill in:
   - `auth_broker.paths.service_keys_dir` — directory of `{destination}.json`
   - `auth_broker.paths.sessions_dir` — directory of `{destination}.env`

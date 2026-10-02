@@ -53,10 +53,10 @@ tools/                     check-graph.js, check-packed.js, publish-changed.js,
 ### AuthBroker
 
 `AuthBroker` orchestrates, nothing more:
-- Resolves `serviceUrl` (session, else service key), the UAA credentials (session, else service key) and the stored token and refresh token.
-- Builds the provider on first use when given a factory, seeded with the above, and reuses it per destination; uses an instance as given.
+- Builds one provider per destination — the one the destination states (`getProvider`) — in one promise cache, which `getProvider` and the token API share when no `provider` option is given (spec §7).
+- With a `provider` option, the token API keeps 3.x's reads: `serviceUrl` (session, else service key), the UAA credentials (session, else service key) and the stored token and refresh token, seeding a factory once per destination (promise-cached) or using an instance as given.
 - Asks the provider once — `getTokens()` for `getToken()`, `refreshTokens()` for `refreshToken()` — with no retry and no fallback.
-- Persists the result by type (session cookies for SAML, bearer token otherwise; the refresh token when present) and returns the token.
+- Writes what a provider obtains through one path, `SessionWriter`: the secret alone with its binding, retried until the store takes it — `onTokens` for its own providers, the token API after each answer of a consumer's.
 
 ### `getProvider`
 
@@ -158,26 +158,26 @@ Providers live in `@mcp-abap-adt/auth-providers` and implement `IRefreshableToke
 ## Authentication Flow
 
 **`getToken(destination)`**
-1. Resolve `serviceUrl`; without one, fail before asking the provider.
-2. Build (factory, first call for the destination) or reuse the provider. The factory receives the credentials with the stored refresh token, and the connection config with the stored token.
-3. `provider.getTokens()`.
-4. Persist: `sessionCookies` when `tokenType` is `'saml'`, else `authorizationToken`; the refresh token when the result carries one.
-5. Return the token.
+1. Read the destination's `authType` from the key store: `basic` or `snc` → `DestinationConfigError` (`authType`) before any provider is asked.
+2. **No `provider` option:** a `none` destination → `DestinationConfigError` (`provider`); else `await getProvider(destination)` — the shared cache — and `provider.getTokens()`. Nothing is written here: `onTokens` wrote anything new before `getTokens()` answered.
+3. **A `provider` option:** resolve `serviceUrl` (without one, fail before asking the provider); build (factory, first call for the destination) or reuse the provider — the factory receives the credentials with the stored refresh token, and the connection config with the stored token; `provider.getTokens()`; submit the result to `SessionWriter` — the secret alone (`sessionCookies` when `tokenType` is `'saml'`, else `authorizationToken`; `expiresAt`; the refresh token, the stored one carried forward; `issuedFor` from the URL and SAP client, `issuedBy` from a factory's client — both fixed when the provider is built for the destination and kept with it, so a later change of URL or client never re-labels a secret obtained before it; a new broker picks the change up, §7) — and await that attempt.
+4. If the write of the result received failed, throw the store's error (the retry goes on); else return the token.
 
-**`refreshToken(destination)`** is the same with `provider.refreshTokens()` — a new token, never the cached one — and backs `ITokenRefresher.refreshToken()` from `createTokenRefresher()`.
+The write's outcome is found by the result object: `SessionWriter`'s write records a failure in a `WeakMap<ITokenResult, Map<destination, …>>` keyed on the result the provider handed to `onTokens` — which `BaseTokenProvider` also returns from `getTokens()` / `refreshTokens()` — never on the copy it writes (whose `expiresAt` is fixed on arrival), and drops it when a write of that result for that destination lands — one result object answered for two destinations (an instance) keeps a failure of one when the other's write lands.
+
+**`refreshToken(destination)`** is the same with `provider.refreshTokens()` — a new token, never the cached one; on the shared provider a renewal in flight (a connector's `rejected()`) is joined — and backs `ITokenRefresher.refreshToken()` from `createTokenRefresher()`.
 
 **Headless processes** configure the provider with an authorization strategy that refuses and catch the error it throws; there is no broker switch for it.
 
 ## Secrets
 
-What a `getProvider` provider obtains is written as the secret alone (see *Persistence*). The token API writes tokens and the refresh token to the session store, never the client secret; credentials from the service key stay there. A session with credentials of its own keeps them and only its refresh token changes. The broker logs no part of any token.
+Everything the broker writes is the secret alone, in one `saveSession` (see *Persistence*) — a `getProvider` provider's token and the token API's alike; `setConnectionConfig` and `setAuthorizationConfig` are never called, so no `serviceUrl`, `authType` or client reaches a session. The broker logs no part of any token.
 
 ## Error Handling
 
 - Provider errors propagate unchanged (class, `code`, `missingFields`, `cause`).
-- Store reads: `null` or `FILE_NOT_FOUND` is absence and the broker goes on to the next source; any other store failure is thrown unchanged — before the provider is asked when it happens in the reads that come before the token, after the provider answered and the token was written when it happens in the reads `persist()` makes to save the refresh token.
-- Store writes that fail propagate from the token API; `getProvider`'s writes
-  are retried and reported by `flush()`.
+- Store reads: `null` or `FILE_NOT_FOUND` is absence and the broker goes on to the next source; any other store failure is thrown unchanged — before the provider is asked when it happens in the reads that come before the token; one in the reads a write makes (the session, for the refresh token to carry; the key store, for the `basic`/`snc` guard) counts as a failed write.
+- A write that fails is retried by `SessionWriter` and reported by `flush()`; the token API also throws it to its caller, for the result it received.
 - A destination that lacks what its type needs: `DestinationConfigError`
   (`code: 'DESTINATION_CONFIG'`, `destination`, `missingFields` — names only,
   never a value; no `cause`, since a provider's own error quotes the value it
