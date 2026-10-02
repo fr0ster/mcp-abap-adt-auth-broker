@@ -31,6 +31,10 @@ const SENTINEL = 'S3NTINEL-must-not-leak';
 
 const OK: AuthOutcome = { ok: true };
 
+/** A `none` destination's resource, and the canonical `issuedFor` its session holds (spec §4.5). */
+const RESOURCE = 'https://abap.example.com';
+const BOUND_TO = 'https://abap.example.com:443';
+
 /** A key store holding means only: three getters, no way to write. */
 function keyStore(
   conn: IConnectionConfig | null,
@@ -354,10 +358,15 @@ describe('getProvider', () => {
       const store = sessionStore({
         authorizationToken: 'stored-token',
         expiresAt: Date.now() + 60_000,
+        issuedFor: BOUND_TO,
       });
       const broker = new AuthBroker({
         sessionStore: store,
-        serviceKeyStore: keyStore({ authType: 'jwt', grantType: 'none' }),
+        serviceKeyStore: keyStore({
+          authType: 'jwt',
+          grantType: 'none',
+          serviceUrl: RESOURCE,
+        }),
       });
 
       const provider = await broker.getProvider('D');
@@ -370,10 +379,17 @@ describe('getProvider', () => {
     });
 
     it('saml/none presents the cookies the session store holds', async () => {
-      const store = sessionStore({ sessionCookies: 'MYSAPSSO2=stored' });
+      const store = sessionStore({
+        sessionCookies: 'MYSAPSSO2=stored',
+        issuedFor: BOUND_TO,
+      });
       const broker = new AuthBroker({
         sessionStore: store,
-        serviceKeyStore: keyStore({ authType: 'saml', grantType: 'none' }),
+        serviceKeyStore: keyStore({
+          authType: 'saml',
+          grantType: 'none',
+          serviceUrl: RESOURCE,
+        }),
       });
 
       const provider = await broker.getProvider('D');
@@ -515,10 +531,14 @@ describe('getProvider', () => {
 
     it('presents the session secret, never the key store one, when both answer', async () => {
       const provider = await new AuthBroker({
-        sessionStore: sessionStore({ authorizationToken: 'from-session' }),
+        sessionStore: sessionStore({
+          authorizationToken: 'from-session',
+          issuedFor: BOUND_TO,
+        }),
         serviceKeyStore: keyStore({
           authType: 'jwt',
           grantType: 'none',
+          serviceUrl: RESOURCE,
           authorizationToken: 'from-key',
         }),
       }).getProvider('D');
