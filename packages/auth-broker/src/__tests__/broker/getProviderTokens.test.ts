@@ -81,6 +81,18 @@ function client(
   };
 }
 
+/**
+ * What a secret obtained for these means is bound to (spec §4.5): written
+ * out literally, never computed by the broker's function.
+ */
+const FOR = 'https://abap.example.com:443?sap-client=100';
+const by = () => `${endpoint.url}?client_id=broker-client`;
+
+/** A stored session bound to this destination's resource and issuer. */
+function bound(secret: IConfig): IConfig {
+  return { ...secret, issuedFor: FOR, issuedBy: by() };
+}
+
 /** A key store holding means only: three getters, no way to write. */
 function keyStore(
   conn: IConnectionConfig | null,
@@ -253,6 +265,8 @@ describe('getProvider — the UAA grants', () => {
         authorizationToken: endpoint.issued[0],
         expiresAt: expect.any(Number),
         refreshToken: 'refresh-1',
+        issuedFor: FOR,
+        issuedBy: by(),
       });
     });
 
@@ -260,7 +274,10 @@ describe('getProvider — the UAA grants', () => {
       const stored = jwtExpiringIn(3600, { jti: 'stored' });
       const { strategy } = recordingStrategy();
       const { broker, store } = brokerFor('authorization_code', {
-        session: { authorizationToken: stored, refreshToken: 'stored-rt' },
+        session: bound({
+          authorizationToken: stored,
+          refreshToken: 'stored-rt',
+        }),
         strategy,
       });
 
@@ -312,6 +329,8 @@ describe('getProvider — the UAA grants', () => {
         authorizationToken: endpoint.issued[0],
         expiresAt: expect.any(Number),
         refreshToken: 'refresh-1',
+        issuedFor: FOR,
+        issuedBy: by(),
       });
     });
 
@@ -352,6 +371,37 @@ describe('getProvider — the UAA grants', () => {
       expect(held()?.authorizationToken).toBe(endpoint.issued[0]);
     });
 
+    it('hands the provider the broker’s logger: its lines arrive whole, with no token in them', async () => {
+      const logger = silentLogger();
+      const { broker } = brokerFor('client_credentials', {
+        withAuthorization: false,
+        logger,
+      });
+
+      await (await broker.getProvider(D)).prepare();
+
+      const token = endpoint.issued[0];
+      const redacted = `<redacted, ${token.length} chars>`;
+      expect(logger.info.mock.calls).toEqual(
+        expect.arrayContaining([
+          ['[BaseTokenProvider] No usable refresh token, performing login'],
+          [
+            '[BaseTokenProvider] Login completed',
+            { newToken: redacted, newRefreshToken: undefined },
+          ],
+        ]),
+      );
+      const everything = JSON.stringify([
+        logger.info.mock.calls,
+        logger.warn.mock.calls,
+        logger.error.mock.calls,
+        logger.debug.mock.calls,
+      ]);
+      expect(everything).not.toContain(token);
+      expect(everything).not.toContain(token.split('.')[1]);
+      expect(everything).not.toContain(CLIENT_SECRET);
+    });
+
     it('is not seeded: the row takes the client alone (spec §4.1)', async () => {
       const { broker } = brokerFor('client_credentials', {
         session: { authorizationToken: jwtExpiringIn(3600) },
@@ -372,11 +422,11 @@ describe('getProvider — the UAA grants', () => {
     (grant) => {
       it('reuses an opaque stored token until the stored expiresAt', async () => {
         const { broker } = brokerFor(grant, {
-          session: {
+          session: bound({
             authorizationToken: 'opaque-stored-token',
             expiresAt: Date.now() + 3_600_000,
             refreshToken: 'stored-rt',
-          },
+          }),
         });
 
         const provider = await broker.getProvider(D);
@@ -388,10 +438,10 @@ describe('getProvider — the UAA grants', () => {
 
       it('renews an opaque stored token with no expiresAt, by its stored refresh token', async () => {
         const { broker } = brokerFor(grant, {
-          session: {
+          session: bound({
             authorizationToken: 'opaque-stored-token',
             refreshToken: 'stored-rt',
-          },
+          }),
         });
 
         const provider = await broker.getProvider(D);
@@ -512,11 +562,11 @@ describe('persistence through onTokens (spec §6)', () => {
   function seeded(grant: UaaGrant = 'authorization_code', logger?: ILogger) {
     const refused = jwtExpiringIn(3600, { jti: 'refused' });
     const built = brokerFor(grant, {
-      session: {
+      session: bound({
         authorizationToken: refused,
         expiresAt: Date.now() + 3_600_000,
         refreshToken: 'stored-rt',
-      },
+      }),
       logger,
     });
     return { ...built, refused };
@@ -541,7 +591,7 @@ describe('persistence through onTokens (spec §6)', () => {
     expect(await bearer(provider)).toBe(endpoint.issued[0]);
   });
 
-  it('writes the secret and nothing else: no client secret, no serviceUrl, no authType (H4)', async () => {
+  it('writes the secret and its binding, nothing else: no client secret, no serviceUrl, no authType (H4)', async () => {
     const { broker, store } = seeded();
     const provider = await broker.getProvider(D);
     const before = Date.now();
@@ -557,8 +607,12 @@ describe('persistence through onTokens (spec §6)', () => {
     expect(Object.keys(written).sort()).toEqual([
       'authorizationToken',
       'expiresAt',
+      'issuedBy',
+      'issuedFor',
       'refreshToken',
     ]);
+    expect(written.issuedFor).toBe(FOR);
+    expect(written.issuedBy).toBe(by());
     expect(written.authorizationToken).toBe(endpoint.issued[0]);
     expect(written.refreshToken).toBe('refresh-1');
     // The token's own exp, an hour on, as the provider reads it (whole seconds).
@@ -566,8 +620,15 @@ describe('persistence through onTokens (spec §6)', () => {
       before + 3_599_000 - 1_000,
     );
     expect(written.expiresAt).toBeLessThanOrEqual(after + 3_600_000);
-    const everything = JSON.stringify(store.saveSession.mock.calls);
-    expect(everything).not.toContain(CLIENT_SECRET);
+    // The means appear only inside the two binding URIs, never as fields.
+    const { issuedFor: _f, issuedBy: _b, ...secret } = written;
+    const everything = JSON.stringify([
+      secret,
+      store.saveSession.mock.calls.slice(1),
+    ]);
+    expect(JSON.stringify(store.saveSession.mock.calls)).not.toContain(
+      CLIENT_SECRET,
+    );
     expect(everything).not.toContain(SERVICE_URL);
     expect(everything).not.toContain('broker-client');
     expect(store.setConnectionConfig).not.toHaveBeenCalled();
@@ -577,7 +638,7 @@ describe('persistence through onTokens (spec §6)', () => {
 
   it('carries the stored refresh token forward when the result has none', async () => {
     const { broker, held } = brokerFor('client_credentials', {
-      session: { refreshToken: 'kept-rt' },
+      session: bound({ refreshToken: 'kept-rt' }),
     });
 
     await (await broker.getProvider(D)).prepare();
@@ -586,12 +647,14 @@ describe('persistence through onTokens (spec §6)', () => {
       authorizationToken: endpoint.issued[0],
       expiresAt: expect.any(Number),
       refreshToken: 'kept-rt',
+      issuedFor: FOR,
+      issuedBy: by(),
     });
   });
 
   it('takes an empty refresh token in a result as none, and keeps the stored one', async () => {
     const { broker, held } = brokerFor('authorization_code', {
-      session: { refreshToken: 'kept-rt' },
+      session: bound({ refreshToken: 'kept-rt' }),
     });
     // The stored refresh token is refused; the login then answers ''.
     endpoint.answerNext({ status: 400, body: { error: 'invalid_grant' } });

@@ -20,15 +20,14 @@
  *   naming the destinations, if any is still not written.
  */
 
-import type { ITokenResult } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 
 const FIRST_DELAY_MS = 1_000;
 const MAX_DELAY_MS = 60_000;
 
-interface Queue {
+interface Queue<T> {
   /** The result waiting to be written; undefined once written. */
-  pending?: ITokenResult;
+  pending?: T;
   /** The last attempt, settled or not: the next one runs after it. */
   tail: Promise<void>;
   /** Consecutive failures since the last write that landed. */
@@ -45,18 +44,16 @@ export function classLabel(error: unknown): string {
   return typeof error;
 }
 
-export class SessionWriter {
-  private readonly queues = new Map<string, Queue>();
+/** `T`: what one write takes — the result, with what the broker writes beside it. */
+export class SessionWriter<T> {
+  private readonly queues = new Map<string, Queue<T>>();
 
   /**
    * @param write Writes one result for a destination; throws when the store
    *   does not take it.
    */
   constructor(
-    private readonly write: (
-      destination: string,
-      result: ITokenResult,
-    ) => Promise<void>,
+    private readonly write: (destination: string, result: T) => Promise<void>,
     private readonly logger: ILogger,
   ) {}
 
@@ -64,7 +61,7 @@ export class SessionWriter {
    * Take a new result for the destination and try to write it now. Never
    * throws: resolves once this attempt has settled, written or left pending.
    */
-  async submit(destination: string, result: ITokenResult): Promise<void> {
+  async submit(destination: string, result: T): Promise<void> {
     const queue = this.queueOf(destination);
     queue.pending = result;
     this.cancelTimer(queue);
@@ -102,7 +99,7 @@ export class SessionWriter {
     }
   }
 
-  private queueOf(destination: string): Queue {
+  private queueOf(destination: string): Queue<T> {
     let queue = this.queues.get(destination);
     if (!queue) {
       queue = { tail: Promise.resolve(), failures: 0 };
@@ -112,13 +109,16 @@ export class SessionWriter {
   }
 
   /** Runs after the destination's previous attempt; never rejects. */
-  private attempt(destination: string, queue: Queue): Promise<void> {
+  private attempt(destination: string, queue: Queue<T>): Promise<void> {
     const run = queue.tail.then(() => this.writePending(destination, queue));
     queue.tail = run;
     return run;
   }
 
-  private async writePending(destination: string, queue: Queue): Promise<void> {
+  private async writePending(
+    destination: string,
+    queue: Queue<T>,
+  ): Promise<void> {
     const result = queue.pending;
     if (result === undefined) return;
     try {
@@ -147,7 +147,7 @@ export class SessionWriter {
     }
   }
 
-  private schedule(destination: string, queue: Queue, delay: number): void {
+  private schedule(destination: string, queue: Queue<T>, delay: number): void {
     this.cancelTimer(queue);
     const timer = setTimeout(() => {
       queue.timer = undefined;
@@ -157,7 +157,7 @@ export class SessionWriter {
     queue.timer = timer;
   }
 
-  private cancelTimer(queue: Queue): void {
+  private cancelTimer(queue: Queue<T>): void {
     if (queue.timer) {
       clearTimeout(queue.timer);
       queue.timer = undefined;

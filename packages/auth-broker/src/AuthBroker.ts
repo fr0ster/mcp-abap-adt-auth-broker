@@ -31,7 +31,14 @@ import type {
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
+import type { IConfig } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import {
+  type Binding,
+  boundHere,
+  handedOverBinding,
+  uaaBinding,
+} from './binding';
 import { DestinationConfigError } from './DestinationConfigError';
 import {
   basicProvider,
@@ -131,10 +138,13 @@ export interface AuthBrokerConfig {
 }
 
 /** The session secret's fields on a connection config — never means. */
+/** The session's side: the secret and what it is bound to (D9). */
 const SECRET_FIELDS = [
   'authorizationToken',
   'sessionCookies',
   'expiresAt',
+  'issuedFor',
+  'issuedBy',
 ] as const;
 const isSecretField = (field: string): boolean =>
   (SECRET_FIELDS as readonly string[]).includes(field);
@@ -146,6 +156,17 @@ function expiryOf(result: ITokenResult): number | undefined {
     return Date.now() + Math.round(result.expiresIn * 1000);
   }
   return undefined;
+}
+
+/** A token result as `onTokens` received it, with the binding it is written with. */
+interface BoundResult {
+  result: ITokenResult;
+  binding: Binding;
+}
+
+/** A stored string that counts as present: `''` is none. */
+function present(value: unknown): value is string {
+  return typeof value === 'string' && value !== '';
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -172,7 +193,7 @@ export class AuthBroker {
   private readonly built = new Map<string, Promise<IAuthProvider>>();
   private readonly authorization: AuthBrokerConfig['authorization'];
   /** getProvider's writes of the session secret, retried on their own (§6). */
-  private readonly writer: SessionWriter;
+  private readonly writer: SessionWriter<BoundResult>;
 
   /**
    * @param config Stores and the provider (instance or factory)
@@ -229,8 +250,8 @@ export class AuthBroker {
     this.provider = provider;
     this.authorization = config.authorization;
     this.logger = logger ?? noOpLogger;
-    this.writer = new SessionWriter(
-      (destination, result) => this.writeSecret(destination, result),
+    this.writer = new SessionWriter<BoundResult>(
+      (destination, bound) => this.writeSecret(destination, bound),
       this.logger,
     );
     this.logger.debug('[AuthBroker] Broker initialized', {
@@ -507,7 +528,7 @@ export class AuthBroker {
   /**
    * The destination's connection config: the service key store's means with
    * the session's secret (`authorizationToken`, `sessionCookies`,
-   * `expiresAt`) laid over them; `null` when neither store holds anything.
+   * `expiresAt`) and its binding (`issuedFor`, `issuedBy`) laid over them; `null` when neither store holds anything.
    * Means a session store answers are not read, nor a secret a key store
    * answers.
    */
@@ -598,12 +619,16 @@ export class AuthBroker {
         const client = await this.read(destination, 'client', () =>
           serviceKeyStore.getAuthorizationConfig(destination),
         );
-        const secret =
+        // What a secret for this destination is bound to (§4.5): written
+        // with every secret, and required of a stored one before it seeds.
+        const binding = uaaBinding(stated, client);
+        const stored =
           grant === 'client_credentials'
             ? null
             : await this.read(destination, 'session', () =>
                 this.sessionStore.loadSession(destination),
               );
+        const secret = this.boundOrDiscarded(destination, stored, binding);
         provider = uaaProvider({
           destination,
           grant,
@@ -615,8 +640,8 @@ export class AuthBroker {
           // finally writes it.
           onTokens: (result) =>
             this.writer.submit(destination, {
-              ...result,
-              expiresAt: expiryOf(result),
+              result: { ...result, expiresAt: expiryOf(result) },
+              binding,
             }),
         });
         this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
@@ -634,12 +659,47 @@ export class AuthBroker {
       const secret = await this.read(destination, 'session', () =>
         this.sessionStore.loadSession(destination),
       );
-      provider = handedOverProvider(destination, authType, secret);
+      const client =
+        authType === 'jwt'
+          ? await this.read(destination, 'client', () =>
+              serviceKeyStore.getAuthorizationConfig(destination),
+            )
+          : null;
+      provider = handedOverProvider(
+        destination,
+        authType,
+        secret,
+        handedOverBinding(authType, stated, client),
+      );
     }
     this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
       authType,
     });
     return provider;
+  }
+
+  /**
+   * The stored secret when it is bound to this destination's resource and
+   * issuer (§4.5), else `null`: the provider is then built as with no session
+   * and logs in afresh — the refresh token is not spent either. The log line
+   * names the destination only: never a URI, never a token.
+   */
+  private boundOrDiscarded(
+    destination: string,
+    stored: IConfig | null,
+    binding: Binding,
+  ): IConfig | null {
+    if (!stored || boundHere(stored, binding)) return stored;
+    if (
+      present(stored.authorizationToken) ||
+      present(stored.sessionCookies) ||
+      present(stored.refreshToken)
+    ) {
+      this.logger.warn(
+        `[AuthBroker] ${destination}: secret bound to another resource, discarded`,
+      );
+    }
+    return null;
   }
 
   /**
@@ -654,21 +714,28 @@ export class AuthBroker {
 
   /**
    * One write of the destination's session secret — and nothing else (spec §6):
-   * `{ authorizationToken, expiresAt, refreshToken }` in one `saveSession`. No
-   * means is ever written: not `serviceUrl`, not `authType`, not the client —
-   * they live in the key store, which the broker never writes (H4).
+   * `{ authorizationToken, expiresAt, refreshToken, issuedFor, issuedBy }` in
+   * one `saveSession`. No means is ever written: not `serviceUrl`, not
+   * `authType`, not the client — they live in the key store, which the broker
+   * never writes (H4).
    *
    * - `expiresAt`: fixed by `onTokens` when the result arrived — the result's
    *   own, else the `expiresIn` it reports counted from then (the rule the
    *   provider applies to its own cache).
    * - `refreshToken`: the result's, else the one the session holds, read at
-   *   write time, so a result without one does not erase the stored one.
+   *   write time, so a result without one does not erase the stored one — but
+   *   only a stored one bound where this one is: a refresh token obtained for
+   *   another resource or from another client is not carried into this
+   *   secret (§4.5).
+   * - `issuedFor` / `issuedBy`: the binding computed when the provider was
+   *   built (§4.5), each left out when the means lack its source — so the
+   *   store clears it.
    * - A destination the key store now states as `basic` or `snc` is not
    *   written: those obtain no session secret.
    */
   private async writeSecret(
     destination: string,
-    result: ITokenResult,
+    { result, binding }: BoundResult,
   ): Promise<void> {
     const serviceKeyStore = this.serviceKeyStore;
     const means = serviceKeyStore
@@ -688,14 +755,17 @@ export class AuthBroker {
           this.sessionStore.loadSession(destination),
         );
     const storedRefreshToken =
-      typeof stored?.refreshToken === 'string' && stored.refreshToken !== ''
+      present(stored?.refreshToken) && boundHere(stored, binding)
         ? stored.refreshToken
         : undefined;
-    await this.sessionStore.saveSession(destination, {
+    const secret: IConfig = {
       authorizationToken: result.authorizationToken,
       expiresAt: result.expiresAt,
       refreshToken: result.refreshToken || storedRefreshToken,
-    });
+    };
+    if (binding.issuedFor !== undefined) secret.issuedFor = binding.issuedFor;
+    if (binding.issuedBy !== undefined) secret.issuedBy = binding.issuedBy;
+    await this.sessionStore.saveSession(destination, secret);
     this.logger.info(`[AuthBroker] Session secret saved for ${destination}`, {
       hasRefreshToken: !!(result.refreshToken || storedRefreshToken),
       expiresAt: result.expiresAt,

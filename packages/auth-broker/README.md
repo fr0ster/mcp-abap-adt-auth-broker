@@ -19,7 +19,8 @@ globally for them.
 ## Features
 
 - 🔌 **A credential for a connector**: `getProvider(destination)` builds the `IAuthProvider` the destination states — basic, SNC, the UAA grants (authorization code, client credentials, passcode), or a credential handed over — from the service key store's means and the session store's secret
-- 💾 **What a provider obtains is stored**: every token a `getProvider` provider obtains or renews — at `prepare()`, on expiry, or after a 401 in `rejected()` — is written to the session store, the secret alone; a failed write is retried by the broker, and `flush()` tells you whether everything landed
+- 💾 **What a provider obtains is stored**: every token a `getProvider` provider obtains or renews — at `prepare()`, on expiry, or after a 401 in `rejected()` — is written to the session store, the secret alone with what it is bound to; a failed write is retried by the broker, and `flush()` tells you whether everything landed
+- 🔒 **A secret goes only where it was obtained**: a stored token is used only for the resource it was obtained for, from the issuer and client that issued it — otherwise it is discarded and the provider logs in afresh
 - 🎯 **Per destination**: one provider per destination name, built by a factory or given once
 - 🔄 **Provider-driven token lifecycle**: The provider decides whether its cached token is still good, refreshes it, or logs in; the broker persists what it returns
 - ⚡ **Forced refresh**: `refreshToken()` obtains a new token even when the cached one looks valid — for a caller holding a 401
@@ -136,21 +137,25 @@ const provider = await broker.getProvider('DEV'); // an IAuthProvider
 // const connection = createAbapConnection({ url, provider }, logger) …
 ```
 
-| `authType` / `grantType` | Provider (auth-providers 5.1) | Read from the key store | Read from the session store |
+| `authType` / `grantType` | Provider (auth-providers 5.2) | Read from the key store | Read from the session store |
 |---|---|---|---|
 | `basic` (no grant read) | `new BasicAuthProvider(username, password)` | `username`, `password` | nothing |
 | `snc` (no grant read) | `SncLogonProvider.forSecureLoginClient({ partnerName, qop, sncLib, myName, logger })` | `sncPartnerName` (required); `sncQop`, `sncLib`, `sncMyName` when set | nothing |
-| `jwt` / `authorization_code` | `AuthorizationCodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` | the seed: `authorizationToken`, `refreshToken`, `expiresAt` |
-| `jwt` / `client_credentials` | `ClientCredentialsProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` | nothing (the row takes the client alone) |
-| `jwt` / `passcode` | `UaaPasscodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = a public client) | the seed: `authorizationToken`, `refreshToken`, `expiresAt` |
-| `jwt` / `none` | `TokenAuthProvider.fixed(authorizationToken)` | `authType`, `grantType` | `authorizationToken` (required) |
-| `saml` / `none` | `new SamlAuthProvider(sessionCookies)` | `authType`, `grantType` | `sessionCookies` (required) |
+| `jwt` / `authorization_code` | `AuthorizationCodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret`; `serviceUrl`, `sapClient` for the binding | the seed: `authorizationToken`, `refreshToken`, `expiresAt` — used only when `issuedFor` and `issuedBy` match |
+| `jwt` / `client_credentials` | `ClientCredentialsProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret`; `serviceUrl`, `sapClient` for the binding | nothing (the row takes the client alone) |
+| `jwt` / `passcode` | `UaaPasscodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = a public client); `serviceUrl`, `sapClient` for the binding | the seed: `authorizationToken`, `refreshToken`, `expiresAt` — used only when `issuedFor` and `issuedBy` match |
+| `jwt` / `none` | `TokenAuthProvider.fixed(authorizationToken)` | `authType`, `grantType`, `serviceUrl` (+ `sapClient`); an issuer, when stated: `oidcIssuerUrl`, or the client's `uaaUrl` + `uaaClientId` | `authorizationToken` (required), `issuedFor` (required to match); `issuedBy` when the means state an issuer |
+| `saml` / `none` | `new SamlAuthProvider(sessionCookies)` | `authType`, `grantType`, `serviceUrl` (+ `sapClient`); `samlAcsUrl` when stated | `sessionCookies` (required), `issuedFor` (required to match); `issuedBy` when `samlAcsUrl` is stated |
 
-**No row reads `serviceUrl`.** The URL of the system is where the connector
-connects, not authorization data: no token provider reads it — a UAA grant
-needs the client and `uaaUrl` — so `getProvider` neither requires nor passes
-it. Give the connector its URL from your key store (`getConnectionConfig`),
-as the key store answers it.
+**No provider reads `serviceUrl`.** The URL of the system is where the
+connector connects, not authorization data: no token provider reads it — a
+UAA grant needs the client and `uaaUrl` — so `getProvider` neither requires it
+nor passes it to a provider. Give the connector its URL from your key store
+(`getConnectionConfig`), as the key store answers it. The broker reads it,
+with `sapClient`, for one thing only: to bind a stored secret to the resource
+it was obtained for (see *A Secret Is Bound to Its Resource and Issuer*). A
+token destination without it still gets its provider, but no stored secret
+is reused for it.
 
 `none` is how a handed-over credential is stated: the key store says
 `grantType: 'none'`, and the token or cookies live in the session. The SNC
@@ -198,6 +203,68 @@ const broker = new AuthBroker({
 });
 ```
 
+### A Secret Is Bound to Its Resource and Issuer
+
+A token's audience, cookies' host and path, a system's client: presenting a
+secret to a resource it was not obtained for is a leak, and a secret from
+another authorization server or client must not stand in for this
+destination's. So the session store keeps, beside the secret, two strings
+(`IConnectionConfig`, `@mcp-abap-adt/interfaces-auth-broker` 1.1.0):
+
+- **`issuedFor`** — the resource: `serviceUrl` with the SAP client, e.g.
+  `https://my-abap.example.com:443/sap/bc/adt?sap-client=100`;
+- **`issuedBy`** — who issued it, to which client: `uaaUrl` with
+  `client_id=<uaaClientId>` for the UAA grants, e.g.
+  `https://sub.authentication.us10.hana.ondemand.com:443?client_id=sb-abap-trial`.
+
+The broker computes both from the destination's means and compares them,
+canonicalised on **both** sides, with what the session holds:
+
+- **The canonical form:** scheme and host lower-cased; the port explicit
+  (`443` for `https`, `80` for `http`); the path without a trailing `/` (the
+  root path is empty); one query parameter at most — `sap-client` (the means'
+  `sapClient` wins over a `sap-client` already in `serviceUrl`) or
+  `client_id` — parsed and re-encoded, so a value percent-encoded on one side
+  and plain on the other compares equal; no user info, no other parameter,
+  no fragment. A URL that does not parse binds nothing. A store keeps the
+  strings as given and need not canonicalise them.
+- **The UAA grants:** a stored secret seeds the provider only when **both**
+  stored values equal the computed ones. Otherwise — either different, or
+  absent on either side (no `serviceUrl` in the means, a session written
+  without them) — the secret is not used, **refresh token included**: the
+  provider is built as with no session and logs in afresh by its grant, and
+  the log says only `<destination>: secret bound to another resource,
+  discarded` — never a URI, never a token. The new secret is written with
+  both fields.
+- **The `none` rows** present a credential the broker cannot obtain again, so
+  a mismatch is refused, not discarded: a `DestinationConfigError` naming
+  `issuedFor` when the stored resource differs or is absent (or the means
+  state no `serviceUrl`), and naming `issuedBy` when the means state an issuer
+  (`oidcIssuerUrl` or the client for `jwt`, `samlAcsUrl` for `saml` — then
+  canonicalised as origin and path) and the stored one differs or is absent.
+  Means that state no issuer leave `issuedBy` uncompared.
+- **The binding does not check the token.** Its audience stays the
+  resource's to enforce; the broker compares two strings and parses no token.
+
+**What you meet:**
+
+1. **A custom `ISessionStore`** (a database, a message log, a secret store)
+   must persist `issuedFor` and `issuedBy` beside the secret, and answer
+   them from `loadSession`. One that drops them still type-checks, but the
+   broker then never reuses its sessions: every process start is a fresh
+   login — a browser each time for an interactive grant.
+2. **A headless process whose strategy refuses logins** gets Oops ("login
+   required") from `prepare()` / `rejected()` on a mismatch, instead of
+   presenting a foreign secret; log in again with the CLI.
+3. **Changing a destination's URL, SAP client, UAA or client** costs one
+   fresh login — intended.
+4. **Session files written before auth-stores 3.1.0** keep working: its
+   session stores answer `issuedFor` from the file's `SAP_URL` (+
+   `SAP_CLIENT`) and `issuedBy` from `SAP_UAA_URL` + `SAP_UAA_CLIENT_ID`,
+   which the 3.x broker and CLI wrote with the token — so a stored token whose
+   URL and client are the destination's is reused. XSUAA sessions written with
+   an empty URL have no `issuedFor`, and log in once.
+
 **One provider per destination** for the broker's life: concurrent first calls
 share one build, and a build that threw is tried again on the next call. A
 destination rewritten from outside is picked up by a new broker.
@@ -210,13 +277,17 @@ moment triggered the renewal: `prepare()`, `authorize()` on expiry, or
 `rejected()` after a 401. A renewal inside a connector is stored before the
 connector resends.
 
-- **The secret alone, in one write**: `saveSession(destination, {
-  authorizationToken, expiresAt, refreshToken })`. No means is ever written —
-  not `serviceUrl`, not `authType`, not the client: the client secret lives in
-  the key store, and the broker never writes the key store (its contract has
-  no write method). `expiresAt` is the result's, else the `expires_in` it
-  reported counted from when it arrived. A result without a refresh token
-  keeps the one the session holds.
+- **The secret alone, with its binding, in one write**:
+  `saveSession(destination, { authorizationToken, expiresAt, refreshToken,
+  issuedFor, issuedBy })` — `issuedFor` / `issuedBy` as computed when the
+  provider was built, each left out when the means lack its source (so the
+  store clears it). No means is ever written — not `serviceUrl`, not
+  `authType`, not the client: the client secret lives in the key store, and
+  the broker never writes the key store (its contract has no write method).
+  `expiresAt` is the result's, else the `expires_in` it reported counted from
+  when it arrived. A result without a refresh token keeps the one the session
+  holds — when that one is bound where the new secret is; one bound to
+  another resource or issuer is not carried into it.
 - **`basic` and `snc` are never written**: they obtain no session secret, and
   `none` obtains nothing either. A destination the key store states as
   `basic` or `snc` at write time is not written.
@@ -725,6 +796,8 @@ configuration whole, and the key's only when the session had none.
   | `snc` whose settings the provider refuses | the store field, e.g. `sncQop` |
   | `jwt` / `none` without a token in the session | `authorizationToken` |
   | `saml` / `none` without cookies in the session | `sessionCookies` |
+  | `jwt` / `none`, `saml` / `none` whose stored `issuedFor` is not the destination's resource, or is absent, or the means state no `serviceUrl` | `issuedFor` |
+  | `jwt` / `none`, `saml` / `none` whose means state an issuer and whose stored `issuedBy` is not it, or is absent | `issuedBy` |
   | a UAA grant without its client in the key store (`''` counts as missing) | `uaaUrl`, `uaaClientId`, and `uaaClientSecret` for `authorization_code` / `client_credentials` — each that is missing |
   | `authorization_code` / `passcode` without the `authorization` option | `authorization` |
 
@@ -775,8 +848,9 @@ try {
 #### Secrets in the Session Store
 
 What a `getProvider` provider obtains is written as the secret alone —
-`authorizationToken`, `expiresAt`, `refreshToken` — and nothing else (see
-*Persistence and `flush()`*). The token API, below, still writes as 3.x did.
+`authorizationToken`, `expiresAt`, `refreshToken`, with `issuedFor` and
+`issuedBy` — and nothing else (see *Persistence and `flush()`*). The token
+API, below, still writes as 3.x did.
 
 The broker writes the token (or session cookies) and the refresh token to the
 session store — never the client secret. When the credentials come from the

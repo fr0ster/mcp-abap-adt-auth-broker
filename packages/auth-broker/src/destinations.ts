@@ -28,6 +28,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { type Binding, sameIssuer, sameResource } from './binding';
 import { DestinationConfigError } from './DestinationConfigError';
 
 type StatedAuthType = NonNullable<IConnectionConfig['authType']>;
@@ -179,30 +180,45 @@ export function sncProvider(
 /**
  * `none` → the credential handed over, from the session: the only way in, so
  * required. Read from the secret alone — the means are not a seed.
+ *
+ * The broker did not obtain it and cannot obtain it again, so a binding that
+ * does not match is refused, never discarded (spec §4.5 item 4): `issuedFor`
+ * must always equal the destination's resource — it is what stops the
+ * credential going to another one; `issuedBy` is compared only when the means
+ * state an issuer.
  */
 export function handedOverProvider(
   destination: string,
   authType: 'jwt' | 'saml',
   secret: IConfig | null,
+  binding: Binding,
 ): IAuthProvider {
-  if (authType === 'jwt') {
-    if (!present(secret?.authorizationToken)) {
-      throw new DestinationConfigError(
-        destination,
-        ['authorizationToken'],
-        'a jwt destination with grantType none needs the token in its session',
-      );
-    }
-    return TokenAuthProvider.fixed(secret.authorizationToken);
-  }
-  if (!present(secret?.sessionCookies)) {
+  const credential =
+    authType === 'jwt' ? secret?.authorizationToken : secret?.sessionCookies;
+  if (!present(credential)) {
     throw new DestinationConfigError(
       destination,
-      ['sessionCookies'],
-      'a saml destination with grantType none needs the cookies in its session',
+      [authType === 'jwt' ? 'authorizationToken' : 'sessionCookies'],
+      authType === 'jwt'
+        ? 'a jwt destination with grantType none needs the token in its session'
+        : 'a saml destination with grantType none needs the cookies in its session',
     );
   }
-  return new SamlAuthProvider(secret.sessionCookies);
+  const unbound: string[] = [];
+  if (!sameResource(secret, binding)) unbound.push('issuedFor');
+  if (binding.issuerStated && !sameIssuer(secret, binding)) {
+    unbound.push('issuedBy');
+  }
+  if (unbound.length > 0) {
+    throw new DestinationConfigError(
+      destination,
+      unbound,
+      'the credential in the session is not bound to this destination’s means',
+    );
+  }
+  return authType === 'jwt'
+    ? TokenAuthProvider.fixed(credential)
+    : new SamlAuthProvider(credential);
 }
 
 /** The UAA grants: one client, one token endpoint (`<uaaUrl>/oauth/token`). */
@@ -277,6 +293,7 @@ export function uaaProvider(row: UaaRow): IAuthProvider {
       uaaUrl,
       clientId,
       clientSecret: clientSecret as string,
+      logger: row.logger,
       ...hooks,
     });
   }

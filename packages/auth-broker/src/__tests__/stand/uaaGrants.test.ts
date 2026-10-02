@@ -10,7 +10,8 @@
  * The broker is composed as a consumer composes it: auth-stores 3's
  * `EnvDestinationStore` holds the means in one directory, its
  * `AbapSessionStore` the session secret in another. What the session file holds
- * afterwards is read from disk — the secret's keys and nothing else.
+ * afterwards is read from disk — the secret's keys and its binding
+ * (`SAP_ISSUED_FOR`, `SAP_ISSUED_BY`), nothing else.
  */
 
 import * as fs from 'node:fs';
@@ -37,6 +38,10 @@ const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
 const USER = { username: 'tester', password: 'tester' };
 const CALLBACK = 'http://localhost/callback';
 const SERVICE_URL = 'https://abap.stand.invalid';
+/** SERVICE_URL's canonical URI — what the session's `issuedFor` must hold (spec §4.5). */
+const ISSUED_FOR = 'https://abap.stand.invalid:443';
+/** UAA_URL (`http://localhost:<port>/uaa`, already canonical) with the client. */
+const issuedBy = (clientId: string) => `${UAA_URL}?client_id=${clientId}`;
 const UNAUTHORIZED = { at: 'request', status: 401, error: null } as const;
 
 const claims = (jwt: string): Record<string, unknown> =>
@@ -99,7 +104,18 @@ const SECRET_KEYS = [
   ABAP_SESSION_VARS.AUTHORIZATION_TOKEN,
   ABAP_SESSION_VARS.EXPIRES_AT,
   ABAP_SESSION_VARS.REFRESH_TOKEN,
+  ABAP_SESSION_VARS.ISSUED_FOR,
+  ABAP_SESSION_VARS.ISSUED_BY,
 ];
+
+/** A key's value in a `.env` file, without the quotes auth-stores may write. */
+function envValue(file: string, key: string): string | undefined {
+  const line = fs
+    .readFileSync(file, 'utf8')
+    .split(/\r?\n/)
+    .find((l) => l.startsWith(`${key}=`));
+  return line?.slice(key.length + 1).replace(/^(['"`])(.*)\1$/, '$2');
+}
 
 describeWhere(
   'getProvider — the UAA grants against Cloud Foundry UAA (the stand)',
@@ -187,7 +203,15 @@ describeWhere(
         [
           ABAP_SESSION_VARS.AUTHORIZATION_TOKEN,
           ABAP_SESSION_VARS.EXPIRES_AT,
+          ABAP_SESSION_VARS.ISSUED_FOR,
+          ABAP_SESSION_VARS.ISSUED_BY,
         ].sort(),
+      );
+      expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_FOR)).toBe(
+        ISSUED_FOR,
+      );
+      expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
+        issuedBy('cc_client'),
       );
       expect(fs.readFileSync(sessionFile, 'utf8')).not.toContain('secret');
     });
@@ -225,6 +249,12 @@ describeWhere(
         ),
       ).toBeLessThanOrEqual(1_000);
       expect(keysOf(sessionFile).sort()).toEqual([...SECRET_KEYS].sort());
+      expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_FOR)).toBe(
+        ISSUED_FOR,
+      );
+      expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
+        issuedBy('authcode'),
+      );
 
       // The server refuses the token: the provider renews in rejected().
       expect(await provider.rejected(UNAUTHORIZED)).toEqual({ ok: true });
@@ -283,7 +313,62 @@ describeWhere(
       );
       await b.flush();
       expect(keysOf(sessionFile).sort()).toEqual([...SECRET_KEYS].sort());
+      expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
+        issuedBy('passcode_client'),
+      );
       expect(fs.readFileSync(sessionFile, 'utf8')).not.toContain('secret');
+    }, 60_000);
+
+    it('a session file bound to another URL is not reused: a fresh login through UAA, written with the new binding', async () => {
+      let logins = 0;
+      const { broker, sessions, sessionFile } = await destination(
+        'MOVED',
+        {
+          grantType: 'authorization_code',
+          uaaClientId: 'authcode',
+          uaaClientSecret: 'secret',
+        },
+        () => {
+          const login = loginThroughUaa();
+          return {
+            authorize: (request) => {
+              logins += 1;
+              return login.authorize(request);
+            },
+          };
+        },
+      );
+      const first = broker();
+      expect(await (await first.getProvider('MOVED')).prepare()).toEqual({
+        ok: true,
+      });
+      await first.flush();
+      const before = await sessions.loadSession('MOVED');
+      expect(logins).toBe(1);
+      expect(before?.issuedFor).toBe(ISSUED_FOR);
+
+      // The destination now names another system.
+      await new EnvDestinationStore(keysDir).setDestination('MOVED', {
+        serviceUrl: 'https://moved.stand.invalid/sap',
+        sapClient: '200',
+      });
+      const second = broker();
+      const moved = await second.getProvider('MOVED');
+      expect(await moved.prepare()).toEqual({ ok: true });
+      await second.flush();
+
+      expect(logins).toBe(2);
+      const token = await bearer(moved);
+      expect(token).not.toBe(before?.authorizationToken);
+      const after = await sessions.loadSession('MOVED');
+      expect(after?.authorizationToken).toBe(token);
+      expect(after?.refreshToken).not.toBe(before?.refreshToken);
+      expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_FOR)).toBe(
+        'https://moved.stand.invalid:443/sap?sap-client=200',
+      );
+      expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
+        issuedBy('authcode'),
+      );
     }, 60_000);
   },
 );

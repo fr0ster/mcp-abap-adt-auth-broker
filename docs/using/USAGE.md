@@ -137,15 +137,54 @@ const trial = await broker.getProvider('TRIAL'); // AuthorizationCodeProvider, s
 |---|---|---|
 | `basic` | `BasicAuthProvider` | `username`, `password` in the key store |
 | `snc` | `SncLogonProvider.forSecureLoginClient` | `sncPartnerName` in the key store; `sncQop`, `sncLib`, `sncMyName` when set (absent: `qop` `'9'`, the library discovered, the name from the credential) |
-| `jwt` / `authorization_code` | `AuthorizationCodeProvider` | `uaaUrl`, `uaaClientId`, `uaaClientSecret` in the key store; the `authorization` option; seeded from the session (token, refresh token, `expiresAt`) when there is one |
+| `jwt` / `authorization_code` | `AuthorizationCodeProvider` | `uaaUrl`, `uaaClientId`, `uaaClientSecret` in the key store; the `authorization` option; seeded from the session (token, refresh token, `expiresAt`) when there is one bound to this destination (below) |
 | `jwt` / `client_credentials` | `ClientCredentialsProvider` | `uaaUrl`, `uaaClientId`, `uaaClientSecret` in the key store; not seeded |
 | `jwt` / `passcode` | `UaaPasscodeProvider` | `uaaUrl`, `uaaClientId` (`uaaClientSecret` `''` is a public client) in the key store; the `authorization` option, handed `<uaaUrl>/passcode`; seeded like `authorization_code` |
-| `jwt` / `none` | `TokenAuthProvider.fixed` | `authorizationToken` in the session store |
-| `saml` / `none` | `SamlAuthProvider` | `sessionCookies` in the session store |
+| `jwt` / `none` | `TokenAuthProvider.fixed` | `serviceUrl` in the key store; `authorizationToken` and a matching `issuedFor` in the session store (and `issuedBy`, when the means state an issuer) |
+| `saml` / `none` | `SamlAuthProvider` | `serviceUrl` in the key store; `sessionCookies` and a matching `issuedFor` in the session store (and `issuedBy`, when `samlAcsUrl` is stated) |
 
-No row needs `serviceUrl`: it is where the connector connects, not
-authorization data, and no token provider reads it. Take the connector's URL
-from your key store's `getConnectionConfig`.
+No provider reads `serviceUrl`: it is where the connector connects, not
+authorization data. Take the connector's URL from your key store's
+`getConnectionConfig`. The broker reads it, with `sapClient`, only to bind a
+stored secret to its resource.
+
+### A stored secret is used only where it is bound
+
+Beside the secret, the session store keeps `issuedFor` — the resource it was
+obtained for, `serviceUrl` with `sap-client` — and `issuedBy` — who issued it
+to which client, `uaaUrl` with `client_id`. The broker computes both from the
+destination's means, canonicalises both sides (scheme and host lower-cased,
+the port explicit, no trailing `/`, only `sap-client` / `client_id` kept and
+re-encoded) and compares:
+
+- **UAA grants:** both equal → the session seeds the provider. Otherwise the
+  secret is not used, refresh token included: the provider logs in afresh,
+  the log says only `<destination>: secret bound to another resource,
+  discarded`, and the new secret is written with this destination's binding.
+  A destination without `serviceUrl` gets its provider, but never reuses a
+  stored secret.
+- **`none`:** a stored `issuedFor` that is not the destination's (or none) is
+  `DestinationConfigError` naming `issuedFor`; when the means state an issuer
+  (`oidcIssuerUrl` or the client for `jwt`, `samlAcsUrl` for `saml`), the same
+  for `issuedBy`.
+
+```typescript
+// A session store of your own must keep both fields with the secret:
+async saveSession(destination, config) {
+  await db.put(destination, {
+    token: config.authorizationToken,
+    expiresAt: config.expiresAt,
+    refreshToken: config.refreshToken,
+    issuedFor: config.issuedFor, // without these two the broker never
+    issuedBy: config.issuedBy,   // reuses a session: a login every start
+  });
+}
+```
+
+Session files written before `@mcp-abap-adt/auth-stores` 3.1.0 keep working:
+its stores answer the binding from the file's `SAP_URL` (+ `SAP_CLIENT`) and
+`SAP_UAA_URL` + `SAP_UAA_CLIENT_ID`. A headless process whose strategy refuses
+logins answers Oops on a mismatch rather than present a foreign secret.
 
 The OIDC grants (`jwt` with `oidc_authorization_code`, `device_code`,
 `password`, `token_exchange`) and the SAML grants (`saml` with `saml2_pure`,
@@ -177,9 +216,10 @@ destination rewritten on disk is picked up by a new broker.
 
 A token provider `getProvider` built writes every token it obtains — at
 `prepare()`, on expiry, or in `rejected()` after a 401 — to the session store
-before it answers: `{ authorizationToken, expiresAt, refreshToken }` in one
-`saveSession`, the stored refresh token kept when the result has none, and
-nothing else — no URL, no `authType`, no client. The key store is never
+before it answers: `{ authorizationToken, expiresAt, refreshToken, issuedFor,
+issuedBy }` in one `saveSession`, the stored refresh token kept when the
+result has none (and it is bound here), and nothing else — no URL field, no
+`authType`, no client. The key store is never
 written. `basic`, `snc` and `none` obtain nothing and write nothing.
 
 A write the store refuses does not fail the authentication: the broker retries
@@ -460,8 +500,9 @@ async getConnectionConfig(destination: string): Promise<IConnectionConfig | null
 ```
 
 Composed from both stores, each for its role: `getConnectionConfig` is the
-key store's means with the session's `authorizationToken`, `sessionCookies`
-and `expiresAt` laid over them (`null` when neither holds anything);
+key store's means with the session's `authorizationToken`, `sessionCookies`,
+`expiresAt` and binding (`issuedFor`, `issuedBy`) laid over them — a key
+store's answer for any of these is never used (`null` when neither holds anything);
 `getAuthorizationConfig` is the key store's client with the session's refresh
 token (`null` without a client in the key store). Means a session store
 answers are not read. Up to 3.1.0 both answered the session's configuration

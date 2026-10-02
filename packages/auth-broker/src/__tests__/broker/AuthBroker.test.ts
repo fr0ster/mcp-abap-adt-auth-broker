@@ -633,6 +633,8 @@ describe('AuthBroker', () => {
         sessionCookies: 'session=cookie',
         expiresAt: 1234,
         refreshToken: 'session-refresh',
+        issuedFor: 'https://session.example:443?sap-client=100',
+        issuedBy: 'https://session-uaa.example:443?client_id=session-client',
       };
       const keyConn: IConnectionConfig = {
         serviceUrl: SERVICE_URL,
@@ -642,6 +644,8 @@ describe('AuthBroker', () => {
         authorizationToken: 'key-token',
         sessionCookies: 'key=cookie',
         expiresAt: 99,
+        issuedFor: 'https://key.example:443',
+        issuedBy: 'https://key-uaa.example:443?client_id=key-client',
       };
       const withBoth = new AuthBroker({
         sessionStore: mockSessionStore(session, null, session),
@@ -667,6 +671,8 @@ describe('AuthBroker', () => {
         authorizationToken: 'session-token',
         sessionCookies: 'session=cookie',
         expiresAt: 1234,
+        issuedFor: 'https://session.example:443?sap-client=100',
+        issuedBy: 'https://session-uaa.example:443?client_id=session-client',
       });
       await expect(withKey.getConnectionConfig('D')).resolves.toEqual({
         serviceUrl: SERVICE_URL,
@@ -678,6 +684,8 @@ describe('AuthBroker', () => {
         authorizationToken: 'session-token',
         sessionCookies: 'session=cookie',
         expiresAt: 1234,
+        issuedFor: 'https://session.example:443?sap-client=100',
+        issuedBy: 'https://session-uaa.example:443?client_id=session-client',
       });
       await expect(withNothing.getConnectionConfig('D')).resolves.toBeNull();
     });

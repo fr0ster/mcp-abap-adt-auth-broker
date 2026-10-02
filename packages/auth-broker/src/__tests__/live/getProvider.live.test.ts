@@ -31,16 +31,22 @@
  * `<destination>.json` in AUTH_BROKER_LIVE_SERVICE_KEYS_DIR, read by auth-stores
  * 3's `AbapServiceKeyStore`: the client (`uaa.*`), the ABAP URL and client. The
  * grant is stated by whoever builds the store, never read from the key (a SAP
- * key cannot state one): until auth-stores 3.1.0 gives `AbapServiceKeyStore`
- * its `grantType` option, `withGrant` below adds it (plan D8). The URL the
+ * key cannot state one): `new AbapServiceKeyStore(dir, { grantType:
+ * 'authorization_code' })` (auth-stores 3.1.0, plan D8). The URL the
  * connector dials is the key's; `getProvider` needs none (D8). Its session —
  * `<destination>.env` in AUTH_BROKER_LIVE_SESSIONS_DIR, read by auth-stores 3's
  * `AbapSessionStore`, which reads a 2.x/3.x file's secret keys only — must hold
- * a refresh token from an earlier login. The case copies that file to a temporary directory and never
- * writes the original; it seeds the copy with a well-formed JWT the system
- * refuses (an `exp` an hour ahead, so the provider trusts it), and the 401 is
- * renewed by the stored refresh token in `rejected()` — no login, no browser:
- * the `authorization` strategy it passes refuses. Where the server rotates
+ * a refresh token from an earlier login, and its binding must be the key's
+ * (spec §4.5): a file written before auth-stores 3.1.0 answers `issuedFor`
+ * from its `SAP_URL` (+ `SAP_CLIENT`) and `issuedBy` from `SAP_UAA_URL` +
+ * `SAP_UAA_CLIENT_ID`, which the 3.x CLI wrote from that same key. The case
+ * copies that file to a temporary directory and never writes the original; it
+ * seeds the copy with a well-formed JWT the system refuses (an `exp` an hour
+ * ahead, so the provider trusts it) under the binding the file answered, and
+ * the 401 is renewed by the stored refresh token in `rejected()` — no login,
+ * no browser: the `authorization` strategy it passes refuses. A binding that
+ * is not the key's is discarded by the broker, and the refused login then
+ * fails the case — log in again with the CLI. Where the server rotates
  * refresh tokens, the run spends the original file's refresh token; log in
  * again afterwards (I have not measured whether XSUAA rotates them).
  *
@@ -66,11 +72,7 @@ import type {
   IAuthProvider,
   IAuthRejection,
 } from '@mcp-abap-adt/interfaces-auth';
-import type {
-  DestinationGrant,
-  IConnectionConfig,
-  IServiceKeyStore,
-} from '@mcp-abap-adt/interfaces-auth-broker';
+import type { IConnectionConfig } from '@mcp-abap-adt/interfaces-auth-broker';
 // auth-stores 3 under an npm alias, for this file only: the library's other
 // suites stay on auth-stores 1.x until step 4e (plan decision D7).
 import {
@@ -348,28 +350,6 @@ function recordingRejections(provider: IAuthProvider): {
   };
 }
 
-/**
- * UNTIL auth-stores 3.1.0 — replaced in the binding step by
- * `new AbapServiceKeyStore(dir, { grantType })`. A key store over SAP service
- * keys whose grant is stated here, by whoever builds it, because a SAP key
- * cannot state one (spec §1.2 item 3). Everything else is the wrapped store's
- * answer, unchanged.
- */
-function withGrant(
-  keys: IServiceKeyStore,
-  grantType: DestinationGrant,
-): IServiceKeyStore {
-  return {
-    getServiceKey: (destination) => keys.getServiceKey(destination),
-    getAuthorizationConfig: (destination) =>
-      keys.getAuthorizationConfig(destination),
-    getConnectionConfig: async (destination) => {
-      const means = await keys.getConnectionConfig(destination);
-      return means ? { ...means, grantType } : null;
-    },
-  };
-}
-
 /** This case renews by refresh: a login would mean a browser, so it is refused. */
 const refuseLogin: IAuthorizationStrategy<string> = {
   authorize: async () => {
@@ -412,17 +392,24 @@ describeWhere(
           `the session of "${destination}" holds no refresh token: log in again with the CLI`,
         );
       }
+      if (!stored.issuedFor || !stored.issuedBy) {
+        throw new Error(
+          `the session of "${destination}" answers no binding (SAP_URL and SAP_UAA_URL / SAP_UAA_CLIENT_ID, or SAP_ISSUED_FOR / SAP_ISSUED_BY): log in again with the CLI`,
+        );
+      }
       const refused = refusedJwt();
+      // A credential written without its binding clears it (auth-stores
+      // 3.1.0): the refused token is written under the one the file answered.
       await sessions.saveSession(destination, {
         authorizationToken: refused,
         refreshToken: stored.refreshToken,
+        issuedFor: stored.issuedFor,
+        issuedBy: stored.issuedBy,
       });
 
-      const keys = withGrant(
-        new AbapServiceKeyStore(
-          env.AUTH_BROKER_LIVE_SERVICE_KEYS_DIR as string,
-        ),
-        'authorization_code',
+      const keys = new AbapServiceKeyStore(
+        env.AUTH_BROKER_LIVE_SERVICE_KEYS_DIR as string,
+        { grantType: 'authorization_code' },
       );
       const broker = new AuthBroker({
         serviceKeyStore: keys,
@@ -473,6 +460,9 @@ describeWhere(
       const after = await sessions.loadSession(destination);
       expect(after?.authorizationToken).toEqual(expect.any(String));
       expect(after?.authorizationToken).not.toBe(refused);
+      // The renewal wrote the binding beside it, computed from the key.
+      expect(after?.issuedFor).toEqual(expect.any(String));
+      expect(after?.issuedBy).toEqual(expect.any(String));
       log.info(
         `jwt over HTTP: the session file holds a new token (${after?.authorizationToken?.length} chars)`,
       );

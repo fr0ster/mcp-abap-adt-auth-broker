@@ -519,9 +519,12 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
   `master` (3.0.0).
 - **What changes:**
   1. `AbapServiceKeyStore(dir, { grantType?, log? })` and
-     `XsuaaServiceKeyStore(dir, { serviceUrl?, grantType?, log? })` — an
-     option given is what `getConnectionConfig` answers for that field; the
-     3.0.0 `(dir, log)` form keeps working (minor).
+     `XsuaaServiceKeyStore(dir, { grantType?, log? })` — `grantType` given is
+     what `getConnectionConfig` answers; the 3.0.0 `(dir, log)` form keeps
+     working (minor). **No `serviceUrl` option** (decided 2026-10-02, as
+     3.1.0 shipped): the resource URL is means of the destination, stated in
+     an `EnvDestinationStore` with the key store as its fallback, or by the
+     consumer's own key store.
   2. The session stores keep `issuedFor` and `issuedBy` (`SAP_ISSUED_FOR`,
      `SAP_ISSUED_BY`; `XSUAA_ISSUED_FOR`, `XSUAA_ISSUED_BY`; fields in the
      in-memory ones): accepted by `saveSession`, written and cleared with the
@@ -532,7 +535,11 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
      (`XSUAA_MCP_URL` for the XSUAA stores); no `SAP_ISSUED_BY` → `issuedBy`
      from `SAP_UAA_URL` with `SAP_UAA_CLIENT_ID` as `client_id`
      (`XSUAA_UAA_URL`, `XSUAA_UAA_CLIENT_ID`) — the 3.x CLI and `persist`
-     wrote them with the token (spec §1.5 item 3).
+     wrote them with the token (spec §1.5 item 3). As shipped: composed, not
+     canonicalised — the parameter appended with `?` (or `&`), its value
+     percent-encoded with `encodeURIComponent`; the broker's canonicaliser
+     parses both sides with `URL` / `URLSearchParams`, so the encoding
+     round-trips (4c3).
   4. `interfaces-auth-broker` `^1.1.0`.
 - **Tests first, and the rule each protects:** each option answered, and its
   absence leaving the 3.0.0 answer (item 1); each of `issuedFor` and
@@ -556,7 +563,7 @@ step-4 PR is the step-3 gate: `npm run check` and `npm test` in the worktree.
 
 ### 4c3 — the broker binds a secret to its resource and issuer (spec §4.5, §6; D9)
 
-- **Repository:** auth-broker, branch `feat/secret-bound-to-resource`.
+- **Repository:** auth-broker, branch `feat/secret-binding`.
 - **What changes:** `interfaces-auth-broker` `^1.1.0`; the dev alias
   `auth-stores-3` `^3.1.0`. One canonicalising function in the library
   (spec §4.5 item 1; the broker's only, decided). `getProvider` computes from
@@ -781,9 +788,11 @@ dependency on `auth-broker` `^4.0.0` alone does not decide it.
   falling back to its service key store) and the session store for the
   secret; instead of seeding sessions from service keys it writes `authType:
   'jwt'`, `grantType: 'authorization_code'` as means; its `detectStoreType`
-  passes `{ grantType }` to `AbapServiceKeyStore` and `{ serviceUrl,
-  grantType }` to `XsuaaServiceKeyStore` (auth-stores 3.1.0, D8) — the URL it
-  passed to `BtpSessionStore` in 2.x; `flush()` on `SIGTERM` and before a stdio transport
+  passes `{ grantType }` to `AbapServiceKeyStore` and to
+  `XsuaaServiceKeyStore` (auth-stores 3.1.0, D8); the URL it passed to
+  `BtpSessionStore` in 2.x is stated as means in an `EnvDestinationStore`
+  (`XSUAA_MCP_URL`, `XSUAA_DESTINATION_VARS`) whose fallback is the XSUAA key
+  store — no key store takes a `serviceUrl` option; `flush()` on `SIGTERM` and before a stdio transport
   closes; its docs install `@mcp-abap-adt/auth-broker-cli`; live check basic
   HTTP and RFC, token, SNC — one code path (spec §12). Its imports of moved types
   (`src/lib/stores/index.ts:24`, `src/lib/auth/brokerFactory.ts:36`) change
@@ -866,10 +875,14 @@ dependency on `auth-broker` `^4.0.0` alone does not decide it.
   format; an ABAP environment key carries the ABAP URL, an XSUAA/BTP key only
   the authorizing service, so its URL was passed separately (2.x: `new
   BtpSessionStore(dir, serviceUrl)`; 3.0.0 removed it from the session stores
-  without moving it). It moves to the key store: auth-stores 3.1.0 gives
+  without moving it). **It is means of the destination, not an option of a
+  key store** (decided 2026-10-02, as auth-stores 3.1.0 shipped): stated in
+  an `EnvDestinationStore` with the service key store as its fallback, or
+  answered by a key store the consumer writes. A SAP key cannot state a grant
+  either; that one is an option: auth-stores 3.1.0 gives
   `AbapServiceKeyStore(dir, { grantType })` and `XsuaaServiceKeyStore(dir,
-  { serviceUrl, grantType })` — stated by whoever builds the store, so nothing
-  is inferred (H1). A SAP key cannot state a grant.
+  { grantType })` — stated by whoever builds the store, so nothing is
+  inferred (H1). There is no `serviceUrl` option.
 - **D9 — decided 2026-10-02 (refined 2026-10-02: the canonical URI; refined
   2026-10-02: two fields): a secret is bound to the resource it was obtained
   for and to the issuer and client that issued it** (4c1, 4c2, 4c3). A JWT's
@@ -921,7 +934,11 @@ dependency on `auth-broker` `^4.0.0` alone does not decide it.
   `SAP_URL` with the token — and `SAP_UAA_URL` + `SAP_UAA_CLIENT_ID` as
   `issuedBy` — the 3.x CLI wrote the client with the token and the 3.x
   `persist` rewrote it with each refresh token — so existing sessions keep
-  working after the upgrade. **Remaining risk:** a legacy shared file whose
+  working after the upgrade. auth-stores 3.1.0 composes them, not
+  canonicalised: the parameter appended with `?` (or `&`), its value
+  percent-encoded (`encodeURIComponent`); the broker's canonicaliser parses
+  both sides with `URL` / `URLSearchParams` and re-encodes the one parameter
+  it keeps, so encoded and unencoded values compare equal. **Remaining risk:** a legacy shared file whose
   `SAP_URL` or `SAP_UAA_*` was edited by hand before its first renewal under
   the binding (or whose token a 3.0.0 store rewrote after the means moved)
   answers a binding nobody checked, until that renewal writes the new keys.
@@ -1031,7 +1048,7 @@ plan's first version):
 | Goal hold / item | Delivered by |
 |---|---|
 | H0 the broker speaks only the store contracts | interfaces (done; sufficient for the split, spec §8.2); step 1 (stores implement the split); step 3 (`check-graph`: no `auth-stores` import in the library); 4b–4e (fakes of the contract in tests) |
-| H1 the configuration states the provider | 4b (pair table, `authType` + `grantType` from the key store only, no fallback to a session's means); step 1 (no grant answered from a SAP key); 4c2 (the grant and an XSUAA key's resource URL stated by whoever builds the key store, D8); step 5 (CLI writes both; `generate-env` stops inferring) |
+| H1 the configuration states the provider | 4b (pair table, `authType` + `grantType` from the key store only, no fallback to a session's means); step 1 (no grant answered from a SAP key); 4c2 (the grant stated by whoever builds the key store; the resource URL stated as means in a destination store, never an option of a key store, D8); step 5 (CLI writes both; `generate-env` stops inferring) |
 | H2 no implicit defaults | 4a (CLI's presenter, validator, `read`); 4b–4d (every collaborator from the consumer, missing → `DestinationConfigError`) |
 | H3 what a provider obtains reaches the session store | 4c (`onTokens`, retry, `flush()`); 4d (OIDC/SAML results); 4e (through connection 10) |
 | H4 no secret the broker was not given | 4c (the session gets the secret alone — field-set test and breaks); step 1 (session stores refuse means); step 5 (the CLI writes means to the key store; the user's); 4c1–4c3 (a stored secret presented only to the resource it was obtained for, and seeded only from its own issuer and client, D9) |
@@ -1064,7 +1081,7 @@ plan's first version):
 | §9 | 4e; carried-over suite in every step-4 PR |
 | §10 | 3 (move, imports, version), 4a (explicit collaborators), 5 (destinations, flags, `flush`), 7 (release) |
 | §11 | 3 |
-| §12 | 7 (breaking list, migration notes, the *Binding* consumer impact); 4c1 (its README note); 8 (consumers — the server passes `serviceUrl` / `grantType` to its key stores, D8) |
+| §12 | 7 (breaking list, migration notes, the *Binding* consumer impact); 4c1 (its README note); 8 (consumers — the server passes `grantType` to its key stores and states the resource URL in a destination store, D8) |
 | §13 | 4b–4e (unit, connection 10), 4c (D8; the live jwt case on service keys), 4c3 (the binding tests), 4d (stand, D5), 6 (live) |
 | §14 | 4a (stale comments), every step (its docs), 7 (final pass, deletion) |
 | §15 | not delivered, by design |

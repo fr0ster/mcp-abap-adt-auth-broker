@@ -74,12 +74,30 @@ connector takes:
   `AuthorizationCodeProvider`, `ClientCredentialsProvider`,
   `UaaPasscodeProvider`, with the client from the key store
   (`getAuthorizationConfig`), seeded from the session (token, refresh token,
-  `expiresAt`; not `client_credentials`), the consumer's `authorization(d,
-  grant)` for the two interactive ones, the broker's logger and `onTokens`;
-  the OIDC and SAML grants are not built yet;
+  `expiresAt`; not `client_credentials`) only when the session is bound to
+  this destination (below), the consumer's `authorization(d, grant)` for the
+  two interactive ones, the broker's logger and `onTokens`; the OIDC and SAML
+  grants are not built yet;
 - caches the *promise* of the build per destination, set before the first store
   read and dropped when the build throws, so concurrent first calls build once
   and a failure is retried.
+
+### The binding (`src/binding.ts`)
+
+A stored secret is used only for the resource it was obtained for, from the
+issuer and client that issued it (spec §4.5). `getProvider` computes, from the
+means, `issuedFor` (`serviceUrl` + `sapClient`) and `issuedBy` (`uaaUrl` +
+`uaaClientId` for the UAA grants; for `none`, `oidcIssuerUrl` or the client
+for `jwt`, `samlAcsUrl` for `saml`), with one canonicalising function — the
+broker's only: scheme and host lower-cased by `URL`, the port explicit
+(443/80), the path without a trailing `/`, one parameter (`sap-client`, the
+means' `sapClient` first; `client_id`; none for an ACS) re-encoded through
+`URLSearchParams`, nothing else. The session's values are canonicalised the
+same way before the comparison, so a store keeps them as given. The UAA rows
+seed only when both match — otherwise the secret, refresh token included, is
+dropped (`boundOrDiscarded`, one value-free warn line) and the provider logs
+in afresh; the `none` rows throw `DestinationConfigError` naming `issuedFor`
+(always compared) or `issuedBy` (compared when the means state an issuer).
 
 ### Persistence (`SessionWriter`)
 
@@ -87,9 +105,11 @@ Every token provider `getProvider` builds gets `onTokens`, which
 `BaseTokenProvider` awaits after every login and refresh — never on a cache
 hit — so a renewal inside a connector is stored before the connector resends.
 The broker writes the session secret alone, `{ authorizationToken, expiresAt,
-refreshToken }` in one `saveSession` — the expiry fixed when the result
-arrives, the stored refresh token carried forward when the result has none —
-and never a means field; a destination the key store states as `basic` or
+refreshToken, issuedFor, issuedBy }` in one `saveSession` — the expiry fixed
+when the result arrives, the binding computed when the provider was built
+(each field left out when the means lack its source), the stored refresh
+token carried forward when the result has none and the stored session is
+bound here — and never a means field; a destination the key store states as `basic` or
 `snc` is not written. `onTokens` never throws: a failed write stays pending per
 destination in `SessionWriter` (`src/SessionWriter.ts`), retried on an
 `unref()`ed timer (1 s, doubling, capped at 60 s), the latest result replacing
