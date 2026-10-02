@@ -196,6 +196,33 @@ describe('AuthBroker', () => {
       expect(everythingWritten(sessionStore)).toBe('[[],[],[]]');
     });
 
+    it('logs the provider option as it is: none, factory or instance', () => {
+      const forms: Array<[string, unknown]> = [
+        ['none', undefined],
+        ['factory', (() => mockProvider()) as TokenProviderFactory],
+        ['instance', mockProvider()],
+      ];
+      for (const [form, provider] of forms) {
+        const logger = {
+          debug: jest.fn(),
+          info: jest.fn(),
+          warn: jest.fn(),
+          error: jest.fn(),
+        };
+        new AuthBroker(
+          {
+            sessionStore: mockSessionStore(),
+            provider: provider as IRefreshableTokenProvider | undefined,
+          },
+          logger,
+        );
+        expect(logger.debug).toHaveBeenCalledWith(
+          '[AuthBroker] Broker initialized',
+          expect.objectContaining({ providerForm: form }),
+        );
+      }
+    });
+
     it('refuses a service key store missing a method', () => {
       const serviceKeyStore = mockServiceKeyStore();
       delete (serviceKeyStore as Partial<IServiceKeyStore>).getServiceKey;

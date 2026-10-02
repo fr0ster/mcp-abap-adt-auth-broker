@@ -346,7 +346,12 @@ export class AuthBroker {
     }, this.logger);
     this.logger.debug('[AuthBroker] Broker initialized', {
       hasServiceKeyStore: !!serviceKeyStore,
-      providerForm: typeof provider === 'function' ? 'factory' : 'instance',
+      providerForm:
+        provider === undefined
+          ? 'none'
+          : typeof provider === 'function'
+            ? 'factory'
+            : 'instance',
     });
   }
 

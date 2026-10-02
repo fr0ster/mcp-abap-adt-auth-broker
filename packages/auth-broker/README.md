@@ -689,7 +689,7 @@ Pass an `ILogger` as the constructor's second argument (for instance
 `DefaultLogger` from `@mcp-abap-adt/logger`); without one, nothing is logged.
 
 **What is logged:** the broker's initialization (whether a key store is
-given, the `provider` option's form), each provider build (the destination's `authType` and grant, whether
+given; the `provider` option: `none`, `factory` or `instance`), each provider build (the destination's `authType` and grant, whether
 it was seeded), each session secret saved (token or cookies, whether a
 refresh token came back, the expiry), a stored secret discarded because it is
 bound elsewhere (the destination only), and each failed write with the error's
