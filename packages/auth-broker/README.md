@@ -18,8 +18,8 @@ globally for them.
 
 ## Features
 
-- 🔌 **A credential for a connector**: `getProvider(destination)` builds the `IAuthProvider` the destination states — basic, SNC, the UAA grants (authorization code, client credentials, passcode), or a credential handed over — from the service key store's means and the session store's secret
-- 💾 **What a provider obtains is stored**: every token a `getProvider` provider obtains or renews — at `prepare()`, on expiry, or after a 401 in `rejected()` — is written to the session store, the secret alone with what it is bound to; a failed write is retried by the broker, and `flush()` tells you whether everything landed
+- 🔌 **A credential for a connector**: `getProvider(destination)` builds the `IAuthProvider` the destination states — basic, SNC, the UAA grants (authorization code, client credentials, passcode), the OIDC grants (authorization code with PKCE, device code, password, token exchange), the SAML grants (session cookies, bearer token), or a credential handed over — from the service key store's means and the session store's secret
+- 💾 **What a provider obtains is stored**: every token or set of SAML session cookies a `getProvider` provider obtains or renews — at `prepare()`, on expiry, or after a 401 in `rejected()` — is written to the session store, the secret alone with what it is bound to; a failed write is retried by the broker, and `flush()` tells you whether everything landed
 - 🔒 **A secret goes only where it was obtained**: a stored token is used only for the resource it was obtained for, from the issuer and client that issued it — otherwise it is discarded and the provider logs in afresh
 - 🎯 **Per destination**: one provider per destination name, built by a factory or given once
 - 🔄 **Provider-driven token lifecycle**: The provider decides whether its cached token is still good, refreshes it, or logs in; the broker persists what it returns
@@ -113,8 +113,8 @@ const broker = new AuthBroker({
 connector takes as it is. The destination states which provider it gets; the
 broker reads two stores, each for one role:
 
-- **the means** — `authType`, `grantType`, basic's user and password, the SNC
-  fields, `serviceUrl`, the client — from the **service key store**
+- **the means** — `authType`, `grantType`, basic's user and password, the SNC,
+  OIDC and SAML fields, `serviceUrl`, the client — from the **service key store**
   (`getConnectionConfig`), and only from there;
 - **the secret** — the token or session cookies, `expiresAt`, the refresh
   token — from the **session store** (`loadSession`), and only from there.
@@ -144,6 +144,12 @@ const provider = await broker.getProvider('DEV'); // an IAuthProvider
 | `jwt` / `authorization_code` | `AuthorizationCodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret`; `serviceUrl`, `sapClient` for the binding | the seed: `authorizationToken`, `refreshToken`, `expiresAt` — used only when `issuedFor` and `issuedBy` match |
 | `jwt` / `client_credentials` | `ClientCredentialsProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret`; `serviceUrl`, `sapClient` for the binding | nothing (the row takes the client alone) |
 | `jwt` / `passcode` | `UaaPasscodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = a public client); `serviceUrl`, `sapClient` for the binding | the seed: `authorizationToken`, `refreshToken`, `expiresAt` — used only when `issuedFor` and `issuedBy` match |
+| `jwt` / `oidc_authorization_code` | `OidcBrowserProvider` (PKCE) | `uaaClientId`, `uaaClientSecret` (`''` = a public client); `oidcIssuerUrl`, or `oidcAuthorizationEndpoint` + `oidcTokenEndpoint`; `oidcScopes`; `serviceUrl`, `sapClient` for the binding | the seed — used only when `issuedFor` and `issuedBy` match |
+| `jwt` / `device_code` | `OidcDeviceFlowProvider` | the client as above; `oidcIssuerUrl`, or `oidcDeviceAuthorizationEndpoint` + `oidcTokenEndpoint`; `oidcScopes`; `serviceUrl`, `sapClient` | the seed, as above |
+| `jwt` / `password` | `OidcPasswordProvider` | the client as above; `username`, `password`; `oidcIssuerUrl`, or `oidcTokenEndpoint`; `oidcScopes`; `serviceUrl`, `sapClient` | the seed, as above |
+| `jwt` / `token_exchange` | `OidcTokenExchangeProvider` (RFC 8693) | the client as above; `oidcSubjectToken`, `oidcSubjectTokenType`; `oidcAudience`, `oidcActorToken`, `oidcActorTokenType` when set; `oidcScopes`, joined by one space into its `scope`; `oidcIssuerUrl`, or `oidcTokenEndpoint`; `serviceUrl`, `sapClient` | the seed, as above (it has no refresh grant: a renewal exchanges again) |
+| `saml` / `saml2_pure` | `Saml2PureProvider` | `samlIdpSsoUrl`, `samlSpEntityId`, `samlIdpEntityId` (the expected issuer), `samlIdpCertificates`; `samlAcsUrl`, `samlRelayState`, `samlIdpInitiated`, `samlClockSkewMs` when set; `serviceUrl`, `sapClient` for the binding | the seed: `sessionCookies`, `expiresAt` — used only when `issuedFor` and `issuedBy` match |
+| `saml` / `saml2_bearer` | `Saml2BearerProvider` (RFC 7522) | the same SAML fields; `samlTokenUrl` when set; the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = a public client); `serviceUrl`, `sapClient` | the seed: `authorizationToken`, `refreshToken`, `expiresAt` — used only when `issuedFor` and `issuedBy` match |
 | `jwt` / `none` | `TokenAuthProvider.fixed(authorizationToken)` | `authType`, `grantType`, `serviceUrl` (+ `sapClient`); an issuer, when stated: `oidcIssuerUrl`, or the client's `uaaUrl` + `uaaClientId` | `authorizationToken` (required), `issuedFor` (required to match); `issuedBy` when the means state an issuer |
 | `saml` / `none` | `new SamlAuthProvider(sessionCookies)` | `authType`, `grantType`, `serviceUrl` (+ `sapClient`); `samlAcsUrl` when stated | `sessionCookies` (required), `issuedFor` (required to match); `issuedBy` when `samlAcsUrl` is stated |
 
@@ -168,8 +174,6 @@ The allowed pairs are `jwt` with `authorization_code`, `client_credentials`,
 `passcode`, `oidc_authorization_code`, `device_code`, `password`,
 `token_exchange` or `none`, and `saml` with `saml2_pure`, `saml2_bearer` or
 `none`. A pair outside them is a `DestinationConfigError` naming `grantType`.
-The OIDC grants and the two SAML grants are allowed pairs whose providers
-this version does not build yet: `getProvider` throws a plain `Error` for them.
 
 **The UAA grants.** The client comes from the key store's
 `getAuthorizationConfig` — never from the session store. A session is the
@@ -203,6 +207,83 @@ const broker = new AuthBroker({
 });
 ```
 
+**The OIDC grants.** The client is the key store's `getAuthorizationConfig`
+again: `uaaClientId`, and `uaaClientSecret` — `''` is a public client, sent
+with no secret. (A key store answers a client only when it holds one:
+auth-stores' `EnvDestinationStore` answers it when all three client fields
+are stated, so an OIDC destination there states `uaaUrl` too — the issuer,
+as `mcp-sso` writes it — and `uaaClientSecret: ''` for a public client.)
+The endpoints come from `oidcIssuerUrl`, which the provider discovers them
+from, or — without it — from every explicit endpoint the row reads
+(`oidcAuthorizationEndpoint`, `oidcDeviceAuthorizationEndpoint`,
+`oidcTokenEndpoint`); without either the error names `oidcIssuerUrl` and the
+endpoints missing. `oidcScopes` is passed as given (`token_exchange` takes
+one `scope` string: the scopes joined by a space). The subject and actor
+tokens of `token_exchange` and the user and password of `password` are
+means: sent to the token endpoint, never written to the session.
+
+**The SAML grants.** Each provider validates the assertion before anything
+uses it, with a validator the broker composes from the destination's trust
+and your replay store: `createSignedResponseValidator` for `saml2_pure` (the
+Response must be signed — the cookies' system receives it whole) and
+`createSignedAssertionValidator` for `saml2_bearer` (the Assertion must be
+signed — the token endpoint receives it alone), from `samlIdpCertificates`
+(PEM or base64 DER; several during a rotation), `samlClockSkewMs` and
+`assertionReplayStore(destination)`; `samlIdpEntityId` is the issuer every
+assertion must name. A certificate the validator cannot read, or a
+`samlClockSkewMs` that is not a whole, non-negative number of milliseconds,
+is a `DestinationConfigError` naming the field. `samlIdpInitiated: true`
+declares an IdP-initiated login: no AuthnRequest, and an assertion carrying
+no `InResponseTo` — your strategy then hands over the SAMLResponse without
+asking for an authorization URL (a strategy that asks gets Oops from
+`prepare()`). `saml2_pure` is seeded with the stored cookies and their
+`expiresAt` — cookies carry no expiry of their own, so the provider keeps them
+until the assertion's earliest `NotOnOrAfter` (less the provider's one-minute
+margin: an identity provider whose assertions live a minute or less makes
+every request a login); SAML has no refresh token, so a renewal is a new
+login through your strategy. `saml2_bearer` posts the Assertion to
+`samlTokenUrl`, else `<uaaUrl>/oauth/token`, with the client, and renews by
+its refresh token.
+
+**The collaborator options** — each a function of the destination, called
+once when that destination's provider is built, never disposed by the
+broker, and required only by the rows that use it; a row whose option is
+missing is a `DestinationConfigError` naming it:
+
+| Option | Rows | What it returns |
+|---|---|---|
+| `authorization(destination, grant)` | `authorization_code`, `passcode`, `saml2_pure`, `saml2_bearer` (the grant is passed) | the `IAuthorizationStrategy<string>` that conducts the login — for the SAML grants, the one that returns the SAMLResponse (`samlCallbackStrategy`, `manualSamlResponseStrategy`, …) |
+| `oidcAuthorization(destination)` | `oidc_authorization_code` | an `IAuthorizationStrategy<OidcCallbackResult>` (`oidcCallbackStrategy`, or `asOidcResult(…)` over a string strategy) |
+| `deviceCodePresenter(destination)` | `device_code` | an `IDeviceCodePresenter` that shows the user the verification URL and code (`consoleDeviceCodePresenter(logger)`, or your UI) |
+| `samlCookies(destination)` | `saml2_pure` | `(samlResponse) => Promise<string>`: posts the validated SAMLResponse to the system's ACS and returns the session cookies it sets |
+| `assertionReplayStore(destination)` | `saml2_pure`, `saml2_bearer` | the `IAssertionReplayStore` the validator records each assertion in, refusing one presented twice — `defaultReplayStore` (process-wide, in memory) or a shared one of yours |
+
+```typescript
+import {
+  consoleDeviceCodePresenter,
+  defaultReplayStore,
+  oidcCallbackStrategy,
+  samlCallbackStrategy,
+} from '@mcp-abap-adt/auth-providers';
+
+const broker = new AuthBroker(
+  {
+    serviceKeyStore: myKeyStore,
+    sessionStore: mySessionStore,
+    authorization: (destination, grant) =>
+      grant === 'saml2_pure' || grant === 'saml2_bearer'
+        ? samlCallbackStrategy({ timeoutMs: 120_000 })
+        : browserCallbackStrategy({ timeoutMs: 120_000 }),
+    oidcAuthorization: () => oidcCallbackStrategy({ timeoutMs: 120_000 }),
+    deviceCodePresenter: () => consoleDeviceCodePresenter(logger),
+    samlCookies: (destination) => (samlResponse) =>
+      postToAcs(destination, samlResponse), // yours: the system's ACS answers Set-Cookie
+    assertionReplayStore: () => defaultReplayStore,
+  },
+  logger,
+);
+```
+
 ### A Secret Is Bound to Its Resource and Issuer
 
 A token's audience, cookies' host and path, a system's client: presenting a
@@ -214,8 +295,11 @@ destination's. So the session store keeps, beside the secret, two strings
 - **`issuedFor`** — the resource: `serviceUrl` with the SAP client, e.g.
   `https://my-abap.example.com:443/sap/bc/adt?sap-client=100`;
 - **`issuedBy`** — who issued it, to which client: `uaaUrl` with
-  `client_id=<uaaClientId>` for the UAA grants, e.g.
-  `https://sub.authentication.us10.hana.ondemand.com:443?client_id=sb-abap-trial`.
+  `client_id=<uaaClientId>` for the UAA grants and `saml2_bearer`, e.g.
+  `https://sub.authentication.us10.hana.ondemand.com:443?client_id=sb-abap-trial`;
+  `oidcIssuerUrl` — else `uaaUrl` — with `client_id=<uaaClientId>` for the
+  OIDC grants; for `saml2_pure`'s cookies, the ACS of the system that set
+  them: `samlAcsUrl`, origin and path.
 
 The broker computes both from the destination's means and compares them,
 canonicalised on **both** sides, with what the session holds:
@@ -228,10 +312,12 @@ canonicalised on **both** sides, with what the session holds:
   and plain on the other compares equal; no user info, no other parameter,
   no fragment. A URL that does not parse binds nothing. A store keeps the
   strings as given and need not canonicalise them.
-- **The UAA grants:** a stored secret seeds the provider only when **both**
+- **The grants that obtain a secret** (UAA, OIDC, SAML)**:** a stored secret seeds the provider only when **both**
   stored values equal the computed ones. Otherwise — either different, or
-  absent on either side (no `serviceUrl` in the means, a session written
-  without them) — the secret is not used, **refresh token included**: the
+  absent on either side (no `serviceUrl` in the means, an OIDC destination
+  stating neither `oidcIssuerUrl` nor `uaaUrl`, a `saml2_pure` one without
+  `samlAcsUrl`, a session written without them) — the secret is not used,
+  **refresh token included**: the
   provider is built as with no session and logs in afresh by its grant, and
   the log says only `<destination>: secret bound to another resource,
   discarded` — never a URI, never a token. The new secret is written with
@@ -279,7 +365,10 @@ connector resends.
 
 - **The secret alone, with its binding, in one write**:
   `saveSession(destination, { authorizationToken, expiresAt, refreshToken,
-  issuedFor, issuedBy })` — `issuedFor` / `issuedBy` as computed when the
+  issuedFor, issuedBy })` — or, for `saml2_pure`'s cookies (a result of
+  `tokenType: 'saml'`), `{ sessionCookies, expiresAt, issuedFor, issuedBy }`,
+  with no refresh token: SAML has none. `saml2_bearer`'s result is a token
+  and is written as one — `issuedFor` / `issuedBy` as computed when the
   provider was built, each left out when the means lack its source (so the
   store clears it). No means is ever written — not `serviceUrl`, not
   `authType`, not the client: the client secret lives in the key store, and
@@ -350,6 +439,34 @@ try {
 
 A cached token that is still valid, or a refresh token the UAA accepts, never
 reaches the strategy.
+
+With `getProvider` the same holds for every collaborator option: give the
+broker an `authorization` / `oidcAuthorization` that refuses, and a
+`deviceCodePresenter` that routes the code to wherever a person can see it —
+or refuses. The provider then runs on its stored secret and refresh token;
+when a login is needed, `prepare()` / `rejected()` answer Oops — whose
+refusal carries fixed wording, never the message of what your collaborator
+threw — and nothing is written:
+
+```typescript
+const refuseLogin = {
+  authorize: async () => {
+    throw new LoginRequiredError('Run mcp-auth to log in');
+  },
+};
+
+const broker = new AuthBroker({
+  serviceKeyStore: myKeyStore,
+  sessionStore: mySessionStore,
+  authorization: () => refuseLogin,
+  oidcAuthorization: () => refuseLogin,
+  deviceCodePresenter: () => ({
+    present: async () => {
+      throw new LoginRequiredError('No one to show a device code to');
+    },
+  }),
+});
+```
 
 ### Custom Browser Auth Port
 
@@ -700,12 +817,11 @@ new AuthBroker(
         ) => IRefreshableTokenProvider);
     // Collaborators, each a function of the destination, called once per
     // build, never disposed by the broker:
-    authorization?: (destination: string, grant: StrategyGrant) => IAuthorizationStrategy<string>; // authorization_code, passcode
-    // Declared for the OIDC and SAML grants, which this version does not build yet:
-    oidcAuthorization?: (destination: string) => IAuthorizationStrategy<OidcCallbackResult>;
-    deviceCodePresenter?: (destination: string) => IDeviceCodePresenter;
-    samlCookies?: (destination: string) => (samlResponse: string) => Promise<string>;
-    assertionReplayStore?: (destination: string) => IAssertionReplayStore;
+    authorization?: (destination: string, grant: StrategyGrant) => IAuthorizationStrategy<string>; // authorization_code, passcode, saml2_pure, saml2_bearer
+    oidcAuthorization?: (destination: string) => IAuthorizationStrategy<OidcCallbackResult>; // oidc_authorization_code
+    deviceCodePresenter?: (destination: string) => IDeviceCodePresenter; // device_code
+    samlCookies?: (destination: string) => (samlResponse: string) => Promise<string>; // saml2_pure
+    assertionReplayStore?: (destination: string) => IAssertionReplayStore; // saml2_pure, saml2_bearer
   },
   logger?: ILogger,
 )
@@ -713,10 +829,14 @@ new AuthBroker(
 
 **Parameters:**
 - `config.sessionStore` - **Required** - The session secret: the token or cookies, `expiresAt`, the refresh token. For the token API, its `serviceUrl`, or the service key's, is required.
-- `config.serviceKeyStore` - The means: `authType`, `grantType`, the client, basic's user and password, the SNC fields, `serviceUrl`. **Required by `getProvider`**, which has no other source of means.
+- `config.serviceKeyStore` - The means: `authType`, `grantType`, the client, basic's user and password, the SNC, OIDC and SAML fields, `serviceUrl`. **Required by `getProvider`**, which has no other source of means.
 - `config.provider` - The token API's source (`getToken`, `refreshToken`, `createTokenRefresher`): a provider instance, used for every destination, or a factory (`TokenProviderFactory`), called once per destination and seeded with what the stores hold (see *Basic Usage*). Not used by `getProvider`. Without it, the token API throws `DestinationConfigError` naming `provider`.
-- `config.authorization` - The interactive strategy of `jwt` / `authorization_code` and `jwt` / `passcode`, as a function of the destination and the grant (see *A Provider for a Connector*). Required only by those grants; the broker supplies no default and disposes nothing.
-- The other collaborator options — the OIDC strategy, the device-code presenter, the SAML cookie function and replay store — are declared for the OIDC and SAML grants; each will be required only by the grants that use it.
+- `config.authorization` - The interactive strategy of `jwt` / `authorization_code`, `jwt` / `passcode`, `saml` / `saml2_pure` and `saml` / `saml2_bearer`, as a function of the destination and the grant (see *A Provider for a Connector*).
+- `config.oidcAuthorization` - The interactive strategy of `jwt` / `oidc_authorization_code`.
+- `config.deviceCodePresenter` - Where `jwt` / `device_code` shows the user the verification URL and code.
+- `config.samlCookies` - `saml2_pure`: turns the validated SAMLResponse into the system's session cookies.
+- `config.assertionReplayStore` - The replay store the SAML validators record each assertion in.
+- Each collaborator option is required only by the rows that use it (missing → `DestinationConfigError` naming it); the broker supplies no default, calls it once per build, and disposes nothing it returns.
 - `logger` - Optional logger. If not provided, nothing is logged.
 
 **Available Implementations:**
@@ -800,6 +920,17 @@ configuration whole, and the key's only when the session had none.
   | `jwt` / `none`, `saml` / `none` whose means state an issuer and whose stored `issuedBy` is not it, or is absent | `issuedBy` |
   | a UAA grant without its client in the key store (`''` counts as missing) | `uaaUrl`, `uaaClientId`, and `uaaClientSecret` for `authorization_code` / `client_credentials` — each that is missing |
   | `authorization_code` / `passcode` without the `authorization` option | `authorization` |
+  | an OIDC grant without its client's id in the key store | `uaaClientId` |
+  | an OIDC grant with neither `oidcIssuerUrl` nor every endpoint its row reads | `oidcIssuerUrl`, and each endpoint missing: `oidcAuthorizationEndpoint` / `oidcDeviceAuthorizationEndpoint`, `oidcTokenEndpoint` |
+  | `password` without user or password | `username`, `password` — each that is missing |
+  | `token_exchange` without its subject | `oidcSubjectToken`, `oidcSubjectTokenType` — each that is missing |
+  | `oidc_authorization_code` without the `oidcAuthorization` option | `oidcAuthorization` |
+  | `device_code` without the `deviceCodePresenter` option | `deviceCodePresenter` |
+  | a SAML grant without its trust (`''` and an empty certificate list count as missing) | `samlIdpSsoUrl`, `samlSpEntityId`, `samlIdpEntityId`, `samlIdpCertificates` — each that is missing |
+  | `saml2_bearer` without its client | `uaaUrl`, `uaaClientId` — each that is missing |
+  | a SAML grant without its collaborators | `authorization`, `samlCookies` (`saml2_pure`), `assertionReplayStore` — each that is missing |
+  | a certificate the validator cannot read | `samlIdpCertificates` |
+  | a `samlClockSkewMs` that is not a whole, non-negative number | `samlClockSkewMs` |
 
 - **Provider errors propagate unchanged** — the same object, with its class,
   `code`, `missingFields` and `cause`: auth-providers' `ValidationError`,

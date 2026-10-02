@@ -582,7 +582,8 @@ export class AuthBroker {
    * One provider per destination for the broker's life: concurrent first calls
    * share one build, and a build that threw is tried again on the next call.
    *
-   * A token provider (the UAA grants) is seeded from the session and writes
+   * A token provider (the UAA, OIDC and SAML grants) is seeded from the
+   * session when the stored secret is bound to this destination, and writes
    * every token it obtains — at `prepare()`, on expiry, or in `rejected()` after
    * a 401 — back to the session store before it answers (see `flush()`).
    *

@@ -19,7 +19,7 @@ An npm workspace in the layout of `mcp-abap-adt-interfaces`:
                            tsconfig.base.json, biome.json, tools/, docs/
 packages/auth-broker/      @mcp-abap-adt/auth-broker — the library (src/, its tests,
                            tests/test-config.yaml.template, tests/stand/: UAA and
-                           Keycloak in Docker for the token grants' suites)
+                           Keycloak in Docker for the UAA, OIDC and SAML grants' suites)
 packages/auth-broker-cli/  @mcp-abap-adt/auth-broker-cli — mcp-auth and mcp-sso (src/, its tests,
                            the Keycloak and CAP stands under tests/)
 tools/                     check-graph.js, check-packed.js, publish-changed.js,
@@ -43,7 +43,7 @@ tools/                     check-graph.js, check-packed.js, publish-changed.js,
 ## Core Principles
 
 - **Interface-only communication**: The broker only talks to `ISessionStore`, `IServiceKeyStore`, and `IRefreshableTokenProvider` interfaces. `getProvider` constructs auth-providers classes by name, from what the destination states, and hands them out as `IAuthProvider`.
-- **Means and secret are split by store**: the service key store holds the means (`authType`, `grantType`, the client, basic's user and password, the SNC fields, `serviceUrl`), the session store the secret (token or cookies, `expiresAt`, refresh token). `getProvider` and the broker's `getConnectionConfig` / `getAuthorizationConfig` read each from its own store only.
+- **Means and secret are split by store**: the service key store holds the means (`authType`, `grantType`, the client, basic's user and password, the SNC, OIDC and SAML fields, `serviceUrl`), the session store the secret (token or cookies, `expiresAt`, refresh token). `getProvider` and the broker's `getConnectionConfig` / `getAuthorizationConfig` read each from its own store only.
 - **The destination states its provider**: `authType`, and `grantType` for `jwt` / `saml`, choose it — never which other fields are present.
 - **Dependency inversion**: Implementations live in `@mcp-abap-adt/auth-stores` and `@mcp-abap-adt/auth-providers`.
 - **The provider decides**: Providers own the token lifecycle — whether the cached token is still good, refresh, re-login — and how a login is conducted (their authorization strategy). The broker does not repeat or override any of it.
@@ -76,8 +76,26 @@ connector takes:
   (`getAuthorizationConfig`), seeded from the session (token, refresh token,
   `expiresAt`; not `client_credentials`) only when the session is bound to
   this destination (below), the consumer's `authorization(d, grant)` for the
-  two interactive ones, the broker's logger and `onTokens`; the OIDC and SAML
-  grants are not built yet;
+  two interactive ones, the broker's logger and `onTokens`;
+- `jwt` / `oidc_authorization_code`, `device_code`, `password`,
+  `token_exchange` → `OidcBrowserProvider`, `OidcDeviceFlowProvider`,
+  `OidcPasswordProvider`, `OidcTokenExchangeProvider` (`oidcProvider` in
+  `src/destinations.ts`): the client id and secret (`''` a public client) from
+  the key store's client, `oidcIssuerUrl` or the row's explicit endpoints, the
+  scopes (`token_exchange`: joined by one space), the user or the subject and
+  actor tokens; the consumer's `oidcAuthorization(d)` / `deviceCodePresenter(d)`;
+  seeded and wired as the UAA rows;
+- `saml` / `saml2_pure`, `saml2_bearer` → `Saml2PureProvider`,
+  `Saml2BearerProvider` (`samlProvider`): the broker composes the validator —
+  `createSignedResponseValidator` for pure, `createSignedAssertionValidator`
+  for bearer, from `samlIdpCertificates`, `samlClockSkewMs` and the consumer's
+  `assertionReplayStore(d)` — and passes `samlIdpEntityId` as the expected
+  issuer; `authorization(d, grant)` conducts the login, `samlCookies(d)` turns
+  pure's SAMLResponse into cookies; pure is seeded with the stored cookies and
+  `expiresAt`, bearer with the token, refresh token and expiry, and takes the
+  client and `samlTokenUrl`;
+- every field and collaborator option a row lacks is named in one
+  `DestinationConfigError`, before any collaborator is called;
 - caches the *promise* of the build per destination, set before the first store
   read and dropped when the build throws, so concurrent first calls build once
   and a failure is retried.
@@ -87,14 +105,15 @@ connector takes:
 A stored secret is used only for the resource it was obtained for, from the
 issuer and client that issued it (spec §4.5). `getProvider` computes, from the
 means, `issuedFor` (`serviceUrl` + `sapClient`) and `issuedBy` (`uaaUrl` +
-`uaaClientId` for the UAA grants; for `none`, `oidcIssuerUrl` or the client
-for `jwt`, `samlAcsUrl` for `saml`), with one canonicalising function — the
+`uaaClientId` for the UAA grants and `saml2_bearer`; `oidcIssuerUrl`, else
+`uaaUrl`, + `uaaClientId` for the OIDC grants; `samlAcsUrl` for `saml2_pure`;
+for `none`, `oidcIssuerUrl` or the client for `jwt`, `samlAcsUrl` for `saml`), with one canonicalising function — the
 broker's only: scheme and host lower-cased by `URL`, the port explicit
 (443/80), the path without a trailing `/`, one parameter (`sap-client`, the
 means' `sapClient` first; `client_id`; none for an ACS) re-encoded through
 `URLSearchParams`, nothing else. The session's values are canonicalised the
-same way before the comparison, so a store keeps them as given. The UAA rows
-seed only when both match — otherwise the secret, refresh token included, is
+same way before the comparison, so a store keeps them as given. The rows
+that obtain a secret (UAA, OIDC, SAML) seed only when both match — otherwise the secret, refresh token included, is
 dropped (`boundOrDiscarded`, one value-free warn line) and the provider logs
 in afresh; the `none` rows throw `DestinationConfigError` naming `issuedFor`
 (always compared) or `issuedBy` (compared when the means state an issuer).
@@ -105,7 +124,9 @@ Every token provider `getProvider` builds gets `onTokens`, which
 `BaseTokenProvider` awaits after every login and refresh — never on a cache
 hit — so a renewal inside a connector is stored before the connector resends.
 The broker writes the session secret alone, `{ authorizationToken, expiresAt,
-refreshToken, issuedFor, issuedBy }` in one `saveSession` — the expiry fixed
+refreshToken, issuedFor, issuedBy }` in one `saveSession` — for a `saml2_pure`
+result (`tokenType: 'saml'`) `{ sessionCookies, expiresAt, issuedFor,
+issuedBy }`, with no refresh token; `saml2_bearer`'s is a token — the expiry fixed
 when the result arrives, the binding computed when the provider was built
 (each field left out when the means lack its source), the stored refresh
 token carried forward when the result has none and the stored session is

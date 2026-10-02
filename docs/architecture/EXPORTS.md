@@ -24,8 +24,15 @@ export {
 collaborator options (`authorization`, `oidcAuthorization`,
 `deviceCodePresenter`, `samlCookies`, `assertionReplayStore`) are each a
 function of the destination; `StrategyGrant` is the grant `authorization` is
-called with (`'authorization_code' | 'passcode' | 'saml2_pure' | 'saml2_bearer'`
-— this version builds the first two).
+called with (`'authorization_code' | 'passcode' | 'saml2_pure' | 'saml2_bearer'`).
+Each is required only by the destination rows that use it: `authorization`
+by `authorization_code`, `passcode`, `saml2_pure`, `saml2_bearer`;
+`oidcAuthorization` by `oidc_authorization_code`; `deviceCodePresenter` by
+`device_code`; `samlCookies` by `saml2_pure`; `assertionReplayStore` by both
+SAML grants. Their types come from the packages that declare them:
+`IAuthorizationStrategy`, `IAssertionReplayStore` from
+`@mcp-abap-adt/interfaces-auth`; `OidcCallbackResult`, `IDeviceCodePresenter`
+from `@mcp-abap-adt/auth-providers` — none is re-exported here.
 
 **Key methods**:
 - `getProvider(destination: string): Promise<IAuthProvider>` — the provider the destination states, from the key store's means and the session's secret — the secret used only when its `issuedFor` / `issuedBy` are the destination's; cached per destination

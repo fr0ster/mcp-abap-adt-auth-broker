@@ -6,7 +6,7 @@ log in through it. Two packages, one repository.
 
 | package | what it is | depends on |
 |---|---|---|
-| [`@mcp-abap-adt/auth-broker`](packages/auth-broker) | the library: for a destination name, builds the `IAuthProvider` it states (`getProvider`) from the means in its key store and the secret in its session store, and stores every token that provider obtains; and the token API — reads the stores, gets a token from a provider, persists the result | the contract packages (`interfaces-auth`, `interfaces-auth-sap`, `interfaces-auth-broker`, `interfaces-utils`), `auth-providers` |
+| [`@mcp-abap-adt/auth-broker`](packages/auth-broker) | the library: for a destination name, builds the `IAuthProvider` it states (`getProvider`) from the means in its key store and the secret in its session store, and stores every token or SAML session cookie that provider obtains; and the token API — reads the stores, gets a token from a provider, persists the result | the contract packages (`interfaces-auth`, `interfaces-auth-sap`, `interfaces-auth-broker`, `interfaces-utils`), `auth-providers` |
 | [`@mcp-abap-adt/auth-broker-cli`](packages/auth-broker-cli) | the `mcp-auth` and `mcp-sso` commands: service key, OIDC or SAML login, written to a session file | the library, `auth-stores`, `auth-providers`, the logger |
 
 ## Installing
