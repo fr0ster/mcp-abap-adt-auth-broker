@@ -36,6 +36,11 @@ import type { IConfig } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { type Binding, boundHere, consumerBinding } from './binding';
 import { destinationBinding } from './bindingOf';
+import {
+  type ClientAuthenticationStrategy,
+  clientAuthenticationContext,
+  resolveClientAuthentication,
+} from './clientAuthentication';
 import { DestinationConfigError } from './DestinationConfigError';
 import {
   basicProvider,
@@ -136,6 +141,20 @@ export interface AuthBrokerConfig {
   ) => (samlResponse: string) => Promise<string>;
   /** The replay store the SAML assertion validators share. */
   assertionReplayStore?: (destination: string) => IAssertionReplayStore;
+  /**
+   * How a destination's client authenticates to the authorization server, for
+   * every grant that authenticates one (`ClientAuthenticationGrant`). Called
+   * once when the destination's provider is built, with the client the key
+   * store answers and its certificate, read only if the strategy asks.
+   *
+   * A given strategy always answers one, or throws: there is no "nothing"
+   * answer, so an explicit choice never falls back to the secret. A throw
+   * becomes a `DestinationConfigError` naming `clientAuthentication`, in fixed
+   * words. Absent: the client secret, as in 4.0.0, and nothing
+   * certificate-related is read. Shipped: `fromServiceKeyCertificate()`,
+   * `fromServiceKeySecret({ encoding })`.
+   */
+  clientAuthentication?: ClientAuthenticationStrategy;
 }
 
 /** The session secret's fields on a connection config — never means. */
@@ -265,6 +284,7 @@ export class AuthBroker {
   private readonly deviceCodePresenter: AuthBrokerConfig['deviceCodePresenter'];
   private readonly samlCookies: AuthBrokerConfig['samlCookies'];
   private readonly assertionReplayStore: AuthBrokerConfig['assertionReplayStore'];
+  private readonly clientAuthentication: AuthBrokerConfig['clientAuthentication'];
   /** getProvider's writes of the session secret, retried on their own. */
   private readonly writer: SessionWriter<BoundResult>;
 
@@ -326,6 +346,7 @@ export class AuthBroker {
     this.deviceCodePresenter = config.deviceCodePresenter;
     this.samlCookies = config.samlCookies;
     this.assertionReplayStore = config.assertionReplayStore;
+    this.clientAuthentication = config.clientAuthentication;
     this.logger = logger ?? noOpLogger;
     this.writer = new SessionWriter<BoundResult>(async (destination, bound) => {
       try {
@@ -790,6 +811,21 @@ export class AuthBroker {
             : await this.read(destination, 'client', () =>
                 serviceKeyStore.getAuthorizationConfig(destination),
               );
+        // The consumer's client authentication, resolved inside the guard
+        // before any provider exists: a strategy that throws leaves nothing
+        // built and nothing cached.
+        if (this.clientAuthentication && grant !== 'saml2_pure') {
+          await resolveClientAuthentication(
+            this.clientAuthentication,
+            clientAuthenticationContext(destination, grant, client, () =>
+              this.read(destination, 'client certificate', async () =>
+                serviceKeyStore.getClientCertificate
+                  ? serviceKeyStore.getClientCertificate(destination)
+                  : null,
+              ),
+            ),
+          );
+        }
         const binding = destinationBinding(authType, grant, stated, client);
         const stored =
           grant === 'client_credentials'

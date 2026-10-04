@@ -10,7 +10,11 @@
 // declares it: tokens from `interfaces-auth`, `AuthType` and
 // `IAuthorizationConfig` from `interfaces-auth-sap`, the store contracts from
 // `interfaces-auth-broker`, `ILogger` from `interfaces-utils`.
-export type { ITokenRefresher } from '@mcp-abap-adt/interfaces-auth';
+export type {
+  IClientAuthentication,
+  ITokenRefresher,
+} from '@mcp-abap-adt/interfaces-auth';
+export type { IClientCertificate } from '@mcp-abap-adt/interfaces-auth-broker';
 export type { AuthType } from '@mcp-abap-adt/interfaces-auth-sap';
 export type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 export {
@@ -20,6 +24,14 @@ export {
   type TokenProviderFactory,
 } from './AuthBroker';
 export { bindingOf, type SecretBinding } from './bindingOf';
+export {
+  type ClientAuthenticationContext,
+  type ClientAuthenticationGrant,
+  type ClientAuthenticationStrategy,
+  type FromServiceKeySecretOptions,
+  fromServiceKeyCertificate,
+  fromServiceKeySecret,
+} from './clientAuthentication';
 export { DestinationConfigError } from './DestinationConfigError';
 // Token provider interface
 export type {
