@@ -61,9 +61,13 @@ x509 key without building providers itself.
    and nothing falls back from one to the other.
 3. **A key with a secret works exactly as today** — same store answers, same
    provider, same request.
-4. **The consumer composes.** The broker builds the provider the destination
-   states; it does not choose an authentication the destination does not
-   state (the providers' rule 7, `provider-does-not-guess`).
+4. **The consumer chooses, through strategies.** Every choice — which grant,
+   which client authentication, which Basic encoding, where certificate files
+   live — is the consumer's, stated explicitly; where a choice is behaviour,
+   it is a strategy the consumer passes. A store only answers what the key
+   holds; the broker only applies what the consumer composed. No default
+   picks for the consumer and nothing is inferred (the providers' rule 7,
+   `provider-does-not-guess`).
 5. **Dependencies only from the registry**, each released before its consumer
    builds against it.
 6. **Every claim is measured.** The x509 path is proven live on the BTP trial
@@ -78,19 +82,37 @@ x509 key without building providers itself.
   `binding-secret` on the trial; nothing documents an x509 one).
 - Rotating or issuing certificates.
 
-## Open, for the spec
+## Decided (2026-10-05, before the spec)
 
-1. The method's name and shape, and whether `getConnectionConfig` / the
-   destination's stated grant needs to say anything about it.
-2. A destination `.env` (`EnvDestinationStore`): paths to the PEM files, the
-   PEM inline, or not supported in this change.
-3. Which grants take the certificate: `client_credentials` (measured) and
-   `authorization_code` (the token request goes to `certurl`, the authorize
-   page to `url`); `passcode` (`UaaPasscodeProvider` takes
-   `clientAuthentication` too since 5.3.0) — in or out.
-4. A wrapped key (`{"credentials": {…}}`), as the CLI already unwraps.
-5. Where the live check lives (broker `test:live`, a trial setup/teardown like
-   auth-providers' `tests/xsuaa/`).
+1. **The store answers, it does not decide.** `IServiceKeyStore` gains an
+   optional `getClientCertificate(destination)` returning
+   `{ certificate, key, certUrl }` or `null` — the key's data, nothing more.
+   The grant stays the destination's stated `grantType`.
+2. **The client authentication is a strategy the consumer gives the broker.**
+   `AuthBroker` takes an optional client-authentication strategy: given the
+   destination and what the store answers, it returns the
+   `IClientAuthentication` for the provider. The broker ships named factories
+   — e.g. one building `tlsClientCertificate` from the store's certificate
+   (`endpoint` = `${certUrl}/oauth/token`), one building `clientSecretBasic`
+   with the encoding the consumer states — and the consumer picks or writes
+   its own. Without a strategy the broker does exactly what 4.0.0 does (the
+   secret, the providers' path without a strategy); a key that has no secret
+   but a certificate is then refused in fixed words naming the missing
+   strategy — never a fallback.
+3. **A destination `.env`** (`EnvDestinationStore`) holds paths to the PEM
+   files and the mTLS host (`UAA_CLIENT_CERT_PATH`, `UAA_CLIENT_KEY_PATH`,
+   `UAA_CERT_URL` — names fixed in the spec), never the PEM itself; the CLI,
+   when it copies an x509 key's client, writes the paths the consumer gives,
+   not the key material.
+4. **Grants:** `client_credentials`, `authorization_code` and `passcode` all
+   take the strategy (5.3.0 providers accept it). `client_credentials` is
+   measured live on the trial; the two user grants get unit tests and are
+   documented as unmeasured.
+5. **A key wrapped in `credentials`** is unwrapped by the store, as for a
+   secret key.
+6. **The live check** is the broker's own opt-in `test:live` with a trial
+   setup/teardown modelled on auth-providers' `tests/xsuaa/` (exact `cf target`
+   guard, `.local/owned`, everything removed, also on failure).
 
 ## Path
 
