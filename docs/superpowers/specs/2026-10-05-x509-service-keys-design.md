@@ -140,7 +140,7 @@ that shape — the consumer passes one, or composes its own:
 
 | Factory | Answers |
 |---|---|
-| `fromServiceKeyCertificate()` | `tlsClientCertificate({ material: { cert, key }, endpoint: \`${certUrl}/oauth/token\` })` from `readCertificate()`. The store lacking `getClientCertificate`, or answering `null` (e.g. an `EnvDestinationStore` with none of the three variables), **throws** — fixed words, "the destination has no client certificate" |
+| `fromServiceKeyCertificate()` | `tlsClientCertificate({ material: { cert, key }, endpoint: \`${certUrl}/oauth/token\` })` from `readCertificate()`. It awaits the strategy's `tlsMaterial()` before answering, so a malformed or incomplete PEM is refused inside the build guard (5.3.0 checks material lazily). The store lacking `getClientCertificate`, or answering `null` (e.g. an `EnvDestinationStore` with none of the three variables), **throws** — fixed words, "the destination has no client certificate" |
 | `fromServiceKeySecret({ encoding })` | `clientSecretBasic(uaaClientSecret, { encoding })` from the secret client. No secret client, or an empty secret, **throws** — fixed words, "the destination has no client secret". `encoding` is required (`'raw'` for XSUAA, measured) |
 
 Both fail closed. A consumer that wants one with the other as its fallback
