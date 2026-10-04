@@ -1,6 +1,6 @@
 # x509 service keys — goal and path
 
-**Status:** draft goal, for review in this PR. The spec and then the plan come
+**Status:** goal approved 2026-10-05. The spec and then the plan come
 next, in this PR. This file is the anchor: it says what they are for, and what
 neither may trade away. If the spec or the plan needs to depart from anything
 under *Holds throughout*, this file changes first — explicitly, in review.
@@ -86,8 +86,8 @@ x509 key without building providers itself.
    PEM inline, or not supported in this change.
 3. Which grants take the certificate: `client_credentials` (measured) and
    `authorization_code` (the token request goes to `certurl`, the authorize
-   page to `url`); `passcode` (`UaaPasscodeProvider` has no
-   `clientAuthentication`) — refused, or out of scope.
+   page to `url`); `passcode` (`UaaPasscodeProvider` takes
+   `clientAuthentication` too since 5.3.0) — in or out.
 4. A wrapped key (`{"credentials": {…}}`), as the CLI already unwraps.
 5. Where the live check lives (broker `test:live`, a trial setup/teardown like
    auth-providers' `tests/xsuaa/`).
