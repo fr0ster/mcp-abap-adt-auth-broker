@@ -71,7 +71,7 @@ Starts the auth-stores PR (its own worktree and branch); Task 3 adds to the same
 
 **Interfaces — Produces:** `XsuaaServiceKeyStore.getClientCertificate(destination)`.
 
-- [ ] Tests: a bare and a `credentials`-wrapped x509 key (`url`, `clientid`, `certificate`, `key`, `certurl`, no `clientsecret`) → `getAuthorizationConfig` `null`, `getClientCertificate` the whole client; a secret key → `getClientCertificate` `null` and every other answer exactly as today (existing tests unchanged); a key with both a secret and a certificate → refused in fixed words; PEM with CRLF and a chain is returned unchanged (Review Focus 5); no store log line contains PEM (marker test).
+- [ ] Tests: a bare and a `credentials`-wrapped x509 key (`url`, `clientid`, `certificate`, `key`, `certurl`, no `clientsecret`) → `getAuthorizationConfig` `null`, `getClientCertificate` the whole client; a secret key → `getClientCertificate` `null` and every other answer exactly as today (existing tests unchanged); a key with both a secret and a complete certificate (SAP's documented `credential-type: x509` shape) → `getAuthorizationConfig` the secret client exactly as 3.2.0, `getClientCertificate` the certificate client, no error; only one of `certificate` / `key` → refused in fixed words; PEM with CRLF and a chain is returned unchanged (Review Focus 5); no store log line contains PEM (marker test).
 - [ ] Implement; `AbapServiceKeyStore` untouched.
 - [ ] Load-bearing each; `npm test`, test:check, lint.
 - [ ] CHANGELOG 3.3.0, README (x509 keys; the `.env` variables), `package.json` 3.3.0 + lockfile; commit, push, open the auth-stores PR; stop for the user's review → merge, tag, user's publish; confirm 3.3.0 on the registry.

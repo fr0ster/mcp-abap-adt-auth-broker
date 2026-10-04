@@ -51,9 +51,18 @@ SAML bearer), and an x509 key never produces one (version-skew safe).
   `url`, `clientid`, `certificate`, `key` and `certurl` and no `clientsecret`
   is an x509 key. `getAuthorizationConfig` answers `null` for it;
   `getClientCertificate` answers `{ uaaUrl, clientId, certificate, key, certUrl }`. A key with a
-  `clientsecret` answers `getClientCertificate` with `null` and everything else
-  exactly as today. A key carrying both a secret and a certificate is refused
-  in fixed words (the key does not say what it is).
+  `clientsecret` and no certificate answers `getClientCertificate` with `null`
+  and everything else exactly as today. **A key carrying both** a secret and a
+  complete certificate (SAP documents such XSUAA credentials with
+  `credential-type: x509`; a trial service key measured 2026-10-04 had no
+  secret — both shapes exist) **offers both and is not an error**:
+  `getAuthorizationConfig` answers its secret client exactly as 3.2.0 did
+  (never a public client — the secret is non-empty), and `getClientCertificate`
+  answers its certificate client. Which one authenticates is the consumer's
+  choice through the broker's strategy; the store does not read
+  `credential-type` to choose (it is documented: SAP uses the certificate in
+  place of the secret for such a binding). A key with only one of
+  `certificate` / `key` is incomplete and refused in fixed words.
 - **`EnvDestinationStore`:** three means fields, each a path or a URL, never
   PEM — `uaaClientCertPath`, `uaaClientKeyPath`, `uaaCertUrl` — store-local
   (declared in auth-stores beside `MeansField`, not in `IConfig`). Their
@@ -275,7 +284,7 @@ provider's refusal (5.3.0 already maps it in fixed words).
 
 | Where | What it proves |
 |---|---|
-| stores, unit | a bare and a wrapped x509 key → `getAuthorizationConfig` null and `getClientCertificate` the whole certificate client; a secret key → `null` and today's answers; both → refused; `EnvDestinationStore`: all three variables → the files' content; none → `null`; some but not all, or any together with the client secret variable → the store's fixed-words error from both methods, **without reading any file**; an unreadable file → fixed words, no content |
+| stores, unit | a bare and a wrapped x509 key → `getAuthorizationConfig` null and `getClientCertificate` the whole certificate client; a secret key → `null` and today's answers; a key with both (SAP's documented `credential-type: x509` shape with a secret) → `getAuthorizationConfig` the secret client, `getClientCertificate` the certificate client; only one of certificate/key → refused; `EnvDestinationStore`: all three variables → the files' content; none → `null`; some but not all, or any together with the client secret variable → the store's fixed-words error from both methods, **without reading any file**; an unreadable file → fixed words, no content |
 | broker, unit | each factory's answer, and each factory throwing when its client is unavailable (store without the method, `null`, no secret; an incomplete or mixed `.env` throws earlier, in the store) → the guarded `DestinationConfigError`, never a fallback; the consumer factory receiving the fourth argument, and a throwing factory guarded; `uaaProvider` with a strategy → the provider got `clientAuthentication` and no secret, for all three grants; without one → byte-for-byte 4.0.0 (existing tests unchanged); certificate without a strategy → `DestinationConfigError` naming `clientAuthentication`; nothing of a key in a log, error or refusal (a marker test) |
 | CLI, unit | the flags; x509 key without a flag → the named error; the `.env` gets paths, never PEM |
 | broker stand | unchanged suites green on 5.3.0 |
