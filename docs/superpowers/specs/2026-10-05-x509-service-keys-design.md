@@ -54,12 +54,26 @@ SAML bearer), and an x509 key never produces one (version-skew safe).
   `clientsecret` answers `getClientCertificate` with `null` and everything else
   exactly as today. A key carrying both a secret and a certificate is refused
   in fixed words (the key does not say what it is).
-- **`EnvDestinationStore`:** three variables, each optional, never PEM —
-  `UAA_CLIENT_CERT_PATH`, `UAA_CLIENT_KEY_PATH`, `UAA_CERT_URL`.
-  `getClientCertificate` reads the two files when all three are set (with
-  `UAA_URL` and `UAA_CLIENT_ID` it already holds) and answers their contents; any one missing → `null`; a file that cannot be read → an
-  error of the store's own class in fixed words naming the variable, never the
-  path's content. `setDestination` takes the three as it takes the others.
+- **`EnvDestinationStore`:** three variables, each a path or a URL, never
+  PEM — `UAA_CLIENT_CERT_PATH`, `UAA_CLIENT_KEY_PATH`, `UAA_CERT_URL`. Its
+  answers, decided from which variables are set (no file is read to decide):
+  - **none of the three** → as 4.0.0 (`getAuthorizationConfig` unchanged;
+    `getClientCertificate` → `null`);
+  - **all three, and no `UAA_CLIENT_SECRET`** → a certificate destination:
+    `getAuthorizationConfig` → `null` (as for an x509 key, so an older consumer
+    never sees a public client); `getClientCertificate` reads the two files
+    and answers `{ uaaUrl, clientId, certificate, key, certUrl }` with
+    `UAA_URL` / `UAA_CLIENT_ID`;
+  - **some but not all three**, or **any of them together with
+    `UAA_CLIENT_SECRET`** → both methods throw the store's own error in fixed
+    words naming the variables (incomplete / mixed client) — never a silent
+    `null`, never the secret;
+  - a file that cannot be read → the store's error in fixed words naming the
+    variable, never the path's content.
+  `setDestination` writes the three as it writes the others, and when it
+  writes a certificate client it removes `UAA_CLIENT_SECRET`, and when it
+  writes a secret client it removes the three — switching a destination's
+  authentication never leaves a stale credential of the other kind.
 - **Never** to the session store: `SessionSecret` gains nothing, and no session
   writer receives a certificate or key.
 - **ABAP service keys** (`AbapServiceKeyStore`) are not touched.
@@ -69,11 +83,21 @@ SAML bearer), and an x509 key never produces one (version-skew safe).
 ### 3.1 The strategy
 
 ```ts
-/** The grants whose client authenticates to the authorization server. */
+/**
+ * Every grant whose client authenticates to the authorization server: the
+ * three UAA grants, the OIDC grants and `saml2_bearer` — every row that
+ * passes a client secret today. (`saml2_pure` and the basic/SNC/handover rows
+ * authenticate no client and never call the strategy.)
+ */
 export type ClientAuthenticationGrant =
   | 'client_credentials'
   | 'authorization_code'
-  | 'passcode';
+  | 'passcode'
+  | 'oidc_authorization_code'
+  | 'device_code'
+  | 'password'
+  | 'token_exchange'
+  | 'saml2_bearer';
 
 export interface ClientAuthenticationContext {
   readonly destination: string;
@@ -138,7 +162,19 @@ broker's. Every throw is turned into the guarded `DestinationConfigError`
   PEM) run inside one guard in the broker: any throw becomes a
   `DestinationConfigError` in fixed words naming `clientAuthentication` — no
   `cause`, no message of the thrown value — before any provider exists.
-- Grants: `client_credentials`, `authorization_code`, `passcode`.
+- **Every client-authenticating row** — `uaaProvider`, the OIDC row
+  (`oidcProvider`) and `saml2_bearer` — applies the same rule: with a strategy,
+  the provider gets its answer as `clientAuthentication` and no `clientSecret`
+  (all these 5.3.0 providers take it); without one, 4.0.0. A strategy is
+  therefore never silently ignored. The exact `DestinationGrant` names of the
+  OIDC rows are taken from `interfaces-auth-broker` in the plan.
+- **The session binding uses the client identity, never PEM.** The binding
+  (`destinationBinding`, `consumerBinding`, `uaaBinding`) is computed from the
+  secret client when there is one, else from the certificate client's `uaaUrl`
+  and `clientId` — resolved through the same memoised `readCertificate` before
+  the binding and the session seed are chosen. So a certificate destination's
+  tokens are stored with `issuedBy` = its issuer and client, reused after the
+  broker is recreated, and refused after the issuer or client id changes.
 
 ### 3.3 The token API, `getAuthorizationConfig`, and the consumer's factory
 
@@ -187,7 +223,13 @@ provider's refusal (5.3.0 already maps it in fixed words).
   `client_credentials`, else `authorization_code`) — client authentication
   does not choose a grant. No flag → 4.0.0 behaviour; an x509 key with no flag
   → an error naming the flag (it no longer rejects a null `authConfig` when the
-  certificate strategy supplies the identity).
+  certificate strategy supplies the identity). With `certificate` it takes
+  `--cert-path` / `--key-path` exactly as `generate-env` does (existing files,
+  resolved to absolute paths) and writes them, with `certurl`, into the
+  `EnvDestinationStore` it authenticates through — path-only; its
+  `withPlaceholderUrl` adapter forwards `getClientCertificate` like every other
+  store method. Its exported destination (env/JSON output) carries the paths
+  and `certurl`, never PEM, and a fresh broker over it gets a token.
 - `generate-env-from-service-key`: the same explicit choice
   (`--client-auth certificate|secret`, `--basic-encoding raw|form` with
   `secret`), passed into the `AuthBroker` it builds. For `certificate` it also
@@ -216,8 +258,10 @@ provider's refusal (5.3.0 already maps it in fixed words).
 | broker, unit | each factory's answer, and each factory throwing when its client is unavailable (store without the method, `null`, an incomplete `.env`, no secret) → the guarded `DestinationConfigError`, never a fallback; the consumer factory receiving the fourth argument, and a throwing factory guarded; `uaaProvider` with a strategy → the provider got `clientAuthentication` and no secret, for all three grants; without one → byte-for-byte 4.0.0 (existing tests unchanged); certificate without a strategy → `DestinationConfigError` naming `clientAuthentication`; nothing of a key in a log, error or refusal (a marker test) |
 | CLI, unit | the flags; x509 key without a flag → the named error; the `.env` gets paths, never PEM |
 | broker stand | unchanged suites green on 5.3.0 |
+| stores, unit (added) | `EnvDestinationStore`: none / all three without secret / partial / mixed with `UAA_CLIENT_SECRET` → 4.0.0 / certificate (authz null) / fixed-words error / fixed-words error; old-consumer view of a certificate destination → `getAuthorizationConfig` null; `setDestination` switching secret↔certificate removes the other kind |
+| broker, unit (bindings, rows) | a certificate destination's binding uses its `uaaUrl`/`clientId`: a stored token reused after broker recreation, refused after the issuer or client id changes; the strategy reaches the OIDC row and `saml2_bearer` (provider gets `clientAuthentication`, no secret) |
 | broker, unit (added) | a throwing strategy and a malformed PEM → `DestinationConfigError` in fixed words, nothing of the thrown value; a valid secret with unreadable certificate paths and no strategy → the secret provider builds, no file read; old-consumer shape: an x509 key → `getAuthorizationConfig` null (never `''`) |
-| trial, live (`test:live`, opt-in) | setup creates an XSUAA instance with an x509 key (exact `cf target` guard, `.local/owned`). (a) `AuthBroker` + `XsuaaServiceKeyStore` + `fromServiceKeyCertificate()` → `getProvider(dest).prepare()` Ok and the token API returns a token whose client id is the key's; (b) `mcp-auth --client-auth certificate` → a token with that client id; (c) `generate-env-from-service-key --client-auth certificate --cert-path … --key-path …` → a destination `.env` with paths only, then a fresh `AuthBroker` over that `.env` from its final location gets a token; (d) a failing run leaves the previous destination file untouched and prints no PEM. Exact non-interactive invocations: `mcp-auth --credential --client-auth certificate --service-key <key> …` and `generate-env-from-service-key <dest> <key> <session> --grant client_credentials --client-auth certificate --cert-path <abs> --key-path <abs>`; the PEM fixtures are written from the trial key into `.local/` (0600) by setup; each run has a timeout; the test asserts no interactive authorization strategy was constructed or invoked (none is passed; a call fails the test). Teardown removes everything, also on failure |
+| trial, live (`test:live`, opt-in) | setup creates an XSUAA instance with an x509 key (exact `cf target` guard, `.local/owned`). (a) `AuthBroker` + `XsuaaServiceKeyStore` + `fromServiceKeyCertificate()` → `getProvider(dest).prepare()` Ok and the token API returns a token whose client id is the key's; (b) `mcp-auth --credential --client-auth certificate --cert-path <abs> --key-path <abs>` → a token with that client id, and a fresh broker over its exported destination gets one too; (c) `generate-env-from-service-key --client-auth certificate --cert-path … --key-path …` → a destination `.env` with paths only, then a fresh `AuthBroker` over that `.env` from its final location gets a token; (d) a failing run leaves the previous destination file untouched and prints no PEM. Exact non-interactive invocations: `mcp-auth --credential --client-auth certificate --service-key <key> …` and `generate-env-from-service-key <dest> <key> <session> --grant client_credentials --client-auth certificate --cert-path <abs> --key-path <abs>`; the PEM fixtures are written from the trial key into `.local/` (0600) by setup; each run has a timeout; the test asserts no interactive authorization strategy was constructed or invoked (none is passed; a call fails the test). Teardown removes everything, also on failure |
 
 Every rule protected by a test is proven load-bearing.
 
