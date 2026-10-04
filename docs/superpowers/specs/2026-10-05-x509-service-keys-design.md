@@ -3,7 +3,7 @@
 **Answers:** `docs/superpowers/2026-10-05-x509-service-keys-goal.md` — its
 "Holds throughout" binds every section; its "Decided" list is not reopened.
 
-**Status:** for review. The plan follows only after this is approved.
+**Status:** for the user's review. Codex adversarial review: seven passes, approved on the seventh (2026-10-05). The plan follows only after the user approves this.
 
 ## 1. The contract — `@mcp-abap-adt/interfaces-auth-broker` (minor)
 
