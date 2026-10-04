@@ -54,24 +54,33 @@ SAML bearer), and an x509 key never produces one (version-skew safe).
   `clientsecret` answers `getClientCertificate` with `null` and everything else
   exactly as today. A key carrying both a secret and a certificate is refused
   in fixed words (the key does not say what it is).
-- **`EnvDestinationStore`:** three variables, each a path or a URL, never
-  PEM — `UAA_CLIENT_CERT_PATH`, `UAA_CLIENT_KEY_PATH`, `UAA_CERT_URL`. Its
+- **`EnvDestinationStore`:** three means fields, each a path or a URL, never
+  PEM — `uaaClientCertPath`, `uaaClientKeyPath`, `uaaCertUrl` — store-local
+  (declared in auth-stores beside `MeansField`, not in `IConfig`). Their
+  variables follow the store's existing prefix scheme (suffixes
+  `UAA_CLIENT_CERT_PATH`, `UAA_CLIENT_KEY_PATH`, `UAA_CERT_URL`): with
+  `ABAP_DESTINATION_VARS` they are `SAP_UAA_CLIENT_CERT_PATH`,
+  `SAP_UAA_CLIENT_KEY_PATH`, `SAP_UAA_CERT_URL`; with `XSUAA_DESTINATION_VARS`,
+  `XSUAA_UAA_CLIENT_CERT_PATH`, … . In `DestinationVariables` the three keys are
+  optional, so a consumer's existing custom map still type-checks; a custom map
+  without them supports no certificate destination (`getClientCertificate` →
+  `null`) — documented, never guessed. Below, "the three variables" means these. Its
   answers, decided from which variables are set (no file is read to decide):
   - **none of the three** → as 4.0.0 (`getAuthorizationConfig` unchanged;
     `getClientCertificate` → `null`);
-  - **all three, and no `UAA_CLIENT_SECRET`** → a certificate destination:
+  - **all three, and no client secret** → a certificate destination:
     `getAuthorizationConfig` → `null` (as for an x509 key, so an older consumer
     never sees a public client); `getClientCertificate` reads the two files
     and answers `{ uaaUrl, clientId, certificate, key, certUrl }` with
-    `UAA_URL` / `UAA_CLIENT_ID`;
-  - **some but not all three**, or **any of them together with
-    `UAA_CLIENT_SECRET`** → both methods throw the store's own error in fixed
+    the store's `uaaUrl` / `uaaClientId` variables;
+  - **some but not all three**, or **any of them together with the
+    client secret variable** → both methods throw the store's own error in fixed
     words naming the variables (incomplete / mixed client) — never a silent
     `null`, never the secret;
   - a file that cannot be read → the store's error in fixed words naming the
     variable, never the path's content.
   `setDestination` writes the three as it writes the others, and when it
-  writes a certificate client it removes `UAA_CLIENT_SECRET`, and when it
+  writes a certificate client it removes the client secret variable, and when it
   writes a secret client it removes the three — switching a destination's
   authentication never leaves a stale credential of the other kind.
 - **Never** to the session store: `SessionSecret` gains nothing, and no session
@@ -258,7 +267,7 @@ provider's refusal (5.3.0 already maps it in fixed words).
 
 - auth-broker: `@mcp-abap-adt/auth-providers ^5.3.0`, `interfaces-auth ^3.2.0`,
   `interfaces-auth-broker ^<the new minor>`, `auth-stores ^<the new minor>`
-  (dev); auth-broker-cli: the same where used. All from the registry.
+  (dev); auth-broker-cli: the same where used, and `@mcp-abap-adt/auth-broker ^4.1.0` (it uses the new factories and the factory's fourth argument). All from the registry.
 - Versions: interfaces-auth-broker minor, auth-stores minor, auth-broker 4.1.0
   (additive), auth-broker-cli minor.
 

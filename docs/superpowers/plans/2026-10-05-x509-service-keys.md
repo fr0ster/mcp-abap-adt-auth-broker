@@ -15,6 +15,7 @@
 - A certificate or its private key never reaches the session store, a log line, a refusal, a thrown message, a `DestinationConfigError`, CLI output, an exported destination, or a file the tool writes (PEM only in the user's own files).
 - The consumer chooses, through strategies: no default, no fallback, nothing inferred from a key's shape (inspecting for `certificate`/`key` only to avoid copying is allowed — spec §4).
 - Without a strategy: byte-for-byte 4.0.0, and nothing certificate-related is called (no `getClientCertificate`, no file read, no identity resolution).
+- Variable names follow `EnvDestinationStore`'s prefix scheme: `SAP_UAA_CLIENT_CERT_PATH` / `SAP_UAA_CLIENT_KEY_PATH` / `SAP_UAA_CERT_URL` (ABAP map), `XSUAA_UAA_…` (XSUAA map); never bare `UAA_…`.
 - An x509 client is never answered through `getAuthorizationConfig` (`null`), so no older consumer sees a public client.
 - Dependencies only from the npm registry; each repo's release is published before its consumer builds against it; no `"link": true`.
 - Versions: interfaces-auth-broker 1.1.0 → 1.2.0; auth-stores 3.2.0 → 3.3.0; auth-broker 4.0.0 → 4.1.0; auth-broker-cli 2.0.0 → 2.1.0.
@@ -52,12 +53,12 @@ Its own worktree, branch and PR; stops at the user's review; merge, tag and the 
 Starts the auth-stores PR (its own worktree and branch); Task 3 adds to the same PR. Builds against interfaces-auth-broker 1.2.0 from the registry.
 
 **Files:**
-- Modify: `src/stores/destination/EnvDestinationStore.ts`, `src/stores/destination/constants.ts` (the three variables), `package.json` (`@mcp-abap-adt/interfaces-auth-broker ^1.2.0`)
+- Modify: `src/stores/destination/EnvDestinationStore.ts` (the only file holding the variable map: `MeansField`, `SUFFIXES`, `withPrefix`, `DestinationVariables`, `DestinationMeans`), `package.json` (`@mcp-abap-adt/interfaces-auth-broker ^1.2.0`)
 - Test: `src/__tests__/stores/EnvDestinationStore.test.ts`
 
-**Interfaces — Consumes:** Task 1. **Produces:** `EnvDestinationStore.getClientCertificate(destination)`; variables `UAA_CLIENT_CERT_PATH`, `UAA_CLIENT_KEY_PATH`, `UAA_CERT_URL`; a store error class with fixed words for incomplete/mixed/unreadable.
+**Interfaces — Consumes:** Task 1. **Produces:** `EnvDestinationStore.getClientCertificate(destination)`; store-local means fields `uaaClientCertPath`, `uaaClientKeyPath`, `uaaCertUrl` (in `DestinationMeans` for `setDestination`, optional keys in `DestinationVariables`); suffixes `UAA_CLIENT_CERT_PATH`, `UAA_CLIENT_KEY_PATH`, `UAA_CERT_URL` → `SAP_UAA_CLIENT_CERT_PATH`… (ABAP map) and `XSUAA_UAA_CLIENT_CERT_PATH`… (XSUAA map); a custom `variables` map without the three keys → `getClientCertificate` `null`; a store error class with fixed words for incomplete/mixed/unreadable.
 
-- [ ] Tests, each asserting what only its rule produces: none of the three → `getAuthorizationConfig` as 4.0.0 and `getClientCertificate` `null`; all three, no `UAA_CLIENT_SECRET` → `getAuthorizationConfig` `null` and `getClientCertificate` `{ uaaUrl, clientId, certificate, key, certUrl }` with the files' content; some but not all → both methods throw fixed words naming the missing variables, **no file read** (spied fs); any of them with `UAA_CLIENT_SECRET` → both throw fixed words (mixed client), no file read; an unreadable file → fixed words naming the variable, nothing of the path's content; `setDestination` writing a certificate client removes `UAA_CLIENT_SECRET`, writing a secret client removes the three (Review Focus 2).
+- [ ] Tests, each asserting what only its rule produces — every case against the **literal on-disk names** for both default maps (`SAP_UAA_CLIENT_CERT_PATH`…, `XSUAA_UAA_CLIENT_CERT_PATH`…), plus a custom map without the three keys (type-checks; certificate → `null`): none of the three → `getAuthorizationConfig` as 4.0.0 and `getClientCertificate` `null`; all three, no `UAA_CLIENT_SECRET` → `getAuthorizationConfig` `null` and `getClientCertificate` `{ uaaUrl, clientId, certificate, key, certUrl }` with the files' content; some but not all → both methods throw fixed words naming the missing variables, **no file read** (spied fs); any of them with `UAA_CLIENT_SECRET` → both throw fixed words (mixed client), no file read; an unreadable file → fixed words naming the variable, nothing of the path's content; `setDestination` writing a certificate client removes `UAA_CLIENT_SECRET`, writing a secret client removes the three (Review Focus 2).
 - [ ] Implement; the decision reads only which variables are set.
 - [ ] Load-bearing: the mixed check, the partial check, the null-authz rule, the stale-credential removal — each broken, its test red, reverted.
 - [ ] `npm test`, test:check, lint; commit.
@@ -80,7 +81,7 @@ Starts the auth-stores PR (its own worktree and branch); Task 3 adds to the same
 Back in this PR (`fr0ster/mcp-abap-adt-auth-broker`, worktree `.worktrees/x509-service-keys`).
 
 **Files:**
-- Modify: `packages/auth-broker/package.json` (`@mcp-abap-adt/auth-providers ^5.3.0`, `interfaces-auth ^3.2.0`, `interfaces-auth-broker ^1.2.0`; dev `auth-stores ^3.3.0`), `packages/auth-broker-cli/package.json` (`auth-providers ^5.3.0`, `auth-stores ^3.3.0`), root lockfile
+- Modify: `packages/auth-broker/package.json` (`@mcp-abap-adt/auth-providers ^5.3.0`, `interfaces-auth ^3.2.0`, `interfaces-auth-broker ^1.2.0`; dev `auth-stores ^3.3.0`), `packages/auth-broker-cli/package.json` (`auth-providers ^5.3.0`, `auth-stores ^3.3.0`; its `@mcp-abap-adt/auth-broker` range moves to `^4.1.0` in Task 10, together with the broker's version), root lockfile
 - Create: `packages/auth-broker/src/clientAuthentication.ts` (`ClientAuthenticationGrant`, `ClientAuthenticationContext`, `fromServiceKeyCertificate`, `fromServiceKeySecret`, the guard)
 - Modify: `packages/auth-broker/src/AuthBroker.ts` (`AuthBrokerConfig.clientAuthentication`), `src/index.ts`
 - Test: `packages/auth-broker/src/__tests__/broker/clientAuthentication.test.ts`
@@ -127,7 +128,7 @@ Back in this PR (`fr0ster/mcp-abap-adt-auth-broker`, worktree `.worktrees/x509-s
 ### Task 7: CLI — `mcp-auth`
 
 **Files:**
-- Modify: `packages/auth-broker-cli/src/runMcpAuth.ts` (flags, the strategy, `withPlaceholderUrl` forwarding `getClientCertificate`, the no-copy rule, exported destination), `packages/auth-broker-cli/src/mcp-auth.ts` (usage/help)
+- Modify: `packages/auth-broker-cli/src/runMcpAuth.ts` (writes the certificate client through `setDestination` with `uaaClientCertPath` / `uaaClientKeyPath` / `uaaCertUrl` — Task 2's fields; flags, the strategy, `withPlaceholderUrl` forwarding `getClientCertificate`, the no-copy rule, exported destination), `packages/auth-broker-cli/src/mcp-auth.ts` (usage/help)
 - Test: `packages/auth-broker-cli/src/__tests__/runMcpAuth.test.ts`
 
 **Interfaces — Consumes:** Tasks 4–6.
@@ -143,7 +144,7 @@ Back in this PR (`fr0ster/mcp-abap-adt-auth-broker`, worktree `.worktrees/x509-s
 - Modify: `packages/auth-broker-cli/src/generateEnv.ts`, `packages/auth-broker-cli/src/generate-env-from-service-key.ts` (usage)
 - Test: `packages/auth-broker-cli/src/__tests__/generateEnv.test.ts`
 
-- [ ] Tests: the same flags (with `--grant`); the choice passed into the `AuthBroker` it builds; for `certificate` the `.env` gets `UAA_CLIENT_CERT_PATH`, `UAA_CLIENT_KEY_PATH` (absolute) and `UAA_CERT_URL`, and no `UAA_CLIENT_SECRET`; never PEM in any written file; relative paths resolved before writing, missing files refused naming the flag (Review Focus 4); a failed login leaves an existing destination file untouched; a fresh `AuthBroker` over the written `.env` (from its final location) builds the certificate destination.
+- [ ] Tests: the same flags (with `--grant`); the choice passed into the `AuthBroker` it builds; for `certificate` it writes through `setDestination` with Task 2's fields and the `.env` holds the literal `SAP_UAA_CLIENT_CERT_PATH` / `SAP_UAA_CLIENT_KEY_PATH` (absolute) / `SAP_UAA_CERT_URL` (or the `XSUAA_UAA_…` names when the XSUAA map is used), and no client secret variable; never PEM in any written file; relative paths resolved before writing, missing files refused naming the flag (Review Focus 4); a failed login leaves an existing destination file untouched; a fresh `AuthBroker` over the written `.env` (from its final location) builds the certificate destination.
 - [ ] Implement; load-bearing each; `npm test`, test:check, lint; commit.
 
 ### Task 9: Live check on the BTP trial
@@ -161,9 +162,10 @@ Back in this PR (`fr0ster/mcp-abap-adt-auth-broker`, worktree `.worktrees/x509-s
 ### Task 10: Documentation, versions, release preparation
 
 **Files:**
-- Modify: `packages/auth-broker/README.md`, `packages/auth-broker-cli/README.md` (the strategy, the two factories and composing them, the `.env` variables, the CLI flags, what stays unmeasured: `authorization_code`/`passcode` over x509, ABAP keys with x509), `docs/` pages that describe destinations or service keys, `CLAUDE.md` (collaborators list, the live check), CHANGELOGs, `packages/auth-broker/package.json` 4.1.0, `packages/auth-broker-cli/package.json` 2.1.0, lockfile
+- Modify: `packages/auth-broker/README.md`, `packages/auth-broker-cli/README.md` (the strategy, the two factories and composing them, the `.env` variables, the CLI flags, what stays unmeasured: `authorization_code`/`passcode` over x509, ABAP keys with x509), `docs/` pages that describe destinations or service keys, `CLAUDE.md` (collaborators list, the live check), CHANGELOGs, `packages/auth-broker/package.json` 4.1.0, `packages/auth-broker-cli/package.json` 2.1.0 **with `@mcp-abap-adt/auth-broker ^4.1.0`** (it uses the new factories and the factory's fourth argument), lockfile
 - Delete: `docs/superpowers/` (goal, spec, plan) after the external review, before merge — what they still owe goes into the PR description first
 
 - [ ] Docs written against the code as built; every README example compiles.
 - [ ] Full gates in the worktree: build, test:check, lint, `npm test`; the broker stand once.
+- [ ] After the broker 4.1.0 is published and before the CLI is: pack the CLI and install it in a clean directory outside the repo from the registry — it resolves `@mcp-abap-adt/auth-broker` 4.1.0 (never 4.0.0) and `mcp-auth --help` runs.
 - [ ] Push; external review; fixes into this PR; merge, tag and the user's publish on the user's word — `auth-broker` and `auth-broker-cli` in dependency order.
