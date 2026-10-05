@@ -14,7 +14,10 @@ Up to `@mcp-abap-adt/auth-broker` 3.0.4 these commands shipped in the library
 package; its CHANGELOG holds their history. This package carries them from
 1.0.0 on. 2.0.0, released with `@mcp-abap-adt/auth-broker` 4.0.0, writes a
 complete 4.0 destination — see *What each command writes, and where* and, if
-you used 1.0.0, *Migrating from 1.0.0*.
+you used 1.0.0, *Migrating from 1.0.0*. 2.1.0, on `@mcp-abap-adt/auth-broker`
+4.1.0, adds x509 service keys: `--client-auth certificate|secret` for
+`mcp-auth` and `generate-env` — see *Client authentication* and *Migrating
+from 2.0.0*.
 
 ## Installation
 
@@ -22,10 +25,10 @@ you used 1.0.0, *Migrating from 1.0.0*.
 npm install -g @mcp-abap-adt/auth-broker-cli
 ```
 
-2.0.0 depends on `@mcp-abap-adt/auth-broker` `^4.0.0`,
-`@mcp-abap-adt/auth-stores` `^3.2.0` and `@mcp-abap-adt/auth-providers`
-`^5.2.1` (1.0.0 depended on the library `^3.1.0`, the first version without
-the commands). If you installed the library globally to
+2.1.0 depends on `@mcp-abap-adt/auth-broker` `^4.1.0`,
+`@mcp-abap-adt/auth-stores` `^3.3.0`, `@mcp-abap-adt/auth-providers`
+`^5.3.0` and `@mcp-abap-adt/interfaces-auth` `^3.2.0` (2.0.0 on the library
+`^4.0.0`; 1.0.0 on `^3.1.0`, the first version without the commands). If you installed the library globally to
 get the commands (3.0.4 or earlier), swap it for this package:
 
 ```bash
@@ -43,7 +46,9 @@ and the broker read:
 - **The means** — how the secret is obtained: `SAP_AUTH_TYPE`, `SAP_GRANT_TYPE`,
   the grant's data (`SAP_OIDC_*`, `SAP_SAML_*`, `SAP_USERNAME` /
   `SAP_PASSWORD`), the client (`SAP_UAA_URL`, `SAP_UAA_CLIENT_ID`,
-  `SAP_UAA_CLIENT_SECRET`) and `SAP_URL`. Written first, through
+  `SAP_UAA_CLIENT_SECRET` — or, with `--client-auth certificate`,
+  `SAP_UAA_CLIENT_CERT_PATH`, `SAP_UAA_CLIENT_KEY_PATH`, `SAP_UAA_CERT_URL` in
+  its place) and `SAP_URL`. Written first, through
   `EnvDestinationStore.setDestination`, before the login.
 - **The secret** — what the login obtained: `SAP_JWT_TOKEN` or
   `SAP_SESSION_COOKIES_B64`, `SAP_EXPIRES_AT`, `SAP_REFRESH_TOKEN`, and what it
@@ -75,7 +80,10 @@ The client secret you give (a service key's, or `--client-id` with
 `--client-secret`), a password, a subject or actor token are means: they are
 written because you asked for a destination that can renew. A public client
 (no `--client-secret`) is written as `SAP_UAA_CLIENT_SECRET=` — the secret
-`''` — and read back as one.
+`''` — and read back as one. A client that authenticates with its certificate
+(`--client-auth certificate`) is written as the two PEM files' absolute paths
+and `certurl`, and no client secret: the certificate and its key stay in your
+own files, never copied into the destination or anywhere else.
 
 **When the output is written, and the exit code.** A command works in a private
 temporary directory (mode `0700`, removed however the run ends) and copies the
@@ -102,6 +110,7 @@ Generate or refresh `.env`/JSON output using AuthBroker + stores:
 ```bash
 mcp-auth <auth-code|oidc|saml2-pure|saml2-bearer> [options]
 mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--credential] [--browser auto|none|system|chrome|edge|firefox] [--format json|env]
+         [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]
 ```
 
 **Note**: The CLI is compiled to `dist/` and does not require `tsx` at runtime. From a clone, run `npm install` and `npm run build` at the repository root; the commands are then `packages/auth-broker-cli/dist/mcp-auth.js` and `…/mcp-sso.js`.
@@ -173,6 +182,78 @@ mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --credential
 # Using existing .env for refresh token
 mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsuaa
 ```
+
+#### Client authentication: `--client-auth`
+
+How the service key's client authenticates to the authorization server is
+yours to state — `mcp-auth` and `generate-env` read the same flags under the
+same rules, and neither infers it from the key:
+
+| Flags | The client authenticates with | Written to the destination |
+|---|---|---|
+| none | its client secret in the token request, as 2.0.0 | `SAP_UAA_CLIENT_SECRET` |
+| `--client-auth secret --basic-encoding raw\|form` | its client secret in an `Authorization: Basic` header (the broker's `fromServiceKeySecret`). `--basic-encoding` is required: `raw` for XSUAA (measured: it does not form-decode), `form` for UAA and Keycloak | `SAP_UAA_CLIENT_SECRET` |
+| `--client-auth certificate --cert-path <path> --key-path <path>` | the key's x509 client: its certificate and private key, from **your** PEM files, presented at the key's `certurl` (`<certurl>/oauth/token`, the broker's `fromServiceKeyCertificate`) | `SAP_UAA_CLIENT_CERT_PATH`, `SAP_UAA_CLIENT_KEY_PATH` (absolute paths), `SAP_UAA_CERT_URL`; no client secret |
+
+With `--type xsuaa` the names are `XSUAA_UAA_CLIENT_CERT_PATH`, … . The flag
+becomes the broker's `clientAuthentication` strategy; the grant stays the
+command's (`--credential` → `client_credentials`, else `authorization_code`).
+
+```bash
+# An x509 XSUAA key (created with {"credential-type": "x509"}): client_credentials
+# with its certificate. client.crt / client.key are the key's `certificate` and
+# `key`, saved by you to files only you can read.
+mcp-auth --service-key ./x509-key.json --output ./mcp.env --type xsuaa --credential \
+  --client-auth certificate --cert-path ./client.crt --key-path ./client.key
+
+# A secret key, the secret in a Basic header as XSUAA reads it
+mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --credential \
+  --client-auth secret --basic-encoding raw
+```
+
+- **The PEM files are yours and stay where they are.** `--cert-path` and
+  `--key-path` must name existing files; they are resolved to absolute paths
+  before anything is written, so the destination works from wherever it is
+  copied. The command never creates, copies or prints a certificate or a
+  key — not in the destination, not in its work directory, not in `--format
+  json` (which adds `uaaUrl`, `uaaClientId`, `uaaClientCertPath`,
+  `uaaClientKeyPath`, `uaaCertUrl`), not on a failed run.
+- **A service key carrying a certificate or a private key is never copied**,
+  whatever the flags: a `credentials`-wrapped key with a `certificate` or
+  `key` field is read in place by `XsuaaServiceKeyStore` (one without keeps
+  the temporary unwrapped copy, as before), and an ABAP-format (`uaa`-nested)
+  key carrying one is read by `XsuaaServiceKeyStore` too — the one store that
+  answers a certificate client.
+- **Refusals name the flag.** An x509 key (a certificate, no secret) without
+  `--client-auth` is refused: `… carries a client certificate and no client
+  secret: state how the client authenticates with --client-auth certificate
+  --cert-path <path> --key-path <path>`. `--client-auth certificate` for a key
+  without a certificate client is refused, naming `url, clientid,
+  certificate, key, certurl`. A flag given without its choice
+  (`--basic-encoding` without `secret`, `--cert-path` without `certificate`),
+  a choice without its flags, or a path with no file is refused before
+  anything is read or written. A key with both a secret and a certificate
+  works with either choice.
+- **The output is a destination a fresh broker uses**: `EnvDestinationStore`
+  answers the certificate client from the three variables, and a broker given
+  `clientAuthentication: fromServiceKeyCertificate()` gets a token with it
+  (measured, below).
+- **A rerun reuses the session.** On the strategy path the session is bound to
+  the client's identity; an XSUAA destination written without
+  `--service-url` (its URL is the command's placeholder) reuses its stored
+  refresh token (`authorization_code`) on a rerun with `--env` instead of
+  logging in again. Without
+  `--client-auth`, 2.0.0's rule stands (such a destination logs in again).
+- **Measured:** `mcp-auth --credential --client-auth certificate` and
+  `generate-env --grant client_credentials --client-auth certificate` against
+  XSUAA on a BTP trial, 2026-10-05 — a token of the key's client, and a fresh
+  broker over the written destination got one too
+  ([the live check](../auth-broker/README.md#the-x509-live-check)). **Not
+  measured:** `authorization_code` over x509 (`mcp-auth --client-auth
+  certificate` without `--credential` is accepted and builds, but has not run
+  against XSUAA), and ABAP environment service keys with x509.
+
+`mcp-sso` has no `--client-auth`: its flows keep the client secret.
 
 ### CLI: mcp-sso
 
@@ -390,8 +471,16 @@ not one of the package's commands (it is not compiled into `dist/`). From the
 repository root, after `npm run build`:
 
 ```bash
-npm run generate-env -w @mcp-abap-adt/auth-broker-cli -- <destination> [service-key-path] [session-path] --grant <authorization_code|client_credentials>
+npm run generate-env -w @mcp-abap-adt/auth-broker-cli -- <destination> [service-key-path] [session-path] --grant <authorization_code|client_credentials> \
+  [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]
 ```
+
+`--client-auth`, `--basic-encoding`, `--cert-path` and `--key-path` are
+`mcp-auth`'s, under the same rules (see *Client authentication*): with
+`certificate`, the session file states the PEM files' absolute paths and the
+key's `certurl` (`SAP_UAA_*`, or `XSUAA_UAA_*` for an XSUAA key) and no client
+secret, and a fresh broker over it — from its final location — gets a token
+(measured with `--grant client_credentials`).
 
 `--grant` is required: a service key holds a client, and a client may serve
 several grants, so the script never reads the grant from the key (up to 1.0.0
@@ -425,9 +514,56 @@ secret, and build a provider from the output with `getProvider`. The stands abov
 interactive and run only by hand:
 `npm run <script> -w @mcp-abap-adt/auth-broker-cli`.
 
+The x509 live check — `mcp-auth` and `generate-env` with `--client-auth
+certificate` against XSUAA on a BTP subaccount, `npm run test:live:x509`, not
+in CI — is described in the library's README,
+[*The x509 Live Check*](../auth-broker/README.md#the-x509-live-check).
+
 The bin smoke check — pack both packages, install the tarballs into an empty
 directory, run each command with `--version` and `help` — is
 `npm run check:packed` at the root, part of `npm run check`.
+
+## Migrating from 2.0.0
+
+2.1.0 is a minor: every 2.0.0 invocation runs as before. What a 2.0.0 user
+may notice:
+
+- **A service key that is not valid JSON is refused in fixed words:** `The
+  service key <path> cannot be read as JSON` (`mcp-auth`, `generate-env`),
+  `The config file <path> cannot be read as JSON` (`mcp-sso --config`) — the
+  parser's message quoted the file's bytes, which hold a client secret or a
+  private key. Exit code `1`, as before.
+- **A key without a client secret says why:** `mcp-auth`'s `Authorization
+  config not found for <destination>. Service key must contain clientid,
+  clientsecret, and url fields` now ends `; a client certificate needs
+  --client-auth certificate.`; `generate-env`'s `Missing authorization config
+  for <destination>` adds the same hint when the key carries a certificate;
+  an x509 key without `--client-auth` gets the refusal under *Client
+  authentication*. Match on the exit code, not the message.
+- **A key carrying a certificate or a private key is not copied** into the
+  work directory any more (a `credentials`-wrapped one is read in place), and
+  an ABAP-format key carrying one is read by `XsuaaServiceKeyStore`.
+- **Dependencies:** `@mcp-abap-adt/auth-broker` `^4.1.0`,
+  `@mcp-abap-adt/auth-stores` `^3.3.0`, `@mcp-abap-adt/auth-providers`
+  `^5.3.0`, and `@mcp-abap-adt/interfaces-auth` `^3.2.0` (new, for types).
+- **New:** `--client-auth`, `--basic-encoding`, `--cert-path`, `--key-path`
+  (see *Client authentication*). A server reading a certificate destination
+  needs `@mcp-abap-adt/auth-broker` 4.1.0 with
+  `clientAuthentication: fromServiceKeyCertificate()` and auth-stores 3.3.0;
+  an older reader (auth-broker 4.0.0, or auth-stores 3.2.0) finds a client
+  without a secret, and the broker refuses the destination's
+  `authorization_code` / `client_credentials` naming `uaaClientSecret`.
+
+**Known limitations** (unchanged since 2.0.0):
+
+- The output (`--output`, the `generate-env` session file) is replaced by a
+  copy (`copyFileSync`), not an atomic rename: a process killed during that
+  copy can leave it partly written.
+- `generate-env` takes the key names from the key's top level: a
+  `credentials`-wrapped ABAP key (`{ "credentials": { "uaa": … } }`) is
+  written with `XSUAA_*` names.
+- `generate-env` takes an option it does not know (`--foo`) as a positional
+  argument.
 
 ## Migrating from 1.0.0
 

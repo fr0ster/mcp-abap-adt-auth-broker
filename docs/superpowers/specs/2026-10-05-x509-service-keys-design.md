@@ -194,6 +194,16 @@ broker's. Every throw is turned into the guarded `DestinationConfigError`
   the session seed are chosen. So a certificate destination's
   tokens are stored with `issuedBy` = its issuer and client, reused after the
   broker is recreated, and refused after the issuer or client id changes.
+- **The resource half on the strategy path (amended at implementation,
+  Rulings 14 and 15).** The binding's `issuedFor` matches when both sides
+  state it and it is equal, **or when neither does**: the means state no
+  `serviceUrl`, or one that does not parse (the CLI's XSUAA placeholder is
+  such a URL — Ruling 15), and the stored session holds no `issuedFor`. A
+  resource stated on one side only never matches; the client identity still
+  decides (`Binding.unstatedResourceMatches`, set by `strategyBinding`).
+  Without a strategy, 4.0.0's rule stands: an absent resource matches
+  nothing. Otherwise an XSUAA destination without a service URL re-logs in on
+  every run.
 
 ### 3.3 The token API, `getAuthorizationConfig`, and the consumer's factory
 
@@ -208,20 +218,45 @@ export type TokenProviderFactory = (
   destination: string,
   authConfig: IAuthorizationConfig | null,
   connConfig: IConnectionConfig,
-  client?: {
-    /** The strategy's answer, when the broker was given a strategy. */
-    readonly clientAuthentication?: IClientAuthentication;
-    /** The client's identity when it has no secret client — never PEM. */
-    readonly uaaUrl?: string;
-    readonly clientId?: string;
-  },
+  client?: TokenProviderClient,
 ) => IRefreshableTokenProvider;
+
+export interface TokenProviderClient {
+  /** The strategy's answer, resolved before the factory is called. */
+  readonly clientAuthentication?: IClientAuthentication;
+  /**
+   * The client's identity — the secret client's when the stores hold one,
+   * else the certificate client's; absent when there is neither. Never PEM.
+   */
+  readonly uaaUrl?: string;
+  readonly clientId?: string;
+  /** The stored refresh token — only when the session is bound here. */
+  readonly refreshToken?: string;
+}
 ```
+
+**Amended at implementation (Rulings 11, 12, 13; the ledger's carry to
+Task 10).** The fourth argument is a named, exported type,
+`TokenProviderClient`. Its `uaaUrl` / `clientId` are the client identity for
+a secret client too, not only for a certificate client. It also carries the
+session's `refreshToken` (Ruling 12) — a certificate client's `authConfig` is
+`null`, so without it a user grant over x509 would log in again after every
+restart — and only when the session is bound to this resource and this client
+identity (Ruling 13). On the strategy path every stored secret obeys the same
+rule: `authConfig.refreshToken` of a secret client, and the token, cookies and
+expiry seeded in `connConfig`, pass only when bound; a result without a
+refresh token carries forward only a bound one. The no-strategy path keeps
+4.0.0's documented carry-over. With a strategy the token API is told the grant
+the destination states (Ruling 11): a destination stating no `jwt` / `saml`
+type and grant is refused naming `authType`, `grantType`; `saml2_pure` and
+`none` authenticate no client and get three arguments. An instance given as
+`provider` is the consumer's composition and gets no strategy.
 
 The broker resolves the strategy (guarded, as in 3.2) **before** it calls the
 factory, and calls the factory inside the same guard: a throw from either is a
-`DestinationConfigError` in fixed words. Without a strategy the fourth argument
-is absent and the call is 4.0.0's. `runMcpAuth` uses exactly this path (§4).
+`DestinationConfigError` in fixed words (the factory's names `provider`,
+`clientAuthentication`). Without a strategy the fourth argument is absent and
+the call is 4.0.0's. `runMcpAuth` uses exactly this path (§4).
 
 ### 3.4 Errors and logs
 

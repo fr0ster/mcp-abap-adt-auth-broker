@@ -334,9 +334,11 @@ export interface UaaRow {
  *
  * Every field and option the row lacks is named in one error, before the
  * consumer's `authorization` is called. `serviceUrl` is not among them: the
- * providers read the client and `uaaUrl` only. `uaaClientSecret: ''` is a public
- * client: `passcode` takes it as no secret; the other two rows' providers
- * require a secret, so for them `''` is missing.
+ * providers read the client and `uaaUrl` only. Without a strategy,
+ * `uaaClientSecret: ''` is a public client: `passcode` takes it as no secret;
+ * the other two rows' providers require a secret, so for them `''` is
+ * missing. On the strategy path the client may be a certificate client's
+ * identity, which holds no secret field at all (`RowClient`).
  *
  * With the strategy's answer (`clientAuthentication`) no secret is required
  * and none is passed: the provider authenticates its client with the answer.
@@ -635,8 +637,9 @@ export interface SamlRow {
  *
  * `saml2_pure` is seeded with the stored cookies and `expiresAt`;
  * `saml2_bearer` with the stored token, its refresh token and expiry, and
- * takes the client (`uaaUrl`, `uaaClientId`; `uaaClientSecret` `''` a public
- * client) and `samlTokenUrl` when stated.
+ * takes the client (`uaaUrl`, `uaaClientId`; without a strategy,
+ * `uaaClientSecret` `''` a public client; on the strategy path the identity
+ * alone, no secret) and `samlTokenUrl` when stated.
  *
  * Every field and option the row lacks is named in one error, before any
  * collaborator is called; so is a `samlClockSkewMs` that is not a whole number

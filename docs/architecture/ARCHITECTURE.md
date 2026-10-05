@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the architecture and design decisions of the `@mcp-abap-adt/auth-broker` package (4.0.0) and its commands, `@mcp-abap-adt/auth-broker-cli` (2.0.0).
+This document describes the architecture and design decisions of the `@mcp-abap-adt/auth-broker` package (4.1.0) and its commands, `@mcp-abap-adt/auth-broker-cli` (2.1.0).
 
 ## Overview
 
@@ -37,8 +37,8 @@ tools/                     check-graph.js, check-packed.js, publish-changed.js,
   `interfaces-auth-broker`, `interfaces-utils`) and `auth-providers` — never
   `auth-stores`; the CLI's, the library, the stores, the providers, the
   contracts and the logger.
-- Releases are tagged per package, `<dir>-v<version>` (`auth-broker-v4.0.0`,
-  `auth-broker-cli-v2.0.0`); `npm run release:publish` publishes exactly the
+- Releases are tagged per package, `<dir>-v<version>` (`auth-broker-v4.1.0`,
+  `auth-broker-cli-v2.1.0`); `npm run release:publish` publishes exactly the
   versions the registry lacks, and refuses one without its tag.
 
 ## Core Principles
@@ -95,6 +95,20 @@ connector takes:
   pure's SAMLResponse into cookies; pure is seeded with the stored cookies and
   `expiresAt`, bearer with the token, refresh token and expiry, and takes the
   client and `samlTokenUrl`;
+- with a `clientAuthentication` strategy (4.1.0), every row whose client
+  authenticates — the three UAA rows, the four OIDC rows, `saml2_bearer` —
+  first resolves it (`src/clientAuthentication.ts`): the strategy is called
+  with the destination, the grant, the key store's secret client and a lazy,
+  memoised `readCertificate()` (`getClientCertificate`); its answer goes to
+  the provider as `clientAuthentication`, and no secret goes with it; the
+  row's client is its identity — the secret client's `uaaUrl` / `uaaClientId`,
+  else the certificate client's (`clientIdentity`), never PEM. Whatever the
+  strategy throws, and an answer that is no `IClientAuthentication`, becomes a
+  `DestinationConfigError` naming `clientAuthentication` in fixed words chosen
+  by class (`resolveClientAuthentication`), before any provider exists.
+  Without a strategy none of this runs — 4.0.0's client and nothing
+  certificate-related — and a client row with no client id adds the fixed
+  hint `a certificate client needs a clientAuthentication strategy`;
 - every field and collaborator option a row lacks is named in one
   `DestinationConfigError`, before any collaborator is called;
 - caches the *promise* of the build per destination, set before the first store
@@ -118,6 +132,19 @@ that obtain a secret (UAA, OIDC, SAML) seed only when both match — otherwise t
 dropped (`boundOrDiscarded`, one value-free warn line) and the provider logs
 in afresh; the `none` rows throw `DestinationConfigError` naming `issuedFor`
 (always compared) or `issuedBy` (compared when the means state an issuer).
+
+On the `clientAuthentication` strategy path (4.1.0) the binding is computed
+from the row's client identity (`issuedBy` = its `uaaUrl` + `client_id`, so a
+secret client and a certificate client of one id share a session) and marked
+`unstatedResourceMatches` (`strategyBinding`): a resource that neither the
+means (no `serviceUrl`, or one that does not parse) nor the stored session
+states matches, so the issuer and client alone decide; one stated on one side
+only never matches. The token API's consumer factory on that path is bound the
+same way (`consumerBinding` with the identity), receives every stored secret —
+the refresh token in its fourth argument (`TokenProviderClient`) and in
+`authConfig`, the token, cookies and expiry in `connConfig` — only when
+`boundHere`, and carries forward only a bound refresh token (`carry: 'bound'`;
+without a strategy, 4.0.0's `carry: 'any'`).
 
 ### Persistence (`SessionWriter`)
 

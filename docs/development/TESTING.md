@@ -30,6 +30,14 @@ packages/auth-broker/src/__tests__/
 │   │                                    # AbapSessionStore over a 3.x-shaped file
 │   ├── getProviderOidcSaml.test.ts      # the OIDC and SAML grants: fake stores, real providers,
 │   │                                    # a local token endpoint, auth-mocks' SAML identity provider
+│   ├── clientAuthentication.test.ts     # the clientAuthentication strategy and its factories: the guard's
+│   │                                    # fixed words, the lazy certificate read, nothing of a key leaks
+│   ├── clientAuthenticationRows.test.ts # every client row with a strategy: clientAuthentication, no secret;
+│   │                                    # without one, 4.0.0 and nothing certificate-related called
+│   ├── clientAuthenticationBinding.test.ts # the strategy path's binding: client identity, a resource
+│   │                                    # neither side states, reuse after recreation
+│   ├── tokenProviderFactory.test.ts     # the token API factory's fourth argument; stored secrets
+│   │                                    # only when bound; the grant refusal; a throwing factory
 │   └── AuthBroker.integration.test.ts   # real service keys, sessions and providers
 ├── stand/
 │   ├── uaaGrants.test.ts                # the UAA grants against UAA in Docker;
@@ -38,8 +46,10 @@ packages/auth-broker/src/__tests__/
 │   │                                    # `npm run test:stand` runs the three
 │   └── formLogin.ts                     # plays the user on the stand's login pages
 ├── live/
-│   └── getProvider.live.test.ts         # getProvider through connection 10 against real
-│                                        # systems; `npm run test:live` only
+│   ├── getProvider.live.test.ts         # getProvider through connection 10 against real
+│   │                                    # systems; `npm run test:live` only
+│   └── x509.live.test.ts                # an x509 XSUAA key through the broker and the CLI
+│                                        # on a BTP subaccount; `npm run test:live:x509` only
 └── helpers/                             # test configuration, logger, free-port helpers,
                                          # the local token endpoint
 
@@ -52,8 +62,10 @@ packages/auth-broker-cli/src/__tests__/
 │                                        # means read back through the key store, the secret alone
 │                                        # in every session write, getProvider over the output, flush
 ├── runMcpAuth.test.ts                   # mcp-auth end to end: the stated strategy, --env refresh,
-│                                        # JSON, the XSUAA keys, a write the store refuses
-├── generateEnv.test.ts                  # generate-env: --grant required, never inferred
+│                                        # JSON, the XSUAA keys, a write the store refuses;
+│                                        # --client-auth, no copy of a key carrying PEM
+├── generateEnv.test.ts                  # generate-env: --grant required, never inferred;
+│                                        # --client-auth certificate|secret, paths only, no PEM
 ├── samlMetadata.test.ts                 # IdP and SP metadata read into the SAML trust
 ├── helpers/                             # the local token endpoint, reading what a run wrote
 └── fixtures/                            # metadata documents with their identities replaced
@@ -87,7 +99,7 @@ defined). The library's `jest.config.js` ignores `__tests__/live/`;
   against a server the test starts on `127.0.0.1`, which answers like ABAP
   Cloud (a session resource, a CSRF token) and refuses with a 401 any bearer
   token the local token endpoint did not issue. The suites that read or write
-  files use `@mcp-abap-adt/auth-stores` 3.2 (a dev dependency) in temporary
+  files use `@mcp-abap-adt/auth-stores` 3.3 (a dev dependency) in temporary
   directories.
 - **`stand/uaaGrants.test.ts`**, **`stand/oidcGrants.test.ts`**,
   **`stand/samlGrants.test.ts`**: the stand (below). Without `UAA_URL` /
@@ -388,6 +400,44 @@ Windows, and `check:publish` hands the script its fake npm as `npm_execpath`.
 The `basic` cases run there too with their variables set. On macOS the SNC
 case runs the same way (`export` instead of `$env:`, `DYLD_LIBRARY_PATH` for
 the SDK's `lib`).
+
+## Live check: an x509 XSUAA service key
+
+`packages/auth-broker/src/__tests__/live/x509.live.test.ts` runs
+`client_credentials` with an x509 XSUAA service key against a real XSUAA:
+the broker with `fromServiceKeyCertificate()` over `XsuaaServiceKeyStore`
+(`getProvider().prepare()` and the token API), `mcp-auth --credential
+--client-auth certificate` and `generate-env-from-service-key --grant
+client_credentials --client-auth certificate` (each followed by a fresh broker
+over the destination it wrote, from its final location), and a failing run —
+a private key that is not the certificate's — that leaves the previous
+destination untouched and prints no PEM. One command builds, creates the
+environment, runs the suite and removes everything, also on failure:
+
+```bash
+export XSUAA_CF_API=<api> XSUAA_CF_ORG=<org> XSUAA_CF_SPACE=<space>  # exactly as `cf target` shows
+cf login -a "$XSUAA_CF_API" --sso -o "$XSUAA_CF_ORG" -s "$XSUAA_CF_SPACE"
+npm run test:live:x509                 # every case
+npm run test:live:x509 -- -t "(b)"     # one case
+X509_KEEP=1 npm run test:live:x509     # keep the environment for another run
+```
+
+Not in `npm test`, not in CI. The scripts (`packages/auth-broker/tests/live/x509/`)
+refuse unless `cf target` equals the three variables exactly, and touch only
+what `setup.sh` created: an `xsuaa` / `application` instance
+(`xs-security.json`: `client_credentials`, `credential-types:
+["binding-secret", "x509"]`) and its key `x509-key`, made afresh each run with
+`{"credential-type": "x509"}` (XSUAA's certificate lives about seven days).
+Each is recorded with its GUID in the ledger `tests/live/x509/.local/owned`,
+bound to that API, org and space, and re-checked before every reuse or delete;
+a name held by anything else is refused or left alone. The key and its PEM
+files are saved owner-only under the gitignored `.local/`, never printed, and
+the suite asserts only on boolean projections of them. A failed teardown exits
+non-zero and keeps `.local/`; `tests/live/x509/teardown.sh` finishes it.
+
+Last run: BTP trial, 2026-10-05 — all five cases passed (the key's shape, and
+(a)–(d)). Not covered: `authorization_code` and `passcode` over x509, the OIDC
+grants and `saml2_bearer` with a strategy, ABAP environment keys with x509.
 
 ## The checks
 
