@@ -726,6 +726,98 @@ describe('the token API factory beside a strategy', () => {
     expect(keys.getClientCertificate).not.toHaveBeenCalled();
     expect(factory.mock.calls[0]).toHaveLength(3);
   });
+
+  describe('a resource neither side states (Ruling 14)', () => {
+    // A service URL with no canonical form binds no resource, as the CLI's
+    // XSUAA placeholder: the session is stored without `issuedFor`.
+    const unstated = () => means({ serviceUrl: '<SERVICE_URL>' });
+
+    it('the same client: bound — its refresh token reaches the fourth argument', async () => {
+      const store = await storedThrough(
+        keyStore(null, certificate(), unstated()),
+        'refresh-of-A',
+        certificateStrategy,
+      );
+      const session = await store.loadSession(D);
+      expect(session).not.toHaveProperty('issuedFor');
+      expect(session?.issuedBy).toBe(`${endpoint.url}?client_id=cert-client`);
+
+      const call = await factoryCall(
+        store,
+        keyStore(null, certificate(), unstated()),
+        certificateStrategy,
+      );
+      expect(call[3]).toEqual({
+        clientAuthentication: answer,
+        uaaUrl: endpoint.url,
+        clientId: 'cert-client',
+        refreshToken: 'refresh-of-A',
+      });
+    });
+
+    it('the same client: a result without a refresh token keeps the stored one', async () => {
+      const store = await storedThrough(
+        keyStore(null, certificate(), unstated()),
+        'refresh-of-A',
+        certificateStrategy,
+      );
+      const broker = new AuthBroker({
+        sessionStore: store,
+        serviceKeyStore: keyStore(null, certificate(), unstated()),
+        provider: () => tokenProvider(jwtExpiringIn(3600)),
+        clientAuthentication: certificateStrategy,
+      });
+      await broker.refreshToken(D);
+      await broker.flush();
+      expect((await store.loadSession(D))?.refreshToken).toBe('refresh-of-A');
+    });
+
+    it('another client: not bound', async () => {
+      const store = await storedThrough(
+        keyStore(null, certificate(), unstated()),
+        'refresh-of-A',
+        certificateStrategy,
+      );
+      const call = await factoryCall(
+        store,
+        keyStore(null, certificate({ clientId: 'cert-client-B' }), unstated()),
+        certificateStrategy,
+      );
+      expect(call[3]).not.toHaveProperty('refreshToken');
+      expect(JSON.stringify(call)).not.toContain('refresh-of-A');
+    });
+
+    it('a session stored with no resource, a destination stating one: not bound', async () => {
+      const store = await storedThrough(
+        keyStore(null, certificate(), unstated()),
+        'refresh-of-A',
+        certificateStrategy,
+      );
+      const call = await factoryCall(
+        store,
+        keyStore(null, certificate()),
+        certificateStrategy,
+      );
+      expect(call[3]).not.toHaveProperty('refreshToken');
+      expect(JSON.stringify(call)).not.toContain('refresh-of-A');
+    });
+
+    it('a session stored with a resource, a destination stating none: not bound', async () => {
+      const store = await storedThrough(
+        keyStore(null, certificate()),
+        'refresh-of-A',
+        certificateStrategy,
+      );
+      expect((await store.loadSession(D))?.issuedFor).toBeDefined();
+      const call = await factoryCall(
+        store,
+        keyStore(null, certificate(), unstated()),
+        certificateStrategy,
+      );
+      expect(call[3]).not.toHaveProperty('refreshToken');
+      expect(JSON.stringify(call)).not.toContain('refresh-of-A');
+    });
+  });
 });
 
 /**

@@ -282,8 +282,9 @@ export async function runMcpAuth(
       // If parsing fails here, let the store report it below.
     }
 
-    // Only XsuaaServiceKeyStore answers a key's certificate client (it reads
-    // `uaa`-nested keys and `abap.url` too).
+    // Only XsuaaServiceKeyStore answers a key's certificate client and reads a
+    // wrapped key in place; it reads `uaa`-nested keys, `abap.url` and the SAP
+    // client too, so an ABAP-format key carrying one answers as before.
     const serviceKeyStore =
       isAbapFormat && !certificateKey
         ? new AbapServiceKeyStore(serviceKeyDir)

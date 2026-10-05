@@ -118,6 +118,15 @@ export interface Binding {
    * matches nothing.
    */
   issuerStated: boolean;
+  /**
+   * Set on the `clientAuthentication` strategy path only: a resource neither
+   * side states — no `issuedFor` computed (no service URL, or one that does
+   * not parse, as the CLI's XSUAA placeholder) and none stored — matches, so
+   * the issuer and client alone decide. A resource stated on one side only
+   * never matches. Without it (the 4.0.0 path) an absent resource matches
+   * nothing.
+   */
+  unstatedResourceMatches?: true;
 }
 
 /** The resource the means name: `serviceUrl` with `sapClient`. */
@@ -198,6 +207,15 @@ export function consumerBinding(
 }
 
 /**
+ * A binding on the `clientAuthentication` strategy path: a resource that
+ * neither the means nor the stored session state matches, so the issuer and
+ * client alone decide (`Binding.unstatedResourceMatches`).
+ */
+export function strategyBinding(binding: Binding): Binding {
+  return { ...binding, unstatedResourceMatches: true };
+}
+
+/**
  * A `none` row: the resource always; the issuer only when the means state one
  * — `oidcIssuerUrl` (with `uaaClientId` when stated) or the client (`uaaUrl`
  * and `uaaClientId`) for `jwt`, `samlAcsUrl` for `saml`.
@@ -236,15 +254,20 @@ export function handedOverBinding(
   };
 }
 
-/** The stored `issuedFor`, canonicalised, equals the destination's. */
+/**
+ * The stored `issuedFor`, canonicalised, equals the destination's — or, with
+ * `unstatedResourceMatches`, neither states one.
+ */
 export function sameResource(
   stored: IConfig | null,
   binding: Binding,
 ): boolean {
-  return (
-    binding.issuedFor !== undefined &&
-    resourceUri(stored?.issuedFor) === binding.issuedFor
-  );
+  if (binding.issuedFor === undefined) {
+    return (
+      binding.unstatedResourceMatches === true && !present(stored?.issuedFor)
+    );
+  }
+  return resourceUri(stored?.issuedFor) === binding.issuedFor;
 }
 
 /** The stored `issuedBy`, canonicalised as the destination's kind, equals it. */
@@ -256,7 +279,9 @@ export function sameIssuer(stored: IConfig | null, binding: Binding): boolean {
 
 /**
  * An obtained secret is this destination's only when **both** stored values
- * equal the computed ones; either absent, on either side, is not a match.
+ * equal the computed ones; either absent, on either side, is not a match —
+ * save a resource absent on both sides of a strategy-path binding
+ * (`unstatedResourceMatches`).
  */
 export function boundHere(stored: IConfig | null, binding: Binding): boolean {
   return sameResource(stored, binding) && sameIssuer(stored, binding);

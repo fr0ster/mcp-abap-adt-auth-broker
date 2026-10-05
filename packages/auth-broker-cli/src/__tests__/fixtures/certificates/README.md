@@ -5,6 +5,10 @@ trusted only inside the test process, and a self-signed client certificate
 else. Made with:
 
     openssl req -x509 -newkey rsa:2048 -nodes -keyout server.key -out server.crt \
-      -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1" -days 36500
+      -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1" \
+      -addext "basicConstraints=critical,CA:FALSE" -days 36500
     openssl req -x509 -newkey rsa:2048 -nodes -keyout client.key -out client.crt \
-      -subj "/CN=mcp-auth-test-client" -days 36500
+      -subj "/CN=mcp-auth-test-client" \
+      -addext "basicConstraints=critical,CA:FALSE" -days 36500
+
+Both are leaves (`CA:FALSE`): neither can sign another certificate.

@@ -35,7 +35,12 @@ import type {
 import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
 import type { IConfig } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { type Binding, boundHere, consumerBinding } from './binding';
+import {
+  type Binding,
+  boundHere,
+  consumerBinding,
+  strategyBinding,
+} from './binding';
 import { destinationBinding } from './bindingOf';
 import {
   type ClientAuthenticationStrategy,
@@ -674,7 +679,9 @@ export class AuthBroker {
         // words, nothing of the thrown value, no cause. The stored refresh
         // token is carried only when the session is bound to this resource
         // and this client identity — never to another authorization server.
-        binding = consumerBinding(serviceUrl, sapClient, strategic.identity);
+        binding = strategyBinding(
+          consumerBinding(serviceUrl, sapClient, strategic.identity),
+        );
         const session = read.sessionRead
           ? read.session
           : await this.loadStoredSession(destination);
@@ -1046,7 +1053,11 @@ export class AuthBroker {
           );
           client = await clientIdentity(context);
         }
-        const binding = destinationBinding(authType, grant, stated, client);
+        const computed = destinationBinding(authType, grant, stated, client);
+        // The strategy path: a resource neither side states matches.
+        const binding = clientAuthentication
+          ? strategyBinding(computed)
+          : computed;
         const stored =
           grant === 'client_credentials'
             ? null

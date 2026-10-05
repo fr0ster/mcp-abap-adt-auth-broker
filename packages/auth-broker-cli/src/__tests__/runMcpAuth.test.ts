@@ -646,6 +646,31 @@ describe('mcp-auth --client-auth', () => {
       expect(certServer.requests).toHaveLength(before);
     });
 
+    it('--type xsuaa with no service URL: an --env rerun refreshes with the stored refresh token (Ruling 14)', async () => {
+      certServer.answer('/oauth/token', tokenAnswer('x509'));
+      const o = options({
+        authType: 'xsuaa',
+        serviceKeyPath: x509Key(),
+        ...certificate,
+      });
+      await expect(run(o)).resolves.toBe(0);
+      const keys = readEnvKeys(path.join(outDir, `${DEST}.env`));
+      expect(keys).not.toHaveProperty('XSUAA_MCP_URL');
+      expect(keys.XSUAA_ISSUED_FOR ?? '').toBe('');
+
+      const previous = path.join(root, `${DEST}.env`);
+      fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
+      strategyCalls = 0;
+      await expect(run({ ...o, envFilePath: previous })).resolves.toBe(0);
+      expect(strategyCalls).toBe(0);
+      expect(certServer.requests.at(-1)?.form).toEqual(
+        expect.objectContaining({
+          grant_type: 'refresh_token',
+          refresh_token: 'x509-refresh-1',
+        }),
+      );
+    });
+
     it('--type abap writes the SAP_UAA_* certificate variables', async () => {
       certServer.answer('/oauth/token', tokenAnswer('x509', false));
       await expect(
@@ -694,6 +719,90 @@ describe('mcp-auth --client-auth', () => {
     });
   });
 
+  describe('an ABAP-format key carrying a certificate', () => {
+    it('with no flag, answers as the same key without one: the service URL, the SAP client, the secret client', async () => {
+      server.answer('/oauth/token', tokenAnswer('cc', false));
+      const abapFormat = (extra: object) => ({
+        uaa: {
+          url: server.url,
+          clientid: 'key-client',
+          clientsecret: CLIENT_SECRET,
+          ...extra,
+        },
+        abap: { url: SERVICE_URL, client: '100' },
+      });
+      const meansOf = async (credentials: object, wrapped: boolean) => {
+        fs.rmSync(outDir, { recursive: true, force: true });
+        const file = path.join(keysDir, `${DEST}.json`);
+        fs.writeFileSync(
+          file,
+          JSON.stringify(wrapped ? detailsOf(credentials) : credentials),
+        );
+        await expect(
+          run(options({ serviceKeyPath: file, credential: true })),
+        ).resolves.toBe(0);
+        const keys = readEnvKeys(path.join(outDir, `${DEST}.env`));
+        return Object.fromEntries(
+          meansKeys('abap')
+            .filter((key) => key in keys)
+            .map((key) => [key, keys[key]]),
+        );
+      };
+      const before = await meansOf(abapFormat({}), false);
+      expect(before).toEqual(
+        expect.objectContaining({
+          SAP_URL: SERVICE_URL,
+          SAP_UAA_URL: server.url,
+          SAP_UAA_CLIENT_ID: 'key-client',
+          SAP_UAA_CLIENT_SECRET: CLIENT_SECRET,
+        }),
+      );
+      for (const wrapped of [false, true]) {
+        const carrying = abapFormat({
+          certificate: CLIENT_CRT,
+          key: CLIENT_KEY,
+          certurl: certServer.url,
+        });
+        expect(await meansOf(carrying, wrapped)).toEqual(before);
+      }
+      expect(server.requests.map((r) => r.form.client_secret)).toEqual([
+        CLIENT_SECRET,
+        CLIENT_SECRET,
+        CLIENT_SECRET,
+      ]);
+      expect(pemCopies()).toEqual([]);
+    });
+
+    it('with --client-auth certificate, its certificate client is read: XsuaaServiceKeyStore is the store that answers one', async () => {
+      certServer.answer('/oauth/token', tokenAnswer('x509', false));
+      const file = path.join(keysDir, `${DEST}.json`);
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          uaa: {
+            url: server.url,
+            clientid: 'key-client',
+            certificate: CLIENT_CRT,
+            key: CLIENT_KEY,
+            certurl: certServer.url,
+          },
+          abap: { url: SERVICE_URL },
+        }),
+      );
+      await expect(
+        run(
+          options({ serviceKeyPath: file, credential: true, ...certificate }),
+        ),
+      ).resolves.toBe(0);
+      const keys = readEnvKeys(path.join(outDir, `${DEST}.env`));
+      expect(keys.SAP_URL).toBe(SERVICE_URL);
+      expect(keys.SAP_UAA_CERT_URL).toBe(certServer.url);
+      expect(certServer.requests[0].clientCertificate).toBe(
+        'mcp-auth-test-client',
+      );
+    });
+  });
+
   describe('secret', () => {
     it('a mixed key: client_secret_basic with the stated encoding; the .env holds the secret and no certificate', async () => {
       server.answer('/authentication/oauth/token', tokenAnswer('cc', false));
@@ -717,7 +826,7 @@ describe('mcp-auth --client-auth', () => {
     it('an x509 key without a secret is refused', async () => {
       await expect(
         run(xsuaa({ serviceKeyPath: x509Key(), ...secret })),
-      ).rejects.toThrow();
+      ).rejects.toThrow('a client certificate needs --client-auth certificate');
       expect(server.requests).toHaveLength(0);
       expect(certServer.requests).toHaveLength(0);
     });

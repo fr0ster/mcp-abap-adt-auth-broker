@@ -291,10 +291,10 @@ function showHelp(): void {
     '    With certificate, the .env names the PEM files by absolute path (SAP_UAA_CLIENT_CERT_PATH,',
   );
   console.log(
-    '    SAP_UAA_CLIENT_KEY_PATH) beside SAP_UAA_CERT_URL, and holds no client secret; the',
+    '    SAP_UAA_CLIENT_KEY_PATH) beside SAP_UAA_CERT_URL — XSUAA_UAA_* with --type xsuaa — and',
   );
   console.log(
-    '    certificate and key are never copied, by the .env or anywhere else.',
+    '    holds no client secret; the certificate and key are never copied, by the .env or anywhere else.',
   );
 }
 

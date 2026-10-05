@@ -111,11 +111,12 @@ function sessions(): {
 function keyStore(
   client: IAuthorizationConfig | null,
   cert: IClientCertificate | null,
+  stated: IConnectionConfig = means,
 ): IServiceKeyStore & { getClientCertificate: jest.Mock } {
   return {
     getServiceKey: async () => null,
     getAuthorizationConfig: async () => client,
-    getConnectionConfig: async () => means,
+    getConnectionConfig: async () => stated,
     getClientCertificate: jest.fn(async () => cert),
   };
 }
@@ -270,6 +271,79 @@ describe('the binding of a certificate client', () => {
       'authorization_code',
     ]);
     expect(held()?.issuedBy).toBe(`${other.url}?client_id=cert-client`);
+  });
+});
+
+describe('a certificate destination stating no resource (Ruling 14)', () => {
+  // A service URL with no canonical form binds no resource: the session is
+  // stored without `issuedFor`, and the issuer and client alone decide.
+  const unstated: IConnectionConfig = { ...means, serviceUrl: '<SERVICE_URL>' };
+
+  async function storedFor(store: ISessionStore, stated: IConnectionConfig) {
+    const first = broker(
+      store,
+      keyStore(null, certificate(), stated),
+      user(),
+      certificateStrategy,
+    );
+    const provider = await first.getProvider(D);
+    expect(await provider.prepare()).toEqual({ ok: true });
+    await first.flush();
+  }
+
+  async function againFor(
+    store: ISessionStore,
+    stated: IConnectionConfig,
+    cert: IClientCertificate = certificate(),
+  ) {
+    const login = user();
+    const again = broker(
+      store,
+      keyStore(null, cert, stated),
+      login,
+      certificateStrategy,
+    );
+    const provider = await again.getProvider(D);
+    expect(await provider.prepare()).toEqual({ ok: true });
+    return { login, provider };
+  }
+
+  it('the same client: the stored token is reused — no login, no request', async () => {
+    const { store, held } = sessions();
+    await storedFor(store, unstated);
+    expect(held()).not.toHaveProperty('issuedFor');
+    const stored = held()?.authorizationToken;
+    const requests = endpoint.requests.length;
+
+    const { login, provider } = await againFor(store, unstated);
+    expect(await bearer(provider)).toBe(stored);
+    expect(login.asked).toBe(0);
+    expect(endpoint.requests).toHaveLength(requests);
+  });
+
+  it('another client: a fresh login', async () => {
+    const { store } = sessions();
+    await storedFor(store, unstated);
+    const { login } = await againFor(
+      store,
+      unstated,
+      certificate({ clientId: 'another-cert-client' }),
+    );
+    expect(login.asked).toBe(1);
+  });
+
+  it('stored with no resource, a destination stating one: a fresh login', async () => {
+    const { store } = sessions();
+    await storedFor(store, unstated);
+    const { login } = await againFor(store, means);
+    expect(login.asked).toBe(1);
+  });
+
+  it('stored with a resource, a destination stating none: a fresh login', async () => {
+    const { store } = sessions();
+    await storedFor(store, means);
+    const { login } = await againFor(store, unstated);
+    expect(login.asked).toBe(1);
   });
 });
 
