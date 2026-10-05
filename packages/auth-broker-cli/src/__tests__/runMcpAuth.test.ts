@@ -877,3 +877,32 @@ describe('mcp-auth --client-auth', () => {
     });
   });
 });
+
+describe('a service key that is not JSON', () => {
+  it.each(['abap', 'xsuaa'] as const)(
+    '--type %s: refused in fixed words before anything is written; nothing of the file on the console or in the error',
+    async (authType) => {
+      const MARKER = 'leaked-marker-7f3a';
+      const file = path.join(keysDir, `${DEST}.json`);
+      fs.writeFileSync(file, `{"clientsecret": "${MARKER}", oops`);
+      let thrown: unknown;
+      await run(
+        options({ serviceKeyPath: file, authType, credential: true }),
+      ).catch((error) => {
+        thrown = error;
+      });
+      expect((thrown as Error).message).toBe(
+        `The service key ${file} cannot be read as JSON`,
+      );
+      expect(fs.readdirSync(workDir)).toEqual([]);
+      const printed = [console.log, console.error]
+        .flatMap((fn) => (fn as jest.Mock).mock.calls.flat())
+        .map(String)
+        .join('\n');
+      expect(printed).not.toContain(MARKER);
+      expect(String((thrown as Error).message)).not.toContain(MARKER);
+      expect(String((thrown as Error).stack)).not.toContain(MARKER);
+      expect(server.requests).toHaveLength(0);
+    },
+  );
+});

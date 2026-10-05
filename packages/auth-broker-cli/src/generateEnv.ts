@@ -25,10 +25,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-import {
-  AbapServiceKeyStore,
-  XsuaaServiceKeyStore,
-} from '@mcp-abap-adt/auth-stores';
+import { XsuaaServiceKeyStore } from '@mcp-abap-adt/auth-stores';
 import {
   type ClientAuthFlags,
   carriesCertificate,
@@ -36,6 +33,7 @@ import {
   clientAuthenticationStrategy,
   clientAuthFlags,
   noCertificateClient,
+  serviceKeyStoreFor,
 } from './clientAuthentication';
 import {
   completeMeans,
@@ -43,6 +41,7 @@ import {
   openDestination,
   writeOutputFile,
 } from './destination';
+import { readJsonFile } from './jsonFile';
 import type { AuthorizationStrategy } from './runMcpAuth';
 
 /** The grants a SAP service key's client alone serves. */
@@ -136,16 +135,23 @@ export async function runGenerateEnv(
 
   // The key's format decides its parser and the file's key names: an ABAP
   // key nests the client under `uaa`, an XSUAA key holds it flat.
-  const rawServiceKey = JSON.parse(
-    fs.readFileSync(resolvedServiceKeyPath, 'utf8'),
-  ) as Record<string, unknown>;
+  // Read in fixed words: the parser's message would quote the key.
+  let rawServiceKey: Record<string, unknown>;
+  try {
+    rawServiceKey = (readJsonFile(resolvedServiceKeyPath, 'The service key') ??
+      {}) as Record<string, unknown>;
+  } catch (error) {
+    console.error(`❌ ${(error as Error).message}`);
+    return 1;
+  }
   const isXsuaa = !rawServiceKey.uaa;
-  // Only XsuaaServiceKeyStore answers a key's certificate client; it reads
-  // `uaa`-nested keys and `abap.url` too.
-  const serviceKeyStore =
-    isXsuaa || certificateFiles
-      ? new XsuaaServiceKeyStore(serviceKeyDir)
-      : new AbapServiceKeyStore(serviceKeyDir);
+  // Only the fields' presence: which client authenticates is the user's flag.
+  const unwrappedKey = rawServiceKey.credentials ?? rawServiceKey;
+  const serviceKeyStore = serviceKeyStoreFor(
+    serviceKeyDir,
+    !isXsuaa,
+    unwrappedKey,
+  );
 
   // The client the destination states: the key's certificate client — who it
   // is and where it authenticates, its PEM dropped — or its secret client.
@@ -158,11 +164,13 @@ export async function runGenerateEnv(
   if (certificateFiles) {
     let certificateClient: Awaited<
       ReturnType<XsuaaServiceKeyStore['getClientCertificate']>
-    >;
+    > = null;
     try {
-      certificateClient = await (
-        serviceKeyStore as XsuaaServiceKeyStore
-      ).getClientCertificate(destination);
+      // A key the ABAP store reads carries no certificate client.
+      if (serviceKeyStore instanceof XsuaaServiceKeyStore) {
+        certificateClient =
+          await serviceKeyStore.getClientCertificate(destination);
+      }
     } catch (error) {
       // The store's refusal names the key's fields, never a value.
       console.error(`❌ ${(error as Error).message}`);
@@ -181,9 +189,7 @@ export async function runGenerateEnv(
     const secretClient =
       await serviceKeyStore.getAuthorizationConfig(destination);
     if (!secretClient) {
-      const certificateKey = carriesCertificate(
-        rawServiceKey.credentials ?? rawServiceKey,
-      );
+      const certificateKey = carriesCertificate(unwrappedKey);
       console.error(
         certificateKey && flags.clientAuth === undefined
           ? `❌ ${certificateNeedsFlag(destination)}`

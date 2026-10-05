@@ -540,3 +540,52 @@ describe('a refused login', () => {
     expect(fs.readFileSync(output, 'utf8')).toBe(before);
   });
 });
+
+describe('a file that is not JSON', () => {
+  const MARKER = 'leaked-marker-7f3a';
+
+  /** Everything the run printed, and the error it ended with. */
+  async function outcome(o: McpSsoOptions) {
+    let thrown: unknown;
+    await run(o).catch((error) => {
+      thrown = error;
+    });
+    const printed = [console.log, console.error]
+      .flatMap((fn) => (fn as jest.Mock).mock.calls.flat())
+      .map(String)
+      .join('\n');
+    return { thrown: thrown as Error, printed };
+  }
+
+  it('--config: refused in fixed words, nothing of the file on the console', async () => {
+    const file = path.join(root, 'provider.json');
+    fs.writeFileSync(file, `{"clientSecret": "${MARKER}", oops`);
+    const { thrown, printed } = await outcome(options({ configPath: file }));
+    expect(thrown.message).toBe('process.exit(1)');
+    expect(console.error).toHaveBeenCalledWith(
+      `❌ The config file ${file} cannot be read as JSON`,
+    );
+    expect(printed).not.toContain(MARKER);
+    expect(server.requests).toHaveLength(0);
+  });
+
+  it('--service-key: the run fails, nothing of the file on the console or in the error', async () => {
+    const file = path.join(root, `${DEST}.json`);
+    fs.writeFileSync(file, `{"clientsecret": "${MARKER}", oops`);
+    const { thrown, printed } = await outcome(
+      options({
+        authType: 'xsuaa',
+        protocol: 'oidc',
+        flow: 'password',
+        serviceKeyPath: file,
+        username: 'alice',
+        password: 'pw',
+      }),
+    );
+    expect(thrown).toBeInstanceOf(Error);
+    expect(printed).not.toContain(MARKER);
+    expect(String(thrown.message)).not.toContain(MARKER);
+    expect(String(thrown.stack)).not.toContain(MARKER);
+    expect(server.requests).toHaveLength(0);
+  });
+});

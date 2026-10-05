@@ -27,7 +27,6 @@ import {
   type staticCodeStrategy,
 } from '@mcp-abap-adt/auth-providers';
 import {
-  AbapServiceKeyStore,
   JsonFileHandler,
   XsuaaServiceKeyStore,
 } from '@mcp-abap-adt/auth-stores';
@@ -37,6 +36,8 @@ import {
   clientAuthenticationStrategy,
   clientAuthFlags,
   noCertificateClient,
+  present,
+  serviceKeyStoreFor,
 } from './clientAuthentication';
 import {
   completeMeans,
@@ -83,11 +84,6 @@ export interface McpAuthContext {
    * `--redirect-port`. Not called for `--credential`.
    */
   authorization: (options: McpAuthOptions) => AuthorizationStrategy;
-}
-
-/** A value present as a non-empty string. */
-function present(value: unknown): value is string {
-  return typeof value === 'string' && value !== '';
 }
 
 /**
@@ -171,11 +167,20 @@ export async function runMcpAuth(
     let isAbapFormat = options.authType === 'abap';
     let rawServiceKeyJson: Record<string, unknown> | null = null;
     let certificateKey = false;
+    let json: Record<string, unknown> | null;
     try {
-      const json = (await JsonFileHandler.load(
+      json = (await JsonFileHandler.load(
         path.basename(resolvedServiceKeyPath),
         serviceKeyDir,
       )) as Record<string, unknown> | null;
+    } catch {
+      // Fixed words, before anything is written: the reader's message quotes
+      // the file, which holds a client secret or a private key.
+      throw new Error(
+        `The service key ${resolvedServiceKeyPath} cannot be read as JSON`,
+      );
+    }
+    try {
       let effectiveJson = json;
       if (json?.credentials) {
         effectiveJson = json.credentials as Record<string, unknown>;
@@ -208,16 +213,16 @@ export async function runMcpAuth(
         isAbapFormat = !!effectiveJson.uaa;
       }
     } catch {
-      // If parsing fails here, let the store report it below.
+      // Unwrapping failed: the store reports what it cannot read below.
     }
 
-    // Only XsuaaServiceKeyStore answers a key's certificate client and reads a
-    // wrapped key in place; it reads `uaa`-nested keys, `abap.url` and the SAP
-    // client too, so an ABAP-format key carrying one answers as before.
-    const serviceKeyStore =
-      isAbapFormat && !certificateKey
-        ? new AbapServiceKeyStore(serviceKeyDir)
-        : new XsuaaServiceKeyStore(serviceKeyDir);
+    // A key carrying a certificate is read by XsuaaServiceKeyStore, whatever
+    // its format: the one store that answers its certificate client.
+    const serviceKeyStore = serviceKeyStoreFor(
+      serviceKeyDir,
+      isAbapFormat,
+      rawServiceKeyJson,
+    );
     try {
       const auth = await serviceKeyStore.getAuthorizationConfig(destination);
       if (auth) {

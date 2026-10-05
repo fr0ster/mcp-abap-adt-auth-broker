@@ -17,6 +17,10 @@ import {
   fromServiceKeyCertificate,
   fromServiceKeySecret,
 } from '@mcp-abap-adt/auth-broker';
+import {
+  AbapServiceKeyStore,
+  XsuaaServiceKeyStore,
+} from '@mcp-abap-adt/auth-stores';
 
 /** The client authentication flags, as given. */
 export interface ClientAuthFlags {
@@ -36,7 +40,7 @@ export interface CertificateFiles {
 }
 
 /** A value present as a non-empty string. */
-function present(value: unknown): value is string {
+export function present(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
 }
 
@@ -128,6 +132,25 @@ export function carriesCertificate(json: unknown): boolean {
       ((part as Record<string, unknown>).certificate !== undefined ||
         (part as Record<string, unknown>).key !== undefined),
   );
+}
+
+/**
+ * The store that reads a service key: AbapServiceKeyStore for an ABAP-format
+ * key (`uaa`-nested) carrying no certificate, XsuaaServiceKeyStore for every
+ * other — the only store that answers a certificate client and reads a
+ * `credentials`-wrapped key in place; it reads `uaa`-nested keys, `abap.url`
+ * and the SAP client too, so an ABAP-format key carrying a certificate
+ * answers as before. AbapServiceKeyStore refuses a key with no client secret
+ * (an x509 one) outright, before the command could name the flag it needs.
+ */
+export function serviceKeyStoreFor(
+  directory: string,
+  abapFormat: boolean,
+  key: unknown,
+): AbapServiceKeyStore | XsuaaServiceKeyStore {
+  return abapFormat && !carriesCertificate(key)
+    ? new AbapServiceKeyStore(directory)
+    : new XsuaaServiceKeyStore(directory);
 }
 
 /** The refusal of a key with a certificate and no secret, run with no flag. */
