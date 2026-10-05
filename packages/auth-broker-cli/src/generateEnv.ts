@@ -250,6 +250,10 @@ export async function runGenerateEnv(
 
   console.log(`🔐 Getting token for destination "${destination}" (${grant})`);
   try {
+    // Kept: getProvider is typed IAuthProvider, and both grants this script
+    // states (authorization_code, client_credentials) build a token provider,
+    // which also has getTokens. A runtime check would add a refusal for a
+    // provider that cannot be built here.
     const provider = (await broker.getProvider(destination)) as unknown as {
       getTokens: () => Promise<unknown>;
     };

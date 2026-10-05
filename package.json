@@ -10,7 +10,7 @@
     "chrono": "./tools/version-stats.sh",
     "clean": "npm run clean --workspaces",
     "lint": "biome check --write packages tools",
-    "lint:check": "biome check packages tools",
+    "lint:check": "biome check --error-on-warnings packages tools",
     "format": "biome format --write packages tools",
     "build": "npm run clean --workspaces && biome check packages tools --diagnostic-level=error && tsc -b packages/auth-broker/tsconfig.build.json packages/auth-broker-cli/tsconfig.build.json",
     "test": "npm run test --workspaces --if-present",

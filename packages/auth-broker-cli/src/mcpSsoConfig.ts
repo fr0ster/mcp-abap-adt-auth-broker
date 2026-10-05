@@ -294,6 +294,9 @@ export function applyFileConfig(
 
   for (const field of CONFIG_BACKFILL_FIELDS) {
     if (options[field] === undefined && fields[field] !== undefined) {
+      // Kept: the file's value is copied as the file states it, unchecked, as
+      // since 2.0.0; typing it per field would mean validating it — a change
+      // of behaviour, not of types.
       (options as unknown as Record<string, unknown>)[field] = fields[field];
     }
   }
