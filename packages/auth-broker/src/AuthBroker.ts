@@ -35,10 +35,16 @@ import type {
 import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
 import type { IConfig } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { type Binding, boundHere, consumerBinding } from './binding';
+import {
+  type Binding,
+  type BoundClient,
+  boundHere,
+  consumerBinding,
+} from './binding';
 import { destinationBinding } from './bindingOf';
 import {
   type ClientAuthenticationStrategy,
+  type ClientIdentity,
   clientAuthenticationContext,
   clientIdentity,
   resolveClientAuthentication,
@@ -89,7 +95,26 @@ export type TokenProviderFactory = (
   destination: string,
   authConfig: IAuthorizationConfig | null,
   connConfig: IConnectionConfig,
+  client?: TokenProviderClient,
 ) => IRefreshableTokenProvider;
+
+/**
+ * The token API factory's fourth argument — present only when the broker was
+ * given a `clientAuthentication` strategy and the destination states a grant
+ * whose client authenticates; without one the factory is called with three
+ * arguments, as 4.0.0. It never carries a certificate, a key or a secret.
+ */
+export interface TokenProviderClient {
+  /** The strategy's answer, resolved before the factory is called. */
+  readonly clientAuthentication?: IClientAuthentication;
+  /**
+   * The client's identity — the secret client's `uaaUrl` when the stores hold
+   * one, else the certificate client's; absent when there is neither.
+   */
+  readonly uaaUrl?: string;
+  /** The client id beside `uaaUrl`, from the same client. */
+  readonly clientId?: string;
+}
 
 /** The grants whose provider takes an `IAuthorizationStrategy<string>`. */
 export type StrategyGrant =
@@ -562,10 +587,40 @@ export class AuthBroker {
         };
       }
       const client = await this.resolveAuthorizationConfig(destination);
-      const built = provider(destination, client, {
-        ...(connConfig ?? {}),
-        serviceUrl,
-      });
+      const seed = { ...(connConfig ?? {}), serviceUrl };
+      const strategic = await this.consumerClientAuthentication(
+        destination,
+        means,
+        client,
+      );
+      let built: IRefreshableTokenProvider;
+      let bound: BoundClient | null = client;
+      if (strategic) {
+        // The strategy's answer and the client identity, resolved before the
+        // factory; the factory called inside the same guard: a throw is fixed
+        // words, nothing of the thrown value, no cause.
+        bound = strategic.identity;
+        const fourth: TokenProviderClient = {
+          clientAuthentication: strategic.clientAuthentication,
+          ...(strategic.identity
+            ? {
+                uaaUrl: strategic.identity.uaaUrl,
+                clientId: strategic.identity.uaaClientId,
+              }
+            : {}),
+        };
+        try {
+          built = provider(destination, client, seed, fourth);
+        } catch {
+          throw new DestinationConfigError(
+            destination,
+            ['provider', 'clientAuthentication'],
+            'the token provider factory failed beside the clientAuthentication strategy',
+          );
+        }
+      } else {
+        built = provider(destination, client, seed);
+      }
       this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
         hasCredentials: !!client,
         hasRefreshToken: !!client?.refreshToken,
@@ -575,7 +630,7 @@ export class AuthBroker {
       });
       return {
         provider: built,
-        binding: consumerBinding(serviceUrl, sapClient, client),
+        binding: consumerBinding(serviceUrl, sapClient, bound),
       };
     });
     this.consumerBuilt.set(destination, build);
@@ -585,6 +640,65 @@ export class AuthBroker {
       }
     });
     return build;
+  }
+
+  /**
+   * The token API's strategy path: with a `clientAuthentication` strategy and a
+   * destination stating a grant whose client authenticates, the strategy's
+   * answer — resolved inside the guard — and the client identity: the secret
+   * client, else the certificate client's, read through the context's memoised
+   * `readCertificate`. `null` without a strategy (4.0.0: nothing
+   * certificate-related is asked) and for a grant that authenticates no
+   * client (`saml2_pure`, `none`), as `getProvider` decides.
+   *
+   * The strategy is told the grant, so a destination that states none is
+   * refused before it is called — a strategy is never silently ignored.
+   */
+  private async consumerClientAuthentication(
+    destination: string,
+    means: IConnectionConfig | null,
+    client: IAuthorizationConfig | null,
+  ): Promise<{
+    clientAuthentication: IClientAuthentication;
+    identity: ClientIdentity | null;
+  } | null> {
+    const strategy = this.clientAuthentication;
+    if (!strategy) {
+      return null;
+    }
+    const authType = means?.authType;
+    if (authType !== 'jwt' && authType !== 'saml') {
+      throw new DestinationConfigError(
+        destination,
+        ['authType', 'grantType'],
+        'a clientAuthentication strategy is told the grant: the destination must state its authType and grantType',
+      );
+    }
+    const grant = statedGrant(
+      destination,
+      authType,
+      means as IConnectionConfig,
+    );
+    if (grant === 'saml2_pure' || grant === 'none') {
+      return null;
+    }
+    const serviceKeyStore = this.serviceKeyStore;
+    const context = clientAuthenticationContext(
+      destination,
+      grant,
+      client,
+      () =>
+        this.read(destination, 'client certificate', async () =>
+          serviceKeyStore?.getClientCertificate
+            ? serviceKeyStore.getClientCertificate(destination)
+            : null,
+        ),
+    );
+    const clientAuthentication = await resolveClientAuthentication(
+      strategy,
+      context,
+    );
+    return { clientAuthentication, identity: await clientIdentity(context) };
   }
 
   /**

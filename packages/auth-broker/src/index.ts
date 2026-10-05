@@ -21,6 +21,7 @@ export {
   AuthBroker,
   type AuthBrokerConfig,
   type StrategyGrant,
+  type TokenProviderClient,
   type TokenProviderFactory,
 } from './AuthBroker';
 export { bindingOf, type SecretBinding } from './bindingOf';
