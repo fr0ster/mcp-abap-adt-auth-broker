@@ -22,6 +22,7 @@ import {
   writeJsonFile,
   writeOutputFile,
 } from './destination';
+import { readJsonFile } from './jsonFile';
 import {
   applyFileConfig,
   buildCollaborators,
@@ -124,7 +125,14 @@ export async function runMcpSso(
       console.error(`❌ Config file not found: ${resolvedConfigPath}`);
       process.exit(1);
     }
-    const raw = JSON.parse(fs.readFileSync(resolvedConfigPath, 'utf8'));
+    // Read in fixed words: the parser's message would quote the file.
+    let raw: unknown;
+    try {
+      raw = readJsonFile(resolvedConfigPath, 'The config file');
+    } catch (error) {
+      console.error(`❌ ${(error as Error).message}`);
+      process.exit(1);
+    }
     providerConfigFromFile = normalizeProviderConfig(raw);
     if (!providerConfigFromFile) {
       console.error(`❌ Config file does not contain provider config`);

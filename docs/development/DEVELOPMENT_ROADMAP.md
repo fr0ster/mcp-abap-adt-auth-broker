@@ -1,8 +1,8 @@
 # Development Roadmap
 
 > **Historical.** This roadmap was written for 0.1.0 and is kept as history; it
-> does not describe the current packages (`@mcp-abap-adt/auth-broker` 4.0.0,
-> `@mcp-abap-adt/auth-broker-cli` 2.0.0). For what they are and do, see the
+> does not describe the current packages (`@mcp-abap-adt/auth-broker` 4.1.0,
+> `@mcp-abap-adt/auth-broker-cli` 2.1.0). For what they are and do, see the
 > package READMEs and CHANGELOGs.
 
 This document outlines the development roadmap for the `@mcp-abap-adt/auth-broker` package and related authentication infrastructure.

@@ -13,10 +13,13 @@ where means and secrets live is the stores' (`@mcp-abap-adt/auth-stores`, or you
 
 **Upgrading from 3.x?** See [*Migrating from 3.x*](#migrating-from-3x) — 4.0.0 needs a session
 store that takes the secret alone (auth-stores 3 or later), means stated in a key store, and
-the contracts of `interfaces-auth` 3.
+the contracts of `interfaces-auth` 3. **On 4.0.0?** 4.1.0 is additive — a client that
+authenticates with an x509 certificate, through the `clientAuthentication` strategy (see
+[*How the Client Authenticates*](#how-the-client-authenticates-clientauthentication)); what a
+4.0.0 consumer may notice is in [*Migrating from 4.0.0*](#migrating-from-400).
 
 The `mcp-auth` and `mcp-sso` commands that write destination files are in
-[`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md) (2.0.0, on this
+[`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md) (2.1.0, on this
 version), in the same repository. Up to 3.0.4 they shipped in this package; from 3.1.0 this package
 has no `bin`. Install the commands with
 `npm i -g @mcp-abap-adt/auth-broker-cli` — after
@@ -34,6 +37,7 @@ globally for them.
 - ⚡ **Forced refresh**: `refreshToken()` obtains a new token even when the cached one looks valid — for a caller holding a 401
 - 🧾 **JWT or SAML cookies**: what the provider returns is saved as a token or as session cookies
 - 🔑 **No secrets copied**: The client secret stays in the service key; the session store gets tokens only
+- 📜 **x509 service keys**: a client that authenticates with a certificate instead of a secret (`tls_client_auth`), when you say so — `clientAuthentication: fromServiceKeyCertificate()`; the certificate and key are read from the key store, and never reach the session store, a log line or an error
 
 ## Installation
 
@@ -153,7 +157,7 @@ const provider = await broker.getProvider('DEV'); // an IAuthProvider
 // const connection = createAbapConnection({ url, provider }, logger) …
 ```
 
-| `authType` / `grantType` | Provider (auth-providers 5.2) | Read from the key store | Read from the session store |
+| `authType` / `grantType` | Provider (auth-providers 5.3) | Read from the key store | Read from the session store |
 |---|---|---|---|
 | `basic` (no grant read) | `new BasicAuthProvider(username, password)` | `username`, `password` | nothing |
 | `snc` (no grant read) | `SncLogonProvider.forSecureLoginClient({ partnerName, qop, sncLib, myName, logger })` | `sncPartnerName` (required); `sncQop`, `sncLib`, `sncMyName` when set | nothing |
@@ -199,6 +203,9 @@ stored refresh token renews it. Without a session the provider is built
 unseeded and obtains its first token at `prepare()`. `uaaClientSecret: ''` is
 a public client: `passcode` takes it as no secret; `AuthorizationCodeProvider`
 and `ClientCredentialsProvider` require a secret, so for them `''` is missing.
+With a `clientAuthentication` strategy no secret is read or required: the
+client authenticates with the strategy's answer — a certificate, say (see *How
+the Client Authenticates*).
 
 **The `authorization` option** is the interactive half of
 `authorization_code` and `passcode`: a function of the destination and the
@@ -391,6 +398,284 @@ API when the broker has no `provider` option (see *Getting Tokens*):
 concurrent first calls share one build, and a build that threw is tried again
 on the next call. A destination rewritten from outside is picked up by a new
 broker.
+
+### How the Client Authenticates: `clientAuthentication`
+
+Every grant whose client authenticates to the authorization server — the UAA
+grants (`authorization_code`, `client_credentials`, `passcode`), the OIDC
+grants (`oidc_authorization_code`, `device_code`, `password`,
+`token_exchange`) and `saml2_bearer` — sends the client's secret, as in 4.0.0,
+unless you tell the broker otherwise. An XSUAA service key created with
+`{"credential-type": "x509"}` holds no secret: it holds a client certificate,
+its private key and the mTLS host the certificate is presented to (`certurl`).
+How the client authenticates is your choice, stated as a strategy — the broker
+never infers it from a key's shape and has no default:
+
+```typescript
+import {
+  AuthBroker,
+  fromServiceKeyCertificate,
+} from '@mcp-abap-adt/auth-broker';
+import {
+  XsuaaServiceKeyStore,
+  XsuaaSessionStore,
+} from '@mcp-abap-adt/auth-stores';
+
+const broker = new AuthBroker({
+  serviceKeyStore: new XsuaaServiceKeyStore('/path/to/keys', {
+    grantType: 'client_credentials',
+  }),
+  sessionStore: new XsuaaSessionStore('/path/to/sessions'),
+  // The key's certificate, presented at <certurl>/oauth/token.
+  clientAuthentication: fromServiceKeyCertificate(),
+});
+
+const provider = await broker.getProvider('mcp'); // its client: the certificate
+```
+
+**The strategy** is `(context) => Promise<IClientAuthentication>`
+(`ClientAuthenticationStrategy`). The broker calls it once when it builds a
+destination's provider, with a `ClientAuthenticationContext`:
+
+- `destination` and `grant` (a `ClientAuthenticationGrant`, one of the eight
+  above);
+- `client` — the secret client the key store's `getAuthorizationConfig`
+  answered, as `uaaUrl`, `uaaClientId` and `uaaClientSecret` only — never a
+  refresh token or any other field the store answered with it — or `null`
+  (an x509 key answers `null` there, never a client with an empty secret);
+- `readCertificate()` — the key store's certificate client
+  (`IClientCertificate`: `uaaUrl`, `clientId`, `certificate`, `key`,
+  `certUrl`), read **only when called**, at most once per build; `null` when
+  the store holds none or implements no `getClientCertificate`.
+
+Its answer goes to the provider as `clientAuthentication`, and **no client
+secret goes with it** (auth-providers 5.3 refuses both). A given strategy
+always answers or throws: there is no "nothing" answer, so an explicit choice
+never falls back to the secret. `saml2_pure`, the `none` rows, `basic` and
+`snc` authenticate no client and never call it.
+
+**The two shipped factories** each fail closed:
+
+| Factory | Answers | Throws (→ the refusal below) |
+|---|---|---|
+| `fromServiceKeyCertificate()` | auth-providers' `tlsClientCertificate` with the certificate and key `readCertificate()` answers, against `<certUrl>/oauth/token` (a trailing `/` of `certUrl` dropped). The material is checked before the factory answers, so a malformed, incomplete or expired certificate is refused when the provider is built, not at its first token request | the store answers no certificate client: "the destination has no client certificate" |
+| `fromServiceKeySecret({ encoding })` | auth-providers' `clientSecretBasic` with the secret client's `uaaClientSecret`, in an `Authorization: Basic` header. `encoding` is required: `'raw'` for XSUAA (measured — it does not form-decode), `'form'` for UAA and Keycloak (RFC 6749 §2.3.1); anything else is a `TypeError` when the factory is made | no secret client, or an empty secret: "the destination has no client secret" |
+
+**Composing them is yours.** A fallback, and its order, is your statement,
+never the broker's. Branch on what the key holds (`readCertificate()` is
+memoised, so the factory reads the same answer); do not `catch` a factory's
+refusal and fall back — that would also swallow an expired, incomplete or
+unreadable certificate and send the secret instead:
+
+```typescript
+import {
+  type ClientAuthenticationStrategy,
+  fromServiceKeyCertificate,
+  fromServiceKeySecret,
+} from '@mcp-abap-adt/auth-broker';
+
+// The certificate when the key holds one, else the secret in a Basic header.
+// Decided by what the key holds, never by a failure: an expired, incomplete or
+// unreadable certificate is refused, not replaced by the secret.
+const certificateElseSecret: ClientAuthenticationStrategy = async (context) =>
+  (await context.readCertificate())
+    ? fromServiceKeyCertificate()(context)
+    : fromServiceKeySecret({ encoding: 'raw' })(context);
+
+// The certificate for client_credentials only; every other grant its secret.
+const byGrant: ClientAuthenticationStrategy = (context) =>
+  context.grant === 'client_credentials'
+    ? fromServiceKeyCertificate()(context)
+    : fromServiceKeySecret({ encoding: 'raw' })(context);
+```
+
+**Where the certificate comes from** — `IServiceKeyStore.getClientCertificate?`
+(`@mcp-abap-adt/interfaces-auth-broker` 1.2.0, optional), which auth-stores
+3.3.0 implements:
+
+- **`XsuaaServiceKeyStore`** — a key (bare, or wrapped in `credentials`)
+  carrying `url`, `clientid`, `certificate`, `key` and `certurl` and no
+  `clientsecret` is an x509 key: `getAuthorizationConfig` answers `null`,
+  `getClientCertificate` the certificate client. A key carrying both a secret
+  and a complete certificate offers both — the secret client as before, the
+  certificate client beside it — and your strategy picks; the store does not
+  read `credential-type` to choose. A key carrying only part of a
+  certificate client is refused by `getClientCertificate` (`incomplete`),
+  naming the missing fields, never a value. `AbapServiceKeyStore` holds no
+  certificate client.
+- **`EnvDestinationStore`** — three means variables, each a path or a URL,
+  never PEM: `SAP_UAA_CLIENT_CERT_PATH`, `SAP_UAA_CLIENT_KEY_PATH`,
+  `SAP_UAA_CERT_URL` (`XSUAA_UAA_CLIENT_CERT_PATH`, … with
+  `XSUAA_DESTINATION_VARS`), beside `SAP_UAA_URL` / `SAP_UAA_CLIENT_ID` and
+  **without** `SAP_UAA_CLIENT_SECRET`. All three and no secret is a
+  certificate client (the two files read when `getClientCertificate` is
+  called); none of them is 4.0.0's answer; some but not all, or any beside the
+  secret, is the store's `ClientCertificateError` from both methods, naming
+  the variables. A file that states neither a client id, a secret nor any of
+  the three asks its `fallback` — so an `EnvDestinationStore` over an `XsuaaServiceKeyStore`
+  answers the x509 key's certificate client. See auth-stores' README for the
+  details.
+
+```env
+# A certificate destination — EnvDestinationStore (ABAP_DESTINATION_VARS)
+SAP_AUTH_TYPE=jwt
+SAP_GRANT_TYPE=client_credentials
+SAP_URL=https://your-system.abap.us10.hana.ondemand.com
+SAP_UAA_URL=https://your-account.authentication.us10.hana.ondemand.com
+SAP_UAA_CLIENT_ID=sb-your-app!t12345
+SAP_UAA_CLIENT_CERT_PATH=/home/you/keys/client.crt
+SAP_UAA_CLIENT_KEY_PATH=/home/you/keys/client.key
+SAP_UAA_CERT_URL=https://your-account.authentication.cert.us10.hana.ondemand.com
+```
+
+**Without a strategy nothing changes:** the client secret, exactly as 4.0.0,
+and nothing certificate-related is read — no `getClientCertificate`, no file.
+A client row whose key store answers no client, or one without a client id,
+now says, after 4.0.0's words, `a certificate client needs a clientAuthentication strategy` (see
+*Migrating from 4.0.0*).
+
+**With a strategy, what the row requires** is its client's identity —
+`uaaUrl` and `uaaClientId` (the OIDC rows: `uaaClientId`) — taken from the
+secret client when the key store has one, else from the certificate client
+(`uaaUrl`, `clientId`), read through the same memoised `readCertificate`; the
+secret is no longer required.
+
+**The binding on the strategy path.** A secret is bound to the client's
+identity (`issuedBy` = `uaaUrl` + `client_id`), never to how the client
+authenticates and never to PEM:
+
+- a certificate destination's tokens are stored with `issuedBy` from the
+  certificate client's `uaaUrl` and `clientId`, reused after the broker is
+  recreated, and dropped after the issuer or the client id changes;
+- a secret key and an x509 key of the **same client id** at the same
+  `uaaUrl` (as an XSUAA instance's keys are) share one session: switching the
+  destination from one to the other keeps its token and refresh token;
+- the resource (`issuedFor`) matches when both sides state it and it is
+  equal — **or when neither does**: means with no `serviceUrl`, or one that
+  does not parse (the CLI's XSUAA placeholder is such a URL), and a session
+  stored without `issuedFor`. A resource stated on one side only never
+  matches. So an XSUAA destination without a service URL reuses its own
+  session instead of logging in on every run; the client identity still
+  decides. (Without a strategy, 4.0.0's rule stands: an absent resource
+  matches nothing.)
+
+**The token API with a factory of yours** gets the same strategy. For a
+destination whose grant authenticates a client, the broker resolves the
+strategy first and calls your factory with a **fourth argument**,
+`TokenProviderClient` — never a certificate, a key or a secret:
+
+| Field | What it is |
+|---|---|
+| `clientAuthentication` | the strategy's answer, to hand to your provider |
+| `uaaUrl`, `clientId` | the client's identity: the secret client's when the stores hold one, else the certificate client's; absent when there is neither |
+| `refreshToken` | the refresh token the session stored — only when the session is bound to this resource and this client identity, and only from that session read (a refresh token a store's `getAuthorizationConfig` carries is dropped on this path; `authConfig` carries the same bound one) |
+
+```typescript
+import {
+  AuthBroker,
+  fromServiceKeyCertificate,
+  type TokenProviderFactory,
+} from '@mcp-abap-adt/auth-broker';
+import { ClientCredentialsProvider } from '@mcp-abap-adt/auth-providers';
+import {
+  XsuaaServiceKeyStore,
+  XsuaaSessionStore,
+} from '@mcp-abap-adt/auth-stores';
+
+const certificateClient: TokenProviderFactory = (
+  destination,
+  _authConfig, // null for an x509 key
+  _connConfig,
+  client,
+) => {
+  if (!client?.clientAuthentication || !client.uaaUrl || !client.clientId) {
+    throw new Error(`No client for ${destination}`);
+  }
+  return new ClientCredentialsProvider({
+    uaaUrl: client.uaaUrl,
+    clientId: client.clientId,
+    clientAuthentication: client.clientAuthentication,
+  });
+};
+
+const tokenBroker = new AuthBroker({
+  serviceKeyStore: new XsuaaServiceKeyStore('/path/to/keys', {
+    grantType: 'client_credentials',
+  }),
+  sessionStore: new XsuaaSessionStore('/path/to/sessions'),
+  clientAuthentication: fromServiceKeyCertificate(),
+  provider: certificateClient,
+});
+
+const token = await tokenBroker.getToken('mcp');
+```
+
+On this path:
+
+- the destination must state its `authType` (`jwt` or `saml`) and
+  `grantType` — the strategy is told the grant — else a
+  `DestinationConfigError` naming `authType`, `grantType`; a `saml2_pure` or
+  `none` destination authenticates no client, and its factory gets three
+  arguments, as in 4.0.0;
+- every stored secret your factory is seeded with passes only when the
+  session is bound to this resource and this client identity: the refresh
+  token (in the fourth argument, and in `authConfig` for a secret client), and
+  the stored token, cookies and expiry in `connConfig` — so a refresh token
+  can never reach another authorization server. A result without a refresh
+  token carries forward only a bound one. (Without a strategy, 4.0.0's
+  carry-over stands: the stored refresh token whatever its binding.)
+- what the factory is handed is built from allowlists, never a store's
+  answer passed whole: `authConfig` is `uaaUrl`, `uaaClientId`,
+  `uaaClientSecret` and the bound refresh token; `connConfig` is
+  `serviceUrl`, `sapClient`, `language`, `authType`, `grantType`, plus — when
+  that same connection read is bound — `authorizationToken`,
+  `sessionCookies`, `expiresAt`, `issuedFor`, `issuedBy`. Anything else a
+  store answers (a password, grant data, a field outside the type) stays
+  behind; without a strategy the reads go through as in 4.0.0;
+- a factory that throws is a `DestinationConfigError` naming `provider`,
+  `clientAuthentication`, in fixed words — what it threw is not kept;
+- a provider **instance** given as `provider` is your own composition: the
+  token API uses it as given and calls no strategy for it.
+
+**A strategy that fails carries nothing out.** Whatever the strategy, a store
+it reads or the certificate check throws — and an answer that is no
+`IClientAuthentication` — becomes a `DestinationConfigError` with
+`missingFields: ['clientAuthentication']`, before any provider exists, in
+fixed words chosen by the error's class only — no `cause`, nothing of the
+thrown message:
+
+| Words (after `Destination "<name>": `) | When |
+|---|---|
+| `the clientAuthentication strategy refused: the destination has no client certificate` | `fromServiceKeyCertificate()`, no certificate client |
+| `the clientAuthentication strategy refused: the destination has no client secret` | `fromServiceKeySecret()`, no secret client or an empty secret |
+| `the clientAuthentication strategy refused: the client certificate is incomplete` / `has expired` / `could not be used` | the certificate check refused the material |
+| `the clientAuthentication strategy answered no client authentication` | the answer has no `authenticate` function |
+| `the client certificate could not be read` | the store failed reading the certificate client for the row's identity |
+| `the clientAuthentication strategy failed` | anything else — your strategy's own error, a store's error (an incomplete `.env`), an unreadable file |
+
+A certificate, a key or a file's content never reaches a log line, a refusal,
+a `DestinationConfigError`, a thrown message or the session store.
+
+**The certificate is pinned for the broker's lifetime.** It is read when the
+destination's provider is built, and that provider is cached per destination
+for as long as the `AuthBroker` lives. An XSUAA x509 key's certificate lives
+about seven days: a long-running process then gets `the client certificate
+has expired` from its provider until it builds a new `AuthBroker`, and
+replacing the key or the PEM files changes nothing before that. Rotating
+certificates is out of scope: create a new key, then a new broker (restart).
+
+**What is measured.** `client_credentials` with an x509 XSUAA service key,
+against XSUAA on a BTP trial (2026-10-05; the instance's `credential-types`
+`["binding-secret", "x509"]`, its key created with
+`{"credential-type": "x509"}`): through the broker
+(`fromServiceKeyCertificate()` + `XsuaaServiceKeyStore`, `getProvider` and the
+token API), through `mcp-auth --client-auth certificate` and through
+`generate-env-from-service-key --client-auth certificate`, each followed by a
+fresh broker over the written destination — see *Testing*. **Not measured:**
+`authorization_code` and `passcode` over x509 (the broker builds them, nothing
+has run them against XSUAA), the OIDC grants and `saml2_bearer` with a
+strategy, and ABAP environment service keys with x509 (`AbapServiceKeyStore`
+holds no certificate client).
 
 ### Persistence and `flush()`
 
@@ -614,6 +899,44 @@ const newToken = await tokenRefresher.refreshToken();
 A `@mcp-abap-adt/connection` 10 connector takes an `IAuthProvider` instead:
 give it `await broker.getProvider('TRIAL')`.
 
+## Migrating from 4.0.0
+
+4.1.0 is a minor: nothing to change to keep 4.0.0's behaviour. Without a
+`clientAuthentication` strategy every destination is served as before and
+nothing certificate-related is read. What a 4.0.0 consumer may still notice:
+
+1. **A refusal's message gains a hint.** A UAA, OIDC or `saml2_bearer`
+   destination whose key store answers no client (or one without a client
+   id) is still a `DestinationConfigError` with the same `missingFields`; its
+   message now ends with `; a certificate client needs a clientAuthentication
+   strategy`. Match on `missingFields` or the class, never the message.
+2. **Dependencies.** `@mcp-abap-adt/interfaces-auth-broker` `^1.2.0` (the
+   optional `IServiceKeyStore.getClientCertificate` and `IClientCertificate`),
+   `@mcp-abap-adt/interfaces-auth` `^3.2.0` and `@mcp-abap-adt/auth-providers`
+   `^5.3.0` (`IClientAuthentication`). A key store that reads x509 keys is
+   auth-stores `^3.3.0`; an older store simply has no certificate client.
+3. **New exports:** `fromServiceKeyCertificate`, `fromServiceKeySecret`, and
+   the types `ClientAuthenticationStrategy`, `ClientAuthenticationContext`,
+   `ClientAuthenticationGrant`, `FromServiceKeySecretOptions`,
+   `TokenProviderClient`, `IClientCertificate`, `IClientAuthentication`.
+
+**Adopting a strategy** (`clientAuthentication`, see *How the Client
+Authenticates*) changes, for the destinations it applies to:
+
+- **No secret goes to the provider** — the strategy's answer does; a
+  provider's constructor refuses both.
+- **A secret is bound to the client's identity**: a secret key and an x509
+  key of the same client id at the same `uaaUrl` share one session, so
+  switching between them keeps the token and the refresh token; a destination
+  stating no parseable `serviceUrl` reuses a session stored without
+  `issuedFor`, which 4.0.0 never did.
+- **The token API with a factory of yours** passes the fourth argument; seeds
+  your factory with a stored refresh token, token or cookies only when the
+  session is bound here (4.0.0 carried the stored refresh token over whatever
+  its binding); refuses a destination that states no `authType` / `grantType`;
+  and turns a throwing factory into a `DestinationConfigError` naming
+  `provider`, `clientAuthentication`.
+
 ## Migrating from 3.x
 
 4.0.0 is a major: what a 3.x consumer must do, in short (the full list is the
@@ -731,6 +1054,9 @@ SAP_ISSUED_FOR=https://your-system.abap.us10.hana.ondemand.com:443?sap-client=10
 SAP_ISSUED_BY=https://your-account.authentication.us10.hana.ondemand.com:443?client_id=client_id
 ```
 
+A client that authenticates with a certificate states `SAP_UAA_CLIENT_CERT_PATH`,
+`SAP_UAA_CLIENT_KEY_PATH` and `SAP_UAA_CERT_URL` — paths and a URL, never PEM —
+in place of `SAP_UAA_CLIENT_SECRET` (see *How the Client Authenticates*).
 SAML cookies are `SAP_SESSION_COOKIES_B64` in place of `SAP_JWT_TOKEN`. The
 XSUAA stores use the same names with `XSUAA_` (`XSUAA_DESTINATION_VARS`,
 `XSUAA_SESSION_VARS`; the URL is `XSUAA_MCP_URL`). Every means key
@@ -758,6 +1084,21 @@ told: `new AbapServiceKeyStore(dir, { grantType: 'authorization_code' })`.
 An XSUAA key carries no URL of the resource it authorizes for: state it as
 means in an `EnvDestinationStore` (`XSUAA_MCP_URL`, with
 `XSUAA_DESTINATION_VARS`) whose `fallback` is the `XsuaaServiceKeyStore`.
+
+An x509 XSUAA key (created with `{"credential-type": "x509"}`) holds a
+certificate client instead of a secret — the broker uses it only beside a
+`clientAuthentication` strategy (see *How the Client Authenticates*):
+
+```json
+{
+  "url": "https://your-account.authentication.us10.hana.ondemand.com",
+  "clientid": "sb-your-app!t12345",
+  "certificate": "-----BEGIN CERTIFICATE-----\n...",
+  "key": "-----BEGIN RSA PRIVATE KEY-----\n...",
+  "certurl": "https://your-account.authentication.cert.us10.hana.ondemand.com",
+  "credential-type": "x509"
+}
+```
 
 ## Responsibilities and Design Principles
 
@@ -857,6 +1198,7 @@ new AuthBroker(
           destination: string,
           authConfig: IAuthorizationConfig | null,
           connConfig: IConnectionConfig,
+          client?: TokenProviderClient, // only beside clientAuthentication (4.1.0)
         ) => IRefreshableTokenProvider);
     // Collaborators, each a function of the destination, called once per
     // build, never disposed by the broker:
@@ -865,6 +1207,8 @@ new AuthBroker(
     deviceCodePresenter?: (destination: string) => IDeviceCodePresenter; // device_code
     samlCookies?: (destination: string) => (samlResponse: string) => Promise<string>; // saml2_pure
     assertionReplayStore?: (destination: string) => IAssertionReplayStore; // saml2_pure, saml2_bearer
+    // How a client authenticates (4.1.0): every grant that authenticates one
+    clientAuthentication?: ClientAuthenticationStrategy;
   },
   logger?: ILogger,
 )
@@ -873,12 +1217,13 @@ new AuthBroker(
 **Parameters:**
 - `config.sessionStore` - **Required** - The session secret: the token or cookies, `expiresAt`, the refresh token, and what it is bound to (`issuedFor`, `issuedBy`). For the token API with a `provider`, its `serviceUrl`, or the service key's, is required (3.x's reads).
 - `config.serviceKeyStore` - The means: `authType`, `grantType`, the client, basic's user and password, the SNC, OIDC and SAML fields, `serviceUrl`. **Required by `getProvider`**, which has no other source of means.
-- `config.provider` - The token API's source (`getToken`, `refreshToken`, `createTokenRefresher`): a provider instance, used for every destination, or a factory (`TokenProviderFactory`), called once per destination and seeded with what the stores hold (see *Basic Usage*). Not used by `getProvider`. Without it, the token API asks the provider `getProvider` builds for the destination (see *Getting Tokens*); with neither it nor a `serviceKeyStore`, the token API throws `DestinationConfigError` naming both.
+- `config.provider` - The token API's source (`getToken`, `refreshToken`, `createTokenRefresher`): a provider instance, used for every destination, or a factory (`TokenProviderFactory`), called once per destination and seeded with what the stores hold (see *Basic Usage*); beside a `clientAuthentication` strategy, with a fourth argument (`TokenProviderClient`, see *How the Client Authenticates*). Not used by `getProvider`. Without it, the token API asks the provider `getProvider` builds for the destination (see *Getting Tokens*); with neither it nor a `serviceKeyStore`, the token API throws `DestinationConfigError` naming both.
 - `config.authorization` - The interactive strategy of `jwt` / `authorization_code`, `jwt` / `passcode`, `saml` / `saml2_pure` and `saml` / `saml2_bearer`, as a function of the destination and the grant (see *A Provider for a Connector*).
 - `config.oidcAuthorization` - The interactive strategy of `jwt` / `oidc_authorization_code`.
 - `config.deviceCodePresenter` - Where `jwt` / `device_code` shows the user the verification URL and code.
 - `config.samlCookies` - `saml2_pure`: turns the validated SAMLResponse into the system's session cookies.
 - `config.assertionReplayStore` - The replay store the SAML validators record each assertion in.
+- `config.clientAuthentication` - How the client of every grant that authenticates one (the UAA and OIDC grants, `saml2_bearer`) authenticates to the authorization server: a `ClientAuthenticationStrategy` — `fromServiceKeyCertificate()`, `fromServiceKeySecret({ encoding })`, or your own composition. Called once per build; absent, the client secret as in 4.0.0 and nothing certificate-related is read (see *How the Client Authenticates*).
 - Each collaborator option is required only by the rows that use it (missing → `DestinationConfigError` naming it); the broker supplies no default, calls it once per build, and disposes nothing it returns.
 - `logger` - Optional logger. If not provided, nothing is logged.
 
@@ -926,7 +1271,8 @@ The two stores composed, each for its role:
   `null` when neither store holds anything.
 - `getAuthorizationConfig` — the service key store's client (`uaaUrl`,
   `uaaClientId`, `uaaClientSecret`) with the session's refresh token; `null`
-  when the key store has no client.
+  when the key store has no client — an x509 key's included: it never answers
+  a certificate or a key.
 
 Means a session store answers (a client, a URL, an `authType`) are not read,
 nor a secret a key store answers. Up to 3.1.0 both answered the session's
@@ -974,6 +1320,10 @@ configuration whole, and the key's only when the session had none.
   | `device_code` without the `deviceCodePresenter` option | `deviceCodePresenter` |
   | a SAML grant without its trust (`''` and an empty certificate list count as missing) | `samlIdpSsoUrl`, `samlSpEntityId`, `samlIdpEntityId`, `samlIdpCertificates` — each that is missing |
   | `saml2_bearer` without its client | `uaaUrl`, `uaaClientId` — each that is missing |
+  | a client row (UAA, OIDC, `saml2_bearer`) with no client id and no `clientAuthentication` strategy | as above; the message adds `a certificate client needs a clientAuthentication strategy` |
+  | the `clientAuthentication` strategy threw, refused, or answered no client authentication; the certificate client could not be read | `clientAuthentication` (fixed words, see *How the Client Authenticates*) |
+  | the token API with a `clientAuthentication` strategy and a factory, on a destination that states no `jwt` / `saml` type | `authType`, `grantType` |
+  | the token API's factory threw beside a `clientAuthentication` strategy | `provider`, `clientAuthentication` |
   | a SAML grant without its collaborators | `authorization`, `samlCookies` (`saml2_pure`), `assertionReplayStore` — each that is missing |
   | a certificate the validator cannot read | `samlIdpCertificates` |
   | a `samlClockSkewMs` that is not a whole, non-negative number | `samlClockSkewMs` |
@@ -1110,6 +1460,30 @@ destination.
 
 Without `test-config.yaml` the template is read, its placeholders disable every
 integration case, and the run reaches no system.
+
+### The x509 Live Check
+
+`npm run test:live:x509` (from the repository root or this package) runs
+`client_credentials` with an x509 XSUAA service key against a real BTP
+subaccount: it builds, creates an `xsuaa` / `application` instance
+(`credential-types: ["binding-secret", "x509"]`) and a key made with
+`{"credential-type": "x509"}`, runs `src/__tests__/live/x509.live.test.ts`
+— the broker with `fromServiceKeyCertificate()`, `mcp-auth --client-auth
+certificate`, `generate-env-from-service-key --client-auth certificate`, a
+fresh broker over each written destination, and a failing run that leaves the
+previous destination untouched and prints no PEM — and removes everything,
+also when a test fails. Not in `npm test`, not in CI.
+
+It refuses to run unless `XSUAA_CF_API`, `XSUAA_CF_ORG` and `XSUAA_CF_SPACE`
+equal exactly what `cf target` shows (`cf login -a <api> --sso -o <org> -s
+<space>` first). It touches only what it created: each resource is recorded
+with its GUID in a ledger, `tests/live/x509/.local/owned` (gitignored, with
+the key and its PEM files, owner-only), bound to that API, org and space, and
+re-checked before every reuse or delete; a name held by anything else is
+refused. A failed teardown exits non-zero and keeps `.local/` — run
+`tests/live/x509/teardown.sh` with the same three variables. `X509_KEEP=1`
+keeps the environment for another run; `-- -t "(b)"` runs one case. Last run:
+BTP trial, 2026-10-05, all five cases passed.
 
 ## Documentation
 

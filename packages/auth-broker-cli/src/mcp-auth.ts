@@ -5,6 +5,7 @@
  *
  * Usage:
  *   mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--credential] [--browser auto|none|chrome|edge|firefox|system] [--format json|env]
+ *            [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]
  *
  * Examples:
  *   # Generate .env file with authorization_code (default)
@@ -18,6 +19,10 @@
  *
  *   # Generate .env file for ABAP
  *   mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap
+ *
+ *   # An x509 XSUAA key: the client authenticates with its certificate
+ *   mcp-auth --service-key ./x509-key.json --output ./mcp.env --type xsuaa --credential \
+ *     --client-auth certificate --cert-path ./client.crt --key-path ./client.key
  */
 
 import { spawnSync } from 'node:child_process';
@@ -98,6 +103,27 @@ function showHelp(): void {
   );
   console.log(
     '                          Must match XSUAA redirect-uris config.',
+  );
+  console.log(
+    '  --client-auth <how>     How the client authenticates to the authorization server:',
+  );
+  console.log(
+    "                            - certificate: the key's x509 client, with --cert-path and --key-path",
+  );
+  console.log(
+    '                            - secret: the client secret in a Basic header, with --basic-encoding',
+  );
+  console.log(
+    '                          Not given: the client secret in the token request, as before.',
+  );
+  console.log(
+    '  --basic-encoding <enc>  With --client-auth secret (required): raw (XSUAA) or form (UAA, Keycloak)',
+  );
+  console.log(
+    '  --cert-path <path>      With --client-auth certificate (required): the client certificate PEM file',
+  );
+  console.log(
+    '  --key-path <path>       With --client-auth certificate (required): its private key PEM file',
   );
   console.log('');
   console.log(
@@ -191,6 +217,13 @@ function showHelp(): void {
     '  mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --redirect-port 8080',
   );
   console.log('');
+  console.log(
+    '  # XSUAA x509 key: client_credentials with the client certificate',
+  );
+  console.log(
+    '  mcp-auth --service-key ./x509-key.json --output ./mcp.env --type xsuaa --credential --client-auth certificate --cert-path ./client.crt --key-path ./client.key',
+  );
+  console.log('');
   console.log('  # ABAP with authorization_code (default)');
   console.log(
     '  mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap',
@@ -251,6 +284,18 @@ function showHelp(): void {
   console.log(
     '    --type xsuaa. It is written only once the secret is stored; otherwise the command exits 1.',
   );
+  console.log(
+    '  - --client-auth is never inferred from the key: an x509 key without it is refused.',
+  );
+  console.log(
+    '    With certificate, the .env names the PEM files by absolute path (SAP_UAA_CLIENT_CERT_PATH,',
+  );
+  console.log(
+    '    SAP_UAA_CLIENT_KEY_PATH) beside SAP_UAA_CERT_URL — XSUAA_UAA_* with --type xsuaa — and',
+  );
+  console.log(
+    '    holds no client secret; the certificate and key are never copied, by the .env or anywhere else.',
+  );
 }
 
 function parseArgs(
@@ -285,6 +330,10 @@ function parseArgs(
   let format: 'json' | 'env' = 'env';
   let serviceUrl: string | undefined;
   let redirectPort: number | undefined;
+  let clientAuth: McpAuthOptions['clientAuth'];
+  let basicEncoding: McpAuthOptions['basicEncoding'];
+  let certPath: string | undefined;
+  let keyPath: string | undefined;
 
   // Parse arguments
   for (let i = 0; i < args.length; i++) {
@@ -347,6 +396,34 @@ function parseArgs(
       }
       redirectPort = port;
       i++;
+    } else if (args[i] === '--client-auth' && i + 1 < args.length) {
+      const how = args[i + 1];
+      if (how === 'certificate' || how === 'secret') {
+        clientAuth = how;
+      } else {
+        console.error(
+          `Invalid client authentication: ${how}. Must be 'certificate' or 'secret'`,
+        );
+        process.exit(1);
+      }
+      i++;
+    } else if (args[i] === '--basic-encoding' && i + 1 < args.length) {
+      const encoding = args[i + 1];
+      if (encoding === 'raw' || encoding === 'form') {
+        basicEncoding = encoding;
+      } else {
+        console.error(
+          `Invalid Basic encoding: ${encoding}. Must be 'raw' or 'form'`,
+        );
+        process.exit(1);
+      }
+      i++;
+    } else if (args[i] === '--cert-path' && i + 1 < args.length) {
+      certPath = args[i + 1];
+      i++;
+    } else if (args[i] === '--key-path' && i + 1 < args.length) {
+      keyPath = args[i + 1];
+      i++;
     } else if (args[i] === '--credential') {
       credential = true;
     } else {
@@ -388,6 +465,10 @@ function parseArgs(
     format,
     serviceUrl,
     redirectPort,
+    clientAuth,
+    basicEncoding,
+    certPath,
+    keyPath,
   };
 }
 

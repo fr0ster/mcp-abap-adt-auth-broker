@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-05
+
+The commands on `@mcp-abap-adt/auth-broker` 4.1.0 (`^4.1.0`, released
+together): x509 service keys. Every 2.0.0 invocation runs as before.
+
+### Added
+
+- **`--client-auth certificate|secret`** for `mcp-auth` and
+  `generate-env-from-service-key`, under the same rules: never inferred from
+  the key; no flag is the client secret, as 2.0.0.
+  - `--client-auth certificate --cert-path <path> --key-path <path>`: the
+    key's x509 client — its certificate and private key from the user's own
+    PEM files (existing, resolved to absolute paths before anything is
+    written), presented at the key's `certurl`. The destination states the
+    paths and `certurl` — `SAP_UAA_CLIENT_CERT_PATH`,
+    `SAP_UAA_CLIENT_KEY_PATH`, `SAP_UAA_CERT_URL` (`XSUAA_UAA_*` with
+    `--type xsuaa` / an XSUAA key) — and no client secret; never PEM.
+    `--format json` adds `uaaUrl`, `uaaClientId`, `uaaClientCertPath`,
+    `uaaClientKeyPath`, `uaaCertUrl`.
+  - `--client-auth secret --basic-encoding raw|form`: the secret in a Basic
+    header; the encoding is required (`raw` for XSUAA).
+  - Each flag only with its choice, and each choice with its flags, checked
+    before anything is read or written; refusals name the flag.
+- An x509 key (a certificate, no secret) run without `--client-auth` is
+  refused, naming the flags it needs; `--client-auth certificate` for a key
+  without a certificate client is refused, naming its fields.
+
+### Changed
+
+- **No copy of key material, whatever the flags.** A `credentials`-wrapped
+  key carrying a `certificate` or `key` field is read in place (by
+  `XsuaaServiceKeyStore`) instead of unwrapped into the work directory; an
+  ABAP-format key carrying one is read by `XsuaaServiceKeyStore`, the store
+  that answers a certificate client. A key without such fields keeps 2.0.0's
+  handling.
+- **A JSON file that does not parse is refused in fixed words**: `The service
+  key <path> cannot be read as JSON` (`mcp-auth`, `generate-env`), `The config
+  file <path> cannot be read as JSON` (`mcp-sso --config`) — the parser's
+  message quoted the file, which holds a client secret or a private key. Exit
+  code `1`, as before.
+- **The no-client refusals say why**: `mcp-auth`'s `Authorization config not
+  found … url fields` ends `; a client certificate needs --client-auth
+  certificate.`; `generate-env`'s `Missing authorization config for <d>` adds
+  the same hint for a key carrying a certificate.
+- **A rerun reuses the session with `--client-auth`**: the broker binds it to
+  the client's identity, and a resource neither side states matches, so an
+  XSUAA destination written without `--service-url` reuses its refresh token
+  on a rerun with `--env` (without `--client-auth`, as 2.0.0, it logs in
+  again).
+
+### Dependencies
+
+`@mcp-abap-adt/auth-broker` `^4.1.0` (was `^4.0.0`),
+`@mcp-abap-adt/auth-stores` `^3.3.0` (was `^3.2.0`),
+`@mcp-abap-adt/auth-providers` `^5.3.0` (was `^5.2.1`),
+`@mcp-abap-adt/interfaces-auth` `^3.2.0` (new: the `IAuthorizationStrategy`
+types the commands now name).
+
+### Migrating from 2.0.0
+
+Nothing is required. A script that matched the messages above should match
+the exit code. A server reading a destination written with `--client-auth
+certificate` needs `@mcp-abap-adt/auth-broker` 4.1.0 with
+`clientAuthentication: fromServiceKeyCertificate()` and auth-stores 3.3.0; an
+older reader finds a client without a secret and refuses it.
+
+### Measured, and not
+
+Measured on a BTP trial, 2026-10-05: `mcp-auth --credential --client-auth
+certificate` and `generate-env --grant client_credentials --client-auth
+certificate` against XSUAA, a fresh broker over each written destination, and
+a failing run that leaves the destination untouched and prints no PEM. Not
+measured: `authorization_code` over x509, ABAP environment keys with x509.
+`mcp-sso` has no `--client-auth`.
+
+### Known limitations (unchanged since 2.0.0)
+
+- The output is replaced by a copy (`copyFileSync`), not an atomic rename.
+- `generate-env` names a `credentials`-wrapped ABAP key's variables `XSUAA_*`
+  (it reads the format from the key's top level).
+- `generate-env` takes an option it does not know as a positional argument.
+
 ## [2.0.0] - 2026-10-02
 
 The commands on `@mcp-abap-adt/auth-broker` 4.0.0 (`^4.0.0`, released

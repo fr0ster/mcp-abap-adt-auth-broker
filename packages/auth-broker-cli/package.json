@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/auth-broker-cli",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "The mcp-auth and mcp-sso commands: log in to a SAP BTP or ABAP destination and write it — its means and the secret the login obtained — through @mcp-abap-adt/auth-broker",
   "bin": {
     "mcp-auth": "./dist/mcp-auth.js",
@@ -59,9 +59,10 @@
     "node": "^22 || ^24 || ^26"
   },
   "dependencies": {
-    "@mcp-abap-adt/auth-broker": "^4.0.0",
-    "@mcp-abap-adt/auth-providers": "^5.2.1",
-    "@mcp-abap-adt/auth-stores": "^3.2.0",
+    "@mcp-abap-adt/auth-broker": "^4.1.0",
+    "@mcp-abap-adt/auth-providers": "^5.3.0",
+    "@mcp-abap-adt/auth-stores": "^3.3.0",
+    "@mcp-abap-adt/interfaces-auth": "^3.2.0",
     "@mcp-abap-adt/interfaces-utils": "^1.1.0",
     "@mcp-abap-adt/logger": "^0.4.0"
   },

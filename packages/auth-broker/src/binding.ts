@@ -29,6 +29,9 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 
+/** What a binding reads of a client: who it is, never its secret. */
+export type BoundClient = Pick<IAuthorizationConfig, 'uaaUrl' | 'uaaClientId'>;
+
 /** The default port a URL without one is taken to mean. */
 const DEFAULT_PORTS: Readonly<Record<string, string>> = {
   'https:': '443',
@@ -115,6 +118,15 @@ export interface Binding {
    * matches nothing.
    */
   issuerStated: boolean;
+  /**
+   * Set on the `clientAuthentication` strategy path only: a resource neither
+   * side states — no `issuedFor` computed (no service URL, or one that does
+   * not parse, as the CLI's XSUAA placeholder) and none stored — matches, so
+   * the issuer and client alone decide. A resource stated on one side only
+   * never matches. Without it (the 4.0.0 path) an absent resource matches
+   * nothing.
+   */
+  unstatedResourceMatches?: true;
 }
 
 /** The resource the means name: `serviceUrl` with `sapClient`. */
@@ -131,7 +143,7 @@ function resourceOf(means: IConnectionConfig): string | undefined {
  */
 export function uaaBinding(
   means: IConnectionConfig,
-  client: IAuthorizationConfig | null,
+  client: BoundClient | null,
 ): Binding {
   const stated = present(client?.uaaUrl) && present(client?.uaaClientId);
   return {
@@ -152,7 +164,7 @@ export function uaaBinding(
  */
 export function oidcBinding(
   means: IConnectionConfig,
-  client: IAuthorizationConfig | null,
+  client: BoundClient | null,
 ): Binding {
   const issuer = present(means.oidcIssuerUrl)
     ? means.oidcIssuerUrl
@@ -189,9 +201,18 @@ export function samlPureBinding(means: IConnectionConfig): Binding {
 export function consumerBinding(
   serviceUrl: string,
   sapClient: string | undefined,
-  client: IAuthorizationConfig | null,
+  client: BoundClient | null,
 ): Binding {
   return uaaBinding({ serviceUrl, sapClient }, client);
+}
+
+/**
+ * A binding on the `clientAuthentication` strategy path: a resource that
+ * neither the means nor the stored session state matches, so the issuer and
+ * client alone decide (`Binding.unstatedResourceMatches`).
+ */
+export function strategyBinding(binding: Binding): Binding {
+  return { ...binding, unstatedResourceMatches: true };
 }
 
 /**
@@ -202,7 +223,7 @@ export function consumerBinding(
 export function handedOverBinding(
   authType: 'jwt' | 'saml',
   means: IConnectionConfig,
-  client: IAuthorizationConfig | null,
+  client: BoundClient | null,
 ): Binding {
   const issuedFor = resourceOf(means);
   if (authType === 'saml') {
@@ -233,15 +254,20 @@ export function handedOverBinding(
   };
 }
 
-/** The stored `issuedFor`, canonicalised, equals the destination's. */
+/**
+ * The stored `issuedFor`, canonicalised, equals the destination's — or, with
+ * `unstatedResourceMatches`, neither states one.
+ */
 export function sameResource(
   stored: IConfig | null,
   binding: Binding,
 ): boolean {
-  return (
-    binding.issuedFor !== undefined &&
-    resourceUri(stored?.issuedFor) === binding.issuedFor
-  );
+  if (binding.issuedFor === undefined) {
+    return (
+      binding.unstatedResourceMatches === true && !present(stored?.issuedFor)
+    );
+  }
+  return resourceUri(stored?.issuedFor) === binding.issuedFor;
 }
 
 /** The stored `issuedBy`, canonicalised as the destination's kind, equals it. */
@@ -253,7 +279,9 @@ export function sameIssuer(stored: IConfig | null, binding: Binding): boolean {
 
 /**
  * An obtained secret is this destination's only when **both** stored values
- * equal the computed ones; either absent, on either side, is not a match.
+ * equal the computed ones; either absent, on either side, is not a match —
+ * save a resource absent on both sides of a strategy-path binding
+ * (`unstatedResourceMatches`).
  */
 export function boundHere(stored: IConfig | null, binding: Binding): boolean {
   return sameResource(stored, binding) && sameIssuer(stored, binding);

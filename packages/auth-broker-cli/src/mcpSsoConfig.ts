@@ -20,6 +20,7 @@ import {
   defaultReplayStore,
   manualPasscodeStrategy,
   manualSamlResponseStrategy,
+  type OidcCallbackResult,
   oidcCallbackStrategy,
   type SsoProviderConfig,
   samlCallbackStrategy,
@@ -27,6 +28,7 @@ import {
   ValidationError,
 } from '@mcp-abap-adt/auth-providers';
 import type { DestinationMeans } from '@mcp-abap-adt/auth-stores';
+import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 
 /**
@@ -670,7 +672,9 @@ export function buildDestinationMeans(
  * `--redirect-port` and manual/OOB code paste into the strategy that
  * replaces them.
  */
-export function buildOidcBrowserAuthorization(options: McpSsoOptions) {
+export function buildOidcBrowserAuthorization(
+  options: McpSsoOptions,
+): IAuthorizationStrategy<OidcCallbackResult> {
   if (options.code) {
     // The consumer already holds the code (manual paste / OOB redirect
     // URI); no callback server is opened at all.
@@ -694,7 +698,9 @@ export function buildOidcBrowserAuthorization(options: McpSsoOptions) {
  * The UAA passcode: `--passcode` when given, else read from this terminal —
  * the strategy shows where to fetch one (`<uaa>/passcode`).
  */
-export function buildPasscodeAuthorization(options: McpSsoOptions) {
+export function buildPasscodeAuthorization(
+  options: McpSsoOptions,
+): IAuthorizationStrategy<string> {
   if (options.passcode) {
     return staticCodeStrategy({ payload: options.passcode });
   }
@@ -709,7 +715,9 @@ export function buildPasscodeAuthorization(options: McpSsoOptions) {
  * `--redirect-port` and the manual/static assertion options into the
  * strategy that replaces them.
  */
-export function buildSamlAuthorization(options: McpSsoOptions) {
+export function buildSamlAuthorization(
+  options: McpSsoOptions,
+): IAuthorizationStrategy<string> {
   if (options.assertion) {
     // The consumer already holds the assertion; nothing is opened or asked.
     return staticCodeStrategy({

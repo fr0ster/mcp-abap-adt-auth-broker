@@ -1,8 +1,8 @@
 # Installation Guide
 
-This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` package (4.0.0)
-and its commands, `@mcp-abap-adt/auth-broker-cli` (2.0.0). Upgrading from 3.x: see
-*Migrating from 3.x* in the [library README](../../packages/auth-broker/README.md#migrating-from-3x).
+This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` package (4.1.0)
+and its commands, `@mcp-abap-adt/auth-broker-cli` (2.1.0). Upgrading from 4.0.0 or 3.x: see
+*Migrating from 4.0.0* and *Migrating from 3.x* in the [library README](../../packages/auth-broker/README.md#migrating-from-400).
 
 ## Prerequisites
 
@@ -32,12 +32,15 @@ on: they are `@mcp-abap-adt/auth-broker-cli`, in the same repository.
 npm install -g @mcp-abap-adt/auth-broker-cli
 ```
 
-Its 2.0.0, on the library's 4.0.0, writes a complete 4.0 destination
+Its 2.1.0, on the library's 4.1.0 (2.0.0 on 4.0.0 alike), writes a complete 4.0 destination
 — the means through `EnvDestinationStore`, the secret through the broker — to
 the file it always wrote, and `flush()`es before it writes the output (exit 1
 when the secret is not stored); see its
 [README](../../packages/auth-broker-cli/README.md#what-each-command-writes-and-where)
-and *Migrating from 1.0.0* there.
+and *Migrating from 2.0.0* / *from 1.0.0* there. For an x509 service key
+(a client certificate, no secret) the library needs auth-stores 3.3.0 or
+later and the `clientAuthentication` strategy; the commands, `--client-auth
+certificate`.
 
 If you installed `@mcp-abap-adt/auth-broker` globally for the commands (3.0.4
 or earlier), swap it:

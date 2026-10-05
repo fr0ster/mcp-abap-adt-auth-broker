@@ -1,6 +1,6 @@
 # Usage Guide
 
-This guide provides API documentation and usage examples for the `@mcp-abap-adt/auth-broker` package (4.0.0) and its commands (`@mcp-abap-adt/auth-broker-cli` 2.0.0). Coming from 3.x: *Migrating from 3.x* in the [library README](../../packages/auth-broker/README.md#migrating-from-3x).
+This guide provides API documentation and usage examples for the `@mcp-abap-adt/auth-broker` package (4.1.0) and its commands (`@mcp-abap-adt/auth-broker-cli` 2.1.0). Coming from 4.0.0 or 3.x: *Migrating from 4.0.0* and *Migrating from 3.x* in the [library README](../../packages/auth-broker/README.md#migrating-from-400).
 
 ## Basic Usage
 
@@ -286,6 +286,56 @@ try {
 }
 ```
 
+## A client certificate: `clientAuthentication`
+
+A client that authenticates with an x509 certificate instead of a secret — an
+XSUAA service key created with `{"credential-type": "x509"}` — is used only
+when you say so, with a strategy; the broker never infers it from the key:
+
+```typescript
+import {
+  AuthBroker,
+  fromServiceKeyCertificate,
+  fromServiceKeySecret,
+} from '@mcp-abap-adt/auth-broker';
+import {
+  EnvDestinationStore,
+  XSUAA_DESTINATION_VARS,
+  XsuaaServiceKeyStore,
+  XsuaaSessionStore,
+} from '@mcp-abap-adt/auth-stores';
+
+const x509Broker = new AuthBroker({
+  // The URL in <dir>/mcp.env (XSUAA_MCP_URL), the client from the x509 key.
+  serviceKeyStore: new EnvDestinationStore('/path/to/destinations', {
+    variables: XSUAA_DESTINATION_VARS,
+    fallback: new XsuaaServiceKeyStore('/path/to/keys', {
+      grantType: 'client_credentials',
+    }),
+  }),
+  sessionStore: new XsuaaSessionStore('/path/to/sessions'),
+  // The certificate when the key holds one, else the secret (XSUAA: raw) —
+  // decided by what the key holds; a bad certificate is refused, never
+  // replaced by the secret.
+  clientAuthentication: async (context) =>
+    (await context.readCertificate())
+      ? fromServiceKeyCertificate()(context)
+      : fromServiceKeySecret({ encoding: 'raw' })(context),
+});
+
+const certificateProvider = await x509Broker.getProvider('mcp');
+```
+
+The strategy applies to every grant whose client authenticates (the UAA and
+OIDC grants, `saml2_bearer`), and to the token API's factory, which then gets a
+fourth argument (`TokenProviderClient`). On that path a secret is bound to the
+client's identity, and stored secrets reach a provider only when bound. Without
+a strategy everything is 4.0.0's. A failing strategy is a
+`DestinationConfigError` naming `clientAuthentication`, in fixed words. The
+whole rule set, the factories, the `.env` variables and what is measured:
+*How the Client Authenticates* in the
+[library README](../../packages/auth-broker/README.md#how-the-client-authenticates-clientauthentication).
+
 ## Store Methods
 
 Stores answer through the contracts of `@mcp-abap-adt/interfaces-auth-broker`,
@@ -305,6 +355,10 @@ const client = await keys.getAuthorizationConfig('mcp');
 const means = await keys.getConnectionConfig('mcp');
 // means.authType, means.grantType, means.serviceUrl (XSUAA: the key's url)
 
+// auth-stores 3.3.0: an x509 key's client — url, clientid, certificate, key,
+// certurl; getAuthorizationConfig answers null for it. null for a secret key.
+const certificateClient = await keys.getClientCertificate('mcp');
+
 // The secret: the token, its expiry, the refresh token, and its binding.
 const secret = await sessions.loadSession('mcp');
 // secret.authorizationToken, secret.expiresAt, secret.refreshToken,
@@ -323,9 +377,11 @@ auth-stores 3 exports its key names, each table for one role:
 - **The means** — `ABAP_DESTINATION_VARS` (`EnvDestinationStore`): `SAP_URL`,
   `SAP_CLIENT`, `SAP_LANGUAGE`, `SAP_AUTH_TYPE`, `SAP_GRANT_TYPE`, the user
   and password, the `SAP_SNC_*`, `SAP_OIDC_*` and `SAP_SAML_*` fields, and the
-  client (`SAP_UAA_URL`, `SAP_UAA_CLIENT_ID`, `SAP_UAA_CLIENT_SECRET`);
-  `XSUAA_DESTINATION_VARS` for the `XSUAA_*` files. The broker never writes
-  them.
+  client (`SAP_UAA_URL`, `SAP_UAA_CLIENT_ID`, `SAP_UAA_CLIENT_SECRET`, or —
+  a certificate client, auth-stores 3.3.0 — `SAP_UAA_CLIENT_CERT_PATH`,
+  `SAP_UAA_CLIENT_KEY_PATH`, `SAP_UAA_CERT_URL`: paths and a URL, never PEM,
+  and no secret); `XSUAA_DESTINATION_VARS` for the `XSUAA_*` files. The broker
+  never writes them.
 
 A session file written by the 3.x broker or CLI holds both in one file; point
 an `EnvDestinationStore` at it for the means, and a session store for the
@@ -348,7 +404,17 @@ written once `flush()` reports the secret stored; otherwise the command exits 1.
 
 ```bash
 mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--credential] [--browser auto|none|system|chrome|edge|firefox] [--format json|env]
+         [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]
 ```
+
+**Client authentication (2.1.0):** no `--client-auth` is the client secret, as
+before; `--client-auth secret --basic-encoding raw|form` the secret in a Basic
+header; `--client-auth certificate --cert-path <path> --key-path <path>` an x509
+key's certificate client, from your own PEM files, which the destination names
+by absolute path (`SAP_UAA_CLIENT_CERT_PATH`, `SAP_UAA_CLIENT_KEY_PATH`,
+`SAP_UAA_CERT_URL`, `XSUAA_UAA_*` with `--type xsuaa`). An x509 key without
+`--client-auth` is refused; no key material is ever copied. See *Client
+authentication* in the CLI's README.
 
 **Authentication Flow:**
 - Default: `authorization_code` (browser-based OAuth2)
@@ -386,6 +452,9 @@ mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa
 
 # XSUAA: client_credentials (special cases)
 mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --credential
+
+# XSUAA x509 key: client_credentials with the client certificate
+mcp-auth --service-key ./x509-key.json --output ./mcp.env --type xsuaa --credential --client-auth certificate --cert-path ./client.crt --key-path ./client.key
 
 # Using existing .env for refresh token
 mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsuaa
@@ -459,6 +528,7 @@ constructor(
     deviceCodePresenter?,  // (destination) — device_code
     samlCookies?,          // (destination) — saml2_pure
     assertionReplayStore?, // (destination) — saml2_pure, saml2_bearer
+    clientAuthentication?, // (context) — how a client authenticates (4.1.0)
   },
   logger?: ILogger,
 )
@@ -467,6 +537,7 @@ type TokenProviderFactory = (
   destination: string,
   authConfig: IAuthorizationConfig | null,
   connConfig: IConnectionConfig,
+  client?: TokenProviderClient, // only beside clientAuthentication (4.1.0)
 ) => IRefreshableTokenProvider;
 ```
 
@@ -506,6 +577,11 @@ type TokenProviderFactory = (
 - `config.assertionReplayStore` — `(destination) => IAssertionReplayStore`,
   where the SAML validators record each assertion so one presented twice is
   refused (`defaultReplayStore`, or your shared one).
+- `config.clientAuthentication` — `(context) => Promise<IClientAuthentication>`,
+  how the client of every grant that authenticates one authenticates:
+  `fromServiceKeyCertificate()`, `fromServiceKeySecret({ encoding })`, or your
+  composition (see *A client certificate* above). Absent: the client secret,
+  as in 4.0.0.
 - Each collaborator is called once when the destination's provider is built,
   never disposed by the broker, and required only by the rows that use it: no
   default — a row without its option is a `DestinationConfigError` naming it.
@@ -615,6 +691,11 @@ wants a token and nothing else. They have two sources:
   for that destination has two token sources for it; use one per destination,
   or hand yours to a connector as
   `TokenAuthProvider.from(broker.createTokenRefresher(d))`.
+
+With a `clientAuthentication` strategy, a factory is called with a fourth
+argument (`TokenProviderClient`: the strategy's answer, the client identity, a
+bound refresh token) and seeded only with stored secrets bound to the
+destination; see *How the Client Authenticates* in the library README.
 
 Either way a destination stated `basic` or `snc` is refused before any
 provider is asked, and a failed write reaches the caller as the store raised
@@ -731,10 +812,15 @@ The broker writes the session secret alone — the token (or session cookies),
 `expiresAt`, the refresh token, `issuedFor` and `issuedBy`, in one
 `saveSession` — for a `getProvider` provider and for the token API alike;
 never the client secret, `serviceUrl` or `authType`, which are means and live
-in the key store. The commands of `@mcp-abap-adt/auth-broker-cli` 2.0.0 write
+in the key store. The commands of `@mcp-abap-adt/auth-broker-cli` 2.x write
 the means themselves, through `EnvDestinationStore`, and leave the secret to
 the broker — both into one `<destination>.env`, each store touching its own
 keys.
+
+A client certificate or its private key never reaches the session store or
+the `.env`: a certificate destination states only the paths of the user's own
+PEM files and `certurl` (`SAP_UAA_CLIENT_CERT_PATH`, `SAP_UAA_CLIENT_KEY_PATH`,
+`SAP_UAA_CERT_URL`), and nothing of the PEM is logged or carried in an error.
 
 The stored refresh token comes back through `loadSession()`, which the broker
 reads to seed the next process's provider.

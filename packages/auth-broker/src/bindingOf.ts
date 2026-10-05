@@ -10,6 +10,7 @@ import type {
   IConnectionConfig,
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
+import type { BoundClient } from './binding';
 import {
   type Binding,
   handedOverBinding,
@@ -29,7 +30,7 @@ export function destinationBinding(
   authType: 'jwt' | 'saml',
   grant: DestinationGrant,
   means: IConnectionConfig,
-  client: IAuthorizationConfig | null,
+  client: BoundClient | null,
 ): Binding {
   if (grant === 'none') return handedOverBinding(authType, means, client);
   if (isOidcGrant(grant)) return oidcBinding(means, client);
