@@ -2,15 +2,23 @@
  * A local HTTP server standing in for a token endpoint (UAA, an OIDC issuer):
  * it records every request — path, form body, Authorization header — and
  * answers each path with what the test states. Nothing leaves the machine.
+ *
+ * With `tls`, an HTTPS server instead (an XSUAA `certurl`): it asks for a
+ * client certificate, accepts any, and records the subject CN of the one
+ * presented.
  */
 
 import * as http from 'node:http';
+import * as https from 'node:https';
 import type { AddressInfo } from 'node:net';
+import type { TLSSocket } from 'node:tls';
 
 export interface RecordedRequest {
   path: string;
   form: Record<string, string>;
   authorization?: string;
+  /** The subject CN of the client certificate presented (`tls` only). */
+  clientCertificate?: string;
 }
 
 export type Answer = { status?: number; body: unknown };
@@ -26,13 +34,16 @@ export interface LocalServer {
   close(): Promise<void>;
 }
 
-export async function startLocalServer(): Promise<LocalServer> {
+export async function startLocalServer(tls?: {
+  cert: string;
+  key: string;
+}): Promise<LocalServer> {
   const answers = new Map<
     string,
     Answer | ((form: Record<string, string>) => Answer)
   >();
   const requests: RecordedRequest[] = [];
-  const server = http.createServer((req, res) => {
+  const handler: http.RequestListener = (req, res) => {
     let body = '';
     req.on('data', (chunk) => {
       body += chunk;
@@ -40,7 +51,17 @@ export async function startLocalServer(): Promise<LocalServer> {
     req.on('end', () => {
       const path = (req.url ?? '').split('?')[0];
       const form = Object.fromEntries(new URLSearchParams(body));
-      requests.push({ path, form, authorization: req.headers.authorization });
+      const peer = tls
+        ? (req.socket as TLSSocket).getPeerCertificate()
+        : undefined;
+      requests.push({
+        path,
+        form,
+        authorization: req.headers.authorization,
+        ...(peer?.subject
+          ? { clientCertificate: String(peer.subject.CN) }
+          : {}),
+      });
       const found = answers.get(path);
       const answer =
         typeof found === 'function' ? found(form) : (found ?? undefined);
@@ -54,11 +75,17 @@ export async function startLocalServer(): Promise<LocalServer> {
       });
       res.end(JSON.stringify(answer.body));
     });
-  });
+  };
+  const server = tls
+    ? https.createServer(
+        { ...tls, requestCert: true, rejectUnauthorized: false },
+        handler,
+      )
+    : http.createServer(handler);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   return {
-    url: `http://127.0.0.1:${port}`,
+    url: `${tls ? 'https' : 'http'}://127.0.0.1:${port}`,
     requests,
     answer: (path, answer) => {
       answers.set(path, answer);
