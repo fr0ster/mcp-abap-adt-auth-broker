@@ -142,7 +142,8 @@ states matches, so the issuer and client alone decide; one stated on one side
 only never matches. The token API's consumer factory on that path is bound the
 same way (`consumerBinding` with the identity), receives every stored secret —
 the refresh token in its fourth argument (`TokenProviderClient`) and in
-`authConfig`, the token, cookies and expiry in `connConfig` — only when
+`authConfig`, the token, cookies and expiry in `connConfig`, each object
+built from an allowlist (`contextClient`, `strategySeed`) — only when
 `boundHere`, and carries forward only a bound refresh token (`carry: 'bound'`;
 without a strategy, 4.0.0's `carry: 'any'`).
 

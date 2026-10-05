@@ -160,6 +160,23 @@ export function contextClient(
 }
 
 /**
+ * The certificate client as the contract declares it — `uaaUrl`, `clientId`,
+ * `certificate`, `key`, `certUrl` — and nothing else a store answered with it.
+ */
+function certificateOf(
+  answer: IClientCertificate | null,
+): IClientCertificate | null {
+  if (!answer) return null;
+  return {
+    uaaUrl: answer.uaaUrl,
+    clientId: answer.clientId,
+    certificate: answer.certificate,
+    key: answer.key,
+    certUrl: answer.certUrl,
+  };
+}
+
+/**
  * The context for one build: the client through `contextClient`;
  * `readCertificate` lazy and memoised — the first call reads, every later one
  * gets the same answer.
@@ -176,7 +193,7 @@ export function clientAuthenticationContext(
     grant,
     client: contextClient(client),
     readCertificate: () => {
-      certificate ??= read();
+      certificate ??= read().then(certificateOf);
       return certificate;
     },
   };

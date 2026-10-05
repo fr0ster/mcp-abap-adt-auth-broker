@@ -340,6 +340,38 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
     );
   });
 
+  it('reads the certificate client as the contract declares it: nothing else the store answered reaches the strategy', async () => {
+    const seen: (IClientCertificate | null)[] = [];
+    const broker = new AuthBroker({
+      sessionStore: sessionStore(),
+      serviceKeyStore: keyStore(
+        null,
+        async () =>
+          ({
+            ...CERTIFICATE,
+            clientsecret: 'secret-beside-the-certificate',
+            somethingUnknown: 'unknown-beside-the-certificate',
+          }) as IClientCertificate,
+      ),
+      clientAuthentication: async (ctx) => {
+        seen.push(await ctx.readCertificate());
+        return fromServiceKeySecret({ encoding: 'raw' })({
+          ...ctx,
+          client: SECRET_CLIENT,
+        });
+      },
+    });
+    await broker.getProvider(D);
+    expect(Object.keys(seen[0] ?? {}).sort()).toEqual([
+      'certUrl',
+      'certificate',
+      'clientId',
+      'key',
+      'uaaUrl',
+    ]);
+    expect(seen[0]).toEqual(CERTIFICATE);
+  });
+
   it('reads no certificate for a strategy that does not ask', async () => {
     const store = keyStore(SECRET_CLIENT, async () => CERTIFICATE);
     const broker = new AuthBroker({

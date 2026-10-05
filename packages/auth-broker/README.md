@@ -624,6 +624,14 @@ On this path:
   can never reach another authorization server. A result without a refresh
   token carries forward only a bound one. (Without a strategy, 4.0.0's
   carry-over stands: the stored refresh token whatever its binding.)
+- what the factory is handed is built from allowlists, never a store's
+  answer passed whole: `authConfig` is `uaaUrl`, `uaaClientId`,
+  `uaaClientSecret` and the bound refresh token; `connConfig` is
+  `serviceUrl`, `sapClient`, `language`, `authType`, `grantType`, plus — when
+  that same connection read is bound — `authorizationToken`,
+  `sessionCookies`, `expiresAt`, `issuedFor`, `issuedBy`. Anything else a
+  store answers (a password, grant data, a field outside the type) stays
+  behind; without a strategy the reads go through as in 4.0.0;
 - a factory that throws is a `DestinationConfigError` naming `provider`,
   `clientAuthentication`, in fixed words — what it threw is not kept;
 - a provider **instance** given as `provider` is your own composition: the

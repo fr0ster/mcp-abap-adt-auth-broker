@@ -216,15 +216,41 @@ const SECRET_FIELDS = [
 const isSecretField = (field: string): boolean =>
   (SECRET_FIELDS as readonly string[]).includes(field);
 
-/** A connection config without the session secret's fields or a refresh token. */
-function withoutSecret(
-  config: IConnectionConfig | null,
-): Partial<IConnectionConfig> {
-  const kept: Record<string, unknown> = {};
-  for (const [field, value] of Object.entries(config ?? {})) {
-    if (!isSecretField(field) && field !== 'refreshToken') kept[field] = value;
+/**
+ * The connection means a strategy-path seed carries — the connection's own,
+ * none of them a secret. Everything else a store's connection read answers
+ * (credentials, grant data, fields outside the type) stays behind.
+ */
+const SEED_MEANS = [
+  'serviceUrl',
+  'sapClient',
+  'language',
+  'authType',
+  'grantType',
+] as const;
+
+/**
+ * The token API factory's seed on the `clientAuthentication` strategy path,
+ * from an allowlist only: `SEED_MEANS`, and the session secret's own fields
+ * (`SECRET_FIELDS`: the token or cookies, the expiry, the binding) only when
+ * that same read is bound here — each secret judged by the read it came from.
+ * `serviceUrl` is the one resolved for the destination.
+ */
+function strategySeed(
+  connConfig: IConnectionConfig | null,
+  binding: Binding,
+  serviceUrl: string,
+): IConnectionConfig {
+  const source = (connConfig ?? {}) as Record<string, unknown>;
+  const fields: readonly string[] =
+    connConfig && boundHere(connConfig, binding)
+      ? [...SEED_MEANS, ...SECRET_FIELDS]
+      : SEED_MEANS;
+  const seed: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (source[field] !== undefined) seed[field] = source[field];
   }
-  return kept as Partial<IConnectionConfig>;
+  return { ...(seed as IConnectionConfig), serviceUrl };
 }
 
 /** When the result expires, in epoch ms: its own `expiresAt`, else `expiresIn` from now. */
@@ -710,10 +736,7 @@ export class AuthBroker {
         // token, cookies and expiry by the binding the connection read itself
         // carries — another process may have written between the two reads —
         // else only the means seed the provider.
-        const seed =
-          connConfig && boundHere(connConfig, binding)
-            ? { ...connConfig, serviceUrl }
-            : { ...withoutSecret(connConfig), serviceUrl };
+        const seed = strategySeed(connConfig, binding, serviceUrl);
         carry = 'bound';
         const refreshToken = client ? client.refreshToken : boundRefreshToken;
         const fourth: TokenProviderClient = {

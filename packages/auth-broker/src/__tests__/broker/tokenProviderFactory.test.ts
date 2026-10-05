@@ -1172,6 +1172,98 @@ describe('a session obtained for another client, on the strategy path', () => {
     expect(without[1]).toBe(overfull);
   });
 
+  it('the seed on the strategy path is an allowlist: extra secrets, PEM-shaped and unknown fields of the connection read never reach the factory', async () => {
+    const forCertClient = {
+      issuedFor: 'https://abap.example.com:443?sap-client=100',
+      issuedBy: `${endpoint.url}?client_id=cert-client`,
+    };
+    const expiresAt = Date.now() + 3_600_000;
+    const extras = {
+      uaaClientSecret: 'secret-in-the-connection-read',
+      password: 'password-in-the-connection-read',
+      oidcSubjectToken: 'subject-in-the-connection-read',
+      certificate:
+        '-----BEGIN CERTIFICATE-----\nPEM-in-the-read\n-----END CERTIFICATE-----',
+      key: '-----BEGIN PRIVATE KEY-----\nKEY-in-the-read\n-----END PRIVATE KEY-----',
+      refreshToken: 'refresh-in-the-connection-read',
+      somethingUnknown: 'unknown-in-the-connection-read',
+    };
+    const leaked = [
+      'secret-in-the-connection-read',
+      'password-in-the-connection-read',
+      'subject-in-the-connection-read',
+      'PEM-in-the-read',
+      'KEY-in-the-read',
+      'refresh-in-the-connection-read',
+      'unknown-in-the-connection-read',
+    ];
+    const withConnection = (connection: IConnectionConfig) => {
+      const { store } = sessions();
+      store.getConnectionConfig = async () => connection;
+      return store;
+    };
+    const keys = keyStore(null, certificate());
+
+    const bound = await tokenApi(
+      withConnection({
+        authorizationToken: 'token-of-the-bound-read',
+        expiresAt,
+        language: 'EN',
+        ...forCertClient,
+        ...extras,
+      } as IConnectionConfig),
+      keys,
+      () => tokenProvider(jwtExpiringIn(3600)),
+      certificateStrategy,
+    );
+    expect(bound[2]).toEqual(
+      expect.objectContaining({
+        authorizationToken: 'token-of-the-bound-read',
+        expiresAt,
+        language: 'EN',
+        ...forCertClient,
+      }),
+    );
+    for (const value of leaked) {
+      expect(JSON.stringify([bound[1], bound[2], bound[3]])).not.toContain(
+        value,
+      );
+    }
+    expect(JSON.stringify(bound[2])).not.toContain('-----BEGIN');
+
+    const unbound = await tokenApi(
+      withConnection({
+        authorizationToken: 'token-of-the-unbound-read',
+        expiresAt,
+        language: 'EN',
+        issuedFor: forCertClient.issuedFor,
+        issuedBy: `${endpoint.url}?client_id=another-client`,
+        ...extras,
+      } as IConnectionConfig),
+      keys,
+      () => tokenProvider(jwtExpiringIn(3600)),
+      certificateStrategy,
+    );
+    expect(unbound[2]).toEqual(expect.objectContaining({ language: 'EN' }));
+    for (const key of SECRET_KEYS) {
+      expect(unbound[2]).not.toHaveProperty(key);
+    }
+    for (const value of [...leaked, 'token-of-the-unbound-read']) {
+      expect(
+        JSON.stringify([unbound[1], unbound[2], unbound[3]]),
+      ).not.toContain(value);
+    }
+
+    // Without a strategy, 4.0.0: the connection read as it is.
+    const without = await tokenApi(
+      withConnection({ language: 'EN', ...extras } as IConnectionConfig),
+      keyStore(SECRET_CLIENT, null),
+      () => tokenProvider(jwtExpiringIn(3600)),
+      undefined,
+    );
+    expect(without[2]).toEqual(expect.objectContaining(extras));
+  });
+
   it('each stored secret is judged by the read it came from: a seed read after another process wrote is checked on its own binding', async () => {
     const forA = {
       issuedFor: 'https://abap.example.com:443?sap-client=100',

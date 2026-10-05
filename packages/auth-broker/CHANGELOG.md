@@ -97,7 +97,12 @@ exactly as by 4.0.0, and nothing certificate-related is read. Released with
   cookies and expiry in `connConfig` — reaches the factory only when the
   session is bound here, and a result without a refresh token carries forward
   only a bound one. (Without a strategy, 4.0.0's carry-over stands.) An
-  instance `provider` gets no strategy.
+  instance `provider` gets no strategy. What the strategy and the factory
+  are handed is built from allowlists, never a store's answer passed whole:
+  the client (`uaaUrl`, `uaaClientId`, `uaaClientSecret`), the certificate
+  client (its five declared fields), and the seed (`serviceUrl`, `sapClient`,
+  `language`, `authType`, `grantType`, and the session secret's fields only
+  from a bound read).
 
 ### Dependencies
 
