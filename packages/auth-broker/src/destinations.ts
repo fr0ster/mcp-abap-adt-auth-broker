@@ -31,6 +31,7 @@ import type {
   IAssertionValidator,
   IAuthorizationStrategy,
   IAuthProvider,
+  IClientAuthentication,
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import type {
@@ -114,6 +115,45 @@ export function statedGrant(
     );
   }
   return grantType as DestinationGrant;
+}
+
+/** The client's own fields: lacking any of them is lacking a client. */
+const CLIENT_FIELDS: readonly string[] = [
+  'uaaUrl',
+  'uaaClientId',
+  'uaaClientSecret',
+];
+
+/** Added to a row's refusal when it lacks a client and no strategy was given. */
+const CERTIFICATE_HINT =
+  'a certificate client needs a clientAuthentication strategy';
+
+/**
+ * A client row's refusal. Without a strategy, a row lacking its client gets
+ * the hint that a certificate client needs one — fixed words, decided from
+ * the lacking names alone, never from the key.
+ */
+function clientRowError(
+  destination: string,
+  lacking: string[],
+  reason: string,
+  clientAuthentication: IClientAuthentication | undefined,
+): DestinationConfigError {
+  const hinted =
+    !clientAuthentication &&
+    lacking.some((name) => CLIENT_FIELDS.includes(name));
+  return new DestinationConfigError(
+    destination,
+    lacking,
+    hinted ? `${reason}; ${CERTIFICATE_HINT}` : reason,
+  );
+}
+
+/** `clientAuthentication` for a provider's config: present only when given. */
+function authenticatedBy(
+  clientAuthentication: IClientAuthentication | undefined,
+): { clientAuthentication?: IClientAuthentication } {
+  return clientAuthentication ? { clientAuthentication } : {};
 }
 
 /** The names of the fields among `names` that `source` lacks or holds as `''`. */
@@ -248,10 +288,18 @@ export function isUaaGrant(grant: DestinationGrant): grant is UaaGrant {
 export interface UaaRow {
   destination: string;
   grant: UaaGrant;
-  /** The client, from the key store's `getAuthorizationConfig`. */
+  /**
+   * The client: the key store's `getAuthorizationConfig` — or, with a
+   * strategy and no secret client, the certificate client's identity.
+   */
   client: IAuthorizationConfig | null;
   /** The session secret — the seed; `null` when there is no session. */
   secret: IConfig | null;
+  /**
+   * The consumer strategy's answer. Given, the provider authenticates its
+   * client with it and gets no `clientSecret`; absent, 4.0.0's secret.
+   */
+  clientAuthentication?: IClientAuthentication;
   /** The consumer's `authorization` option. */
   authorization:
     | ((
@@ -274,37 +322,49 @@ export interface UaaRow {
  * providers read the client and `uaaUrl` only. `uaaClientSecret: ''` is a public
  * client: `passcode` takes it as no secret; the other two rows' providers
  * require a secret, so for them `''` is missing.
+ *
+ * With the strategy's answer (`clientAuthentication`) no secret is required
+ * and none is passed: the provider authenticates its client with the answer.
  */
 export function uaaProvider(row: UaaRow): IAuthProvider {
-  const { destination, grant, client, secret } = row;
+  const { destination, grant, client, secret, clientAuthentication } = row;
   const lacking: string[] = [];
   if (!present(client?.uaaUrl)) lacking.push('uaaUrl');
   if (!present(client?.uaaClientId)) lacking.push('uaaClientId');
-  if (grant !== 'passcode' && !present(client?.uaaClientSecret)) {
+  if (
+    !clientAuthentication &&
+    grant !== 'passcode' &&
+    !present(client?.uaaClientSecret)
+  ) {
     lacking.push('uaaClientSecret');
   }
   if (grant !== 'client_credentials' && !row.authorization) {
     lacking.push('authorization');
   }
   if (lacking.length > 0) {
-    throw new DestinationConfigError(
+    throw clientRowError(
       destination,
       lacking,
       `a jwt destination with grantType ${grant} lacks what its grant needs`,
+      clientAuthentication,
     );
   }
   const uaaUrl = client?.uaaUrl as string;
   const clientId = client?.uaaClientId as string;
-  const clientSecret = present(client?.uaaClientSecret)
-    ? client.uaaClientSecret
-    : undefined;
-  const hooks = { onTokens: row.onTokens };
+  const clientSecret =
+    !clientAuthentication && present(client?.uaaClientSecret)
+      ? client.uaaClientSecret
+      : undefined;
+  const hooks = {
+    onTokens: row.onTokens,
+    ...authenticatedBy(clientAuthentication),
+  };
 
   if (grant === 'client_credentials') {
     return new ClientCredentialsProvider({
       uaaUrl,
       clientId,
-      clientSecret: clientSecret as string,
+      ...(clientSecret === undefined ? {} : { clientSecret }),
       logger: row.logger,
       ...hooks,
     });
@@ -319,7 +379,7 @@ export function uaaProvider(row: UaaRow): IAuthProvider {
     return new AuthorizationCodeProvider({
       uaaUrl,
       clientId,
-      clientSecret: clientSecret as string,
+      ...(clientSecret === undefined ? {} : { clientSecret }),
       authorization,
       ...seed,
       logger: row.logger,
@@ -398,6 +458,8 @@ export interface OidcRow {
   client: IAuthorizationConfig | null;
   /** The session secret — the seed; `null` when there is none, or it is not bound here. */
   secret: IConfig | null;
+  /** The consumer strategy's answer: given, it replaces the secret. */
+  clientAuthentication?: IClientAuthentication;
   oidcAuthorization:
     | ((destination: string) => IAuthorizationStrategy<OidcCallbackResult>)
     | undefined;
@@ -446,10 +508,11 @@ export function oidcProvider(row: OidcRow): IAuthProvider {
     lacking.push('deviceCodePresenter');
   }
   if (lacking.length > 0) {
-    throw new DestinationConfigError(
+    throw clientRowError(
       destination,
       lacking,
       `a jwt destination with grantType ${grant} lacks what its grant needs`,
+      row.clientAuthentication,
     );
   }
   const scopes =
@@ -459,7 +522,10 @@ export function oidcProvider(row: OidcRow): IAuthProvider {
   const common = {
     issuerUrl: stated(means.oidcIssuerUrl),
     clientId: client?.uaaClientId as string,
-    clientSecret: stated(client?.uaaClientSecret),
+    clientSecret: row.clientAuthentication
+      ? undefined
+      : stated(client?.uaaClientSecret),
+    ...authenticatedBy(row.clientAuthentication),
     tokenEndpoint: stated(means.oidcTokenEndpoint),
     ...tokenSeed(row.secret),
     logger: row.logger,
@@ -524,6 +590,8 @@ export interface SamlRow {
   client: IAuthorizationConfig | null;
   /** The session secret — the seed; `null` when there is none, or it is not bound here. */
   secret: IConfig | null;
+  /** `saml2_bearer`: the consumer strategy's answer; given, it replaces the secret. */
+  clientAuthentication?: IClientAuthentication;
   authorization:
     | ((
         destination: string,
@@ -582,10 +650,11 @@ export function samlProvider(row: SamlRow): IAuthProvider {
   if (grant === 'saml2_pure' && !row.samlCookies) lacking.push('samlCookies');
   if (!row.assertionReplayStore) lacking.push('assertionReplayStore');
   if (lacking.length > 0) {
-    throw new DestinationConfigError(
+    throw clientRowError(
       destination,
       lacking,
       `a saml destination with grantType ${grant} lacks what its grant needs`,
+      grant === 'saml2_bearer' ? row.clientAuthentication : undefined,
     );
   }
   const skew = means.samlClockSkewMs;
@@ -653,7 +722,10 @@ export function samlProvider(row: SamlRow): IAuthProvider {
     tokenUrl: stated(means.samlTokenUrl),
     uaaUrl: client?.uaaUrl as string,
     clientId: client?.uaaClientId as string,
-    clientSecret: stated(client?.uaaClientSecret),
+    clientSecret: row.clientAuthentication
+      ? undefined
+      : stated(client?.uaaClientSecret),
+    ...authenticatedBy(row.clientAuthentication),
     ...tokenSeed(row.secret),
   });
 }

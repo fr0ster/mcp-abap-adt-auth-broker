@@ -27,6 +27,7 @@ import type {
   IAssertionReplayStore,
   IAuthorizationStrategy,
   IAuthProvider,
+  IClientAuthentication,
   IRefreshableTokenProvider,
   ITokenRefresher,
   ITokenResult,
@@ -39,6 +40,7 @@ import { destinationBinding } from './bindingOf';
 import {
   type ClientAuthenticationStrategy,
   clientAuthenticationContext,
+  clientIdentity,
   resolveClientAuthentication,
 } from './clientAuthentication';
 import { DestinationConfigError } from './DestinationConfigError';
@@ -805,7 +807,7 @@ export class AuthBroker {
         // saml2_pure), what a secret for this destination is bound to
         // — written with every secret, and required of a stored one
         // before it seeds — and the stored secret when it is.
-        const client =
+        const secretClient =
           grant === 'saml2_pure'
             ? null
             : await this.read(destination, 'client', () =>
@@ -813,18 +815,29 @@ export class AuthBroker {
               );
         // The consumer's client authentication, resolved inside the guard
         // before any provider exists: a strategy that throws leaves nothing
-        // built and nothing cached.
+        // built and nothing cached. Then the client identity the row and the
+        // binding take — the secret client, else the certificate client's —
+        // so the binding and the seed are chosen from it. Without a strategy
+        // nothing of this runs: 4.0.0's client, nothing certificate-related.
+        let client = secretClient;
+        let clientAuthentication: IClientAuthentication | undefined;
         if (this.clientAuthentication && grant !== 'saml2_pure') {
-          await resolveClientAuthentication(
-            this.clientAuthentication,
-            clientAuthenticationContext(destination, grant, client, () =>
+          const context = clientAuthenticationContext(
+            destination,
+            grant,
+            secretClient,
+            () =>
               this.read(destination, 'client certificate', async () =>
                 serviceKeyStore.getClientCertificate
                   ? serviceKeyStore.getClientCertificate(destination)
                   : null,
               ),
-            ),
           );
+          clientAuthentication = await resolveClientAuthentication(
+            this.clientAuthentication,
+            context,
+          );
+          client = await clientIdentity(context);
         }
         const binding = destinationBinding(authType, grant, stated, client);
         const stored =
@@ -849,6 +862,7 @@ export class AuthBroker {
           destination,
           client,
           secret,
+          ...(clientAuthentication ? { clientAuthentication } : {}),
           logger: this.logger,
           onTokens,
         };

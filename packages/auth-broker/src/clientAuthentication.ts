@@ -226,3 +226,35 @@ export async function resolveClientAuthentication(
   }
   return answer as IClientAuthentication;
 }
+
+/**
+ * The client identity a strategy-authenticated row and its binding take: the
+ * secret client when the key store has one, else the certificate client's
+ * `uaaUrl` and `clientId` — read through the context's memoised
+ * `readCertificate`, so at most once per build — else `null`. Never PEM: the
+ * identity carries no secret either (the row passes none beside a strategy).
+ *
+ * A failing read is a `DestinationConfigError` naming `clientAuthentication`
+ * in fixed words — nothing of what the store threw, no `cause`.
+ */
+export async function clientIdentity(
+  context: ClientAuthenticationContext,
+): Promise<IAuthorizationConfig | null> {
+  if (context.client) return context.client;
+  let certificate: IClientCertificate | null;
+  try {
+    certificate = await context.readCertificate();
+  } catch {
+    throw new DestinationConfigError(
+      context.destination,
+      ['clientAuthentication'],
+      'the client certificate could not be read',
+    );
+  }
+  if (!certificate) return null;
+  return {
+    uaaUrl: certificate.uaaUrl,
+    uaaClientId: certificate.clientId,
+    uaaClientSecret: '',
+  };
+}
