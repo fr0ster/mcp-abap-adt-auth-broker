@@ -17,7 +17,7 @@ export function readEnvKeys(file: string): Record<string, string> {
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
     const match = /^([A-Z0-9_]+)=(.*)$/.exec(line);
     if (!match) continue;
-    let value = match[2];
+    let value = match[2]!;
     const quote = value[0];
     if (
       value.length >= 2 &&
@@ -26,7 +26,7 @@ export function readEnvKeys(file: string): Record<string, string> {
     ) {
       value = value.slice(1, -1);
     }
-    keys[match[1]] = value;
+    keys[match[1]!] = value;
   }
   return keys;
 }

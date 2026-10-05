@@ -25,12 +25,12 @@ import {
 /** The client authentication flags, as given. */
 export interface ClientAuthFlags {
   /** `--client-auth`: `certificate` or `secret`; absent, the client secret as 2.0.0. */
-  clientAuth?: string;
+  clientAuth?: string | undefined;
   /** `--basic-encoding`: required with `secret`, nowhere else. */
-  basicEncoding?: string;
+  basicEncoding?: string | undefined;
   /** `--cert-path` / `--key-path`: required with `certificate`, nowhere else. */
-  certPath?: string;
-  keyPath?: string;
+  certPath?: string | undefined;
+  keyPath?: string | undefined;
 }
 
 /** The certificate files `--client-auth certificate` names, as absolute paths. */
@@ -89,13 +89,15 @@ export function clientAuthFlags(
       `--client-auth certificate needs ${missing.map(([flag]) => flag).join(' and ')}`,
     );
   }
-  const [certPath, keyPath] = certificateFlags.map(([flag, value]) => {
+  const resolveFile = ([flag, value]: (typeof certificateFlags)[number]) => {
     const resolved = path.resolve(value as string);
     if (!fs.statSync(resolved, { throwIfNoEntry: false })?.isFile()) {
       throw new Error(`${flag}: no file at ${resolved}`);
     }
     return resolved;
-  });
+  };
+  const certPath = resolveFile(certificateFlags[0]);
+  const keyPath = resolveFile(certificateFlags[1]);
   return { certPath, keyPath };
 }
 

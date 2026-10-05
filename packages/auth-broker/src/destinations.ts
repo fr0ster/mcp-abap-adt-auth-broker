@@ -8,22 +8,31 @@
 
 import {
   AuthorizationCodeProvider,
+  type AuthorizationCodeProviderConfig,
   BasicAuthProvider,
   ClientCredentialsProvider,
   createSignedAssertionValidator,
   createSignedResponseValidator,
   type IDeviceCodePresenter,
   OidcBrowserProvider,
+  type OidcBrowserProviderConfig,
   type OidcCallbackResult,
   OidcDeviceFlowProvider,
+  type OidcDeviceFlowProviderConfig,
   OidcPasswordProvider,
+  type OidcPasswordProviderConfig,
   OidcTokenExchangeProvider,
+  type OidcTokenExchangeProviderConfig,
   Saml2BearerProvider,
+  type Saml2BearerProviderConfig,
   Saml2PureProvider,
+  type Saml2PureProviderConfig,
   SamlAuthProvider,
+  type ShippedValidatorOptions,
   SncLogonProvider,
   TokenAuthProvider,
   UaaPasscodeProvider,
+  type UaaPasscodeProviderConfig,
   ValidationError,
 } from '@mcp-abap-adt/auth-providers';
 import type {
@@ -43,6 +52,7 @@ import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { type Binding, sameIssuer, sameResource } from './binding';
 import type { ClientIdentity } from './clientAuthentication';
+import { asContract } from './contractShape';
 import { DestinationConfigError } from './DestinationConfigError';
 
 type StatedAuthType = NonNullable<IConnectionConfig['authType']>;
@@ -225,13 +235,15 @@ export function sncProvider(
     );
   }
   try {
-    return SncLogonProvider.forSecureLoginClient({
-      partnerName: means.sncPartnerName,
-      qop: present(means.sncQop) ? means.sncQop : undefined,
-      sncLib: present(means.sncLib) ? means.sncLib : undefined,
-      myName: present(means.sncMyName) ? means.sncMyName : undefined,
-      logger,
-    });
+    return SncLogonProvider.forSecureLoginClient(
+      asContract<Parameters<typeof SncLogonProvider.forSecureLoginClient>[0]>({
+        partnerName: means.sncPartnerName,
+        qop: present(means.sncQop) ? means.sncQop : undefined,
+        sncLib: present(means.sncLib) ? means.sncLib : undefined,
+        myName: present(means.sncMyName) ? means.sncMyName : undefined,
+        logger,
+      }),
+    );
   } catch (error) {
     if (error instanceof ValidationError) {
       throw new DestinationConfigError(
@@ -393,32 +405,36 @@ export function uaaProvider(row: UaaRow): IAuthProvider {
     row.authorization as NonNullable<UaaRow['authorization']>
   )(destination, grant);
   if (grant === 'authorization_code') {
-    return new AuthorizationCodeProvider({
+    return new AuthorizationCodeProvider(
+      asContract<AuthorizationCodeProviderConfig>({
+        uaaUrl,
+        clientId,
+        ...(clientSecret === undefined ? {} : { clientSecret }),
+        authorization,
+        ...seed,
+        logger: row.logger,
+        ...hooks,
+      }),
+    );
+  }
+  return new UaaPasscodeProvider(
+    asContract<UaaPasscodeProviderConfig>({
       uaaUrl,
       clientId,
-      ...(clientSecret === undefined ? {} : { clientSecret }),
+      clientSecret,
       authorization,
       ...seed,
       logger: row.logger,
       ...hooks,
-    });
-  }
-  return new UaaPasscodeProvider({
-    uaaUrl,
-    clientId,
-    clientSecret,
-    authorization,
-    ...seed,
-    logger: row.logger,
-    ...hooks,
-  });
+    }),
+  );
 }
 
 /** The seed of a token provider: the stored token, its refresh token and expiry. */
 function tokenSeed(secret: IConfig | null): {
-  accessToken?: string;
-  refreshToken?: string;
-  expiresAt?: number;
+  accessToken?: string | undefined;
+  refreshToken?: string | undefined;
+  expiresAt?: number | undefined;
 } {
   return {
     accessToken: present(secret?.authorizationToken)
@@ -551,43 +567,53 @@ export function oidcProvider(row: OidcRow): IAuthProvider {
 
   switch (grant) {
     case 'oidc_authorization_code':
-      return new OidcBrowserProvider({
-        ...common,
-        scopes,
-        authorizationEndpoint: stated(means.oidcAuthorizationEndpoint),
-        // Checked above.
-        authorization: (
-          row.oidcAuthorization as NonNullable<OidcRow['oidcAuthorization']>
-        )(destination),
-      });
+      return new OidcBrowserProvider(
+        asContract<OidcBrowserProviderConfig>({
+          ...common,
+          scopes,
+          authorizationEndpoint: stated(means.oidcAuthorizationEndpoint),
+          // Checked above.
+          authorization: (
+            row.oidcAuthorization as NonNullable<OidcRow['oidcAuthorization']>
+          )(destination),
+        }),
+      );
     case 'device_code':
-      return new OidcDeviceFlowProvider({
-        ...common,
-        scopes,
-        deviceAuthorizationEndpoint: stated(
-          means.oidcDeviceAuthorizationEndpoint,
-        ),
-        presenter: (
-          row.deviceCodePresenter as NonNullable<OidcRow['deviceCodePresenter']>
-        )(destination),
-      });
+      return new OidcDeviceFlowProvider(
+        asContract<OidcDeviceFlowProviderConfig>({
+          ...common,
+          scopes,
+          deviceAuthorizationEndpoint: stated(
+            means.oidcDeviceAuthorizationEndpoint,
+          ),
+          presenter: (
+            row.deviceCodePresenter as NonNullable<
+              OidcRow['deviceCodePresenter']
+            >
+          )(destination),
+        }),
+      );
     case 'password':
-      return new OidcPasswordProvider({
-        ...common,
-        scopes,
-        username: means.username as string,
-        password: means.password as string,
-      });
+      return new OidcPasswordProvider(
+        asContract<OidcPasswordProviderConfig>({
+          ...common,
+          scopes,
+          username: means.username as string,
+          password: means.password as string,
+        }),
+      );
     case 'token_exchange':
-      return new OidcTokenExchangeProvider({
-        ...common,
-        scope: scopes?.join(' '),
-        subjectToken: means.oidcSubjectToken as string,
-        subjectTokenType: means.oidcSubjectTokenType as string,
-        audience: stated(means.oidcAudience),
-        actorToken: stated(means.oidcActorToken),
-        actorTokenType: stated(means.oidcActorTokenType),
-      });
+      return new OidcTokenExchangeProvider(
+        asContract<OidcTokenExchangeProviderConfig>({
+          ...common,
+          scope: scopes?.join(' '),
+          subjectToken: means.oidcSubjectToken as string,
+          subjectTokenType: means.oidcSubjectTokenType as string,
+          audience: stated(means.oidcAudience),
+          actorToken: stated(means.oidcActorToken),
+          actorTokenType: stated(means.oidcActorTokenType),
+        }),
+      );
   }
 }
 
@@ -694,11 +720,13 @@ export function samlProvider(row: SamlRow): IAuthProvider {
       : createSignedAssertionValidator;
   let assertionValidator: IAssertionValidator;
   try {
-    assertionValidator = createValidator({
-      idpCertificates: certificates as string[],
-      clockSkewMs: skew,
-      replayStore,
-    });
+    assertionValidator = createValidator(
+      asContract<ShippedValidatorOptions>({
+        idpCertificates: certificates as string[],
+        clockSkewMs: skew,
+        replayStore,
+      }),
+    );
   } catch {
     // The validator's own message may quote what it could not read; the
     // error names the field only.
@@ -726,25 +754,29 @@ export function samlProvider(row: SamlRow): IAuthProvider {
 
   if (grant === 'saml2_pure') {
     const secret = row.secret;
-    return new Saml2PureProvider({
-      ...common,
-      cookieProvider: (row.samlCookies as NonNullable<SamlRow['samlCookies']>)(
-        destination,
-      ),
-      accessToken: stated(secret?.sessionCookies),
-      expiresAt:
-        typeof secret?.expiresAt === 'number' ? secret.expiresAt : undefined,
-    });
+    return new Saml2PureProvider(
+      asContract<Saml2PureProviderConfig>({
+        ...common,
+        cookieProvider: (
+          row.samlCookies as NonNullable<SamlRow['samlCookies']>
+        )(destination),
+        accessToken: stated(secret?.sessionCookies),
+        expiresAt:
+          typeof secret?.expiresAt === 'number' ? secret.expiresAt : undefined,
+      }),
+    );
   }
-  return new Saml2BearerProvider({
-    ...common,
-    tokenUrl: stated(means.samlTokenUrl),
-    uaaUrl: client?.uaaUrl as string,
-    clientId: client?.uaaClientId as string,
-    clientSecret: row.clientAuthentication
-      ? undefined
-      : stated(secretOf(client)),
-    ...authenticatedBy(row.clientAuthentication),
-    ...tokenSeed(row.secret),
-  });
+  return new Saml2BearerProvider(
+    asContract<Saml2BearerProviderConfig>({
+      ...common,
+      tokenUrl: stated(means.samlTokenUrl),
+      uaaUrl: client?.uaaUrl as string,
+      clientId: client?.uaaClientId as string,
+      clientSecret: row.clientAuthentication
+        ? undefined
+        : stated(secretOf(client)),
+      ...authenticatedBy(row.clientAuthentication),
+      ...tokenSeed(row.secret),
+    }),
+  );
 }

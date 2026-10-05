@@ -11,6 +11,28 @@ Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for 
 
 ## [Unreleased]
 
+### Changed
+
+- **Built under a stricter compiler.** Both packages, sources and tests,
+  compile with `noImplicitReturns`, `noFallthroughCasesInSwitch`,
+  `noImplicitOverride`, `noUncheckedIndexedAccess` and
+  `exactOptionalPropertyTypes`. No behaviour changes: every object the broker
+  hands a consumer factory or strategy, builds a provider from, or writes to a
+  session keeps exactly its own keys and values, `refreshToken: undefined`
+  included — pinned by a new test of the factory's `authConfig`, its
+  `connConfig` seed, its fourth argument, the strategy context and the written
+  secret. The contract packages declare their optional fields `?: T`; where the
+  broker builds one with an explicit `undefined`, one internal helper
+  (`src/contractShape.ts`) states the shape instead of dropping the key.
+- **`AuthBrokerConfig`'s optional fields are declared `?: T | undefined`**
+  (`serviceKeyStore`, `provider`, `authorization`, `oidcAuthorization`,
+  `deviceCodePresenter`, `samlCookies`, `assertionReplayStore`,
+  `clientAuthentication`). A consumer compiling with
+  `exactOptionalPropertyTypes` may now pass `undefined` for one, which the
+  constructor has always read as absent; for anyone else the type is the same.
+- Lint: `noExplicitAny` is an error outside the tests, and `lint:check` fails
+  on any warning.
+
 ## [4.1.0] - 2026-10-05
 
 **x509 service keys.** A client that authenticates to the authorization

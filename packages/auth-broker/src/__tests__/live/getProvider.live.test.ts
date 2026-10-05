@@ -79,6 +79,7 @@ import type {
   IAuthRejection,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { IConnectionConfig } from '@mcp-abap-adt/interfaces-auth-broker';
+import { asContract } from '../../contractShape';
 import { AuthBroker } from '../../index';
 import { describeWhere, runLog as log } from '../helpers/describeWhere';
 
@@ -117,7 +118,7 @@ function rfcUnavailable(): string | null {
     return null;
   } catch (error) {
     const first = (error instanceof Error ? error.message : String(error))
-      .split('\n')[0]
+      .split('\n')[0]!
       .slice(0, 200);
     return `@mcp-abap-adt/sap-rfc-lite does not load here — install with SAPNWRFC_HOME set to the NW RFC SDK, and put its lib on the loader path (${first})`;
   }
@@ -203,11 +204,11 @@ async function addressOf(
       `destination "${destination}" states no SAP_URL in ${env.AUTH_BROKER_LIVE_KEYS_DIR}`,
     );
   }
-  return {
+  return asContract<ConnectorConfig>({
     url: means.serviceUrl,
     client: means.sapClient,
     authType: 'basic',
-  };
+  });
 }
 
 function byteSize(data: unknown): number {
@@ -227,10 +228,14 @@ describeWhere(
       const connector = new AdtOnPremConnector(
         config,
         await broker.getProvider(destination),
-        new OnPremHttpTransport(() => ({}), quiet, {
-          client: config.client,
-          baseUrl: config.url,
-        }),
+        new OnPremHttpTransport(
+          () => ({}),
+          quiet,
+          asContract<ConstructorParameters<typeof OnPremHttpTransport>[2]>({
+            client: config.client,
+            baseUrl: config.url,
+          }),
+        ),
         quiet,
       );
       try {
@@ -425,12 +430,20 @@ describeWhere(
         await broker.getProvider(destination),
       );
       const connector = new AdtCloudConnector(
-        { url: means.serviceUrl, client: means.sapClient, authType: 'jwt' },
-        recorded.provider,
-        new CloudHttpTransport(() => ({}), quiet, {
+        asContract<ConnectorConfig>({
+          url: means.serviceUrl,
           client: means.sapClient,
-          baseUrl: means.serviceUrl,
+          authType: 'jwt',
         }),
+        recorded.provider,
+        new CloudHttpTransport(
+          () => ({}),
+          quiet,
+          asContract<ConstructorParameters<typeof CloudHttpTransport>[2]>({
+            client: means.sapClient,
+            baseUrl: means.serviceUrl,
+          }),
+        ),
         quiet,
       );
       try {

@@ -211,7 +211,7 @@ describe('the token API factory without a strategy', () => {
 
     expect(factory).toHaveBeenCalledTimes(1);
     expect(factory.mock.calls[0]).toHaveLength(3);
-    expect(factory.mock.calls[0][1]).toEqual(SECRET_CLIENT);
+    expect(factory.mock.calls[0]![1]).toEqual(SECRET_CLIENT);
     expect(keys.getClientCertificate).not.toHaveBeenCalled();
   });
 
@@ -251,7 +251,7 @@ describe('the token API factory beside a strategy', () => {
     await broker.getToken(D);
 
     expect(factory).toHaveBeenCalledTimes(1);
-    const [, authConfig, , client] = factory.mock.calls[0];
+    const [, authConfig, , client] = factory.mock.calls[0]!;
     expect(authConfig).toBeNull();
     expect(client).toEqual({
       clientAuthentication: answer,
@@ -264,8 +264,8 @@ describe('the token API factory beside a strategy', () => {
     // The context: the stated grant and the secret client (none); the
     // certificate read once, memoised for the identity.
     expect(contexts).toHaveLength(1);
-    expect(contexts[0].grant).toBe('authorization_code');
-    expect(contexts[0].client).toBeNull();
+    expect(contexts[0]!.grant).toBe('authorization_code');
+    expect(contexts[0]!.client).toBeNull();
     expect(keys.getClientCertificate).toHaveBeenCalledTimes(1);
   });
 
@@ -284,7 +284,7 @@ describe('the token API factory beside a strategy', () => {
 
     await broker.getToken(D);
 
-    const [, authConfig, , client] = factory.mock.calls[0];
+    const [, authConfig, , client] = factory.mock.calls[0]!;
     expect(authConfig).toEqual(SECRET_CLIENT);
     expect(client).toEqual({
       clientAuthentication: answer,
@@ -391,7 +391,7 @@ describe('the token API factory beside a strategy', () => {
     await tokenApi.flush();
     expect(held()?.refreshToken).toBe('refresh-cert-1');
     // Nothing stored yet when the first factory was built.
-    expect(first.mock.calls[0][3]).not.toHaveProperty('refreshToken');
+    expect(first.mock.calls[0]![3]).not.toHaveProperty('refreshToken');
 
     const again = jest.fn<
       IRefreshableTokenProvider,
@@ -405,7 +405,7 @@ describe('the token API factory beside a strategy', () => {
     });
     await recreated.getToken(D);
 
-    const [, authConfig, , client] = again.mock.calls[0];
+    const [, authConfig, , client] = again.mock.calls[0]!;
     expect(authConfig).toBeNull();
     expect(client).toEqual({
       clientAuthentication: answer,
@@ -441,7 +441,7 @@ describe('the token API factory beside a strategy', () => {
       });
       await recreated.getToken(D);
 
-      expect(factory.mock.calls[0][1]).toEqual({
+      expect(factory.mock.calls[0]![1]).toEqual({
         ...SECRET_CLIENT,
         refreshToken: 'refresh-secret-1',
       });
@@ -488,7 +488,7 @@ describe('the token API factory beside a strategy', () => {
     });
     await broker.getToken(D);
     expect(factory).toHaveBeenCalledTimes(1);
-    return factory.mock.calls[0];
+    return factory.mock.calls[0]!;
   }
 
   it("a certificate client's refresh token does not reach the factory for another client id", async () => {
@@ -896,7 +896,7 @@ describe('a session obtained for another client, on the strategy path', () => {
     });
     await broker.getToken(D);
     await broker.flush();
-    return factory.mock.calls[0];
+    return factory.mock.calls[0]!;
   }
 
   const SECRET_KEYS = [

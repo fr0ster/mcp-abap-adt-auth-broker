@@ -23,7 +23,7 @@
 		"rules": {
 			"recommended": true,
 			"suspicious": {
-				"noExplicitAny": "warn"
+				"noExplicitAny": "error"
 			},
 			"correctness": {
 				"noUnusedVariables": "warn",
@@ -50,6 +50,9 @@
 			"includes": ["**/__tests__/**", "**/*.test.ts", "**/*.spec.ts"],
 			"linter": {
 				"rules": {
+					"style": {
+						"noNonNullAssertion": "off"
+					},
 					"suspicious": {
 						"noExplicitAny": "off"
 					},

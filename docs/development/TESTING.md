@@ -38,6 +38,8 @@ packages/auth-broker/src/__tests__/
 │   │                                    # neither side states, reuse after recreation
 │   ├── tokenProviderFactory.test.ts     # the token API factory's fourth argument; stored secrets
 │   │                                    # only when bound; the grant refusal; a throwing factory
+│   ├── ownKeys.test.ts                  # the exact own keys, `key: undefined` included, of what the
+│   │                                    # token API hands the factory and the strategy, and writes
 │   └── AuthBroker.integration.test.ts   # real service keys, sessions and providers
 ├── stand/
 │   ├── uaaGrants.test.ts                # the UAA grants against UAA in Docker;
@@ -447,8 +449,8 @@ and each package's `prepublishOnly` runs it too:
 | Script | What it proves |
 |---|---|
 | `npm run build` | Biome at error level, then `tsc -b` over both packages (the CLI references the library) |
-| `npm run test:check` | both packages type-check, tests included |
-| `npm run lint:check` | Biome over `packages/` and `tools/` |
+| `npm run test:check` | both packages type-check, tests included, under the strict flags of `tsconfig.base.json` |
+| `npm run lint:check` | Biome over `packages/` and `tools/`, no warning allowed |
 | `npm run check:graph` | each package imports only what its allowlist permits, declares it, and uses every runtime dependency it declares; tests import only declared dependencies; the library never imports `auth-stores` |
 | `npm run check:packed` | the bin smoke check: both packages packed and installed into an empty directory, `mcp-auth` and `mcp-sso` run with `--version` (the CLI's version) and `help`, the library loads with no `bin`. Needs the network, and says so when it cannot reach it |
 | `npm run check:publish` | `tools/publish-changed.js` exercised against fixture repositories and a fake npm |

@@ -28,6 +28,7 @@ import type {
   IConnectionConfig,
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
+import { asContract } from './contractShape';
 
 /** What a binding reads of a client: who it is, never its secret. */
 export type BoundClient = Pick<IAuthorizationConfig, 'uaaUrl' | 'uaaClientId'>;
@@ -108,8 +109,8 @@ export type IssuerKind = 'issuer' | 'acs';
 
 /** What this destination's means bind a secret to, canonical; absent where they cannot say. */
 export interface Binding {
-  issuedFor?: string;
-  issuedBy?: string;
+  issuedFor?: string | undefined;
+  issuedBy?: string | undefined;
   /** How the stored `issuedBy` is canonicalised before it is compared. */
   issuerKind: IssuerKind;
   /**
@@ -203,7 +204,10 @@ export function consumerBinding(
   sapClient: string | undefined,
   client: BoundClient | null,
 ): Binding {
-  return uaaBinding({ serviceUrl, sapClient }, client);
+  return uaaBinding(
+    asContract<IConnectionConfig>({ serviceUrl, sapClient }),
+    client,
+  );
 }
 
 /**

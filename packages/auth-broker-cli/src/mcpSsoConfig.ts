@@ -30,6 +30,8 @@ import {
 import type { DestinationMeans } from '@mcp-abap-adt/auth-stores';
 import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract } from './contractShape';
+import type { StatedMeans } from './destination';
 
 /**
  * A person completes these logins at a browser; the library's own default
@@ -38,75 +40,76 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 export const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 export interface McpSsoOptions {
-  outputFile?: string;
-  envFilePath?: string;
-  destination?: string;
-  serviceKeyPath?: string;
+  outputFile?: string | undefined;
+  envFilePath?: string | undefined;
+  destination?: string | undefined;
+  serviceKeyPath?: string | undefined;
   authType: 'abap' | 'xsuaa';
   format: 'json' | 'env';
-  protocol?: 'oidc' | 'saml2';
+  protocol?: 'oidc' | 'saml2' | undefined;
   flow?:
     | 'browser'
     | 'device'
     | 'password'
     | 'token_exchange'
     | 'bearer'
-    | 'pure';
-  configPath?: string;
-  serviceUrl?: string;
-  browser?: string;
+    | 'pure'
+    | undefined;
+  configPath?: string | undefined;
+  serviceUrl?: string | undefined;
+  browser?: string | undefined;
   // Overrides the strategy's own callback port (auth-providers'
   // DEFAULT_CALLBACK_PORT) when set; otherwise the strategy decides.
-  redirectPort?: number;
-  redirectUri?: string;
-  issuerUrl?: string;
-  authorizationEndpoint?: string;
-  tokenEndpoint?: string;
-  deviceAuthorizationEndpoint?: string;
-  clientId?: string;
-  clientSecret?: string;
-  scopes?: string[];
-  scope?: string;
-  code?: string;
-  username?: string;
-  password?: string;
-  passcode?: string;
-  subjectToken?: string;
-  subjectTokenType?: string;
-  audience?: string;
-  actorToken?: string;
-  actorTokenType?: string;
-  idpSsoUrl?: string;
-  spEntityId?: string;
-  acsUrl?: string;
-  relayState?: string;
-  assertionFlow?: 'browser' | 'manual' | 'assertion';
-  assertion?: string;
-  cookie?: string;
-  uaaUrl?: string;
-  samlMetadataPath?: string;
+  redirectPort?: number | undefined;
+  redirectUri?: string | undefined;
+  issuerUrl?: string | undefined;
+  authorizationEndpoint?: string | undefined;
+  tokenEndpoint?: string | undefined;
+  deviceAuthorizationEndpoint?: string | undefined;
+  clientId?: string | undefined;
+  clientSecret?: string | undefined;
+  scopes?: string[] | undefined;
+  scope?: string | undefined;
+  code?: string | undefined;
+  username?: string | undefined;
+  password?: string | undefined;
+  passcode?: string | undefined;
+  subjectToken?: string | undefined;
+  subjectTokenType?: string | undefined;
+  audience?: string | undefined;
+  actorToken?: string | undefined;
+  actorTokenType?: string | undefined;
+  idpSsoUrl?: string | undefined;
+  spEntityId?: string | undefined;
+  acsUrl?: string | undefined;
+  relayState?: string | undefined;
+  assertionFlow?: 'browser' | 'manual' | 'assertion' | undefined;
+  assertion?: string | undefined;
+  cookie?: string | undefined;
+  uaaUrl?: string | undefined;
+  samlMetadataPath?: string | undefined;
   /**
    * The identity provider's signing certificates, inline (PEM or bare base64
    * DER). Only a `--config` file carries these; `--idp-cert` names files
    * instead (`idpCertificateFiles`).
    */
-  idpCertificates?: string[];
+  idpCertificates?: string[] | undefined;
   /** Paths from `--idp-cert`, repeatable; read by `resolveIdpCertificates`. */
-  idpCertificateFiles?: string[];
+  idpCertificateFiles?: string[] | undefined;
   /** The `Issuer` the assertion must name: the identity provider's entityID. */
-  idpEntityId?: string;
+  idpEntityId?: string | undefined;
   /**
    * The identity provider's SAML metadata, an https URL or a file: fills the
    * entityID, signing certificates and SSO URL that were not given explicitly.
    */
-  idpMetadata?: string;
+  idpMetadata?: string | undefined;
   /**
    * The identity provider starts the login; no AuthnRequest is sent, so the
    * assertion must carry no `InResponseTo`.
    */
-  idpInitiated?: boolean;
+  idpInitiated?: boolean | undefined;
   /** The AuthnRequest ID an `--assertion` answers, when this CLI did not send it. */
-  authnRequestId?: string;
+  authnRequestId?: string | undefined;
 }
 
 /**
@@ -291,6 +294,9 @@ export function applyFileConfig(
 
   for (const field of CONFIG_BACKFILL_FIELDS) {
     if (options[field] === undefined && fields[field] !== undefined) {
+      // Kept: the file's value is copied as the file states it, unchecked, as
+      // since 2.0.0; typing it per field would mean validating it — a change
+      // of behaviour, not of types.
       (options as unknown as Record<string, unknown>)[field] = fields[field];
     }
   }
@@ -520,7 +526,7 @@ function scopeList(scopes: unknown): string[] | undefined {
 }
 
 /** The client of an OIDC row: an id, a secret (`''` a public client), a UAA URL when given. */
-function oidcClient(options: McpSsoOptions): DestinationMeans {
+function oidcClient(options: McpSsoOptions): StatedMeans {
   return {
     uaaUrl: options.uaaUrl ?? null,
     uaaClientId: requireOption(options.clientId, '--client-id'),
@@ -535,7 +541,7 @@ function oidcClient(options: McpSsoOptions): DestinationMeans {
  * `createSignedAssertionValidator` for bearer). Missing trust is refused here,
  * naming each field, before anything is written.
  */
-function buildSamlTrust(options: McpSsoOptions): DestinationMeans {
+function buildSamlTrust(options: McpSsoOptions): StatedMeans {
   const idpCertificates = resolveIdpCertificates(options);
   const missing: string[] = [];
   if (!idpCertificates) missing.push('idpCertificates');
@@ -563,7 +569,7 @@ function buildSamlTrust(options: McpSsoOptions): DestinationMeans {
   };
 }
 
-function samlCommon(options: McpSsoOptions): DestinationMeans {
+function samlCommon(options: McpSsoOptions): StatedMeans {
   return {
     samlIdpSsoUrl: requireOption(options.idpSsoUrl, '--idp-sso-url'),
     samlSpEntityId: requireOption(options.spEntityId, '--sp-entity-id'),
@@ -583,11 +589,9 @@ function samlCommon(options: McpSsoOptions): DestinationMeans {
  * `''`. Nothing obtained by a login is means: the passcode, the code, the
  * assertion and the cookies are not written here.
  */
-export function buildDestinationMeans(
-  options: McpSsoOptions,
-): DestinationMeans {
+export function buildDestinationMeans(options: McpSsoOptions): StatedMeans {
   const row = ssoRow(options);
-  const base: DestinationMeans = {
+  const base: StatedMeans = {
     authType: row.authType,
     grantType: row.grantType,
     serviceUrl: options.serviceUrl,
@@ -679,19 +683,23 @@ export function buildOidcBrowserAuthorization(
     // The consumer already holds the code (manual paste / OOB redirect
     // URI); no callback server is opened at all.
     return asOidcResult(
-      staticCodeStrategy({
-        redirectUri: options.redirectUri,
-        payload: options.code,
-      }),
+      staticCodeStrategy(
+        asContract<Parameters<typeof staticCodeStrategy>[0]>({
+          redirectUri: options.redirectUri,
+          payload: options.code,
+        }),
+      ),
     );
   }
   // No fallback: an omitted --redirect-port lets the strategy bind its own
   // default port rather than this CLI pinning a number it doesn't own.
-  return oidcCallbackStrategy({
-    port: options.redirectPort,
-    browser: options.browser,
-    timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
-  });
+  return oidcCallbackStrategy(
+    asContract<Parameters<typeof oidcCallbackStrategy>[0]>({
+      port: options.redirectPort,
+      browser: options.browser,
+      timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+    }),
+  );
 }
 
 /**
@@ -720,10 +728,12 @@ export function buildSamlAuthorization(
 ): IAuthorizationStrategy<string> {
   if (options.assertion) {
     // The consumer already holds the assertion; nothing is opened or asked.
-    return staticCodeStrategy({
-      redirectUri: options.acsUrl,
-      payload: options.assertion,
-    });
+    return staticCodeStrategy(
+      asContract<Parameters<typeof staticCodeStrategy>[0]>({
+        redirectUri: options.acsUrl,
+        payload: options.assertion,
+      }),
+    );
   }
   if (options.idpInitiated) {
     return buildIdpInitiatedAuthorization(options);
@@ -732,18 +742,22 @@ export function buildSamlAuthorization(
   if (assertionFlow !== 'browser') {
     // 'manual', and an 'assertion' flow given no value, both need a human to
     // lift the SAMLResponse out of the POST body by hand.
-    return manualSamlResponseStrategy({
-      redirectUri: options.acsUrl,
-      read: (prompt, signal) => readManualInput(prompt, signal),
-    });
+    return manualSamlResponseStrategy(
+      asContract<Parameters<typeof manualSamlResponseStrategy>[0]>({
+        redirectUri: options.acsUrl,
+        read: (prompt, signal) => readManualInput(prompt, signal),
+      }),
+    );
   }
   // No fallback: an omitted --redirect-port lets the strategy bind its own
   // default port rather than this CLI pinning a number it doesn't own.
-  return samlCallbackStrategy({
-    port: options.redirectPort,
-    browser: options.browser,
-    timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
-  });
+  return samlCallbackStrategy(
+    asContract<Parameters<typeof samlCallbackStrategy>[0]>({
+      port: options.redirectPort,
+      browser: options.browser,
+      timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+    }),
+  );
 }
 
 /**
@@ -799,16 +813,14 @@ export function buildSamlCookieProvider(
 }
 
 /** The broker options through which a run's collaborators reach its provider. */
-export type SsoCollaborators = Required<
-  Pick<
-    AuthBrokerConfig,
+export type SsoCollaborators = {
+  [K in
     | 'authorization'
     | 'oidcAuthorization'
     | 'deviceCodePresenter'
     | 'samlCookies'
-    | 'assertionReplayStore'
-  >
->;
+    | 'assertionReplayStore']-?: NonNullable<AuthBrokerConfig[K]>;
+};
 
 /**
  * Every collaborator a provider the broker builds may need, stated by this CLI

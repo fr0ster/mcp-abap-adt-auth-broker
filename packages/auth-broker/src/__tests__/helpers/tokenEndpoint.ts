@@ -20,7 +20,7 @@ export interface TokenRequest {
   grantType: string;
   params: Record<string, string>;
   /** The `Authorization` header, when the client authenticated with one. */
-  authorization?: string;
+  authorization?: string | undefined;
 }
 
 export interface TokenAnswer {

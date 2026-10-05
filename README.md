@@ -57,8 +57,8 @@ npm run check      # build, type checks, lint, dependency graph, packed tarballs
 |---|---|
 | `build` | cleans both packages, Biome at error level, `tsc -b` (the CLI references the library) |
 | `test` | Jest in each workspace; `npm test -w <package> -- <file> -t "<case>"` for one |
-| `test:check` | type-checks both packages, tests included |
-| `lint` / `lint:check` / `format` | Biome over `packages/` and `tools/` |
+| `test:check` | type-checks both packages, tests included, under the strict flags of `tsconfig.base.json` |
+| `lint` / `lint:check` / `format` | Biome over `packages/` and `tools/`; `lint:check` fails on any warning |
 | `check:graph` | `tools/check-graph.js`: each package imports only what it may, declares it, and uses what it declares; the library never imports `auth-stores` |
 | `check:packed` | `tools/check-packed.js`: both packages packed and installed into an empty directory; `mcp-auth` and `mcp-sso` run with `--version` and `help`; needs the network |
 | `check:publish` | `tools/test-publish-changed.js`: the release tool against fixture repositories |

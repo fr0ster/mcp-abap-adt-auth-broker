@@ -274,9 +274,9 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
     expect(store.getClientCertificate).toHaveBeenCalledTimes(1);
     expect(store.getClientCertificate).toHaveBeenCalledWith(D);
     expect(seen).toHaveLength(1);
-    expect(seen[0].destination).toBe(D);
-    expect(seen[0].grant).toBe('client_credentials');
-    expect(seen[0].client).toEqual(SECRET_CLIENT);
+    expect(seen[0]!.destination).toBe(D);
+    expect(seen[0]!.grant).toBe('client_credentials');
+    expect(seen[0]!.client).toEqual(SECRET_CLIENT);
   });
 
   it("tells the strategy the client's identity and secret only — never a refresh token the key store answered — on getProvider and the token API alike", async () => {
@@ -335,7 +335,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
       serviceKeyStore: keyStore(withRefresh),
       provider: factory,
     }).getToken(D);
-    expect(factory.mock.calls[0][1]?.refreshToken).toBe(
+    expect(factory.mock.calls[0]![1]?.refreshToken).toBe(
       'refresh-the-key-store-answered',
     );
   });

@@ -122,7 +122,7 @@ function lastWrite(store: jest.Mocked<ISessionStore>): Record<string, unknown> {
   const calls = store.saveSession.mock.calls;
   expect(calls.length).toBeGreaterThan(0);
   return Object.fromEntries(
-    Object.entries(calls[calls.length - 1][1] as object).filter(
+    Object.entries(calls[calls.length - 1]![1] as object).filter(
       ([, value]) => value !== undefined,
     ),
   );
@@ -289,7 +289,7 @@ describe('AuthBroker', () => {
 
       await broker.getToken('DEST');
 
-      expect(factory.mock.calls[0][2]).toEqual(
+      expect(factory.mock.calls[0]![2]).toEqual(
         expect.objectContaining({ serviceUrl: SERVICE_URL }),
       );
       // A factory is handed the client: the issuer it is bound to.
@@ -741,8 +741,8 @@ describe('AuthBroker', () => {
 
       await broker.getToken('DEST');
 
-      expect(factory.mock.calls[0][1]).toEqual(sessionAuth);
-      expect(factory.mock.calls[0][2]).toEqual(
+      expect(factory.mock.calls[0]![1]).toEqual(sessionAuth);
+      expect(factory.mock.calls[0]![2]).toEqual(
         expect.objectContaining({ serviceUrl: SERVICE_URL, sapClient: '200' }),
       );
       // Bound to what the provider was handed: the session's URL and client.
@@ -765,7 +765,7 @@ describe('AuthBroker', () => {
 
       await broker.getToken('DEST');
 
-      expect(factory.mock.calls[0][1]).toBeNull();
+      expect(factory.mock.calls[0]![1]).toBeNull();
     });
 
     it('builds once per destination and reuses the provider', async () => {

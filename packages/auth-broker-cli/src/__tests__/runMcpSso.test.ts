@@ -289,7 +289,7 @@ describe('mcp-sso oidc --flow password', () => {
       }),
     );
     expect(code).toBe(0);
-    expect(server.requests[0].form).toEqual(
+    expect(server.requests[0]!.form).toEqual(
       expect.objectContaining({
         grant_type: 'password',
         username: 'alice',
@@ -365,13 +365,13 @@ describe('mcp-sso oidc --flow password --passcode', () => {
       }),
     );
     expect(code).toBe(0);
-    expect(server.requests[0].form).toEqual(
+    expect(server.requests[0]!.form).toEqual(
       expect.objectContaining({
         grant_type: 'password',
         passcode: 'ONE-TIME-123',
       }),
     );
-    expect(server.requests[0].form.username).toBeUndefined();
+    expect(server.requests[0]!.form.username).toBeUndefined();
     const means = await keyStoreOf('abap').getConnectionConfig(DEST);
     expect(means).toEqual(
       expect.objectContaining({ authType: 'jwt', grantType: 'passcode' }),

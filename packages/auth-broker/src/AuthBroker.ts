@@ -50,6 +50,7 @@ import {
   contextClient,
   resolveClientAuthentication,
 } from './clientAuthentication';
+import { asContract } from './contractShape';
 import { DestinationConfigError } from './DestinationConfigError';
 import {
   basicProvider,
@@ -150,7 +151,7 @@ export interface AuthBrokerConfig {
    * basic's user and password, the SNC fields, `serviceUrl`. `getProvider`
    * needs it: there is no other source of means.
    */
-  serviceKeyStore?: IServiceKeyStore;
+  serviceKeyStore?: IServiceKeyStore | undefined;
   /**
    * The token API's source: the token provider, or a factory building one per
    * destination. Not used by `getProvider`, which builds what the destination
@@ -159,29 +160,35 @@ export interface AuthBrokerConfig {
    * An instance is used as given, for every destination. A factory is seeded
    * with what the stores hold for the destination (see `TokenProviderFactory`).
    */
-  provider?: IRefreshableTokenProvider | TokenProviderFactory;
+  provider?: IRefreshableTokenProvider | TokenProviderFactory | undefined;
 
   // Collaborators — each a function of the destination, called once when that
   // destination's provider is built, each required only by the grants that
   // use it. The broker supplies no default and disposes none.
 
   /** The interactive strategy of the UAA code, passcode and SAML grants. */
-  authorization?: (
-    destination: string,
-    grant: StrategyGrant,
-  ) => IAuthorizationStrategy<string>;
+  authorization?:
+    | ((
+        destination: string,
+        grant: StrategyGrant,
+      ) => IAuthorizationStrategy<string>)
+    | undefined;
   /** The interactive strategy of the OIDC authorization code grant. */
-  oidcAuthorization?: (
-    destination: string,
-  ) => IAuthorizationStrategy<OidcCallbackResult>;
+  oidcAuthorization?:
+    | ((destination: string) => IAuthorizationStrategy<OidcCallbackResult>)
+    | undefined;
   /** Where the device flow shows the user its code. */
-  deviceCodePresenter?: (destination: string) => IDeviceCodePresenter;
+  deviceCodePresenter?:
+    | ((destination: string) => IDeviceCodePresenter)
+    | undefined;
   /** `saml2_pure`: turns the SAMLResponse into the system's session cookies. */
-  samlCookies?: (
-    destination: string,
-  ) => (samlResponse: string) => Promise<string>;
+  samlCookies?:
+    | ((destination: string) => (samlResponse: string) => Promise<string>)
+    | undefined;
   /** The replay store the SAML assertion validators share. */
-  assertionReplayStore?: (destination: string) => IAssertionReplayStore;
+  assertionReplayStore?:
+    | ((destination: string) => IAssertionReplayStore)
+    | undefined;
   /**
    * How a destination's client authenticates to the authorization server, for
    * every grant that authenticates one (`ClientAuthenticationGrant`). Called
@@ -201,7 +208,7 @@ export interface AuthBrokerConfig {
    * An instance given as `provider` is already composed by the consumer, so
    * the token API uses it as given and calls no strategy for it.
    */
-  clientAuthentication?: ClientAuthenticationStrategy;
+  clientAuthentication?: ClientAuthenticationStrategy | undefined;
 }
 
 /** The session secret's fields on a connection config — never means. */
@@ -342,10 +349,10 @@ function composeAuthorization(
 ): IAuthorizationConfig | null {
   if (read.sessionAuth) return read.sessionAuth;
   if (!read.keyAuth) return null;
-  return {
+  return asContract<IAuthorizationConfig>({
     ...read.keyAuth,
     refreshToken: refreshToken ?? read.keyAuth.refreshToken,
-  };
+  });
 }
 
 /**
@@ -361,7 +368,9 @@ function strategyAuthorization(
   // The same allowlist the strategy is told (`contextClient`): nothing else a
   // store's authorization-config read carried reaches the factory.
   const client = contextClient(read.sessionAuth ?? read.keyAuth);
-  return client ? { ...client, refreshToken } : null;
+  return client
+    ? asContract<IAuthorizationConfig>({ ...client, refreshToken })
+    : null;
 }
 
 /** A stored string that counts as present: `''` is none. */
@@ -651,7 +660,10 @@ export class AuthBroker {
     this.logger.debug(`[AuthBroker] ${method} for ${destination}`);
     const result = checked(destination, await provider[method]());
     await this.writer.submit(destination, {
-      result: { ...result, expiresAt: expiryOf(result) },
+      result: asContract<ITokenResult>({
+        ...result,
+        expiresAt: expiryOf(result),
+      }),
       original: result,
       binding,
       carry,
@@ -1110,7 +1122,10 @@ export class AuthBroker {
         // token API.
         const onTokens = (result: ITokenResult) =>
           this.writer.submit(destination, {
-            result: { ...result, expiresAt: expiryOf(result) },
+            result: asContract<ITokenResult>({
+              ...result,
+              expiresAt: expiryOf(result),
+            }),
             original: result,
             binding,
             carry: 'bound',
@@ -1259,10 +1274,10 @@ export class AuthBroker {
     if (result.tokenType === 'saml') {
       // saml2_pure: the cookies are the credential, and SAML has no refresh
       // token to carry.
-      secret = {
+      secret = asContract<IConfig>({
         sessionCookies: result.authorizationToken,
         expiresAt: result.expiresAt,
-      };
+      });
     } else {
       const stored = result.refreshToken
         ? null
@@ -1274,11 +1289,11 @@ export class AuthBroker {
         (carry === 'any' || boundHere(stored, binding))
           ? stored.refreshToken
           : undefined;
-      secret = {
+      secret = asContract<IConfig>({
         authorizationToken: result.authorizationToken,
         expiresAt: result.expiresAt,
         refreshToken: result.refreshToken || storedRefreshToken,
-      };
+      });
     }
     if (binding.issuedFor !== undefined) secret.issuedFor = binding.issuedFor;
     if (binding.issuedBy !== undefined) secret.issuedBy = binding.issuedBy;

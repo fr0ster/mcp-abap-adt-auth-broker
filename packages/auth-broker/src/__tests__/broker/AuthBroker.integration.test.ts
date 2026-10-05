@@ -23,6 +23,7 @@ import {
   SafeAbapSessionStore,
 } from '@mcp-abap-adt/auth-stores';
 import { AuthBroker } from '../../AuthBroker';
+import { asContract, type WithUndefined } from '../../contractShape';
 import {
   getAbapDestination,
   getExpiredToken,
@@ -41,8 +42,12 @@ import { createTestLogger } from '../helpers/testLogger';
 const INTERACTIVE_LOGIN_TIMEOUT_MS = 290_000;
 
 /** An AuthorizationCodeProvider: since auth-providers 4.2.0 it refreshes on request itself. */
-function authorizationCodeProvider(config: AuthorizationCodeProviderConfig) {
-  return new AuthorizationCodeProvider(config);
+function authorizationCodeProvider(
+  config: WithUndefined<AuthorizationCodeProviderConfig>,
+) {
+  return new AuthorizationCodeProvider(
+    asContract<AuthorizationCodeProviderConfig>(config),
+  );
 }
 
 /** What a headless process's strategy throws instead of opening a browser. */
@@ -89,7 +94,7 @@ const validateTokenExpiration = (token: string): boolean => {
     }
 
     // Decode payload
-    const payload = parts[1];
+    const payload = parts[1]!;
     const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
     const padded = base64 + '=='.substring(0, (4 - (base64.length % 4)) % 4);
     const decoded = Buffer.from(padded, 'base64').toString('utf8');
@@ -347,7 +352,7 @@ describe('AuthBroker Integration', () => {
       try {
         const parts = expiredToken.split('.');
         if (parts.length === 3) {
-          const payload = parts[1];
+          const payload = parts[1]!;
           const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
           const padded =
             base64 + '=='.substring(0, (4 - (base64.length % 4)) % 4);

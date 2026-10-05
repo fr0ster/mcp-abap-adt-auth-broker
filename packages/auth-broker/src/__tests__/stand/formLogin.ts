@@ -123,7 +123,7 @@ export class FormBrowser {
 
   private remember(response: Response): void {
     for (const line of response.headers.getSetCookie()) {
-      const [pair] = line.split(';');
+      const [pair = ''] = line.split(';');
       const eq = pair.indexOf('=');
       if (eq > 0) {
         this.cookies.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());

@@ -196,7 +196,7 @@ describe('mcp-auth (authorization_code)', () => {
     server.answer('/oauth/token', tokenAnswer('uaa'));
     await expect(run(options({ serviceKeyPath: abapKey() }))).resolves.toBe(0);
     expect(strategyCalls).toBe(1);
-    expect(server.requests[0].form).toEqual(
+    expect(server.requests[0]!.form).toEqual(
       expect.objectContaining({
         grant_type: 'authorization_code',
         code: 'the-code',
@@ -299,7 +299,7 @@ describe('mcp-auth --credential --type xsuaa', () => {
       ),
     ).resolves.toBe(0);
     expect(strategyCalls).toBe(0);
-    expect(server.requests[0].form.grant_type).toBe('client_credentials');
+    expect(server.requests[0]!.form.grant_type).toBe('client_credentials');
     const keys = readEnvKeys(path.join(outDir, `${DEST}.env`));
     expect(keys.XSUAA_AUTH_TYPE).toBe('jwt');
     expect(keys.XSUAA_GRANT_TYPE).toBe('client_credentials');
@@ -541,7 +541,7 @@ describe('mcp-auth --client-auth', () => {
 
       expect(server.requests).toHaveLength(0);
       expect(certServer.requests).toHaveLength(1);
-      const [request] = certServer.requests;
+      const request = certServer.requests[0]!;
       expect(request.path).toBe('/oauth/token');
       expect(request.form.grant_type).toBe('client_credentials');
       expect(request.form.client_id).toBe('key-client');
@@ -571,13 +571,13 @@ describe('mcp-auth --client-auth', () => {
       });
       await expect(run(o)).resolves.toBe(0);
       expect(strategyCalls).toBe(1);
-      expect(certServer.requests[0].form).toEqual(
+      expect(certServer.requests[0]!.form).toEqual(
         expect.objectContaining({
           grant_type: 'authorization_code',
           code: 'the-code',
         }),
       );
-      expect(certServer.requests[0].clientCertificate).toBe(
+      expect(certServer.requests[0]!.clientCertificate).toBe(
         'mcp-auth-test-client',
       );
       expect(readEnvKeys(path.join(outDir, `${DEST}.env`)).SAP_GRANT_TYPE).toBe(
@@ -664,7 +664,7 @@ describe('mcp-auth --client-auth', () => {
       expect(keys.SAP_UAA_CLIENT_KEY_PATH).toBe(CLIENT_KEY_PATH);
       expect(keys.SAP_UAA_CERT_URL).toBe(certServer.url);
       expect(keys).not.toHaveProperty('SAP_UAA_CLIENT_SECRET');
-      expect(certServer.requests[0].clientCertificate).toBe(
+      expect(certServer.requests[0]!.clientCertificate).toBe(
         'mcp-auth-test-client',
       );
     });
@@ -773,7 +773,7 @@ describe('mcp-auth --client-auth', () => {
       const keys = readEnvKeys(path.join(outDir, `${DEST}.env`));
       expect(keys.SAP_URL).toBe(SERVICE_URL);
       expect(keys.SAP_UAA_CERT_URL).toBe(certServer.url);
-      expect(certServer.requests[0].clientCertificate).toBe(
+      expect(certServer.requests[0]!.clientCertificate).toBe(
         'mcp-auth-test-client',
       );
     });
@@ -786,7 +786,7 @@ describe('mcp-auth --client-auth', () => {
         run(xsuaa({ serviceKeyPath: x509Key({ mixed: true }), ...secret })),
       ).resolves.toBe(0);
       expect(certServer.requests).toHaveLength(0);
-      const [request] = server.requests;
+      const request = server.requests[0]!;
       expect(request.form.grant_type).toBe('client_credentials');
       expect(request.form).not.toHaveProperty('client_secret');
       expect(request.authorization).toBe(

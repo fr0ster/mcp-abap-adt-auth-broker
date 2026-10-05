@@ -36,6 +36,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract, type WithUndefined } from '../../contractShape';
 import { AuthBroker, bindingOf, DestinationConfigError } from '../../index';
 import {
   jwtExpiringIn,
@@ -71,15 +72,15 @@ afterEach(async () => {
 
 function means(
   grant: string,
-  extra: Partial<IConnectionConfig> = {},
+  extra: WithUndefined<Partial<IConnectionConfig>> = {},
 ): IConnectionConfig {
-  return {
+  return asContract<IConnectionConfig>({
     authType: 'jwt',
-    grantType: grant as IConnectionConfig['grantType'],
+    grantType: grant as NonNullable<IConnectionConfig['grantType']>,
     serviceUrl: SERVICE_URL,
     sapClient: '100',
     ...extra,
-  };
+  });
 }
 
 function client(
@@ -176,7 +177,7 @@ function broker(
   grant: string,
   session: IConfig | null,
   options: {
-    conn?: IConnectionConfig | null;
+    conn?: IConnectionConfig | null | undefined;
     auth?: IAuthorizationConfig | null;
     sessions?: ISessionStore;
   } = {},
@@ -199,15 +200,15 @@ function broker(
 }
 
 /** A stored secret bound as this destination's means bind it. */
-function storedSecret(extra: Partial<IConfig> = {}): IConfig {
-  return {
+function storedSecret(extra: WithUndefined<Partial<IConfig>> = {}): IConfig {
+  return asContract<IConfig>({
     authorizationToken: STORED_TOKEN,
     expiresAt: Date.now() + 3_600_000,
     refreshToken: STORED_RT,
     issuedFor: FOR,
     issuedBy: BY,
     ...extra,
-  };
+  });
 }
 
 const STORED_TOKEN = jwtExpiringIn(3600, {
@@ -240,7 +241,7 @@ describe.each(['authorization_code', 'passcode'] as const)(
       const cases: [
         string,
         () => {
-          session: Partial<IConfig>;
+          session: WithUndefined<Partial<IConfig>>;
           conn?: IConnectionConfig;
           /** The means state no resource: no issuedFor is written. */
           noResource?: true;
@@ -375,7 +376,7 @@ describe.each(['authorization_code', 'passcode'] as const)(
         await b.flush();
         expect(store.saveSession).toHaveBeenCalledTimes(1);
         const expected: IConfig = {
-          authorizationToken: endpoint.issued[0],
+          authorizationToken: endpoint.issued[0]!,
           expiresAt: expect.any(Number),
           refreshToken: 'refresh-1',
           issuedBy: BY,
@@ -599,12 +600,15 @@ describe('persist writes the binding with every secret, and nothing else', () =>
   ])(
     'does not carry a stored refresh token bound to %s into the new secret',
     async (_label, binding) => {
-      const { broker: b, held } = broker('client_credentials', {
-        refreshToken: 'foreign-rt',
-        issuedFor: FOR,
-        issuedBy: BY,
-        ...binding,
-      });
+      const { broker: b, held } = broker(
+        'client_credentials',
+        asContract<IConfig>({
+          refreshToken: 'foreign-rt',
+          issuedFor: FOR,
+          issuedBy: BY,
+          ...binding,
+        }),
+      );
 
       await (await b.getProvider(D)).prepare();
       await b.flush();
@@ -1002,7 +1006,9 @@ describe('bindingOf: the binding a consumer writes beside a credential it hands 
       'none',
       {
         sessionCookies: 'SAP_SESSIONID=abc',
-        ...bindingOf({ ...stated, sapClient: undefined }),
+        ...bindingOf(
+          asContract<IConnectionConfig>({ ...stated, sapClient: undefined }),
+        ),
       },
       { conn: stated, auth: null },
     );

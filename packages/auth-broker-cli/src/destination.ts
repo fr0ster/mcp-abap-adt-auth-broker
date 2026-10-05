@@ -30,6 +30,7 @@ import {
   XSUAA_DESTINATION_VARS,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
+import type { WithUndefined } from './contractShape';
 
 /** Which key names the destination file uses: `SAP_*` or `XSUAA_*`. */
 export type DestinationType = 'abap' | 'xsuaa';
@@ -109,11 +110,14 @@ const GRANT_FIELDS = [
   'samlTokenUrl',
 ] as const satisfies readonly (keyof DestinationMeans)[];
 
+/** The means a command states: a field given as `undefined` is not stated. */
+export type StatedMeans = WithUndefined<DestinationMeans>;
+
 /**
  * The write a command makes: what it states, every grant field it does not
  * state removed, and nothing given as `undefined` (a field left out stays).
  */
-export function completeMeans(stated: DestinationMeans): DestinationMeans {
+export function completeMeans(stated: StatedMeans): DestinationMeans {
   const means: Record<string, unknown> = {};
   for (const field of GRANT_FIELDS) {
     means[field] = null;

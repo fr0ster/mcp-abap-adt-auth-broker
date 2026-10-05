@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Built under a stricter compiler**, as `@mcp-abap-adt/auth-broker`:
+  `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noImplicitOverride`,
+  `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`, sources and
+  tests. No behaviour changes: every flag, message, exit code and written file
+  is as before. Argument parsing reads each value once and tests it instead of
+  the index bound; a destination's stated means, a strategy's options and a
+  provider's configuration keep the keys they had (`redirectUri: undefined`,
+  `port: undefined` included).
+- Lint: `noExplicitAny` is an error outside the tests, and `lint:check` fails
+  on any warning.
+
 ## [2.1.0] - 2026-10-05
 
 The commands on `@mcp-abap-adt/auth-broker` 4.1.0 (`^4.1.0`, released
