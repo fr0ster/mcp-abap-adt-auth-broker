@@ -116,12 +116,12 @@ Back in this PR (`fr0ster/mcp-abap-adt-auth-broker`, worktree `.worktrees/x509-s
 ### Task 6: Broker — the consumer factory's fourth argument
 
 **Files:**
-- Modify: `packages/auth-broker/src/AuthBroker.ts` (`TokenProviderFactory`, `consumerProviderFor`)
+- Modify: `packages/auth-broker/src/AuthBroker.ts` (`TokenProviderFactory`, `consumerProviderFor` — including `consumerBinding` on the strategy path: the secret client, else the certificate client's `uaaUrl`/`clientId`, as spec §3.2)
 - Test: `packages/auth-broker/src/__tests__/broker/tokenProviderFactory.test.ts`
 
 **Interfaces — Produces:** `TokenProviderFactory = (destination, authConfig, connConfig, client?: { clientAuthentication?: IClientAuthentication; uaaUrl?: string; clientId?: string }) => IRefreshableTokenProvider`.
 
-- [ ] Tests: without a strategy the factory is called with exactly three arguments (4.0.0); with one, the fourth carries the strategy's answer and the identity (never PEM — assert the argument holds no `-----BEGIN`); a throwing factory → the guarded `DestinationConfigError`; a 4.0.0-shaped factory (three parameters) keeps working.
+- [ ] Tests: a certificate destination's token-API tokens carry `issuedBy` = issuer?client_id and are reused after the broker is recreated (consumerBinding from the certificate client's identity); without a strategy the factory is called with exactly three arguments (4.0.0); with one, the fourth carries the strategy's answer and the identity (never PEM — assert the argument holds no `-----BEGIN`); a throwing factory → the guarded `DestinationConfigError`; a 4.0.0-shaped factory (three parameters) keeps working.
 - [ ] Implement inside the same guard as Task 4.
 - [ ] Load-bearing; `npm test`, test:check, lint; commit.
 
