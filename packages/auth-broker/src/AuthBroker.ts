@@ -47,6 +47,7 @@ import {
   type ClientIdentity,
   clientAuthenticationContext,
   clientIdentity,
+  contextClient,
   resolveClientAuthentication,
 } from './clientAuthentication';
 import { DestinationConfigError } from './DestinationConfigError';
@@ -331,7 +332,9 @@ function strategyAuthorization(
   read: AuthorizationRead,
   refreshToken: string | undefined,
 ): IAuthorizationConfig | null {
-  const client = read.sessionAuth ?? read.keyAuth;
+  // The same allowlist the strategy is told (`contextClient`): nothing else a
+  // store's authorization-config read carried reaches the factory.
+  const client = contextClient(read.sessionAuth ?? read.keyAuth);
   return client ? { ...client, refreshToken } : null;
 }
 

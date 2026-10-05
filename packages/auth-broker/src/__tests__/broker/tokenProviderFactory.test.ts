@@ -1115,6 +1115,63 @@ describe('a session obtained for another client, on the strategy path', () => {
     expect(elsewhere[3]).not.toHaveProperty('refreshToken');
   });
 
+  it('an authorization-config read carrying more than a client: on the strategy path only uaaUrl, uaaClientId, uaaClientSecret and the bound refresh token reach the factory', async () => {
+    // Outside the type: a custom store answering a session's secret with its
+    // client. None of it is checked by a binding.
+    const overfull = {
+      uaaUrl: 'https://uaa.example.com',
+      uaaClientId: 'session-client',
+      uaaClientSecret: 'session-secret',
+      refreshToken: 'refresh-of-the-client-read',
+      authorizationToken: 'token-of-the-client-read',
+      sessionCookies: 'cookies-of-the-client-read',
+      expiresAt: 4_102_444_800_000,
+    } as IAuthorizationConfig;
+    const leaked = [
+      'refresh-of-the-client-read',
+      'token-of-the-client-read',
+      'cookies-of-the-client-read',
+      '4102444800000',
+    ];
+    const overSession = () => {
+      const { store } = secretSessions();
+      store.getAuthorizationConfig = async () => overfull;
+      return store;
+    };
+    const overKeys = keyStore(overfull, null);
+
+    for (const [sessions, keys] of [
+      [overSession(), keyStore(null, null)],
+      [secretSessions().store, overKeys],
+    ] as const) {
+      const call = await tokenApi(
+        sessions,
+        keys,
+        () => tokenProvider(jwtExpiringIn(3600)),
+        certificateStrategy,
+      );
+      expect(Object.keys(call[1] ?? {}).sort()).toEqual([
+        'refreshToken',
+        'uaaClientId',
+        'uaaClientSecret',
+        'uaaUrl',
+      ]);
+      expect(call[1]?.refreshToken).toBeUndefined();
+      for (const value of leaked) {
+        expect(JSON.stringify([call[1], call[3]])).not.toContain(value);
+      }
+    }
+
+    // Without a strategy, 4.0.0: the client read as it is.
+    const without = await tokenApi(
+      overSession(),
+      keyStore(null, null),
+      () => tokenProvider(jwtExpiringIn(3600)),
+      undefined,
+    );
+    expect(without[1]).toBe(overfull);
+  });
+
   it('each stored secret is judged by the read it came from: a seed read after another process wrote is checked on its own binding', async () => {
     const forA = {
       issuedFor: 'https://abap.example.com:443?sap-client=100',
