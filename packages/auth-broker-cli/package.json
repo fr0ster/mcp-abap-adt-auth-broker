@@ -62,6 +62,7 @@
     "@mcp-abap-adt/auth-broker": "^4.0.0",
     "@mcp-abap-adt/auth-providers": "^5.3.0",
     "@mcp-abap-adt/auth-stores": "^3.3.0",
+    "@mcp-abap-adt/interfaces-auth": "^3.2.0",
     "@mcp-abap-adt/interfaces-utils": "^1.1.0",
     "@mcp-abap-adt/logger": "^0.4.0"
   },

@@ -12,6 +12,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
+import { CertificateMaterialError } from '@mcp-abap-adt/auth-providers';
 import type {
   IClientAuthentication,
   ITokenRequestDraft,
@@ -81,11 +82,12 @@ const means: IConnectionConfig = {
 function keyStore(
   client: IAuthorizationConfig | null,
   certificate?: () => Promise<IClientCertificate | null>,
+  stated: IConnectionConfig = means,
 ): jest.Mocked<IServiceKeyStore> {
   const store: jest.Mocked<IServiceKeyStore> = {
     getServiceKey: jest.fn(async (_d: string) => null),
     getAuthorizationConfig: jest.fn(async (_d: string) => client),
-    getConnectionConfig: jest.fn(async (_d: string) => means),
+    getConnectionConfig: jest.fn(async (_d: string) => stated),
   };
   if (certificate) {
     store.getClientCertificate = jest.fn(async (_d: string) => certificate());
@@ -451,4 +453,183 @@ describe('getProvider with a clientAuthentication strategy: the guard', () => {
     await expect(broker.getProvider(D)).resolves.toBeDefined();
     expect(strategy).toHaveBeenCalledTimes(2);
   });
+});
+
+describe('the guard is total: nothing about the thrown value is trusted', () => {
+  function brokerThrowing(thrown: () => unknown): AuthBroker {
+    return new AuthBroker({
+      sessionStore: sessionStore(),
+      serviceKeyStore: keyStore(SECRET_CLIENT),
+      clientAuthentication: async () => {
+        throw thrown();
+      },
+    });
+  }
+
+  it('a thrown Proxy whose getPrototypeOf trap throws: the generic fixed words, no raw error', async () => {
+    const error = await rejection(
+      brokerThrowing(
+        () =>
+          new Proxy(
+            {},
+            {
+              getPrototypeOf() {
+                throw new Error(MARKER);
+              },
+              get() {
+                throw new Error(MARKER);
+              },
+            },
+          ),
+      ).getProvider(D),
+    );
+    expectGuarded(error, 'the clientAuthentication strategy failed');
+    expect(everythingIn(error)).not.toContain(MARKER);
+  });
+
+  it('a CertificateMaterialError carrying its own words: the broker’s words, never the instance’s', async () => {
+    const error = await rejection(
+      brokerThrowing(() =>
+        Object.defineProperty(new CertificateMaterialError(false), 'words', {
+          value: { reason: MARKER, hint: MARKER },
+        }),
+      ).getProvider(D),
+    );
+    expectGuarded(
+      error,
+      'the clientAuthentication strategy refused: the client certificate could not be used',
+    );
+    expect(everythingIn(error)).not.toContain(MARKER);
+  });
+
+  it('a CertificateMaterialError whose words and flags are getters that throw: fixed words, no raw error', async () => {
+    const error = await rejection(
+      brokerThrowing(() => {
+        const e = new CertificateMaterialError(true);
+        for (const name of ['words', 'incomplete', 'expired']) {
+          Object.defineProperty(e, name, {
+            get() {
+              throw new Error(MARKER);
+            },
+          });
+        }
+        return e;
+      }).getProvider(D),
+    );
+    expectGuarded(error, 'the clientAuthentication strategy failed');
+    expect(everythingIn(error)).not.toContain(MARKER);
+  });
+
+  it('chooses the certificate words by the flags: incomplete, expired', async () => {
+    expectGuarded(
+      await rejection(
+        brokerThrowing(() => new CertificateMaterialError(true)).getProvider(D),
+      ),
+      'the clientAuthentication strategy refused: the client certificate is incomplete',
+    );
+    expectGuarded(
+      await rejection(
+        brokerThrowing(
+          () => new CertificateMaterialError(false, true),
+        ).getProvider(D),
+      ),
+      'the clientAuthentication strategy refused: the client certificate has expired',
+    );
+  });
+
+  it('a factory’s own refusal rewritten by the consumer before rethrowing: the factory’s fixed words', async () => {
+    const broker = new AuthBroker({
+      sessionStore: sessionStore(),
+      serviceKeyStore: keyStore(SECRET_CLIENT, async () => null),
+      clientAuthentication: async (ctx) =>
+        fromServiceKeyCertificate()(ctx).catch((e: unknown) => {
+          Object.defineProperty(e, 'words', { value: MARKER });
+          (e as Error).message = MARKER;
+          throw e;
+        }),
+    });
+    const error = await rejection(broker.getProvider(D));
+    expectGuarded(
+      error,
+      'the clientAuthentication strategy refused: the destination has no client certificate',
+    );
+    expect(everythingIn(error)).not.toContain(MARKER);
+  });
+});
+
+describe('which rows call the strategy, and with which grant', () => {
+  const rowsWithoutClient: Array<[string, IConnectionConfig]> = [
+    ['saml / saml2_pure', { authType: 'saml', grantType: 'saml2_pure' }],
+    [
+      'basic',
+      {
+        authType: 'basic',
+        serviceUrl: 'https://abap.example.com',
+        username: 'u',
+        password: 'p',
+      },
+    ],
+    ['snc', { authType: 'snc' }],
+    [
+      'jwt / none (handed over)',
+      {
+        authType: 'jwt',
+        grantType: 'none',
+        serviceUrl: 'https://a.example.com',
+      },
+    ],
+    [
+      'saml / none (handed over)',
+      {
+        authType: 'saml',
+        grantType: 'none',
+        serviceUrl: 'https://a.example.com',
+      },
+    ],
+  ];
+
+  it.each(rowsWithoutClient)(
+    '%s never calls the strategy',
+    async (_name, stated) => {
+      const strategy = jest.fn(fromServiceKeySecret({ encoding: 'raw' }));
+      const broker = new AuthBroker({
+        sessionStore: sessionStore(),
+        serviceKeyStore: keyStore(
+          SECRET_CLIENT,
+          async () => CERTIFICATE,
+          stated,
+        ),
+        clientAuthentication: strategy,
+      });
+      await Promise.allSettled([broker.getProvider(D)]);
+      expect(strategy).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['jwt', 'authorization_code'],
+    ['jwt', 'passcode'],
+    ['jwt', 'password'],
+    ['jwt', 'device_code'],
+    ['saml', 'saml2_bearer'],
+  ] as const)(
+    '%s / %s: the context names the stated grant',
+    async (authType, grant) => {
+      const grants: string[] = [];
+      const broker = new AuthBroker({
+        sessionStore: sessionStore(),
+        serviceKeyStore: keyStore(SECRET_CLIENT, undefined, {
+          authType,
+          grantType: grant,
+          serviceUrl: 'https://abap.example.com',
+        }),
+        clientAuthentication: async (ctx) => {
+          grants.push(ctx.grant);
+          return fromServiceKeySecret({ encoding: 'raw' })(ctx);
+        },
+      });
+      await Promise.allSettled([broker.getProvider(D)]);
+      expect(grants).toEqual([grant]);
+    },
+  );
 });

@@ -20,6 +20,7 @@ import {
   defaultReplayStore,
   manualPasscodeStrategy,
   manualSamlResponseStrategy,
+  type OidcCallbackResult,
   oidcCallbackStrategy,
   type SsoProviderConfig,
   samlCallbackStrategy,
@@ -27,6 +28,7 @@ import {
   ValidationError,
 } from '@mcp-abap-adt/auth-providers';
 import type { DestinationMeans } from '@mcp-abap-adt/auth-stores';
+import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 
 /**
@@ -672,7 +674,7 @@ export function buildDestinationMeans(
  */
 export function buildOidcBrowserAuthorization(
   options: McpSsoOptions,
-): ReturnType<typeof oidcCallbackStrategy> {
+): IAuthorizationStrategy<OidcCallbackResult> {
   if (options.code) {
     // The consumer already holds the code (manual paste / OOB redirect
     // URI); no callback server is opened at all.
@@ -698,7 +700,7 @@ export function buildOidcBrowserAuthorization(
  */
 export function buildPasscodeAuthorization(
   options: McpSsoOptions,
-): ReturnType<typeof staticCodeStrategy> {
+): IAuthorizationStrategy<string> {
   if (options.passcode) {
     return staticCodeStrategy({ payload: options.passcode });
   }
@@ -715,7 +717,7 @@ export function buildPasscodeAuthorization(
  */
 export function buildSamlAuthorization(
   options: McpSsoOptions,
-): ReturnType<typeof staticCodeStrategy> {
+): IAuthorizationStrategy<string> {
   if (options.assertion) {
     // The consumer already holds the assertion; nothing is opened or asked.
     return staticCodeStrategy({

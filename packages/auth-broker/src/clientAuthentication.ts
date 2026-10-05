@@ -55,19 +55,25 @@ export type ClientAuthenticationStrategy = (
   context: ClientAuthenticationContext,
 ) => Promise<IClientAuthentication>;
 
+const NO_CERTIFICATE = 'the destination has no client certificate';
+const NO_SECRET = 'the destination has no client secret';
+
 /**
- * A shipped factory's refusal: fixed words, the only ones the guard repeats.
- * Module-private, so nothing outside this file can make one.
+ * A shipped factory's refusal. Module-private, so nothing outside this file
+ * can make one — but a consumer composing a factory can catch and alter it,
+ * so the guard reads only `missing` and picks the words itself.
  */
 class ClientUnavailableError extends Error {
-  constructor(readonly words: string) {
-    super(words);
+  constructor(readonly missing: 'certificate' | 'secret') {
+    super(missing === 'certificate' ? NO_CERTIFICATE : NO_SECRET);
     this.name = 'ClientUnavailableError';
   }
 }
 
-const NO_CERTIFICATE = 'the destination has no client certificate';
-const NO_SECRET = 'the destination has no client secret';
+/** The broker's words for auth-providers' CertificateMaterialError, by its flags. */
+const CERTIFICATE_INCOMPLETE = 'the client certificate is incomplete';
+const CERTIFICATE_EXPIRED = 'the client certificate has expired';
+const CERTIFICATE_UNUSABLE = 'the client certificate could not be used';
 
 /**
  * `tls_client_auth` with the certificate and key the key store holds, against
@@ -83,13 +89,16 @@ export function fromServiceKeyCertificate(): ClientAuthenticationStrategy {
   return async (context) => {
     const certificate = await context.readCertificate();
     if (!certificate) {
-      throw new ClientUnavailableError(NO_CERTIFICATE);
+      throw new ClientUnavailableError('certificate');
     }
     const authentication = tlsClientCertificate({
       material: { cert: certificate.certificate, key: certificate.key },
       endpoint: `${certificate.certUrl.replace(/\/+$/, '')}/oauth/token`,
     });
-    await authentication.tlsMaterial?.();
+    if (typeof authentication.tlsMaterial !== 'function') {
+      throw new ClientUnavailableError('certificate');
+    }
+    await authentication.tlsMaterial();
     return authentication;
   };
 }
@@ -123,7 +132,7 @@ export function fromServiceKeySecret(
   return async (context) => {
     const secret = context.client?.uaaClientSecret;
     if (typeof secret !== 'string' || secret.length === 0) {
-      throw new ClientUnavailableError(NO_SECRET);
+      throw new ClientUnavailableError('secret');
     }
     return clientSecretBasic(secret, { encoding });
   };
@@ -151,15 +160,35 @@ export function clientAuthenticationContext(
   };
 }
 
-/** The fixed words for what a strategy threw: only words this package owns. */
+const FAILED = 'the clientAuthentication strategy failed';
+const REFUSED = 'the clientAuthentication strategy refused';
+
+/**
+ * The fixed words for what a strategy threw. Every word is this module's own:
+ * the thrown value only selects among them, through `instanceof` and flags
+ * compared with `===` — never a message, never its `words`. Classifying may
+ * itself throw (a Proxy, a getter), so it runs in its own try and falls back
+ * to the generic words.
+ */
 function refusalWords(error: unknown): string {
-  if (error instanceof ClientUnavailableError) {
-    return `the clientAuthentication strategy refused: ${error.words}`;
+  try {
+    if (error instanceof ClientUnavailableError) {
+      const missing = error.missing;
+      if (missing === 'certificate') return `${REFUSED}: ${NO_CERTIFICATE}`;
+      if (missing === 'secret') return `${REFUSED}: ${NO_SECRET}`;
+      return FAILED;
+    }
+    if (error instanceof CertificateMaterialError) {
+      if (error.incomplete === true) {
+        return `${REFUSED}: ${CERTIFICATE_INCOMPLETE}`;
+      }
+      if (error.expired === true) return `${REFUSED}: ${CERTIFICATE_EXPIRED}`;
+      return `${REFUSED}: ${CERTIFICATE_UNUSABLE}`;
+    }
+  } catch {
+    // Fall through: the thrown value could not even be classified.
   }
-  if (error instanceof CertificateMaterialError) {
-    return `the clientAuthentication strategy refused: ${error.words.reason}`;
-  }
-  return 'the clientAuthentication strategy failed';
+  return FAILED;
 }
 
 /**
