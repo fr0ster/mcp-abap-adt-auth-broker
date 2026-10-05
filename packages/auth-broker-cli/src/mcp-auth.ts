@@ -29,6 +29,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
+import { asContract } from './contractShape';
 import { type McpAuthOptions, runMcpAuth } from './runMcpAuth';
 import { createWorkDir } from './workDir';
 
@@ -572,11 +573,13 @@ async function main() {
       // --redirect-port lets the strategy bind its own default rather than
       // this CLI pinning a number it doesn't own.
       authorization: (run) =>
-        browserCallbackStrategy({
-          browser: run.browser,
-          port: run.redirectPort,
-          timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
-        }),
+        browserCallbackStrategy(
+          asContract<Parameters<typeof browserCallbackStrategy>[0]>({
+            browser: run.browser,
+            port: run.redirectPort,
+            timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+          }),
+        ),
     });
     // Exit explicitly to close any open handles (e.g., OAuth callback server)
     process.exit(code);

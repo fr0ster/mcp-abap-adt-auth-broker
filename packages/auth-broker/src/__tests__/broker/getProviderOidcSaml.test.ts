@@ -40,6 +40,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { asContract, type WithUndefined } from '../../contractShape';
 import {
   AuthBroker,
   type AuthBrokerConfig,
@@ -136,7 +137,7 @@ function silentLogger(): jest.Mocked<ILogger> {
 /** What a provider put on one request: its bearer token and its cookies. */
 async function presented(
   provider: IAuthProvider,
-): Promise<{ bearer?: string; cookies?: string }> {
+): Promise<{ bearer?: string | undefined; cookies?: string | undefined }> {
   const headers: Record<string, string> = {};
   let cookies: string | undefined;
   const request: IRequestTarget = {
@@ -185,7 +186,7 @@ function everythingIn(error: unknown): string {
 /** The means of an OIDC destination, as a key store states them. */
 function oidcMeans(
   grant: OidcGrant,
-  extra: Partial<IConnectionConfig> = {},
+  extra: WithUndefined<Partial<IConnectionConfig>> = {},
 ): IConnectionConfig {
   const base: IConnectionConfig = {
     authType: 'jwt',
@@ -203,7 +204,7 @@ function oidcMeans(
     base.oidcSubjectToken = SUBJECT_TOKEN;
     base.oidcSubjectTokenType = 'urn:ietf:params:oauth:token-type:access_token';
   }
-  return { ...base, ...extra };
+  return asContract<IConnectionConfig>({ ...base, ...extra });
 }
 
 function oidcClient(

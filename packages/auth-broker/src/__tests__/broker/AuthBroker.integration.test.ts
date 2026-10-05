@@ -23,6 +23,7 @@ import {
   SafeAbapSessionStore,
 } from '@mcp-abap-adt/auth-stores';
 import { AuthBroker } from '../../AuthBroker';
+import { asContract, type WithUndefined } from '../../contractShape';
 import {
   getAbapDestination,
   getExpiredToken,
@@ -41,8 +42,12 @@ import { createTestLogger } from '../helpers/testLogger';
 const INTERACTIVE_LOGIN_TIMEOUT_MS = 290_000;
 
 /** An AuthorizationCodeProvider: since auth-providers 4.2.0 it refreshes on request itself. */
-function authorizationCodeProvider(config: AuthorizationCodeProviderConfig) {
-  return new AuthorizationCodeProvider(config);
+function authorizationCodeProvider(
+  config: WithUndefined<AuthorizationCodeProviderConfig>,
+) {
+  return new AuthorizationCodeProvider(
+    asContract<AuthorizationCodeProviderConfig>(config),
+  );
 }
 
 /** What a headless process's strategy throws instead of opening a browser. */

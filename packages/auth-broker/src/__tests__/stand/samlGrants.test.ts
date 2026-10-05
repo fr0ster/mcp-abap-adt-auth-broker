@@ -249,7 +249,7 @@ async function loggedInToUaa(cookies: string | undefined): Promise<boolean> {
 
 async function presented(
   provider: IAuthProvider,
-): Promise<{ bearer?: string; cookies?: string }> {
+): Promise<{ bearer?: string | undefined; cookies?: string | undefined }> {
   let bearer: string | undefined;
   let cookies: string | undefined;
   const request: IRequestTarget = {
@@ -364,7 +364,7 @@ describeWhere(
         {
           ...samlMeans(webSsoAcs),
           grantType: 'saml2_pure',
-          serviceUrl: UAA_URL,
+          serviceUrl: UAA_URL!,
         },
         {
           authorization: (_d, grant) => {

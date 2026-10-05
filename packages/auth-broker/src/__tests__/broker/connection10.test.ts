@@ -57,7 +57,7 @@ const quiet = {
 interface Seen {
   method: string;
   path: string;
-  bearer?: string;
+  bearer?: string | undefined;
   status: number;
 }
 

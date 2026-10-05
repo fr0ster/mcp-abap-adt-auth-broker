@@ -27,13 +27,13 @@ const MAX_DELAY_MS = 60_000;
 
 interface Queue<T> {
   /** The result waiting to be written; undefined once written. */
-  pending?: T;
+  pending?: T | undefined;
   /** The last attempt, settled or not: the next one runs after it. */
   tail: Promise<void>;
   /** Consecutive failures since the last write that landed. */
   failures: number;
   lastError?: unknown;
-  timer?: NodeJS.Timeout;
+  timer?: NodeJS.Timeout | undefined;
 }
 
 /** A thrown value's class, for a log line: never its message. */

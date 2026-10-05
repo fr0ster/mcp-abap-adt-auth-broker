@@ -16,7 +16,7 @@ import type { TLSSocket } from 'node:tls';
 export interface RecordedRequest {
   path: string;
   form: Record<string, string>;
-  authorization?: string;
+  authorization?: string | undefined;
   /** The subject CN of the client certificate presented (`tls` only). */
   clientCertificate?: string;
 }

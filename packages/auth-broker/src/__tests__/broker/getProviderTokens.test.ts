@@ -210,7 +210,7 @@ function brokerFor(
     auth?: IAuthorizationConfig | null;
     strategy?: IAuthorizationStrategy<string>;
     withAuthorization?: boolean;
-    logger?: ILogger;
+    logger?: ILogger | undefined;
   } = {},
 ) {
   const sessions = sessionStore(options.session ?? null);
@@ -884,7 +884,7 @@ describe('persistence through onTokens', () => {
       const provider = await broker.getProvider(D);
       store.saveSession.mockRejectedValueOnce(new StoreDiskError('disk full'));
       // Only the timers started while the failed write is handled.
-      const timers: { timer: NodeJS.Timeout; ms?: number }[] = [];
+      const timers: { timer: NodeJS.Timeout; ms?: number | undefined }[] = [];
       const realSetTimeout = global.setTimeout;
       const spy = jest.spyOn(global, 'setTimeout').mockImplementation(((
         fn: () => void,

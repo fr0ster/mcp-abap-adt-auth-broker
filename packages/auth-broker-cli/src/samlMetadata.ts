@@ -19,17 +19,17 @@ import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 
 export interface IdpMetadata {
-  entityId?: string;
+  entityId?: string | undefined;
   /** Base64 DER, one per signing key (several during a key rotation). */
   certificates: string[];
   /** The SSO endpoint for the HTTP-Redirect binding, else HTTP-POST. */
-  ssoUrl?: string;
+  ssoUrl?: string | undefined;
 }
 
 export interface SpMetadata {
-  entityId?: string;
+  entityId?: string | undefined;
   /** The ACS whose Location is `/oauth/token/alias/…` (the bearer endpoint). */
-  bearerAcsUrl?: string;
+  bearerAcsUrl?: string | undefined;
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -58,7 +58,7 @@ function attribute(tag: string, name: string): string | undefined {
 
 /** One `EntityDescriptor`: its entityID and its inner XML. */
 interface Entity {
-  entityId?: string;
+  entityId?: string | undefined;
   body: string;
 }
 
@@ -205,18 +205,18 @@ export function readSpMetadata(xml: string, spEntityId?: string): SpMetadata {
 
 /** The fields `applySamlMetadata` may fill. */
 export interface SamlMetadataTarget {
-  protocol?: string;
-  flow?: string;
-  uaaUrl?: string;
-  samlMetadataPath?: string;
-  idpMetadata?: string;
-  idpEntityId?: string;
-  idpCertificates?: string[];
-  idpCertificateFiles?: string[];
-  idpSsoUrl?: string;
-  spEntityId?: string;
-  acsUrl?: string;
-  tokenEndpoint?: string;
+  protocol?: string | undefined;
+  flow?: string | undefined;
+  uaaUrl?: string | undefined;
+  samlMetadataPath?: string | undefined;
+  idpMetadata?: string | undefined;
+  idpEntityId?: string | undefined;
+  idpCertificates?: string[] | undefined;
+  idpCertificateFiles?: string[] | undefined;
+  idpSsoUrl?: string | undefined;
+  spEntityId?: string | undefined;
+  acsUrl?: string | undefined;
+  tokenEndpoint?: string | undefined;
 }
 
 /**

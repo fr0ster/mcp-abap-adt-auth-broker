@@ -25,12 +25,12 @@ import {
 /** The client authentication flags, as given. */
 export interface ClientAuthFlags {
   /** `--client-auth`: `certificate` or `secret`; absent, the client secret as 2.0.0. */
-  clientAuth?: string;
+  clientAuth?: string | undefined;
   /** `--basic-encoding`: required with `secret`, nowhere else. */
-  basicEncoding?: string;
+  basicEncoding?: string | undefined;
   /** `--cert-path` / `--key-path`: required with `certificate`, nowhere else. */
-  certPath?: string;
-  keyPath?: string;
+  certPath?: string | undefined;
+  keyPath?: string | undefined;
 }
 
 /** The certificate files `--client-auth certificate` names, as absolute paths. */

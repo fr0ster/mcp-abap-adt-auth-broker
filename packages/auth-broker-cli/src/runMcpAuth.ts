@@ -22,6 +22,7 @@ import * as path from 'node:path';
 import { AuthBroker, type IServiceKeyStore } from '@mcp-abap-adt/auth-broker';
 import {
   AuthorizationCodeProvider,
+  type AuthorizationCodeProviderConfig,
   ClientCredentialsProvider,
   DEFAULT_CALLBACK_PORT,
   type staticCodeStrategy,
@@ -39,6 +40,7 @@ import {
   present,
   serviceKeyStoreFor,
 } from './clientAuthentication';
+import { asContract } from './contractShape';
 import {
   completeMeans,
   flushed,
@@ -52,27 +54,27 @@ import {
 export type AuthorizationStrategy = ReturnType<typeof staticCodeStrategy>;
 
 export interface McpAuthOptions {
-  serviceKeyPath?: string; // Optional if env file is provided
-  envFilePath?: string;
+  serviceKeyPath?: string | undefined; // Optional if env file is provided
+  envFilePath?: string | undefined;
   outputFile: string;
   authType: 'abap' | 'xsuaa';
   browser: string; // Browser for authorization_code flow (default: 'auto')
   credential: boolean; // Use client_credentials instead of authorization_code
   format: 'json' | 'env';
-  serviceUrl?: string;
+  serviceUrl?: string | undefined;
   // The callback port is the provider's own choice (`auth-providers`'
   // DEFAULT_CALLBACK_PORT); this only overrides it when the user asks.
-  redirectPort?: number;
+  redirectPort?: number | undefined;
   /**
    * How the client authenticates (`--client-auth`). Absent: the client
    * secret in the token request, as 2.0.0.
    */
-  clientAuth?: 'certificate' | 'secret';
+  clientAuth?: 'certificate' | 'secret' | undefined;
   /** `--basic-encoding`: required with `clientAuth: 'secret'`, nowhere else. */
-  basicEncoding?: 'raw' | 'form';
+  basicEncoding?: 'raw' | 'form' | undefined;
   /** `--cert-path` / `--key-path`: required with `clientAuth: 'certificate'`. */
-  certPath?: string;
-  keyPath?: string;
+  certPath?: string | undefined;
+  keyPath?: string | undefined;
 }
 
 export interface McpAuthContext {
@@ -421,11 +423,13 @@ export async function runMcpAuth(
         };
         return options.credential
           ? new ClientCredentialsProvider(authenticated)
-          : new AuthorizationCodeProvider({
-              ...authenticated,
-              refreshToken: stated.refreshToken,
-              authorization: authorization(options),
-            });
+          : new AuthorizationCodeProvider(
+              asContract<AuthorizationCodeProviderConfig>({
+                ...authenticated,
+                refreshToken: stated.refreshToken,
+                authorization: authorization(options),
+              }),
+            );
       }
       if (!auth) {
         throw new Error(`Missing authorization config for ${destination}`);
@@ -436,13 +440,15 @@ export async function runMcpAuth(
             clientId: auth.uaaClientId,
             clientSecret: auth.uaaClientSecret,
           })
-        : new AuthorizationCodeProvider({
-            uaaUrl: auth.uaaUrl,
-            clientId: auth.uaaClientId,
-            clientSecret: auth.uaaClientSecret,
-            refreshToken: auth.refreshToken,
-            authorization: authorization(options),
-          });
+        : new AuthorizationCodeProvider(
+            asContract<AuthorizationCodeProviderConfig>({
+              uaaUrl: auth.uaaUrl,
+              clientId: auth.uaaClientId,
+              clientSecret: auth.uaaClientSecret,
+              refreshToken: auth.refreshToken,
+              authorization: authorization(options),
+            }),
+          );
     },
   });
 
