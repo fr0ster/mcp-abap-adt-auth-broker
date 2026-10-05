@@ -44,6 +44,7 @@
     "build": "tsc -b tsconfig.build.json",
     "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
     "test:live": "cross-env NODE_OPTIONS=--experimental-vm-modules jest -c jest.live.config.js",
+    "test:live:x509": "tests/live/x509/run.sh",
     "test:stand": "tests/stand/run.sh",
     "stand:up": "tests/stand/up.sh",
     "stand:down": "tests/stand/down.sh",

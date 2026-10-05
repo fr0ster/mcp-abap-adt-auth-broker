@@ -16,6 +16,7 @@
     "test": "npm run test --workspaces --if-present",
     "test:check": "npm run test:check --workspaces",
     "test:live": "npm run test:live -w @mcp-abap-adt/auth-broker --",
+    "test:live:x509": "npm run test:live:x509 -w @mcp-abap-adt/auth-broker --",
     "test:stand": "npm run test:stand -w @mcp-abap-adt/auth-broker --",
     "stand:up": "npm run stand:up -w @mcp-abap-adt/auth-broker",
     "stand:down": "npm run stand:down -w @mcp-abap-adt/auth-broker",
