@@ -8,6 +8,10 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import {
+  AuthBroker,
+  fromServiceKeyCertificate,
+} from '@mcp-abap-adt/auth-broker';
 import { staticCodeStrategy } from '@mcp-abap-adt/auth-providers';
 import {
   AbapSessionStore,
@@ -16,6 +20,18 @@ import {
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
 import { runGenerateEnv } from '../generateEnv';
+import {
+  CLIENT_CN,
+  CLIENT_CRT,
+  CLIENT_CRT_PATH,
+  CLIENT_KEY,
+  CLIENT_KEY_PATH,
+  PEM,
+  pemFilesUnder,
+  startCertServer,
+  trustCertServer,
+} from './helpers/certificates';
+import { readEnvKeys } from './helpers/destinationFiles';
 import {
   jwtName,
   type LocalServer,
@@ -262,5 +278,523 @@ describe('generate-env', () => {
       expect(after).toContain('SAP_GRANT_TYPE=client_credentials');
       expect(after).not.toContain('old-password');
     });
+  });
+});
+
+// --- client authentication: --client-auth certificate | secret -------------
+
+describe('generate-env --client-auth', () => {
+  let certServer: LocalServer;
+  let sessionDir: string;
+
+  // The HTTPS stand-in for `certurl` is trusted inside this process alone.
+  trustCertServer();
+
+  beforeEach(async () => {
+    certServer = await startCertServer();
+    sessionDir = path.join(root, 'sessions');
+  });
+
+  afterEach(async () => {
+    await certServer.close();
+  });
+
+  const SECRET = 'key-secret';
+
+  /**
+   * An XSUAA key carrying a client certificate (`credential-type: x509`);
+   * `mixed` adds a client secret.
+   */
+  function x509Key({ mixed = false }: { mixed?: boolean } = {}): string {
+    const file = path.join(root, 'mcp.json');
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        url: `${server.url}/authentication`,
+        clientid: 'key-client',
+        ...(mixed ? { clientsecret: SECRET } : {}),
+        certificate: CLIENT_CRT,
+        key: CLIENT_KEY,
+        certurl: certServer.url,
+        'credential-type': 'x509',
+      }),
+    );
+    return file;
+  }
+
+  /** An ABAP key whose `uaa` client is an x509 one. */
+  function abapX509Key(): string {
+    const file = path.join(root, 'TRIAL.json');
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        uaa: {
+          url: server.url,
+          clientid: 'key-client',
+          certificate: CLIENT_CRT,
+          key: CLIENT_KEY,
+          certurl: certServer.url,
+        },
+        abap: { url: 'https://abap.example.com' },
+      }),
+    );
+    return file;
+  }
+
+  const certificate = [
+    '--client-auth',
+    'certificate',
+    '--cert-path',
+    CLIENT_CRT_PATH,
+    '--key-path',
+    CLIENT_KEY_PATH,
+  ];
+
+  /** What the run printed, every line. */
+  function printed(): string {
+    return [console.log, console.error]
+      .flatMap((fn) => (fn as jest.Mock).mock.calls.flat())
+      .map(String)
+      .join('\n');
+  }
+
+  /** No PEM in what the run wrote, kept, or printed. */
+  function expectNoPem() {
+    expect(pemFilesUnder(workDir, sessionDir)).toEqual([]);
+    expect(printed()).not.toContain(PEM);
+  }
+
+  describe('the flags, checked before anything is written', () => {
+    async function refused(args: string[], words: string) {
+      const session = path.join(sessionDir, 'mcp.env');
+      await expect(
+        runGenerateEnv(
+          ['mcp', x509Key({ mixed: true }), session, ...args],
+          noBrowser,
+        ),
+      ).resolves.toBe(1);
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining(words),
+      );
+      expect(fs.readdirSync(workDir)).toEqual([]);
+      expect(fs.existsSync(sessionDir)).toBe(false);
+      expect(server.requests).toHaveLength(0);
+      expect(certServer.requests).toHaveLength(0);
+    }
+
+    const cc = ['--grant', 'client_credentials'];
+
+    it('an unknown --client-auth is refused naming it', async () => {
+      await refused(
+        [...cc, '--client-auth', 'none'],
+        "--client-auth must be 'certificate' or 'secret'",
+      );
+    });
+
+    it('a flag with no value is refused naming it', async () => {
+      await refused([...cc, '--client-auth'], '--client-auth needs a value');
+    });
+
+    it('secret without --basic-encoding names it', async () => {
+      await refused(
+        [...cc, '--client-auth', 'secret'],
+        '--client-auth secret needs --basic-encoding raw|form',
+      );
+    });
+
+    it('--basic-encoding without --client-auth secret is refused', async () => {
+      await refused(
+        [...cc, ...certificate, '--basic-encoding', 'raw'],
+        '--basic-encoding applies only to --client-auth secret',
+      );
+    });
+
+    it('certificate without --cert-path names it', async () => {
+      await refused(
+        [...cc, '--client-auth', 'certificate', '--key-path', CLIENT_KEY_PATH],
+        '--client-auth certificate needs --cert-path',
+      );
+    });
+
+    it('certificate without --key-path names it', async () => {
+      await refused(
+        [...cc, '--client-auth', 'certificate', '--cert-path', CLIENT_CRT_PATH],
+        '--client-auth certificate needs --key-path',
+      );
+    });
+
+    it('--cert-path / --key-path without --client-auth certificate are refused', async () => {
+      await refused(
+        [
+          ...cc,
+          '--client-auth',
+          'secret',
+          '--basic-encoding',
+          'raw',
+          '--key-path',
+          CLIENT_KEY_PATH,
+        ],
+        '--key-path apply only to --client-auth certificate',
+      );
+    });
+
+    it('a --cert-path with no file is refused naming the flag', async () => {
+      const missing = path.join(root, 'missing.crt');
+      await refused(
+        [...cc, ...certificate.slice(0, 3), missing, ...certificate.slice(4)],
+        `--cert-path: no file at ${missing}`,
+      );
+    });
+
+    it('a --key-path with no file is refused naming the flag', async () => {
+      const missing = path.join(root, 'missing.key');
+      await refused(
+        [...cc, ...certificate.slice(0, 5), missing],
+        `--key-path: no file at ${missing}`,
+      );
+    });
+
+    it('a relative --key-path with no file is refused at its absolute path', async () => {
+      await refused(
+        [...cc, ...certificate.slice(0, 5), 'missing.key'],
+        `--key-path: no file at ${path.resolve('missing.key')}`,
+      );
+    });
+  });
+
+  it.each([
+    ['', false],
+    [' wrapped in `credentials`', true],
+  ])(
+    'an x509 key%s with no flag names --client-auth: nothing written',
+    async (_, wrapped) => {
+      const session = path.join(sessionDir, 'mcp.env');
+      const key = x509Key();
+      if (wrapped) {
+        const credentials = JSON.parse(fs.readFileSync(key, 'utf8'));
+        fs.writeFileSync(key, JSON.stringify({ credentials }));
+      }
+      await expect(
+        runGenerateEnv(
+          ['mcp', key, session, '--grant', 'client_credentials'],
+          noBrowser,
+        ),
+      ).resolves.toBe(1);
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'carries a client certificate and no client secret: state how the client authenticates with --client-auth',
+        ),
+      );
+      expect(fs.readdirSync(workDir)).toEqual([]);
+      expect(fs.existsSync(sessionDir)).toBe(false);
+      expect(server.requests).toHaveLength(0);
+      expect(certServer.requests).toHaveLength(0);
+    },
+  );
+
+  describe('certificate', () => {
+    it('client_credentials at certurl with the certificate; the .env holds absolute paths and certurl, no secret, no PEM', async () => {
+      certServer.answer('/oauth/token', tokenAnswer('x509', false));
+      const relative = (file: string) => path.relative(process.cwd(), file);
+      const session = path.join(sessionDir, 'mcp.env');
+      await expect(
+        runGenerateEnv(
+          [
+            'mcp',
+            x509Key({ mixed: true }),
+            session,
+            '--grant',
+            'client_credentials',
+            '--client-auth',
+            'certificate',
+            '--cert-path',
+            relative(CLIENT_CRT_PATH),
+            '--key-path',
+            relative(CLIENT_KEY_PATH),
+          ],
+          noBrowser,
+        ),
+      ).resolves.toBe(0);
+
+      expect(server.requests).toHaveLength(0);
+      expect(certServer.requests).toHaveLength(1);
+      const [request] = certServer.requests;
+      expect(request.path).toBe('/oauth/token');
+      expect(request.form.grant_type).toBe('client_credentials');
+      expect(request.form.client_id).toBe('key-client');
+      expect(request.form).not.toHaveProperty('client_secret');
+      expect(request.authorization).toBeUndefined();
+      expect(request.clientCertificate).toBe(CLIENT_CN);
+
+      const keys = readEnvKeys(session);
+      expect(keys.XSUAA_AUTH_TYPE).toBe('jwt');
+      expect(keys.XSUAA_GRANT_TYPE).toBe('client_credentials');
+      expect(keys.XSUAA_UAA_URL).toBe(`${server.url}/authentication`);
+      expect(keys.XSUAA_UAA_CLIENT_ID).toBe('key-client');
+      expect(keys.XSUAA_UAA_CLIENT_CERT_PATH).toBe(CLIENT_CRT_PATH);
+      expect(keys.XSUAA_UAA_CLIENT_KEY_PATH).toBe(CLIENT_KEY_PATH);
+      expect(keys.XSUAA_UAA_CERT_URL).toBe(certServer.url);
+      expect(keys).not.toHaveProperty('XSUAA_UAA_CLIENT_SECRET');
+      expect(Object.keys(keys).filter((key) => key.startsWith('SAP_'))).toEqual(
+        [],
+      );
+      expect(jwtName(keys.XSUAA_JWT_TOKEN)).toBe('x509-access-1');
+      expectNoPem();
+    });
+
+    it('an ABAP key: the SAP_UAA_* certificate variables and the service URL; a fresh broker over the .env, from its final location, presents the stored token', async () => {
+      certServer.answer('/oauth/token', tokenAnswer('x509'));
+      const session = path.join(sessionDir, 'TRIAL.env');
+      await expect(
+        runGenerateEnv(
+          [
+            'TRIAL',
+            abapX509Key(),
+            session,
+            '--grant',
+            'authorization_code',
+            ...certificate,
+          ],
+          noBrowser,
+        ),
+      ).resolves.toBe(0);
+      expect(certServer.requests).toHaveLength(1);
+      expect(certServer.requests[0].form).toEqual(
+        expect.objectContaining({
+          grant_type: 'authorization_code',
+          code: 'the-code',
+        }),
+      );
+      expect(certServer.requests[0].clientCertificate).toBe(CLIENT_CN);
+
+      const keys = readEnvKeys(session);
+      expect(keys.SAP_URL).toBe('https://abap.example.com');
+      expect(keys.SAP_GRANT_TYPE).toBe('authorization_code');
+      expect(keys.SAP_UAA_URL).toBe(server.url);
+      expect(keys.SAP_UAA_CLIENT_ID).toBe('key-client');
+      expect(keys.SAP_UAA_CLIENT_CERT_PATH).toBe(CLIENT_CRT_PATH);
+      expect(keys.SAP_UAA_CLIENT_KEY_PATH).toBe(CLIENT_KEY_PATH);
+      expect(keys.SAP_UAA_CERT_URL).toBe(certServer.url);
+      expect(keys).not.toHaveProperty('SAP_UAA_CLIENT_SECRET');
+      expect(
+        Object.keys(keys).filter((key) => key.startsWith('XSUAA_')),
+      ).toEqual([]);
+      expectNoPem();
+
+      // The run's work directory is gone; the .env alone, where it was written.
+      fs.rmSync(workDir, { recursive: true, force: true });
+      const broker = new AuthBroker({
+        sessionStore: new AbapSessionStore(sessionDir),
+        serviceKeyStore: new EnvDestinationStore(sessionDir),
+        clientAuthentication: fromServiceKeyCertificate(),
+        authorization: () => ({
+          authorize: async () => {
+            throw new Error('no login expected');
+          },
+        }),
+      });
+      const provider = (await broker.getProvider('TRIAL')) as unknown as {
+        getTokens: () => Promise<{ authorizationToken: string }>;
+      };
+      const reused = await provider.getTokens();
+      expect(jwtName(reused.authorizationToken)).toBe('x509-access-1');
+      expect(certServer.requests).toHaveLength(1);
+    });
+
+    it("an incomplete certificate client is refused in the store's words — fields named, no PEM — nothing written", async () => {
+      const key = x509Key();
+      const { certurl: _, ...incomplete } = JSON.parse(
+        fs.readFileSync(key, 'utf8'),
+      );
+      fs.writeFileSync(key, JSON.stringify(incomplete));
+      await expect(
+        runGenerateEnv(
+          [
+            'mcp',
+            key,
+            path.join(sessionDir, 'mcp.env'),
+            '--grant',
+            'client_credentials',
+            ...certificate,
+          ],
+          noBrowser,
+        ),
+      ).resolves.toBe(1);
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('is incomplete: certurl missing'),
+      );
+      expect(printed()).not.toContain(PEM);
+      expect(fs.readdirSync(workDir)).toEqual([]);
+      expect(fs.existsSync(sessionDir)).toBe(false);
+      expect(certServer.requests).toHaveLength(0);
+    });
+
+    it('a key with no certificate client is refused, nothing written', async () => {
+      const session = path.join(sessionDir, 'mcp.env');
+      await expect(
+        runGenerateEnv(
+          [
+            'mcp',
+            xsuaaKey(),
+            session,
+            '--grant',
+            'client_credentials',
+            ...certificate,
+          ],
+          noBrowser,
+        ),
+      ).resolves.toBe(1);
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'carries no client certificate (url, clientid, certificate, key, certurl): --client-auth certificate needs one',
+        ),
+      );
+      expect(fs.readdirSync(workDir)).toEqual([]);
+      expect(fs.existsSync(sessionDir)).toBe(false);
+      expect(server.requests).toHaveLength(0);
+    });
+  });
+
+  describe('secret', () => {
+    // `+` and `%` read differently raw and form-encoded (RFC 6749 §2.3.1).
+    const RESERVED = 'se+cr%et';
+
+    it.each([
+      ['raw', `key-client:${RESERVED}`],
+      ['form', 'key-client:se%2Bcr%25et'],
+    ])(
+      'a mixed key with --basic-encoding %s: the secret in a Basic header so encoded; the .env holds the secret and no certificate',
+      async (encoding, credential) => {
+        server.answer('/authentication/oauth/token', tokenAnswer('cc', false));
+        const key = x509Key({ mixed: true });
+        const json = JSON.parse(fs.readFileSync(key, 'utf8'));
+        fs.writeFileSync(
+          key,
+          JSON.stringify({ ...json, clientsecret: RESERVED }),
+        );
+        const session = path.join(sessionDir, 'mcp.env');
+        await expect(
+          runGenerateEnv(
+            [
+              'mcp',
+              key,
+              session,
+              '--grant',
+              'client_credentials',
+              '--client-auth',
+              'secret',
+              '--basic-encoding',
+              encoding,
+            ],
+            noBrowser,
+          ),
+        ).resolves.toBe(0);
+        expect(certServer.requests).toHaveLength(0);
+        const [request] = server.requests;
+        expect(request.form.grant_type).toBe('client_credentials');
+        expect(request.form).not.toHaveProperty('client_secret');
+        expect(request.authorization).toBe(
+          `Basic ${Buffer.from(credential).toString('base64')}`,
+        );
+        const keys = readEnvKeys(session);
+        expect(keys.XSUAA_UAA_CLIENT_SECRET).toBe(RESERVED);
+        expect(keys).not.toHaveProperty('XSUAA_UAA_CLIENT_CERT_PATH');
+        expect(keys).not.toHaveProperty('XSUAA_UAA_CLIENT_KEY_PATH');
+        expect(keys).not.toHaveProperty('XSUAA_UAA_CERT_URL');
+        expectNoPem();
+      },
+    );
+
+    it('an x509 key without a secret is refused naming --client-auth certificate, nothing written', async () => {
+      const session = path.join(sessionDir, 'mcp.env');
+      await expect(
+        runGenerateEnv(
+          [
+            'mcp',
+            x509Key(),
+            session,
+            '--grant',
+            'client_credentials',
+            '--client-auth',
+            'secret',
+            '--basic-encoding',
+            'raw',
+          ],
+          noBrowser,
+        ),
+      ).resolves.toBe(1);
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'a client certificate needs --client-auth certificate',
+        ),
+      );
+      expect(fs.readdirSync(workDir)).toEqual([]);
+      expect(fs.existsSync(sessionDir)).toBe(false);
+      expect(server.requests).toHaveLength(0);
+    });
+  });
+
+  describe('a failed login leaves an existing destination file untouched, and no PEM anywhere', () => {
+    const before = [
+      'XSUAA_UAA_URL=https://old.example.com',
+      'XSUAA_UAA_CLIENT_ID=old-client',
+      "XSUAA_UAA_CLIENT_SECRET='old-secret'",
+      'XSUAA_JWT_TOKEN=old-token',
+      '',
+    ].join('\n');
+
+    const flags: Record<string, string[]> = {
+      'no flag': [],
+      secret: ['--client-auth', 'secret', '--basic-encoding', 'raw'],
+      certificate,
+    };
+    for (const [flag, stated] of Object.entries(flags)) {
+      for (const outcome of ['granted', 'refused'] as const) {
+        it(`a mixed key, ${flag}, ${outcome}`, async () => {
+          for (const target of [server, certServer]) {
+            target.answer(
+              target === server
+                ? '/authentication/oauth/token'
+                : '/oauth/token',
+              outcome === 'granted'
+                ? tokenAnswer('t', false)
+                : () => ({ status: 401, body: { error: 'invalid_client' } }),
+            );
+          }
+          const session = path.join(sessionDir, 'mcp.env');
+          fs.mkdirSync(sessionDir, { recursive: true });
+          fs.writeFileSync(session, before);
+          await expect(
+            runGenerateEnv(
+              [
+                'mcp',
+                x509Key({ mixed: true }),
+                session,
+                '--grant',
+                'client_credentials',
+                ...stated,
+              ],
+              noBrowser,
+            ),
+          ).resolves.toBe(outcome === 'granted' ? 0 : 1);
+          expect(server.requests.length + certServer.requests.length).toBe(1);
+          if (outcome === 'refused') {
+            expect(fs.readFileSync(session, 'utf8')).toBe(before);
+          } else {
+            // One kind of client: the certificate replaces the old secret.
+            const keys = readEnvKeys(session);
+            expect(keys.XSUAA_UAA_CLIENT_ID).toBe('key-client');
+            if (flag === 'certificate') {
+              expect(keys).not.toHaveProperty('XSUAA_UAA_CLIENT_SECRET');
+              expect(keys.XSUAA_UAA_CLIENT_CERT_PATH).toBe(CLIENT_CRT_PATH);
+            } else {
+              expect(keys.XSUAA_UAA_CLIENT_SECRET).toBe(SECRET);
+              expect(keys).not.toHaveProperty('XSUAA_UAA_CLIENT_CERT_PATH');
+            }
+          }
+          expectNoPem();
+        });
+      }
+    }
   });
 });

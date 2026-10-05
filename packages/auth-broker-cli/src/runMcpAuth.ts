@@ -19,13 +19,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import {
-  AuthBroker,
-  type ClientAuthenticationStrategy,
-  fromServiceKeyCertificate,
-  fromServiceKeySecret,
-  type IServiceKeyStore,
-} from '@mcp-abap-adt/auth-broker';
+import { AuthBroker, type IServiceKeyStore } from '@mcp-abap-adt/auth-broker';
 import {
   AuthorizationCodeProvider,
   ClientCredentialsProvider,
@@ -37,6 +31,13 @@ import {
   JsonFileHandler,
   XsuaaServiceKeyStore,
 } from '@mcp-abap-adt/auth-stores';
+import {
+  carriesCertificate,
+  certificateNeedsFlag,
+  clientAuthenticationStrategy,
+  clientAuthFlags,
+  noCertificateClient,
+} from './clientAuthentication';
 import {
   completeMeans,
   flushed,
@@ -87,78 +88,6 @@ export interface McpAuthContext {
 /** A value present as a non-empty string. */
 function present(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
-}
-
-/**
- * The client authentication flags, checked before anything is written: each
- * flag only with the choice it belongs to, every flag that choice needs, and
- * the certificate files present — resolved to absolute paths, so the
- * destination works from wherever it is copied. A refusal names the flag.
- */
-function clientAuthFlags(
-  options: McpAuthOptions,
-): { certPath: string; keyPath: string } | null {
-  const { clientAuth } = options;
-  if (
-    clientAuth !== undefined &&
-    clientAuth !== 'certificate' &&
-    clientAuth !== 'secret'
-  ) {
-    throw new Error(`--client-auth must be 'certificate' or 'secret'`);
-  }
-  if (clientAuth === 'secret') {
-    if (options.basicEncoding !== 'raw' && options.basicEncoding !== 'form') {
-      throw new Error(
-        '--client-auth secret needs --basic-encoding raw|form: how the client id and secret are encoded depends on the server (XSUAA: raw)',
-      );
-    }
-  } else if (options.basicEncoding !== undefined) {
-    throw new Error('--basic-encoding applies only to --client-auth secret');
-  }
-  const certificateFlags = [
-    ['--cert-path', options.certPath],
-    ['--key-path', options.keyPath],
-  ] as const;
-  if (clientAuth !== 'certificate') {
-    const stray = certificateFlags.filter(([, value]) => value !== undefined);
-    if (stray.length > 0) {
-      throw new Error(
-        `${stray.map(([flag]) => flag).join(' and ')} apply only to --client-auth certificate`,
-      );
-    }
-    return null;
-  }
-  const missing = certificateFlags.filter(([, value]) => !present(value));
-  if (missing.length > 0) {
-    throw new Error(
-      `--client-auth certificate needs ${missing.map(([flag]) => flag).join(' and ')}`,
-    );
-  }
-  const [certPath, keyPath] = certificateFlags.map(([flag, value]) => {
-    const resolved = path.resolve(value as string);
-    if (!fs.statSync(resolved, { throwIfNoEntry: false })?.isFile()) {
-      throw new Error(`${flag}: no file at ${resolved}`);
-    }
-    return resolved;
-  });
-  return { certPath, keyPath };
-}
-
-/**
- * Whether a service key carries a client certificate or a private key, in
- * part or whole, flat or under `uaa` — PEM the CLI must never copy. Only the
- * fields' presence is read; which client authenticates is the user's flag.
- */
-function carriesCertificate(json: unknown): boolean {
-  if (typeof json !== 'object' || json === null) return false;
-  const uaa = (json as Record<string, unknown>).uaa;
-  return [json, uaa].some(
-    (part) =>
-      typeof part === 'object' &&
-      part !== null &&
-      ((part as Record<string, unknown>).certificate !== undefined ||
-        (part as Record<string, unknown>).key !== undefined),
-  );
 }
 
 /**
@@ -328,9 +257,7 @@ export async function runMcpAuth(
       // For XSUAA, serviceUrl is optional and may not exist in the key.
     }
     if (!options.clientAuth && !keyClient && certificateKey) {
-      throw new Error(
-        `The service key of ${destination} carries a client certificate and no client secret: state how the client authenticates with --client-auth certificate --cert-path <path> --key-path <path>`,
-      );
+      throw new Error(certificateNeedsFlag(destination));
     }
     if (certificateFiles && serviceKeyStore instanceof XsuaaServiceKeyStore) {
       // The store's refusal of an incomplete certificate client names the
@@ -345,9 +272,7 @@ export async function runMcpAuth(
       }
     }
     if (certificateFiles && !keyCertificate) {
-      throw new Error(
-        `The service key of ${destination} carries no client certificate (url, clientid, certificate, key, certurl): --client-auth certificate needs one`,
-      );
+      throw new Error(noCertificateClient(destination));
     }
   }
 
@@ -461,14 +386,7 @@ export async function runMcpAuth(
   }
 
   // The user's choice as the broker's strategy; none without `--client-auth`.
-  let clientAuthentication: ClientAuthenticationStrategy | undefined;
-  if (certificateFiles) {
-    clientAuthentication = fromServiceKeyCertificate();
-  } else if (options.clientAuth === 'secret') {
-    clientAuthentication = fromServiceKeySecret({
-      encoding: options.basicEncoding as 'raw' | 'form',
-    });
-  }
+  const clientAuthentication = clientAuthenticationStrategy(options);
 
   // This command's own provider, built by the broker's factory form from the
   // client the destination states and the refresh token its session holds —

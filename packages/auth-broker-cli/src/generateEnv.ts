@@ -12,6 +12,14 @@
  * the session file only once `flush()` reports the secret stored: a refused or
  * cancelled login, or a secret the store did not take, leaves the file byte
  * for byte as it was.
+ *
+ * How the client authenticates is the user's statement, never inferred from
+ * the key, under the same flags and rules as `mcp-auth`: no `--client-auth`
+ * is the client secret, as 2.0.0; `--client-auth secret --basic-encoding
+ * raw|form` the secret in a Basic header; `--client-auth certificate
+ * --cert-path --key-path` the key's x509 client, whose certificate and key
+ * stay in the user's own files — the destination names them by absolute path
+ * beside `certurl`, never holds their PEM.
  */
 
 import * as fs from 'node:fs';
@@ -21,6 +29,14 @@ import {
   AbapServiceKeyStore,
   XsuaaServiceKeyStore,
 } from '@mcp-abap-adt/auth-stores';
+import {
+  type ClientAuthFlags,
+  carriesCertificate,
+  certificateNeedsFlag,
+  clientAuthenticationStrategy,
+  clientAuthFlags,
+  noCertificateClient,
+} from './clientAuthentication';
 import {
   completeMeans,
   flushed,
@@ -34,7 +50,15 @@ const GRANTS = ['authorization_code', 'client_credentials'] as const;
 export type GenerateEnvGrant = (typeof GRANTS)[number];
 
 export const GENERATE_ENV_USAGE =
-  'Usage: generate-env-from-service-key <destination> [service-key-path] [session-path] --grant <authorization_code|client_credentials>';
+  'Usage: generate-env-from-service-key <destination> [service-key-path] [session-path] --grant <authorization_code|client_credentials> [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]';
+
+/** The client authentication flags and the field each one fills. */
+const CLIENT_AUTH_FLAGS: Record<string, keyof ClientAuthFlags> = {
+  '--client-auth': 'clientAuth',
+  '--basic-encoding': 'basicEncoding',
+  '--cert-path': 'certPath',
+  '--key-path': 'keyPath',
+};
 
 export interface GenerateEnvContext {
   /** The interactive strategy of the authorization code grant, stated by the caller. */
@@ -50,9 +74,18 @@ export async function runGenerateEnv(
 ): Promise<number> {
   const positional: string[] = [];
   let grant: string | undefined;
+  const flags: ClientAuthFlags = {};
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--grant') {
       grant = args[i + 1];
+      i++;
+    } else if (Object.hasOwn(CLIENT_AUTH_FLAGS, args[i])) {
+      if (i + 1 >= args.length) {
+        console.error(`❌ ${args[i]} needs a value`);
+        console.error(GENERATE_ENV_USAGE);
+        return 1;
+      }
+      flags[CLIENT_AUTH_FLAGS[args[i]]] = args[i + 1];
       i++;
     } else {
       positional.push(args[i]);
@@ -69,6 +102,17 @@ export async function runGenerateEnv(
     console.error(
       `❌ --grant is required: ${GRANTS.join(' or ')}. A service key does not say which grant its destination uses.`,
     );
+    console.error(GENERATE_ENV_USAGE);
+    return 1;
+  }
+
+  // Checked before anything is read or written; the certificate files are
+  // resolved to absolute paths, so the destination works from its final place.
+  let certificateFiles: ReturnType<typeof clientAuthFlags>;
+  try {
+    certificateFiles = clientAuthFlags(flags);
+  } catch (error) {
+    console.error(`❌ ${(error as Error).message}`);
     console.error(GENERATE_ENV_USAGE);
     return 1;
   }
@@ -96,14 +140,58 @@ export async function runGenerateEnv(
     fs.readFileSync(resolvedServiceKeyPath, 'utf8'),
   ) as Record<string, unknown>;
   const isXsuaa = !rawServiceKey.uaa;
-  const serviceKeyStore = isXsuaa
-    ? new XsuaaServiceKeyStore(serviceKeyDir)
-    : new AbapServiceKeyStore(serviceKeyDir);
+  // Only XsuaaServiceKeyStore answers a key's certificate client; it reads
+  // `uaa`-nested keys and `abap.url` too.
+  const serviceKeyStore =
+    isXsuaa || certificateFiles
+      ? new XsuaaServiceKeyStore(serviceKeyDir)
+      : new AbapServiceKeyStore(serviceKeyDir);
 
-  const client = await serviceKeyStore.getAuthorizationConfig(destination);
-  if (!client) {
-    console.error(`❌ Missing authorization config for ${destination}`);
-    return 1;
+  // The client the destination states: the key's certificate client — who it
+  // is and where it authenticates, its PEM dropped — or its secret client.
+  let client: {
+    uaaUrl: string;
+    uaaClientId: string;
+    uaaClientSecret?: string;
+    uaaCertUrl?: string;
+  };
+  if (certificateFiles) {
+    let certificateClient: Awaited<
+      ReturnType<XsuaaServiceKeyStore['getClientCertificate']>
+    >;
+    try {
+      certificateClient = await (
+        serviceKeyStore as XsuaaServiceKeyStore
+      ).getClientCertificate(destination);
+    } catch (error) {
+      // The store's refusal names the key's fields, never a value.
+      console.error(`❌ ${(error as Error).message}`);
+      return 1;
+    }
+    if (!certificateClient) {
+      console.error(`❌ ${noCertificateClient(destination)}`);
+      return 1;
+    }
+    client = {
+      uaaUrl: certificateClient.uaaUrl,
+      uaaClientId: certificateClient.clientId,
+      uaaCertUrl: certificateClient.certUrl,
+    };
+  } else {
+    const secretClient =
+      await serviceKeyStore.getAuthorizationConfig(destination);
+    if (!secretClient) {
+      const certificateKey = carriesCertificate(
+        rawServiceKey.credentials ?? rawServiceKey,
+      );
+      console.error(
+        certificateKey && flags.clientAuth === undefined
+          ? `❌ ${certificateNeedsFlag(destination)}`
+          : `❌ Missing authorization config for ${destination}${certificateKey ? ': the service key carries no client secret; a client certificate needs --client-auth certificate' : ''}`,
+      );
+      return 1;
+    }
+    client = secretClient;
   }
   let serviceUrl: string | undefined;
   try {
@@ -120,6 +208,8 @@ export async function runGenerateEnv(
     isXsuaa ? 'xsuaa' : 'abap',
     resolvedSessionPath,
   );
+  // A certificate client is written as its paths and `certurl` — never PEM —
+  // and the store removes the client secret it replaces (and the reverse).
   await files.keyStore.setDestination(
     destination,
     completeMeans({
@@ -128,13 +218,21 @@ export async function runGenerateEnv(
       serviceUrl,
       uaaUrl: client.uaaUrl,
       uaaClientId: client.uaaClientId,
-      uaaClientSecret: client.uaaClientSecret,
+      ...(certificateFiles
+        ? {
+            uaaCertUrl: client.uaaCertUrl,
+            uaaClientCertPath: certificateFiles.certPath,
+            uaaClientKeyPath: certificateFiles.keyPath,
+          }
+        : { uaaClientSecret: client.uaaClientSecret }),
     }),
   );
 
+  // The user's choice as the broker's strategy; none without `--client-auth`.
   const broker = new AuthBroker({
     sessionStore: files.sessionStore,
     serviceKeyStore: files.keyStore,
+    clientAuthentication: clientAuthenticationStrategy(flags),
     authorization: () => authorization(),
   });
 

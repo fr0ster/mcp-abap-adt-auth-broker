@@ -12,7 +12,6 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import * as tls from 'node:tls';
 import {
   AuthBroker,
   fromServiceKeyCertificate,
@@ -25,6 +24,15 @@ import {
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
 import { type McpAuthOptions, runMcpAuth } from '../runMcpAuth';
+import {
+  CLIENT_CRT,
+  CLIENT_CRT_PATH,
+  CLIENT_KEY,
+  CLIENT_KEY_PATH,
+  pemFilesUnder,
+  startCertServer,
+  trustCertServer,
+} from './helpers/certificates';
 import {
   meansKeys,
   readEnvKeys,
@@ -337,51 +345,19 @@ describe('a refused login', () => {
 
 // --- client authentication: --client-auth certificate | secret -------------
 
-const FIXTURES = path.join(__dirname, 'fixtures', 'certificates');
-const CLIENT_CRT_PATH = path.join(FIXTURES, 'client.crt');
-const CLIENT_KEY_PATH = path.join(FIXTURES, 'client.key');
-const CLIENT_CRT = fs.readFileSync(CLIENT_CRT_PATH, 'utf8');
-const CLIENT_KEY = fs.readFileSync(CLIENT_KEY_PATH, 'utf8');
-const PEM = '-----BEGIN';
-
-/** Every file under `dir`, recursively; none when it does not exist. */
-function filesUnder(dir: string): string[] {
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const full = path.join(dir, entry.name);
-    return entry.isDirectory() ? filesUnder(full) : [full];
-  });
-}
-
 /** The files under the work and output directories that hold PEM. */
 function pemCopies(): string[] {
-  return [...filesUnder(workDir), ...filesUnder(outDir)].filter((file) =>
-    fs.readFileSync(file, 'utf8').includes(PEM),
-  );
+  return pemFilesUnder(workDir, outDir);
 }
 
 describe('mcp-auth --client-auth', () => {
   let certServer: LocalServer;
-  let defaultCas: string[];
 
-  beforeAll(() => {
-    // The HTTPS stand-in for `certurl` is trusted inside this process alone.
-    defaultCas = tls.getCACertificates('default');
-    tls.setDefaultCACertificates([
-      ...defaultCas,
-      fs.readFileSync(path.join(FIXTURES, 'server.crt'), 'utf8'),
-    ]);
-  });
-
-  afterAll(() => {
-    tls.setDefaultCACertificates(defaultCas);
-  });
+  // The HTTPS stand-in for `certurl` is trusted inside this process alone.
+  trustCertServer();
 
   beforeEach(async () => {
-    certServer = await startLocalServer({
-      cert: fs.readFileSync(path.join(FIXTURES, 'server.crt'), 'utf8'),
-      key: fs.readFileSync(path.join(FIXTURES, 'server.key'), 'utf8'),
-    });
+    certServer = await startCertServer();
   });
 
   afterEach(async () => {
