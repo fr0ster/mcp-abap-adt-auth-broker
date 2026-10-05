@@ -153,9 +153,12 @@ that shape — the consumer passes one, or composes its own:
 | `fromServiceKeySecret({ encoding })` | `clientSecretBasic(uaaClientSecret, { encoding })` from the secret client. No secret client, or an empty secret, **throws** — fixed words, "the destination has no client secret". `encoding` is required (`'raw'` for XSUAA, measured) |
 
 Both fail closed. A consumer that wants one with the other as its fallback
-writes that itself — e.g. `ctx => fromServiceKeyCertificate()(ctx).catch(() => fromServiceKeySecret({ encoding: 'raw' })(ctx))`
+writes that itself, deciding by what the key holds — e.g.
+`async (ctx) => (await ctx.readCertificate()) ? fromServiceKeyCertificate()(ctx) : fromServiceKeySecret({ encoding: 'raw' })(ctx)`
 — the fallback, and its order, are the consumer's statement, never the
-broker's. Every throw is turned into the guarded `DestinationConfigError`
+broker's. (Amended at the final review: a `catch`-based fallback would send
+the secret for an expired, incomplete or unreadable certificate too —
+contrary to the goal's invariant 2.) Every throw is turned into the guarded `DestinationConfigError`
 (3.2).
 
 ### 3.2 `uaaProvider`

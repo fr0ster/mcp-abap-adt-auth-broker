@@ -38,7 +38,8 @@ exactly as by 4.0.0, and nothing certificate-related is read. Released with
   answers. **`fromServiceKeySecret({ encoding: 'raw' | 'form' })`** —
   `clientSecretBasic` with the secret client; `encoding` required (`raw` for
   XSUAA, measured). Each fails closed; a fallback is the consumer's
-  composition.
+  composition, decided by what the key holds (`readCertificate()`), never by
+  catching a refusal.
 - **The certificate client** is read through the optional
   `IServiceKeyStore.getClientCertificate` (`@mcp-abap-adt/interfaces-auth-broker`
   1.2.0) — auth-stores 3.3.0 answers it for an x509 XSUAA key and for an
@@ -50,8 +51,9 @@ exactly as by 4.0.0, and nothing certificate-related is read. Released with
 - **The token API factory's fourth argument, `TokenProviderClient`** —
   beside a strategy, for a grant that authenticates a client: the strategy's
   `clientAuthentication`, the client identity (`uaaUrl`, `clientId`) and the
-  stored `refreshToken` when the session is bound here. Never a certificate,
-  key or secret. Additive: a 4.0.0 factory keeps working.
+  stored `refreshToken` when the session is bound here — taken only from the
+  session read whose binding was checked, never from a client's own read.
+  Never a certificate, key or secret. Additive: a 4.0.0 factory keeps working.
 - **Fixed-words refusals**: whatever a strategy, a store it reads or the
   certificate check throws — and an answer that is no `IClientAuthentication`
   — is a `DestinationConfigError` naming `clientAuthentication` before any
@@ -125,6 +127,13 @@ measured: `authorization_code` and `passcode` over x509, the OIDC grants and
 
 ### Known limitations
 
+- **The certificate is pinned for the broker's lifetime.** It is read when a
+  destination's provider is built, and the provider is cached per
+  destination for as long as the `AuthBroker` lives. An XSUAA x509
+  certificate lives about seven days: a long-running process then gets "the
+  client certificate has expired" until it builds a new `AuthBroker`, and
+  replacing the key or the PEM files changes nothing before that. Rotation is
+  out of scope.
 - The certificate refusals use the broker's own three phrases (incomplete /
   expired / could not be used), classified by auth-providers'
   `CertificateMaterialError` flags; the provider's own hint for each is not

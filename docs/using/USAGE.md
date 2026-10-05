@@ -314,11 +314,13 @@ const x509Broker = new AuthBroker({
     }),
   }),
   sessionStore: new XsuaaSessionStore('/path/to/sessions'),
-  // The certificate when the key holds one, else the secret (XSUAA: raw).
-  clientAuthentication: (context) =>
-    fromServiceKeyCertificate()(context).catch(() =>
-      fromServiceKeySecret({ encoding: 'raw' })(context),
-    ),
+  // The certificate when the key holds one, else the secret (XSUAA: raw) —
+  // decided by what the key holds; a bad certificate is refused, never
+  // replaced by the secret.
+  clientAuthentication: async (context) =>
+    (await context.readCertificate())
+      ? fromServiceKeyCertificate()(context)
+      : fromServiceKeySecret({ encoding: 'raw' })(context),
 });
 
 const certificateProvider = await x509Broker.getProvider('mcp');
@@ -810,10 +812,15 @@ The broker writes the session secret alone — the token (or session cookies),
 `expiresAt`, the refresh token, `issuedFor` and `issuedBy`, in one
 `saveSession` — for a `getProvider` provider and for the token API alike;
 never the client secret, `serviceUrl` or `authType`, which are means and live
-in the key store. The commands of `@mcp-abap-adt/auth-broker-cli` 2.0.0 write
+in the key store. The commands of `@mcp-abap-adt/auth-broker-cli` 2.x write
 the means themselves, through `EnvDestinationStore`, and leave the secret to
 the broker — both into one `<destination>.env`, each store touching its own
 keys.
+
+A client certificate or its private key never reaches the session store or
+the `.env`: a certificate destination states only the paths of the user's own
+PEM files and `certurl` (`SAP_UAA_CLIENT_CERT_PATH`, `SAP_UAA_CLIENT_KEY_PATH`,
+`SAP_UAA_CERT_URL`), and nothing of the PEM is logged or carried in an error.
 
 The stored refresh token comes back through `loadSession()`, which the broker
 reads to seed the next process's provider.

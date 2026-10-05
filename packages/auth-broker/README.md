@@ -461,7 +461,10 @@ never falls back to the secret. `saml2_pure`, the `none` rows, `basic` and
 | `fromServiceKeySecret({ encoding })` | auth-providers' `clientSecretBasic` with the secret client's `uaaClientSecret`, in an `Authorization: Basic` header. `encoding` is required: `'raw'` for XSUAA (measured — it does not form-decode), `'form'` for UAA and Keycloak (RFC 6749 §2.3.1); anything else is a `TypeError` when the factory is made | no secret client, or an empty secret: "the destination has no client secret" |
 
 **Composing them is yours.** A fallback, and its order, is your statement,
-never the broker's:
+never the broker's. Branch on what the key holds (`readCertificate()` is
+memoised, so the factory reads the same answer); do not `catch` a factory's
+refusal and fall back — that would also swallow an expired, incomplete or
+unreadable certificate and send the secret instead:
 
 ```typescript
 import {
@@ -471,10 +474,12 @@ import {
 } from '@mcp-abap-adt/auth-broker';
 
 // The certificate when the key holds one, else the secret in a Basic header.
-const certificateElseSecret: ClientAuthenticationStrategy = (context) =>
-  fromServiceKeyCertificate()(context).catch(() =>
-    fromServiceKeySecret({ encoding: 'raw' })(context),
-  );
+// Decided by what the key holds, never by a failure: an expired, incomplete or
+// unreadable certificate is refused, not replaced by the secret.
+const certificateElseSecret: ClientAuthenticationStrategy = async (context) =>
+  (await context.readCertificate())
+    ? fromServiceKeyCertificate()(context)
+    : fromServiceKeySecret({ encoding: 'raw' })(context);
 
 // The certificate for client_credentials only; every other grant its secret.
 const byGrant: ClientAuthenticationStrategy = (context) =>
@@ -562,7 +567,7 @@ strategy first and calls your factory with a **fourth argument**,
 |---|---|
 | `clientAuthentication` | the strategy's answer, to hand to your provider |
 | `uaaUrl`, `clientId` | the client's identity: the secret client's when the stores hold one, else the certificate client's; absent when there is neither |
-| `refreshToken` | the refresh token the session stored — only when the session is bound to this resource and this client identity |
+| `refreshToken` | the refresh token the session stored — only when the session is bound to this resource and this client identity, and only from that session read (a refresh token a store's `getAuthorizationConfig` carries is dropped on this path; `authConfig` carries the same bound one) |
 
 ```typescript
 import {
@@ -641,6 +646,14 @@ thrown message:
 
 A certificate, a key or a file's content never reaches a log line, a refusal,
 a `DestinationConfigError`, a thrown message or the session store.
+
+**The certificate is pinned for the broker's lifetime.** It is read when the
+destination's provider is built, and that provider is cached per destination
+for as long as the `AuthBroker` lives. An XSUAA x509 key's certificate lives
+about seven days: a long-running process then gets `the client certificate
+has expired` from its provider until it builds a new `AuthBroker`, and
+replacing the key or the PEM files changes nothing before that. Rotating
+certificates is out of scope: create a new key, then a new broker (restart).
 
 **What is measured.** `client_credentials` with an x509 XSUAA service key,
 against XSUAA on a BTP trial (2026-10-05; the instance's `credential-types`
