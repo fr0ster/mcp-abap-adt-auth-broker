@@ -880,9 +880,11 @@ describe('a session obtained for another client, on the strategy path', () => {
       refreshToken: 'refresh-of-session-client',
     };
     const make = (issuedBy: string) => {
-      const { store } = sessions();
+      const { store } = secretSessions();
       store.getAuthorizationConfig = async () => sessionClient;
       store.loadSession = async () => ({
+        authorizationToken: 'token-of-the-session',
+        expiresAt: Date.now() + 3_600_000,
         refreshToken: 'stored-refresh',
         issuedFor: 'https://abap.example.com:443?sap-client=100',
         issuedBy,
@@ -900,6 +902,10 @@ describe('a session obtained for another client, on the strategy path', () => {
     );
     expect(unbound[1]).toEqual({ ...sessionClient, refreshToken: undefined });
     expect(unbound[3]).not.toHaveProperty('refreshToken');
+    for (const key of SECRET_KEYS) {
+      expect(unbound[2]).not.toHaveProperty(key);
+    }
+    expect(JSON.stringify(unbound)).not.toContain('token-of-the-session');
 
     const bound = await tokenApi(
       make(own),
@@ -909,6 +915,9 @@ describe('a session obtained for another client, on the strategy path', () => {
     );
     expect(bound[1]).toEqual(sessionClient);
     expect(bound[3]?.refreshToken).toBe('refresh-of-session-client');
+    expect(bound[2]).toEqual(
+      expect.objectContaining({ authorizationToken: 'token-of-the-session' }),
+    );
 
     // 4.0.0: the session's client as it is.
     const without = await tokenApi(
@@ -918,5 +927,65 @@ describe('a session obtained for another client, on the strategy path', () => {
       undefined,
     );
     expect(without[1]).toEqual(sessionClient);
+    expect(without[2]).toEqual(
+      expect.objectContaining({ authorizationToken: 'token-of-the-session' }),
+    );
+  });
+
+  it('each stored secret is judged by the read it came from: a seed read after another process wrote is checked on its own binding', async () => {
+    const forA = {
+      issuedFor: 'https://abap.example.com:443?sap-client=100',
+      issuedBy: `${endpoint.url}?client_id=cert-client`,
+    };
+    const forB = {
+      issuedFor: 'https://abap.example.com:443?sap-client=100',
+      issuedBy: `${endpoint.url}?client_id=cert-client-B`,
+    };
+    const expiresAt = Date.now() + 3_600_000;
+    /** loadSession answers one secret, getConnectionConfig another. */
+    const split = (
+      session: IConfig,
+      connection: IConnectionConfig,
+    ): ISessionStore => {
+      const { store } = sessions();
+      store.loadSession = async () => session;
+      store.getConnectionConfig = async () => connection;
+      return store;
+    };
+    const keysB = keyStore(null, certificate({ clientId: 'cert-client-B' }));
+
+    // The session read says B; the connection read, written meanwhile, holds
+    // A's token: A's token does not seed B.
+    const staleSeed = await tokenApi(
+      split(
+        { refreshToken: 'refresh-of-B', expiresAt, ...forB },
+        { authorizationToken: 'token-of-A', expiresAt, ...forA },
+      ),
+      keysB,
+      () => tokenProvider(jwtExpiringIn(3600)),
+      certificateStrategy,
+    );
+    expect(JSON.stringify(staleSeed[2])).not.toContain('token-of-A');
+    for (const key of SECRET_KEYS) {
+      expect(staleSeed[2]).not.toHaveProperty(key);
+    }
+    expect(staleSeed[3]?.refreshToken).toBe('refresh-of-B');
+
+    // The other way round: the connection read is B's own and seeds; the
+    // session read is A's, so its refresh token does not reach the factory.
+    const staleRefresh = await tokenApi(
+      split(
+        { refreshToken: 'refresh-of-A', expiresAt, ...forA },
+        { authorizationToken: 'token-of-B', expiresAt, ...forB },
+      ),
+      keysB,
+      () => tokenProvider(jwtExpiringIn(3600)),
+      certificateStrategy,
+    );
+    expect(staleRefresh[2]).toEqual(
+      expect.objectContaining({ authorizationToken: 'token-of-B' }),
+    );
+    expect(staleRefresh[3]).not.toHaveProperty('refreshToken');
+    expect(JSON.stringify(staleRefresh)).not.toContain('refresh-of-A');
   });
 });

@@ -188,6 +188,12 @@ export interface AuthBrokerConfig {
    * words. Absent: the client secret, as in 4.0.0, and nothing
    * certificate-related is read. Shipped: `fromServiceKeyCertificate()`,
    * `fromServiceKeySecret({ encoding })`.
+   *
+   * It applies to the providers the broker builds: `getProvider`'s, and the
+   * token API's `provider` factory, which gets its answer as a fourth
+   * argument (`TokenProviderClient`) for a grant that authenticates a client.
+   * An instance given as `provider` is already composed by the consumer, so
+   * the token API uses it as given and calls no strategy for it.
    */
   clientAuthentication?: ClientAuthenticationStrategy;
 }
@@ -677,11 +683,14 @@ export class AuthBroker {
           ? storedRefreshTokenOf(session)
           : undefined;
         client = composeAuthorization(read, boundRefreshToken, bound);
-        // The session's secret seeds the provider only when bound; else only
-        // the means do.
-        const seed = bound
-          ? { ...(connConfig ?? {}), serviceUrl }
-          : { ...withoutSecret(connConfig), serviceUrl };
+        // Each stored secret is judged by the read it came from: the seed's
+        // token, cookies and expiry by the binding the connection read itself
+        // carries — another process may have written between the two reads —
+        // else only the means seed the provider.
+        const seed =
+          connConfig && boundHere(connConfig, binding)
+            ? { ...connConfig, serviceUrl }
+            : { ...withoutSecret(connConfig), serviceUrl };
         carry = 'bound';
         const refreshToken = client ? client.refreshToken : boundRefreshToken;
         const fourth: TokenProviderClient = {
@@ -741,7 +750,9 @@ export class AuthBroker {
    * client (`saml2_pure`, `none`), as `getProvider` decides.
    *
    * The strategy is told the grant, so a destination that states none is
-   * refused before it is called — a strategy is never silently ignored.
+   * refused before it is called rather than built without it. (An instance
+   * given as `provider` is the consumer's own composition: the strategy
+   * applies only to what the broker builds, so it is not used there.)
    */
   private async consumerClientAuthentication(
     destination: string,
