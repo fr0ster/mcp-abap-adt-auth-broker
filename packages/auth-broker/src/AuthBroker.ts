@@ -35,12 +35,7 @@ import type {
 import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
 import type { IConfig } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import {
-  type Binding,
-  type BoundClient,
-  boundHere,
-  consumerBinding,
-} from './binding';
+import { type Binding, boundHere, consumerBinding } from './binding';
 import { destinationBinding } from './bindingOf';
 import {
   type ClientAuthenticationStrategy,
@@ -88,6 +83,11 @@ const noOpLogger: ILogger = {
  * - `connConfig`: the session's connection config, with `serviceUrl` resolved
  *   and the last token the session stored, so the provider can reuse it while
  *   it is valid.
+ * - `client` (optional): passed only beside a `clientAuthentication` strategy,
+ *   for a destination whose grant authenticates a client — the strategy's
+ *   answer, the client identity and the bound refresh token; never PEM. See
+ *   `TokenProviderClient`. Without a strategy the factory gets three
+ *   arguments, as 4.0.0.
  *
  * Called once per destination; the broker keeps the provider it returns.
  */
@@ -115,8 +115,9 @@ export interface TokenProviderClient {
   /** The client id beside `uaaUrl`, from the same client. */
   readonly clientId?: string;
   /**
-   * The refresh token the session stored — as `authConfig` carries it for a
-   * secret client (4.0.0's merge), so a certificate client, whose
+   * The refresh token the session stored, only when the session is bound to
+   * this resource and this client identity — as `authConfig` carries it on
+   * the strategy path for a secret client, so a certificate client, whose
    * `authConfig` is `null`, gets it too.
    */
   readonly refreshToken?: string;
@@ -258,6 +259,38 @@ function obtainsTokens(
 }
 
 /** A stored string that counts as present: `''` is none. */
+/** What the consumer factory's credentials are composed from. */
+interface AuthorizationRead {
+  readonly sessionAuth: IAuthorizationConfig | null;
+  readonly keyAuth: IAuthorizationConfig | null;
+  readonly session: IConfig | null;
+  /** Whether `session` was read: not when the session held its own client. */
+  readonly sessionRead: boolean;
+}
+
+/** The refresh token a stored session holds, unchecked. */
+function storedRefreshTokenOf(session: IConfig | null): string | undefined {
+  return typeof session?.refreshToken === 'string'
+    ? session.refreshToken
+    : undefined;
+}
+
+/**
+ * The 3.x composition: the session's client as it is, else the key store's
+ * with `refreshToken` — the one given, else the key's own.
+ */
+function composeAuthorization(
+  read: AuthorizationRead,
+  refreshToken: string | undefined,
+): IAuthorizationConfig | null {
+  if (read.sessionAuth) return read.sessionAuth;
+  if (!read.keyAuth) return null;
+  return {
+    ...read.keyAuth,
+    refreshToken: refreshToken ?? read.keyAuth.refreshToken,
+  };
+}
+
 function present(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
 }
@@ -592,23 +625,34 @@ export class AuthBroker {
           binding: consumerBinding(serviceUrl, sapClient, null),
         };
       }
-      const client = await this.resolveAuthorizationConfig(destination);
+      const read = await this.readAuthorization(destination);
       const seed = { ...(connConfig ?? {}), serviceUrl };
       const strategic = await this.consumerClientAuthentication(
         destination,
         means,
-        client,
+        read.sessionAuth ?? read.keyAuth,
       );
       let built: IRefreshableTokenProvider;
-      let bound: BoundClient | null = client;
+      let client: IAuthorizationConfig | null;
+      let binding: Binding;
       if (strategic) {
         // The strategy's answer and the client identity, resolved before the
         // factory; the factory called inside the same guard: a throw is fixed
-        // words, nothing of the thrown value, no cause.
-        bound = strategic.identity;
-        const refreshToken = client
-          ? client.refreshToken
-          : await this.storedRefreshToken(destination);
+        // words, nothing of the thrown value, no cause. The stored refresh
+        // token is carried only when the session is bound to this resource
+        // and this client identity — never to another authorization server.
+        binding = consumerBinding(serviceUrl, sapClient, strategic.identity);
+        const session = read.sessionRead
+          ? read.session
+          : await this.loadStoredSession(destination);
+        const boundRefreshToken =
+          session &&
+          boundHere(session, binding) &&
+          typeof session.refreshToken === 'string'
+            ? session.refreshToken
+            : undefined;
+        client = composeAuthorization(read, boundRefreshToken);
+        const refreshToken = client ? client.refreshToken : boundRefreshToken;
         const fourth: TokenProviderClient = {
           clientAuthentication: strategic.clientAuthentication,
           ...(strategic.identity
@@ -629,6 +673,9 @@ export class AuthBroker {
           );
         }
       } else {
+        // 4.0.0: the stored refresh token carried over as read.
+        client = composeAuthorization(read, storedRefreshTokenOf(read.session));
+        binding = consumerBinding(serviceUrl, sapClient, client);
         built = provider(destination, client, seed);
       }
       this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
@@ -638,10 +685,7 @@ export class AuthBroker {
           connConfig?.authorizationToken || connConfig?.sessionCookies
         ),
       });
-      return {
-        provider: built,
-        binding: consumerBinding(serviceUrl, sapClient, bound),
-      };
+      return { provider: built, binding };
     });
     this.consumerBuilt.set(destination, build);
     build.catch(() => {
@@ -676,19 +720,16 @@ export class AuthBroker {
     if (!strategy) {
       return null;
     }
-    const authType = means?.authType;
-    if (authType !== 'jwt' && authType !== 'saml') {
+    // basic and snc never get here: the token API refuses them first
+    // (`statedForTokens`).
+    if (!means || (means.authType !== 'jwt' && means.authType !== 'saml')) {
       throw new DestinationConfigError(
         destination,
         ['authType', 'grantType'],
         'a clientAuthentication strategy is told the grant: the destination must state its authType and grantType',
       );
     }
-    const grant = statedGrant(
-      destination,
-      authType,
-      means as IConnectionConfig,
-    );
+    const grant = statedGrant(destination, means.authType, means);
     if (grant === 'saml2_pure' || grant === 'none') {
       return null;
     }
@@ -712,48 +753,37 @@ export class AuthBroker {
   }
 
   /**
-   * The credentials a consumer's factory is built with: the session's own when
-   * it holds them, else the service key's, carrying the refresh token the
-   * session stored — the 3.x order. A session store of auth-stores 3
+   * What a consumer's factory's credentials are composed from, read in the
+   * 3.x order: the session's authorization config; only when it has none, the
+   * session and then the key store's client. A session store of auth-stores 3
    * answers no client, so the key store's is what is found.
    */
-  private async resolveAuthorizationConfig(
+  private async readAuthorization(
     destination: string,
-  ): Promise<IAuthorizationConfig | null> {
+  ): Promise<AuthorizationRead> {
     const sessionAuth = await this.read(
       destination,
       'session authorization config',
       () => this.sessionStore.getAuthorizationConfig(destination),
     );
     if (sessionAuth) {
-      return sessionAuth;
+      return { sessionAuth, keyAuth: null, session: null, sessionRead: false };
     }
-    const storedRefreshToken = await this.storedRefreshToken(destination);
+    const session = await this.loadStoredSession(destination);
     const serviceKeyStore = this.serviceKeyStore;
     const keyAuth = serviceKeyStore
       ? await this.read(destination, 'service key authorization config', () =>
           serviceKeyStore.getAuthorizationConfig(destination),
         )
       : null;
-    if (!keyAuth) {
-      return null;
-    }
-    return {
-      ...keyAuth,
-      refreshToken: storedRefreshToken ?? keyAuth.refreshToken,
-    };
+    return { sessionAuth: null, keyAuth, session, sessionRead: true };
   }
 
-  /** The refresh token the session stored, read as 4.0.0 reads it. */
-  private async storedRefreshToken(
-    destination: string,
-  ): Promise<string | undefined> {
-    const session = await this.read(destination, 'session', () =>
+  /** The session the store holds for the destination, or null. */
+  private loadStoredSession(destination: string): Promise<IConfig | null> {
+    return this.read(destination, 'session', () =>
       this.sessionStore.loadSession(destination),
     );
-    return typeof session?.refreshToken === 'string'
-      ? session.refreshToken
-      : undefined;
   }
 
   /**

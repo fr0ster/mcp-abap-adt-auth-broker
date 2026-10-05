@@ -435,6 +435,156 @@ describe('the token API factory beside a strategy', () => {
     }
   });
 
+  /** Stores a session through the token API for `keys`; returns the store. */
+  async function storedThrough(
+    keys: IServiceKeyStore,
+    refreshToken: string,
+    clientAuthentication: ClientAuthenticationStrategy | undefined,
+  ) {
+    const { store, held } = sessions();
+    const first = new AuthBroker({
+      sessionStore: store,
+      serviceKeyStore: keys,
+      provider: () => refreshingProvider(jwtExpiringIn(3600), refreshToken),
+      ...(clientAuthentication ? { clientAuthentication } : {}),
+    });
+    await first.getToken(D);
+    await first.flush();
+    expect(held()?.refreshToken).toBe(refreshToken);
+    return store;
+  }
+
+  /** The factory call of a token-API broker built over `store` for `keys`. */
+  async function factoryCall(
+    store: ISessionStore,
+    keys: IServiceKeyStore,
+    clientAuthentication: ClientAuthenticationStrategy | undefined,
+  ) {
+    const factory = jest.fn<
+      IRefreshableTokenProvider,
+      Parameters<TokenProviderFactory>
+    >(() => tokenProvider(jwtExpiringIn(3600)));
+    const broker = new AuthBroker({
+      sessionStore: store,
+      serviceKeyStore: keys,
+      provider: factory,
+      ...(clientAuthentication ? { clientAuthentication } : {}),
+    });
+    await broker.getToken(D);
+    expect(factory).toHaveBeenCalledTimes(1);
+    return factory.mock.calls[0];
+  }
+
+  it("a certificate client's refresh token does not reach the factory for another client id", async () => {
+    const store = await storedThrough(
+      keyStore(null, certificate()),
+      'refresh-of-A',
+      certificateStrategy,
+    );
+
+    const call = await factoryCall(
+      store,
+      keyStore(null, certificate({ clientId: 'cert-client-B' })),
+      certificateStrategy,
+    );
+
+    expect(call[1]).toBeNull();
+    expect(call[3]).toEqual({
+      clientAuthentication: answer,
+      uaaUrl: endpoint.url,
+      clientId: 'cert-client-B',
+    });
+    expect(JSON.stringify(call)).not.toContain('refresh-of-A');
+  });
+
+  it("a certificate client's refresh token does not reach the factory for another issuer", async () => {
+    const store = await storedThrough(
+      keyStore(null, certificate()),
+      'refresh-of-A',
+      certificateStrategy,
+    );
+
+    const call = await factoryCall(
+      store,
+      keyStore(null, certificate({ uaaUrl: 'https://other-uaa.example.com' })),
+      certificateStrategy,
+    );
+
+    expect(call[3]).toEqual({
+      clientAuthentication: answer,
+      uaaUrl: 'https://other-uaa.example.com',
+      clientId: 'cert-client',
+    });
+    expect(JSON.stringify(call)).not.toContain('refresh-of-A');
+  });
+
+  it("a secret client on the strategy path: a session bound to another client gives no refresh token — without a strategy 4.0.0's carry-over stays", async () => {
+    const other: IAuthorizationConfig = {
+      ...SECRET_CLIENT,
+      uaaClientId: 'another-secret-client',
+    };
+
+    const withStrategy = await factoryCall(
+      await storedThrough(
+        keyStore(SECRET_CLIENT, null),
+        'refresh-of-A',
+        certificateStrategy,
+      ),
+      keyStore(other, null),
+      certificateStrategy,
+    );
+    expect(withStrategy[1]).toEqual(expect.objectContaining(other));
+    expect(withStrategy[1]?.refreshToken).toBeUndefined();
+    expect(JSON.stringify(withStrategy)).not.toContain('refresh-of-A');
+
+    // 4.0.0, documented: the consumer path carries the stored refresh token
+    // over without a binding check.
+    const without = await factoryCall(
+      await storedThrough(
+        keyStore(SECRET_CLIENT, null),
+        'refresh-of-A',
+        undefined,
+      ),
+      keyStore(other, null),
+      undefined,
+    );
+    expect(without).toHaveLength(3);
+    expect(without[1]?.refreshToken).toBe('refresh-of-A');
+  });
+
+  it('basic and snc destinations are refused by the token API itself, before the strategy', async () => {
+    for (const authType of ['basic', 'snc'] as const) {
+      const { store } = sessions();
+      const strategy = jest.fn(certificateStrategy);
+      const factory = jest.fn<
+        IRefreshableTokenProvider,
+        Parameters<TokenProviderFactory>
+      >(() => tokenProvider(jwtExpiringIn(3600)));
+      const keys = keyStore(SECRET_CLIENT, certificate(), {
+        authType,
+        serviceUrl: 'https://abap.example.com',
+      });
+      const broker = new AuthBroker({
+        sessionStore: store,
+        serviceKeyStore: keys,
+        provider: factory,
+        clientAuthentication: strategy,
+      });
+
+      const error = await broker.getToken(D).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(DestinationConfigError);
+      expect((error as DestinationConfigError).missingFields).toEqual([
+        'authType',
+      ]);
+      expect((error as Error).message).toContain(
+        `the token API serves no ${authType} destination`,
+      );
+      expect(strategy).not.toHaveBeenCalled();
+      expect(keys.getClientCertificate).not.toHaveBeenCalled();
+      expect(factory).not.toHaveBeenCalled();
+    }
+  });
+
   it('a 4.0.0-shaped factory (three parameters) keeps working', async () => {
     const { store } = sessions();
     const token = jwtExpiringIn(3600);
