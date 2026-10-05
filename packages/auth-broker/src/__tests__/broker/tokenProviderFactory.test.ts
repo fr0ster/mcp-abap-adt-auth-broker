@@ -1001,7 +1001,7 @@ describe('a session obtained for another client, on the strategy path', () => {
     expect(held()?.refreshToken).toBe('refresh-of-A');
   });
 
-  it("a session store holding its own client: that client's refresh token reaches the factory only when the session is bound", async () => {
+  it("a session store holding its own client: only the bound session read's refresh token reaches the factory, never the client read's", async () => {
     const sessionClient: IAuthorizationConfig = {
       uaaUrl: 'https://uaa.example.com',
       uaaClientId: 'session-client',
@@ -1042,8 +1042,14 @@ describe('a session obtained for another client, on the strategy path', () => {
       () => tokenProvider(jwtExpiringIn(3600)),
       certificateStrategy,
     );
-    expect(bound[1]).toEqual(sessionClient);
-    expect(bound[3]?.refreshToken).toBe('refresh-of-session-client');
+    // The refresh token of the session read whose binding was checked — not
+    // the one getAuthorizationConfig read on its own.
+    expect(bound[1]).toEqual({
+      ...sessionClient,
+      refreshToken: 'stored-refresh',
+    });
+    expect(bound[3]?.refreshToken).toBe('stored-refresh');
+    expect(JSON.stringify(bound)).not.toContain('refresh-of-session-client');
     expect(bound[2]).toEqual(
       expect.objectContaining({ authorizationToken: 'token-of-the-session' }),
     );
@@ -1059,6 +1065,54 @@ describe('a session obtained for another client, on the strategy path', () => {
     expect(without[2]).toEqual(
       expect.objectContaining({ authorizationToken: 'token-of-the-session' }),
     );
+  });
+
+  it("a session store holding its own client, rewritten between the reads: resource A's refresh token never reaches resource B's factory", async () => {
+    const own = 'https://uaa.example.com:443?client_id=session-client';
+    // getAuthorizationConfig reads the client while the session is A's: it
+    // carries A's refresh token. Another process then writes B's session —
+    // the same client, B's resource — which loadSession reads, bound to B.
+    const make = (sessionFor: IConfig) => {
+      const { store } = secretSessions();
+      store.getAuthorizationConfig = async () => ({
+        uaaUrl: 'https://uaa.example.com',
+        uaaClientId: 'session-client',
+        uaaClientSecret: 'session-secret',
+        refreshToken: 'refresh-of-A',
+      });
+      store.loadSession = async () => sessionFor;
+      return store;
+    };
+    const ofB = {
+      refreshToken: 'refresh-of-B',
+      expiresAt: Date.now() + 3_600_000,
+      issuedFor: 'https://abap.example.com:443?sap-client=100',
+      issuedBy: own,
+    };
+
+    const rewritten = await tokenApi(
+      make(ofB),
+      keyStore(null, null),
+      () => tokenProvider(jwtExpiringIn(3600)),
+      certificateStrategy,
+    );
+    expect(JSON.stringify(rewritten)).not.toContain('refresh-of-A');
+    expect(rewritten[1]?.refreshToken).toBe('refresh-of-B');
+    expect(rewritten[3]?.refreshToken).toBe('refresh-of-B');
+
+    // A session read bound elsewhere: no refresh token at all.
+    const elsewhere = await tokenApi(
+      make({
+        ...ofB,
+        issuedFor: 'https://other.example.com:443?sap-client=100',
+      }),
+      keyStore(null, null),
+      () => tokenProvider(jwtExpiringIn(3600)),
+      certificateStrategy,
+    );
+    expect(JSON.stringify(elsewhere)).not.toContain('refresh-of-A');
+    expect(elsewhere[1]?.refreshToken).toBeUndefined();
+    expect(elsewhere[3]).not.toHaveProperty('refreshToken');
   });
 
   it('each stored secret is judged by the read it came from: a seed read after another process wrote is checked on its own binding', async () => {

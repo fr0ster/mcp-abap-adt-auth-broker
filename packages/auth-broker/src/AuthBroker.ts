@@ -305,26 +305,34 @@ function storedRefreshTokenOf(session: IConfig | null): string | undefined {
 }
 
 /**
- * The 3.x composition: the session's client as it is, else the key store's
- * with `refreshToken` — the one given, else the key's own. With
- * `sessionBound: false` (the strategy path, a session bound elsewhere) the
- * session's client comes without its refresh token.
+ * The 3.x composition, the no-strategy path: the session's client as it is,
+ * else the key store's with `refreshToken` — the one given, else the key's
+ * own. (The strategy path takes `strategyAuthorization`.)
  */
 function composeAuthorization(
   read: AuthorizationRead,
   refreshToken: string | undefined,
-  sessionBound = true,
 ): IAuthorizationConfig | null {
-  if (read.sessionAuth) {
-    return sessionBound
-      ? read.sessionAuth
-      : { ...read.sessionAuth, refreshToken: undefined };
-  }
+  if (read.sessionAuth) return read.sessionAuth;
   if (!read.keyAuth) return null;
   return {
     ...read.keyAuth,
     refreshToken: refreshToken ?? read.keyAuth.refreshToken,
   };
+}
+
+/**
+ * The client on the `clientAuthentication` strategy path: the session's own
+ * client, else the key store's, carrying only `refreshToken` — the one the
+ * session read whose binding was checked holds, when bound — never a refresh
+ * token either client read carried itself.
+ */
+function strategyAuthorization(
+  read: AuthorizationRead,
+  refreshToken: string | undefined,
+): IAuthorizationConfig | null {
+  const client = read.sessionAuth ?? read.keyAuth;
+  return client ? { ...client, refreshToken } : null;
 }
 
 /** A stored string that counts as present: `''` is none. */
@@ -667,7 +675,8 @@ export class AuthBroker {
       const strategic = await this.consumerClientAuthentication(
         destination,
         means,
-        read.sessionAuth ?? read.keyAuth,
+        // The strategy is told the client, never a refresh token read with it.
+        strategyAuthorization(read, undefined),
       );
       let built: IRefreshableTokenProvider;
       let client: IAuthorizationConfig | null;
@@ -689,7 +698,11 @@ export class AuthBroker {
         const boundRefreshToken = bound
           ? storedRefreshTokenOf(session)
           : undefined;
-        client = composeAuthorization(read, boundRefreshToken, bound);
+        // The client without any refresh token of its own read: a session
+        // store's `getAuthorizationConfig` is another read than the session
+        // whose binding was checked, and another process may have written
+        // between them. The refresh token comes only from that checked read.
+        client = strategyAuthorization(read, boundRefreshToken);
         // Each stored secret is judged by the read it came from: the seed's
         // token, cookies and expiry by the binding the connection read itself
         // carries — another process may have written between the two reads —
