@@ -772,6 +772,43 @@ describe('the token API factory beside a strategy', () => {
       expect((await store.loadSession(D))?.refreshToken).toBe('refresh-of-A');
     });
 
+    it('no client identity: a session stating neither resource nor issuer is not bound', async () => {
+      const { store } = sessions();
+      await store.saveSession(D, {
+        authorizationToken: jwtExpiringIn(3600),
+        refreshToken: 'refresh-of-nobody',
+      } as IConfig);
+      const call = await factoryCall(
+        store,
+        keyStore(null, null, unstated()),
+        async () => answer,
+      );
+      expect(call[1]).toBeNull();
+      expect(call[3]).toEqual({ clientAuthentication: answer });
+      expect(JSON.stringify(call)).not.toContain('refresh-of-nobody');
+    });
+
+    it('the same client: the stored access token seeds the factory', async () => {
+      const { store } = secretSessions();
+      const first = new AuthBroker({
+        sessionStore: store,
+        serviceKeyStore: keyStore(null, certificate(), unstated()),
+        provider: () => refreshingProvider(jwtExpiringIn(3600), 'refresh-of-A'),
+        clientAuthentication: certificateStrategy,
+      });
+      await first.getToken(D);
+      await first.flush();
+      const stored = (await store.loadSession(D))?.authorizationToken;
+      expect(stored).toBeDefined();
+
+      const call = await factoryCall(
+        store,
+        keyStore(null, certificate(), unstated()),
+        certificateStrategy,
+      );
+      expect(call[2].authorizationToken).toBe(stored);
+    });
+
     it('another client: not bound', async () => {
       const store = await storedThrough(
         keyStore(null, certificate(), unstated()),

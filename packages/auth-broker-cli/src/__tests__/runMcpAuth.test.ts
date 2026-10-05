@@ -720,7 +720,7 @@ describe('mcp-auth --client-auth', () => {
   });
 
   describe('an ABAP-format key carrying a certificate', () => {
-    it('with no flag, answers as the same key without one: the service URL, the SAP client, the secret client', async () => {
+    it('with no flag, answers as the same key without one: the same means — the service URL and the secret client', async () => {
       server.answer('/oauth/token', tokenAnswer('cc', false));
       const abapFormat = (extra: object) => ({
         uaa: {
