@@ -343,6 +343,98 @@ describe('the token API factory beside a strategy', () => {
     expect(await bearer(provider)).not.toBe(token);
   });
 
+  /** A provider that answers one token with a refresh token. */
+  function refreshingProvider(
+    token: string,
+    refreshToken: string,
+  ): IRefreshableTokenProvider {
+    const result: ITokenResult = {
+      authorizationToken: token,
+      refreshToken,
+      authType: 'authorization_code',
+    };
+    return {
+      getTokens: async () => result,
+      refreshTokens: async () => result,
+    };
+  }
+
+  it("a certificate client's stored refresh token reaches the factory in the fourth argument, also after the broker is recreated", async () => {
+    const { store, held } = sessions();
+    const first = jest.fn<
+      IRefreshableTokenProvider,
+      Parameters<TokenProviderFactory>
+    >(() => refreshingProvider(jwtExpiringIn(3600), 'refresh-cert-1'));
+    const tokenApi = new AuthBroker({
+      sessionStore: store,
+      serviceKeyStore: keyStore(null, certificate()),
+      provider: first,
+      clientAuthentication: certificateStrategy,
+    });
+    await tokenApi.getToken(D);
+    await tokenApi.flush();
+    expect(held()?.refreshToken).toBe('refresh-cert-1');
+    // Nothing stored yet when the first factory was built.
+    expect(first.mock.calls[0][3]).not.toHaveProperty('refreshToken');
+
+    const again = jest.fn<
+      IRefreshableTokenProvider,
+      Parameters<TokenProviderFactory>
+    >(() => tokenProvider(jwtExpiringIn(3600)));
+    const recreated = new AuthBroker({
+      sessionStore: store,
+      serviceKeyStore: keyStore(null, certificate()),
+      provider: again,
+      clientAuthentication: certificateStrategy,
+    });
+    await recreated.getToken(D);
+
+    const [, authConfig, , client] = again.mock.calls[0];
+    expect(authConfig).toBeNull();
+    expect(client).toEqual({
+      clientAuthentication: answer,
+      uaaUrl: endpoint.url,
+      clientId: 'cert-client',
+      refreshToken: 'refresh-cert-1',
+    });
+    expect(JSON.stringify(again.mock.calls[0])).not.toContain('-----BEGIN');
+  });
+
+  it('a secret client keeps getting the stored refresh token through authConfig, with and without a strategy', async () => {
+    for (const clientAuthentication of [undefined, certificateStrategy]) {
+      const { store } = sessions();
+      const first = new AuthBroker({
+        sessionStore: store,
+        serviceKeyStore: keyStore(SECRET_CLIENT, null),
+        provider: () =>
+          refreshingProvider(jwtExpiringIn(3600), 'refresh-secret-1'),
+        ...(clientAuthentication ? { clientAuthentication } : {}),
+      });
+      await first.getToken(D);
+      await first.flush();
+
+      const factory = jest.fn<
+        IRefreshableTokenProvider,
+        Parameters<TokenProviderFactory>
+      >(() => tokenProvider(jwtExpiringIn(3600)));
+      const recreated = new AuthBroker({
+        sessionStore: store,
+        serviceKeyStore: keyStore(SECRET_CLIENT, null),
+        provider: factory,
+        ...(clientAuthentication ? { clientAuthentication } : {}),
+      });
+      await recreated.getToken(D);
+
+      expect(factory.mock.calls[0][1]).toEqual({
+        ...SECRET_CLIENT,
+        refreshToken: 'refresh-secret-1',
+      });
+      if (!clientAuthentication) {
+        expect(factory.mock.calls[0]).toHaveLength(3);
+      }
+    }
+  });
+
   it('a 4.0.0-shaped factory (three parameters) keeps working', async () => {
     const { store } = sessions();
     const token = jwtExpiringIn(3600);

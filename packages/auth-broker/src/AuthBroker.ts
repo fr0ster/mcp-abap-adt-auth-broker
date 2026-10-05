@@ -114,6 +114,12 @@ export interface TokenProviderClient {
   readonly uaaUrl?: string;
   /** The client id beside `uaaUrl`, from the same client. */
   readonly clientId?: string;
+  /**
+   * The refresh token the session stored — as `authConfig` carries it for a
+   * secret client (4.0.0's merge), so a certificate client, whose
+   * `authConfig` is `null`, gets it too.
+   */
+  readonly refreshToken?: string;
 }
 
 /** The grants whose provider takes an `IAuthorizationStrategy<string>`. */
@@ -600,6 +606,9 @@ export class AuthBroker {
         // factory; the factory called inside the same guard: a throw is fixed
         // words, nothing of the thrown value, no cause.
         bound = strategic.identity;
+        const refreshToken = client
+          ? client.refreshToken
+          : await this.storedRefreshToken(destination);
         const fourth: TokenProviderClient = {
           clientAuthentication: strategic.clientAuthentication,
           ...(strategic.identity
@@ -608,6 +617,7 @@ export class AuthBroker {
                 clientId: strategic.identity.uaaClientId,
               }
             : {}),
+          ...(present(refreshToken) ? { refreshToken } : {}),
         };
         try {
           built = provider(destination, client, seed, fourth);
@@ -718,13 +728,7 @@ export class AuthBroker {
     if (sessionAuth) {
       return sessionAuth;
     }
-    const session = await this.read(destination, 'session', () =>
-      this.sessionStore.loadSession(destination),
-    );
-    const storedRefreshToken =
-      typeof session?.refreshToken === 'string'
-        ? session.refreshToken
-        : undefined;
+    const storedRefreshToken = await this.storedRefreshToken(destination);
     const serviceKeyStore = this.serviceKeyStore;
     const keyAuth = serviceKeyStore
       ? await this.read(destination, 'service key authorization config', () =>
@@ -738,6 +742,18 @@ export class AuthBroker {
       ...keyAuth,
       refreshToken: storedRefreshToken ?? keyAuth.refreshToken,
     };
+  }
+
+  /** The refresh token the session stored, read as 4.0.0 reads it. */
+  private async storedRefreshToken(
+    destination: string,
+  ): Promise<string | undefined> {
+    const session = await this.read(destination, 'session', () =>
+      this.sessionStore.loadSession(destination),
+    );
+    return typeof session?.refreshToken === 'string'
+      ? session.refreshToken
+      : undefined;
   }
 
   /**
