@@ -145,6 +145,22 @@ function tokenProvider(token: string): IRefreshableTokenProvider {
   };
 }
 
+/** A provider that answers one token with a refresh token. */
+function refreshingProviderOf(
+  token: string,
+  refreshToken: string,
+): IRefreshableTokenProvider {
+  const result: ITokenResult = {
+    authorizationToken: token,
+    refreshToken,
+    authType: 'authorization_code',
+  };
+  return {
+    getTokens: async () => result,
+    refreshTokens: async () => result,
+  };
+}
+
 /** A user that logs in: records each time it is asked. */
 function user(): { strategy: IAuthorizationStrategy<string>; asked: number } {
   const state = {
@@ -709,5 +725,198 @@ describe('the token API factory beside a strategy', () => {
     expect(strategy).not.toHaveBeenCalled();
     expect(keys.getClientCertificate).not.toHaveBeenCalled();
     expect(factory.mock.calls[0]).toHaveLength(3);
+  });
+});
+
+/**
+ * A session store as `SecretSessionStore` answers: `getConnectionConfig`
+ * returns the stored secret without its refresh token, so the token API seeds
+ * the factory's provider with it.
+ */
+function secretSessions(): {
+  store: ISessionStore;
+  held: () => IConfig | undefined;
+} {
+  const base = sessions();
+  base.store.getConnectionConfig = async (d) => {
+    const s = await base.store.loadSession(d);
+    if (!s) return null;
+    const { refreshToken: _omitted, ...rest } = s;
+    return rest as IConnectionConfig;
+  };
+  return base;
+}
+
+describe('a session obtained for another client, on the strategy path', () => {
+  /** A token-API broker over `store` for `keys`; its factory recorded. */
+  async function tokenApi(
+    store: ISessionStore,
+    keys: IServiceKeyStore,
+    answerWith: () => IRefreshableTokenProvider,
+    clientAuthentication: ClientAuthenticationStrategy | undefined,
+  ) {
+    const factory = jest.fn<
+      IRefreshableTokenProvider,
+      Parameters<TokenProviderFactory>
+    >(answerWith);
+    const broker = new AuthBroker({
+      sessionStore: store,
+      serviceKeyStore: keys,
+      provider: factory,
+      ...(clientAuthentication ? { clientAuthentication } : {}),
+    });
+    await broker.getToken(D);
+    await broker.flush();
+    return factory.mock.calls[0];
+  }
+
+  const SECRET_KEYS = [
+    'authorizationToken',
+    'sessionCookies',
+    'expiresAt',
+    'issuedFor',
+    'issuedBy',
+  ];
+
+  for (const [what, otherCert] of [
+    ['another client id', { clientId: 'cert-client-B' }],
+    ['another issuer', { uaaUrl: 'https://other-uaa.example.com' }],
+  ] as const) {
+    it(`${what}: A's refresh token is not laundered into B's secret, and A's access token does not seed B`, async () => {
+      const { store, held } = secretSessions();
+      const tokenA = jwtExpiringIn(3600, { jti: 'A' });
+      await tokenApi(
+        store,
+        keyStore(null, certificate()),
+        () => refreshingProviderOf(tokenA, 'refresh-of-A'),
+        certificateStrategy,
+      );
+      expect(held()?.refreshToken).toBe('refresh-of-A');
+
+      // B's provider answers no refresh token.
+      const tokenB = jwtExpiringIn(3600, { jti: 'B' });
+      const callB = await tokenApi(
+        store,
+        keyStore(null, certificate(otherCert)),
+        () => tokenProvider(tokenB),
+        certificateStrategy,
+      );
+      for (const key of SECRET_KEYS) {
+        expect(callB[2]).not.toHaveProperty(key);
+      }
+      expect(JSON.stringify(callB)).not.toContain(tokenA);
+      expect(JSON.stringify(callB)).not.toContain('refresh-of-A');
+      expect(held()?.authorizationToken).toBe(tokenB);
+      expect(held()?.refreshToken).toBeUndefined();
+      expect(JSON.stringify(held())).not.toContain('refresh-of-A');
+
+      // The next broker for B: B's own secret seeds it, nothing of A.
+      const callB2 = await tokenApi(
+        store,
+        keyStore(null, certificate(otherCert)),
+        () => tokenProvider(tokenB),
+        certificateStrategy,
+      );
+      expect(callB2[3]).not.toHaveProperty('refreshToken');
+      expect(callB2[2]).toEqual(
+        expect.objectContaining({ authorizationToken: tokenB }),
+      );
+      expect(JSON.stringify(callB2)).not.toContain(tokenA);
+      expect(JSON.stringify(callB2)).not.toContain('refresh-of-A');
+    });
+  }
+
+  it('the same client: its own access token seeds the factory, its refresh token is carried', async () => {
+    const { store, held } = secretSessions();
+    const tokenA = jwtExpiringIn(3600, { jti: 'A' });
+    await tokenApi(
+      store,
+      keyStore(null, certificate()),
+      () => refreshingProviderOf(tokenA, 'refresh-of-A'),
+      certificateStrategy,
+    );
+    const call = await tokenApi(
+      store,
+      keyStore(null, certificate()),
+      () => tokenProvider(tokenA),
+      certificateStrategy,
+    );
+    expect(call[2]).toEqual(
+      expect.objectContaining({ authorizationToken: tokenA }),
+    );
+    expect(call[3]?.refreshToken).toBe('refresh-of-A');
+    expect(held()?.refreshToken).toBe('refresh-of-A');
+  });
+
+  it("without a strategy 4.0.0 stays: A's access token seeds B and A's refresh token is carried into B's secret", async () => {
+    const { store, held } = secretSessions();
+    const tokenA = jwtExpiringIn(3600, { jti: 'A' });
+    await tokenApi(
+      store,
+      keyStore(SECRET_CLIENT, null),
+      () => refreshingProviderOf(tokenA, 'refresh-of-A'),
+      undefined,
+    );
+    const tokenB = jwtExpiringIn(3600, { jti: 'B' });
+    const callB = await tokenApi(
+      store,
+      keyStore({ ...SECRET_CLIENT, uaaClientId: 'secret-client-B' }, null),
+      () => tokenProvider(tokenB),
+      undefined,
+    );
+    expect(callB).toHaveLength(3);
+    expect(callB[2]).toEqual(
+      expect.objectContaining({ authorizationToken: tokenA }),
+    );
+    expect(callB[1]?.refreshToken).toBe('refresh-of-A');
+    expect(held()?.refreshToken).toBe('refresh-of-A');
+  });
+
+  it("a session store holding its own client: that client's refresh token reaches the factory only when the session is bound", async () => {
+    const sessionClient: IAuthorizationConfig = {
+      uaaUrl: 'https://uaa.example.com',
+      uaaClientId: 'session-client',
+      uaaClientSecret: 'session-secret',
+      refreshToken: 'refresh-of-session-client',
+    };
+    const make = (issuedBy: string) => {
+      const { store } = sessions();
+      store.getAuthorizationConfig = async () => sessionClient;
+      store.loadSession = async () => ({
+        refreshToken: 'stored-refresh',
+        issuedFor: 'https://abap.example.com:443?sap-client=100',
+        issuedBy,
+      });
+      return store;
+    };
+    const foreign = 'https://uaa.example.com:443?client_id=another-client';
+    const own = 'https://uaa.example.com:443?client_id=session-client';
+
+    const unbound = await tokenApi(
+      make(foreign),
+      keyStore(null, null),
+      () => tokenProvider(jwtExpiringIn(3600)),
+      certificateStrategy,
+    );
+    expect(unbound[1]).toEqual({ ...sessionClient, refreshToken: undefined });
+    expect(unbound[3]).not.toHaveProperty('refreshToken');
+
+    const bound = await tokenApi(
+      make(own),
+      keyStore(null, null),
+      () => tokenProvider(jwtExpiringIn(3600)),
+      certificateStrategy,
+    );
+    expect(bound[1]).toEqual(sessionClient);
+    expect(bound[3]?.refreshToken).toBe('refresh-of-session-client');
+
+    // 4.0.0: the session's client as it is.
+    const without = await tokenApi(
+      make(foreign),
+      keyStore(null, null),
+      () => tokenProvider(jwtExpiringIn(3600)),
+      undefined,
+    );
+    expect(without[1]).toEqual(sessionClient);
   });
 });

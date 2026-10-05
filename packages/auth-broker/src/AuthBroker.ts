@@ -204,6 +204,17 @@ const SECRET_FIELDS = [
 const isSecretField = (field: string): boolean =>
   (SECRET_FIELDS as readonly string[]).includes(field);
 
+/** A connection config without the session secret's fields or a refresh token. */
+function withoutSecret(
+  config: IConnectionConfig | null,
+): Partial<IConnectionConfig> {
+  const kept: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(config ?? {})) {
+    if (!isSecretField(field) && field !== 'refreshToken') kept[field] = value;
+  }
+  return kept as Partial<IConnectionConfig>;
+}
+
 /** When the result expires, in epoch ms: its own `expiresAt`, else `expiresIn` from now. */
 function expiryOf(result: ITokenResult): number | undefined {
   if (typeof result.expiresAt === 'number') return result.expiresAt;
@@ -226,9 +237,11 @@ interface BoundResult {
   binding: Binding;
   /**
    * Which stored refresh token a result without one carries forward: only one
-   * bound where this secret is (`bound`, the providers the broker builds:
-   * a secret is reused only where it is bound), or whichever the session holds (`any`, a consumer's provider, which
-   * the token API seeds with it whatever its binding, as 3.x did).
+   * bound where this secret is (`bound`: the providers the broker builds, and
+   * a consumer's factory beside a `clientAuthentication` strategy — a secret
+   * is reused only where it is bound), or whichever the session holds (`any`:
+   * a consumer's provider without a strategy, which the token API seeds with
+   * it whatever its binding, as 3.x did).
    */
   carry: 'bound' | 'any';
 }
@@ -245,6 +258,12 @@ interface BoundResult {
 interface ConsumerBuilt {
   provider: IRefreshableTokenProvider;
   binding: Binding;
+  /**
+   * `any` as 4.0.0 (the provider was seeded with whatever the session held);
+   * `bound` on the strategy path, whose provider was seeded only with a
+   * session bound to this resource and client identity.
+   */
+  carry: 'bound' | 'any';
 }
 
 /** A provider `getProvider` built that obtains tokens: a token provider. */
@@ -258,7 +277,6 @@ function obtainsTokens(
   );
 }
 
-/** A stored string that counts as present: `''` is none. */
 /** What the consumer factory's credentials are composed from. */
 interface AuthorizationRead {
   readonly sessionAuth: IAuthorizationConfig | null;
@@ -277,13 +295,20 @@ function storedRefreshTokenOf(session: IConfig | null): string | undefined {
 
 /**
  * The 3.x composition: the session's client as it is, else the key store's
- * with `refreshToken` — the one given, else the key's own.
+ * with `refreshToken` — the one given, else the key's own. With
+ * `sessionBound: false` (the strategy path, a session bound elsewhere) the
+ * session's client comes without its refresh token.
  */
 function composeAuthorization(
   read: AuthorizationRead,
   refreshToken: string | undefined,
+  sessionBound = true,
 ): IAuthorizationConfig | null {
-  if (read.sessionAuth) return read.sessionAuth;
+  if (read.sessionAuth) {
+    return sessionBound
+      ? read.sessionAuth
+      : { ...read.sessionAuth, refreshToken: undefined };
+  }
   if (!read.keyAuth) return null;
   return {
     ...read.keyAuth,
@@ -291,6 +316,7 @@ function composeAuthorization(
   };
 }
 
+/** A stored string that counts as present: `''` is none. */
 function present(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
 }
@@ -567,7 +593,7 @@ export class AuthBroker {
       () => this.sessionStore.getConnectionConfig(destination),
     );
     const serviceUrl = await this.resolveServiceUrl(destination, connConfig);
-    const { provider, binding } = await this.consumerProviderFor(
+    const { provider, binding, carry } = await this.consumerProviderFor(
       destination,
       serviceUrl,
       connConfig,
@@ -580,7 +606,7 @@ export class AuthBroker {
       result: { ...result, expiresAt: expiryOf(result) },
       original: result,
       binding,
-      carry: 'any',
+      carry,
     });
     this.throwFailedWrite(destination, result);
     return result;
@@ -623,10 +649,10 @@ export class AuthBroker {
         return {
           provider,
           binding: consumerBinding(serviceUrl, sapClient, null),
+          carry: 'any',
         };
       }
       const read = await this.readAuthorization(destination);
-      const seed = { ...(connConfig ?? {}), serviceUrl };
       const strategic = await this.consumerClientAuthentication(
         destination,
         means,
@@ -635,6 +661,7 @@ export class AuthBroker {
       let built: IRefreshableTokenProvider;
       let client: IAuthorizationConfig | null;
       let binding: Binding;
+      let carry: ConsumerBuilt['carry'];
       if (strategic) {
         // The strategy's answer and the client identity, resolved before the
         // factory; the factory called inside the same guard: a throw is fixed
@@ -645,13 +672,17 @@ export class AuthBroker {
         const session = read.sessionRead
           ? read.session
           : await this.loadStoredSession(destination);
-        const boundRefreshToken =
-          session &&
-          boundHere(session, binding) &&
-          typeof session.refreshToken === 'string'
-            ? session.refreshToken
-            : undefined;
-        client = composeAuthorization(read, boundRefreshToken);
+        const bound = !!session && boundHere(session, binding);
+        const boundRefreshToken = bound
+          ? storedRefreshTokenOf(session)
+          : undefined;
+        client = composeAuthorization(read, boundRefreshToken, bound);
+        // The session's secret seeds the provider only when bound; else only
+        // the means do.
+        const seed = bound
+          ? { ...(connConfig ?? {}), serviceUrl }
+          : { ...withoutSecret(connConfig), serviceUrl };
+        carry = 'bound';
         const refreshToken = client ? client.refreshToken : boundRefreshToken;
         const fourth: TokenProviderClient = {
           clientAuthentication: strategic.clientAuthentication,
@@ -673,10 +704,14 @@ export class AuthBroker {
           );
         }
       } else {
-        // 4.0.0: the stored refresh token carried over as read.
+        // 4.0.0: the stored secret and refresh token carried over as read.
         client = composeAuthorization(read, storedRefreshTokenOf(read.session));
         binding = consumerBinding(serviceUrl, sapClient, client);
-        built = provider(destination, client, seed);
+        carry = 'any';
+        built = provider(destination, client, {
+          ...(connConfig ?? {}),
+          serviceUrl,
+        });
       }
       this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
         hasCredentials: !!client,
@@ -685,7 +720,7 @@ export class AuthBroker {
           connConfig?.authorizationToken || connConfig?.sessionCookies
         ),
       });
-      return { provider: built, binding };
+      return { provider: built, binding, carry };
     });
     this.consumerBuilt.set(destination, build);
     build.catch(() => {
@@ -1133,8 +1168,10 @@ export class AuthBroker {
    *   write time, so a result without one does not erase the stored one — for
    *   a provider the broker built, only a stored one bound where this one is:
    *   a refresh token obtained for another resource or from another client is
-   *   not carried into this secret. A consumer's provider was seeded
-   *   with whatever the session held, so whatever it holds is carried.
+   *   not carried into this secret. So too for a consumer's factory beside a
+   *   `clientAuthentication` strategy, seeded only with a bound session. A
+   *   consumer's provider without one was seeded with whatever the session
+   *   held, so whatever it holds is carried (4.0.0).
    * - `issuedFor` / `issuedBy`: the binding computed when the provider was
    *   built, each left out when the means lack its source — so the
    *   store clears it.
