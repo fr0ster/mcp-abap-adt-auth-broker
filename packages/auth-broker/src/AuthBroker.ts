@@ -51,6 +51,7 @@ import {
   isSamlGrant,
   isUaaGrant,
   oidcProvider,
+  type RowClient,
   samlProvider,
   sncProvider,
   statedAuthType,
@@ -819,7 +820,7 @@ export class AuthBroker {
         // binding take — the secret client, else the certificate client's —
         // so the binding and the seed are chosen from it. Without a strategy
         // nothing of this runs: 4.0.0's client, nothing certificate-related.
-        let client = secretClient;
+        let client: RowClient | null = secretClient;
         let clientAuthentication: IClientAuthentication | undefined;
         if (this.clientAuthentication && grant !== 'saml2_pure') {
           const context = clientAuthenticationContext(

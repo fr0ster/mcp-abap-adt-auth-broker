@@ -33,6 +33,7 @@ import type {
   ISessionStore,
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
+import { clientIdentity } from '../../clientAuthentication';
 import {
   AuthBroker,
   type AuthBrokerConfig,
@@ -360,6 +361,34 @@ describe('with a strategy, every client row', () => {
     expect(error.message).not.toContain(HINT);
   });
 
+  it.each([
+    [
+      'the secret client',
+      (): IAuthorizationConfig | null => secretClient(),
+      'secret-client',
+    ],
+    [
+      'the certificate client',
+      (): IAuthorizationConfig | null => null,
+      'cert-client',
+    ],
+  ] as const)(
+    'the identity from %s is who the client is — no secret field, no PEM',
+    async (_from, client, id) => {
+      const identity = await clientIdentity({
+        destination: D,
+        grant: 'client_credentials',
+        client: client(),
+        readCertificate: async () => certificateClient(),
+      });
+      expect(identity).toEqual({ uaaUrl: endpoint.url, uaaClientId: id });
+      expect(Object.keys(identity ?? {}).sort()).toEqual([
+        'uaaClientId',
+        'uaaUrl',
+      ]);
+    },
+  );
+
   it('a certificate read that fails after the strategy answered is a fixed DestinationConfigError', async () => {
     const keys = keyStore('client_credentials', null);
     keys.getClientCertificate.mockRejectedValue(
@@ -444,4 +473,50 @@ describe('without a strategy — 4.0.0', () => {
     expect(error.missingFields).toEqual(['authorization']);
     expect(error.message).not.toContain(HINT);
   });
+
+  it.each([
+    [
+      'client_credentials',
+      { uaaClientSecret: '' },
+      'a jwt destination with grantType client_credentials lacks what its grant needs (uaaClientSecret)',
+    ],
+    [
+      'authorization_code',
+      { uaaUrl: '' },
+      'a jwt destination with grantType authorization_code lacks what its grant needs (uaaUrl)',
+    ],
+    [
+      'passcode',
+      { uaaUrl: '', uaaClientSecret: '' },
+      'a jwt destination with grantType passcode lacks what its grant needs (uaaUrl)',
+    ],
+    [
+      'saml2_bearer',
+      { uaaUrl: '' },
+      'a saml destination with grantType saml2_bearer lacks what its grant needs (uaaUrl)',
+    ],
+  ] as const)(
+    '%s, a client with a gap (%j): 4.0.0’s message exactly, no hint',
+    async (grant, gap, words) => {
+      const keys = keyStore(grant, { ...secretClient(), ...gap });
+      const broker = brokerFor(keys);
+
+      const error = await refusal(broker.getProvider(D));
+      expect(error.message).toBe(`Destination "${D}": ${words}`);
+      expect(keys.getClientCertificate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['client_credentials', 'password'] as const)(
+    '%s, a client without a client id: the hint',
+    async (grant) => {
+      const keys = keyStore(grant, { ...secretClient(), uaaClientId: '' });
+      const broker = brokerFor(keys);
+
+      const error = await refusal(broker.getProvider(D));
+      expect(error.missingFields).toContain('uaaClientId');
+      expect(error.message).toContain(HINT);
+      expect(keys.getClientCertificate).not.toHaveBeenCalled();
+    },
+  );
 });

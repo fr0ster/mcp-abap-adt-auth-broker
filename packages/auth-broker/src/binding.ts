@@ -29,6 +29,9 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 
+/** What a binding reads of a client: who it is, never its secret. */
+export type BoundClient = Pick<IAuthorizationConfig, 'uaaUrl' | 'uaaClientId'>;
+
 /** The default port a URL without one is taken to mean. */
 const DEFAULT_PORTS: Readonly<Record<string, string>> = {
   'https:': '443',
@@ -131,7 +134,7 @@ function resourceOf(means: IConnectionConfig): string | undefined {
  */
 export function uaaBinding(
   means: IConnectionConfig,
-  client: IAuthorizationConfig | null,
+  client: BoundClient | null,
 ): Binding {
   const stated = present(client?.uaaUrl) && present(client?.uaaClientId);
   return {
@@ -152,7 +155,7 @@ export function uaaBinding(
  */
 export function oidcBinding(
   means: IConnectionConfig,
-  client: IAuthorizationConfig | null,
+  client: BoundClient | null,
 ): Binding {
   const issuer = present(means.oidcIssuerUrl)
     ? means.oidcIssuerUrl
@@ -189,7 +192,7 @@ export function samlPureBinding(means: IConnectionConfig): Binding {
 export function consumerBinding(
   serviceUrl: string,
   sapClient: string | undefined,
-  client: IAuthorizationConfig | null,
+  client: BoundClient | null,
 ): Binding {
   return uaaBinding({ serviceUrl, sapClient }, client);
 }
@@ -202,7 +205,7 @@ export function consumerBinding(
 export function handedOverBinding(
   authType: 'jwt' | 'saml',
   means: IConnectionConfig,
-  client: IAuthorizationConfig | null,
+  client: BoundClient | null,
 ): Binding {
   const issuedFor = resourceOf(means);
   if (authType === 'saml') {

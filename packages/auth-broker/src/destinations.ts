@@ -42,6 +42,7 @@ import type {
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { type Binding, sameIssuer, sameResource } from './binding';
+import type { ClientIdentity } from './clientAuthentication';
 import { DestinationConfigError } from './DestinationConfigError';
 
 type StatedAuthType = NonNullable<IConnectionConfig['authType']>;
@@ -117,31 +118,45 @@ export function statedGrant(
   return grantType as DestinationGrant;
 }
 
-/** The client's own fields: lacking any of them is lacking a client. */
-const CLIENT_FIELDS: readonly string[] = [
-  'uaaUrl',
-  'uaaClientId',
-  'uaaClientSecret',
-];
+/**
+ * A row's client: the key store's secret client, or — on the strategy path
+ * without one — the certificate client's identity, which carries no secret
+ * field at all, so it can never pass for a (public) secret client.
+ */
+export type RowClient = IAuthorizationConfig | ClientIdentity;
 
-/** Added to a row's refusal when it lacks a client and no strategy was given. */
+/** The secret a row's client holds; an identity holds none. */
+function secretOf(client: RowClient | null): string | undefined {
+  return client && 'uaaClientSecret' in client
+    ? client.uaaClientSecret
+    : undefined;
+}
+
+/** Added to a row's refusal when it has no client and no strategy was given. */
 const CERTIFICATE_HINT =
   'a certificate client needs a clientAuthentication strategy';
 
 /**
- * A client row's refusal. Without a strategy, a row lacking its client gets
- * the hint that a certificate client needs one — fixed words, decided from
- * the lacking names alone, never from the key.
+ * Whether a client row's refusal gets the hint: no strategy, and no client
+ * at all — the key store answered none, or one without a client id. A
+ * client that lacks only its secret or its URL is a secret client with a
+ * gap, and gets 4.0.0's words alone. Decided from what was read, never by
+ * asking the store about a certificate.
  */
+function noClientHint(
+  clientAuthentication: IClientAuthentication | undefined,
+  client: RowClient | null,
+): boolean {
+  return !clientAuthentication && !present(client?.uaaClientId);
+}
+
+/** A client row's refusal: 4.0.0's words, and the hint when `hinted`. */
 function clientRowError(
   destination: string,
   lacking: string[],
   reason: string,
-  clientAuthentication: IClientAuthentication | undefined,
+  hinted: boolean,
 ): DestinationConfigError {
-  const hinted =
-    !clientAuthentication &&
-    lacking.some((name) => CLIENT_FIELDS.includes(name));
   return new DestinationConfigError(
     destination,
     lacking,
@@ -292,7 +307,7 @@ export interface UaaRow {
    * The client: the key store's `getAuthorizationConfig` — or, with a
    * strategy and no secret client, the certificate client's identity.
    */
-  client: IAuthorizationConfig | null;
+  client: RowClient | null;
   /** The session secret — the seed; `null` when there is no session. */
   secret: IConfig | null;
   /**
@@ -334,7 +349,7 @@ export function uaaProvider(row: UaaRow): IAuthProvider {
   if (
     !clientAuthentication &&
     grant !== 'passcode' &&
-    !present(client?.uaaClientSecret)
+    !present(secretOf(client))
   ) {
     lacking.push('uaaClientSecret');
   }
@@ -346,14 +361,14 @@ export function uaaProvider(row: UaaRow): IAuthProvider {
       destination,
       lacking,
       `a jwt destination with grantType ${grant} lacks what its grant needs`,
-      clientAuthentication,
+      noClientHint(clientAuthentication, client),
     );
   }
   const uaaUrl = client?.uaaUrl as string;
   const clientId = client?.uaaClientId as string;
   const clientSecret =
-    !clientAuthentication && present(client?.uaaClientSecret)
-      ? client.uaaClientSecret
+    !clientAuthentication && present(secretOf(client))
+      ? secretOf(client)
       : undefined;
   const hooks = {
     onTokens: row.onTokens,
@@ -455,7 +470,7 @@ export interface OidcRow {
   grant: OidcGrant;
   means: IConnectionConfig;
   /** The client, from the key store's `getAuthorizationConfig`. */
-  client: IAuthorizationConfig | null;
+  client: RowClient | null;
   /** The session secret — the seed; `null` when there is none, or it is not bound here. */
   secret: IConfig | null;
   /** The consumer strategy's answer: given, it replaces the secret. */
@@ -512,7 +527,7 @@ export function oidcProvider(row: OidcRow): IAuthProvider {
       destination,
       lacking,
       `a jwt destination with grantType ${grant} lacks what its grant needs`,
-      row.clientAuthentication,
+      noClientHint(row.clientAuthentication, client),
     );
   }
   const scopes =
@@ -524,7 +539,7 @@ export function oidcProvider(row: OidcRow): IAuthProvider {
     clientId: client?.uaaClientId as string,
     clientSecret: row.clientAuthentication
       ? undefined
-      : stated(client?.uaaClientSecret),
+      : stated(secretOf(client)),
     ...authenticatedBy(row.clientAuthentication),
     tokenEndpoint: stated(means.oidcTokenEndpoint),
     ...tokenSeed(row.secret),
@@ -587,7 +602,7 @@ export interface SamlRow {
   grant: SamlGrant;
   means: IConnectionConfig;
   /** `saml2_bearer`'s client, from the key store; `null` for `saml2_pure`. */
-  client: IAuthorizationConfig | null;
+  client: RowClient | null;
   /** The session secret — the seed; `null` when there is none, or it is not bound here. */
   secret: IConfig | null;
   /** `saml2_bearer`: the consumer strategy's answer; given, it replaces the secret. */
@@ -654,7 +669,8 @@ export function samlProvider(row: SamlRow): IAuthProvider {
       destination,
       lacking,
       `a saml destination with grantType ${grant} lacks what its grant needs`,
-      grant === 'saml2_bearer' ? row.clientAuthentication : undefined,
+      grant === 'saml2_bearer' &&
+        noClientHint(row.clientAuthentication, client),
     );
   }
   const skew = means.samlClockSkewMs;
@@ -724,7 +740,7 @@ export function samlProvider(row: SamlRow): IAuthProvider {
     clientId: client?.uaaClientId as string,
     clientSecret: row.clientAuthentication
       ? undefined
-      : stated(client?.uaaClientSecret),
+      : stated(secretOf(client)),
     ...authenticatedBy(row.clientAuthentication),
     ...tokenSeed(row.secret),
   });
