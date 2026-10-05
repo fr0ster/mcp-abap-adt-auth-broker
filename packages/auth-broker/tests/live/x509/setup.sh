@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Creates the x509 live check's environment in the targeted space:
 #   - an xsuaa/application instance whose client may use client_credentials
-#     and authenticates with a client certificate (credential-types x509);
+#     and authenticate with a secret or a client certificate (credential-types
+#     binding-secret, x509 — the pair measured on the trial, 2026-10-04, in
+#     auth-providers' tests/xsuaa);
 #   - its service key `x509-key`, created with {"credential-type":"x509"},
 #     holding a certificate and its private key. It is created afresh on every
 #     run — XSUAA's certificate is valid for about seven days.
@@ -47,17 +49,30 @@ ensure_instance() { # name plan params-file
     [ "$guid" = "$(recorded_id instance "$1")" ] || refuse_foreign "service instance $1 ($guid)"
     # An instance kept from an earlier run (X509_KEEP=1) gets today's
     # parameters: credential types and grant types may have changed since.
-    quietly cf update-service "$1" -c "$3" --wait || {
+    quietly bounded cf update-service "$1" -c "$3" --wait || {
       echo "$1: could not update it with $3" >&2
       exit 1
     }
     echo "$1: reused (owned, $guid)"
   else
-    quietly cf create-service xsuaa "$2" "$1" -c "$3" --wait
-    guid="$(instance_guid "$1")" || exit 3
+    # Recorded right after it is created — and also when cf reports the
+    # create failed or timed out, if the instance is there anyway: the name
+    # was free a moment ago (checked above), so it is the one this run asked
+    # for. Unrecorded, teardown would leave it and every later run would
+    # refuse it as someone else's.
+    created=1
+    quietly bounded cf create-service xsuaa "$2" "$1" -c "$3" --wait || created=0
+    guid="$(instance_guid "$1")" || {
+      echo "$1: could not tell whether it was created, so it is not recorded." \
+        "If cf services lists it, remove it: cf delete-service $1 -f" >&2
+      exit 3
+    }
+    if [ -n "$guid" ]; then
+      own instance "$1" "$guid"
+      echo "$1: created ($guid)"
+    fi
+    [ "$created" = 1 ] || { echo "$1: could not create it" >&2; exit 1; }
     [ -n "$guid" ] || { echo "$1: created, but cf reports it absent" >&2; exit 1; }
-    own instance "$1" "$guid"
-    echo "$1: created ($guid)"
   fi
 }
 
@@ -72,7 +87,7 @@ fresh_key() { # instance key key-params
   key="$(key_guid "$instance" "$2")" || exit 3
   if [ -n "$key" ]; then
     [ "$key" = "$(recorded_id key "$1/$2")" ] || refuse_foreign "service key $1/$2 ($key)"
-    quietly cf delete-service-key "$1" "$2" -f --wait || {
+    quietly bounded cf delete-service-key "$1" "$2" -f --wait || {
       echo "$1/$2: could not delete it to create it afresh" >&2
       exit 1
     }
@@ -80,7 +95,7 @@ fresh_key() { # instance key key-params
     echo "$1/$2: deleted ($key), to be created afresh"
   fi
   created=1
-  quietly cf create-service-key "$1" "$2" -c "$3" --wait || created=0
+  quietly bounded cf create-service-key "$1" "$2" -c "$3" --wait || created=0
   key="$(key_guid "$instance" "$2")" || {
     echo "$1/$2: could not tell whether it was created, so it is not recorded." \
       "If cf service-keys $1 lists it, remove it: cf delete-service-key $1 $2 -f" >&2
@@ -94,6 +109,10 @@ fresh_key() { # instance key key-params
   [ -n "$key" ] || { echo "$1/$2: created, but cf reports it absent" >&2; exit 1; }
 }
 
+# The target once more, right before the first write: cf may have been
+# pointed elsewhere since the run started.
+guard_target
+guard_ledger
 ensure_instance "$INSTANCE" application "$HERE/xs-security.json"
 
 # The files of an earlier run go first: a run that fails below must not leave

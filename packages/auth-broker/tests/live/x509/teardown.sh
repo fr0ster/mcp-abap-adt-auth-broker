@@ -40,7 +40,7 @@ delete_key() { # instance key
     elif [ "$current" != "$recorded" ]; then
       echo "$1/$2: now $current, not ours ($recorded) — left alone" >&2
     else
-      quietly cf delete-service-key "$1" "$2" -f --wait || fail "could not delete $1/$2"
+      quietly bounded cf delete-service-key "$1" "$2" -f --wait || fail "could not delete $1/$2"
       echo "$1/$2: deleted ($recorded)"
     fi
   fi
@@ -56,7 +56,7 @@ delete_instance() { # name
   elif [ "$current" != "$recorded" ]; then
     echo "$1: now $current, not ours ($recorded) — left alone" >&2
   else
-    quietly cf delete-service "$1" -f --wait || fail "could not delete $1 (a service key not recorded as ours blocks it? cf service-keys $1 lists them; one you know is a leftover of these tests: cf delete-service-key $1 <key> -f)"
+    quietly bounded cf delete-service "$1" -f --wait || fail "could not delete $1 (a service key not recorded as ours blocks it? cf service-keys $1 lists them; one you know is a leftover of these tests: cf delete-service-key $1 <key> -f)"
     echo "$1: deleted ($recorded)"
   fi
   disown instance "$1"

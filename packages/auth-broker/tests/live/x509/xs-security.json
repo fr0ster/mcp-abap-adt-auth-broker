@@ -4,6 +4,6 @@
   "description": "auth-broker: the x509 live check — client_credentials with a client certificate through the broker and the CLI. Created and removed by packages/auth-broker/tests/live/x509 scripts.",
   "oauth2-configuration": {
     "grant-types": ["client_credentials"],
-    "credential-types": ["x509"]
+    "credential-types": ["binding-secret", "x509"]
   }
 }

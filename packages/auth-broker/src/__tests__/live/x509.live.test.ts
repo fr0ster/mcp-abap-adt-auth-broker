@@ -2,8 +2,9 @@
  * An x509 XSUAA service key through the auth chain, against a real XSUAA: the
  * broker with `fromServiceKeyCertificate()`, and the CLI's two commands with
  * `--client-auth certificate`. The key is the one tests/live/x509/setup.sh
- * creates on a BTP trial (`credential-types: ["x509"]`, key parameter
- * `{"credential-type": "x509"}`) and teardown.sh removes; `npm run
+ * creates on a BTP trial (`credential-types: ["binding-secret", "x509"]`,
+ * the pair measured there on 2026-10-04; key parameter
+ * `{"credential-type": "x509"}`, so the key holds no secret) and teardown.sh removes; `npm run
  * test:live:x509` does both around this suite and builds first. Not part of
  * `npm test`, not part of CI.
  *
@@ -16,7 +17,9 @@
  * — each with a timeout. Both are non-interactive here (client_credentials):
  * no case passes an interactive strategy, and while a command runs this suite
  * holds the callback port a browser login would bind (auth-providers'
- * DEFAULT_CALLBACK_PORT), so one constructed and invoked fails the run.
+ * DEFAULT_CALLBACK_PORT), so one constructed and invoked fails the run — and
+ * a failure that says the port is in use is never taken for the expected one.
+ * A command's TMPDIR is the case's work directory, removed after the case.
  *
  * Jest prints the received value when a matcher fails: every assertion on the
  * key's material, a token or a command's output is made on a boolean
@@ -37,6 +40,7 @@ import {
   EnvDestinationStore,
   SafeXsuaaSessionStore,
   XSUAA_DESTINATION_VARS,
+  XSUAA_SESSION_VARS,
   XsuaaServiceKeyStore,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
@@ -50,6 +54,8 @@ const CLI = path.resolve(__dirname, '../../../../auth-broker-cli');
 const MCP_AUTH = path.join(CLI, 'dist', 'mcp-auth.js');
 const GENERATE_ENV = path.join(CLI, 'src', 'generate-env-from-service-key.ts');
 const COMMAND_TIMEOUT_MS = 60_000;
+/** After SIGTERM at the timeout, how long a command gets before SIGKILL. */
+const KILL_GRACE_MS = 5_000;
 
 function unavailable(): string | null {
   if (!LOCAL) {
@@ -138,15 +144,18 @@ interface CommandResult {
 }
 
 /**
- * Runs `node <args>` in `cwd` with a timeout, stdout and stderr together. The
- * output is kept for the assertions only — never printed whole.
+ * Runs `node <args>` in `cwd` with a timeout, stdout and stderr together; its
+ * TMPDIR is `cwd`, so whatever it leaves there goes with the case's work
+ * directory. At the timeout it gets SIGTERM — its own cleanup runs — and
+ * SIGKILL after a grace period. The output is kept for the assertions only —
+ * never printed whole.
  */
 function runNode(args: string[], cwd: string): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       cwd,
       // Jest's --experimental-vm-modules is not the CLI's.
-      env: { ...process.env, NODE_OPTIONS: '' },
+      env: { ...process.env, NODE_OPTIONS: '', TMPDIR: cwd },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -157,16 +166,22 @@ function runNode(args: string[], cwd: string): Promise<CommandResult> {
       output += chunk;
     });
     let timedOut = false;
+    let killer: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      child.kill('SIGTERM');
+      killer = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS);
     }, COMMAND_TIMEOUT_MS);
-    child.on('error', (error) => {
+    const stop = () => {
       clearTimeout(timer);
+      if (killer) clearTimeout(killer);
+    };
+    child.on('error', (error) => {
+      stop();
       reject(error);
     });
     child.on('close', (status) => {
-      clearTimeout(timer);
+      stop();
       resolve({ status, timedOut, output });
     });
   });
@@ -253,6 +268,23 @@ describeWhere(
       expect('XSUAA_UAA_CLIENT_SECRET' in keys).toBe(false);
       expect(keys.XSUAA_GRANT_TYPE).toBe('client_credentials');
       return keys;
+    };
+
+    /**
+     * The destination alone: the session's lines (token, expiry, refresh
+     * token, binding) removed from a written `.env`, so a broker over it must
+     * obtain a token itself — over mTLS — instead of reusing the CLI's.
+     */
+    const withoutSession = (file: string): void => {
+      const session = new Set<string>(Object.values(XSUAA_SESSION_VARS));
+      const kept = fs
+        .readFileSync(file, 'utf8')
+        .split(/\r?\n/)
+        .filter((line) => !session.has(line.split('=')[0]));
+      fs.writeFileSync(file, kept.join('\n'), { mode: 0o600 });
+      expect(XSUAA_SESSION_VARS.AUTHORIZATION_TOKEN in readEnvKeys(file)).toBe(
+        false,
+      );
     };
 
     /** A broker over a written destination, from where it now lives. */
@@ -370,14 +402,22 @@ describeWhere(
         expect(pemFree(fs.readFileSync(file, 'utf8'))).toBe(true);
       }
 
-      const broker = freshBroker(outDir);
+      // A copy of the destination without the CLI's token: the fresh broker
+      // obtains its own.
+      const freshDir = path.join(work, 'fresh');
+      fs.mkdirSync(freshDir);
+      const fresh = path.join(freshDir, `${DESTINATION}.env`);
+      fs.copyFileSync(output, fresh);
+      withoutSession(fresh);
+      const broker = freshBroker(freshDir);
       expect(await (await broker.getProvider(DESTINATION)).prepare()).toEqual({
         ok: true,
       });
       const token = await broker.getToken(DESTINATION);
       expect(clientOf(token) === x509.clientid).toBe(true);
+      expect(token !== keys.XSUAA_JWT_TOKEN).toBe(true);
       log.info(
-        'x509 (b): mcp-auth wrote paths only; a fresh broker got a token',
+        'x509 (b): mcp-auth wrote paths only; a fresh broker obtained a new token over mTLS',
       );
     }, 120_000);
 
@@ -410,10 +450,12 @@ describeWhere(
       // Moved where it is used: the paths it holds are absolute.
       const finalDir = path.join(work, 'final');
       fs.mkdirSync(finalDir);
-      fs.renameSync(written, path.join(finalDir, `${DESTINATION}.env`));
+      const moved = path.join(finalDir, `${DESTINATION}.env`);
+      fs.renameSync(written, moved);
       for (const file of filesUnder(work)) {
         expect(pemFree(fs.readFileSync(file, 'utf8'))).toBe(true);
       }
+      withoutSession(moved);
 
       const broker = freshBroker(finalDir);
       expect(await (await broker.getProvider(DESTINATION)).prepare()).toEqual({
@@ -421,8 +463,9 @@ describeWhere(
       });
       const token = await broker.getToken(DESTINATION);
       expect(clientOf(token) === x509.clientid).toBe(true);
+      expect(token !== keys.XSUAA_JWT_TOKEN).toBe(true);
       log.info(
-        'x509 (c): generate-env wrote paths only; a fresh broker over the moved .env got a token',
+        'x509 (c): generate-env wrote paths only; a fresh broker over the moved .env obtained a new token over mTLS',
       );
     }, 120_000);
 
@@ -459,6 +502,8 @@ describeWhere(
       );
       expect(failedGenerate.timedOut).toBe(false);
       expect(failedGenerate.status !== 0).toBe(true);
+      // Not the failure of an invoked browser login on the held port.
+      expect(failedGenerate.output.includes('already in use')).toBe(false);
       expect(pemFree(failedGenerate.output, foreign.body)).toBe(true);
       expect(fs.readFileSync(session).equals(before)).toBe(true);
 
@@ -484,6 +529,7 @@ describeWhere(
       );
       expect(failedMcpAuth.timedOut).toBe(false);
       expect(failedMcpAuth.status !== 0).toBe(true);
+      expect(failedMcpAuth.output.includes('already in use')).toBe(false);
       expect(pemFree(failedMcpAuth.output, foreign.body)).toBe(true);
       expect(fs.readFileSync(output).equals(previous)).toBe(true);
 
@@ -494,6 +540,7 @@ describeWhere(
       log.info(
         `x509 (d): failing runs exited ${failedGenerate.status} / ${failedMcpAuth.status}; previous destinations untouched`,
       );
-    }, 240_000);
+      // Four commands of up to 60 s each, plus the grace periods.
+    }, 300_000);
   },
 );

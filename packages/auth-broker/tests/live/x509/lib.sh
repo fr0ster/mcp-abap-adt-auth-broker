@@ -146,6 +146,26 @@ key_guid() { # instance-guid key
   ' "$1" "$2"
 }
 
+# How long one `cf … --wait` may take, in seconds, before it counts as a
+# failure (a broker that never answers must not hang the run). The caller
+# treats a timeout like any other failure: it looks up what exists and records
+# what it created.
+CF_WAIT_TIMEOUT="${CF_WAIT_TIMEOUT:-600}"
+
+# Runs a command bounded by CF_WAIT_TIMEOUT, through GNU `timeout` (`gtimeout`
+# from Homebrew coreutils on macOS). Without either it runs unbounded and
+# says so: macOS ships neither.
+bounded() { # command...
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$CF_WAIT_TIMEOUT" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$CF_WAIT_TIMEOUT" "$@"
+  else
+    echo "note: no timeout command; $1 $2 runs unbounded" >&2
+    "$@"
+  fi
+}
+
 # Runs a cf command that prints no secret, showing its output only when it
 # fails — cf writes the reason to stdout as often as to stderr.
 quietly() { # command...
