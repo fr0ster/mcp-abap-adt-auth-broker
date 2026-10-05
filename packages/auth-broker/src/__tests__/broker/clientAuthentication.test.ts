@@ -28,9 +28,11 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   AuthBroker,
   type ClientAuthenticationContext,
+  type ClientAuthenticationStrategy,
   DestinationConfigError,
   fromServiceKeyCertificate,
   fromServiceKeySecret,
+  type IRefreshableTokenProvider,
 } from '../../index';
 
 const D = 'X509';
@@ -275,6 +277,67 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
     expect(seen[0].destination).toBe(D);
     expect(seen[0].grant).toBe('client_credentials');
     expect(seen[0].client).toEqual(SECRET_CLIENT);
+  });
+
+  it("tells the strategy the client's identity and secret only — never a refresh token the key store answered — on getProvider and the token API alike", async () => {
+    const withRefresh: IAuthorizationConfig = {
+      ...SECRET_CLIENT,
+      refreshToken: 'refresh-the-key-store-answered',
+    };
+    const allowlist = ['uaaClientId', 'uaaClientSecret', 'uaaUrl'];
+    const seen: ClientAuthenticationContext[] = [];
+    const strategy: ClientAuthenticationStrategy = async (ctx) => {
+      seen.push(ctx);
+      return fromServiceKeySecret({ encoding: 'raw' })(ctx);
+    };
+
+    // getProvider, no stored session.
+    await new AuthBroker({
+      sessionStore: sessionStore(),
+      serviceKeyStore: keyStore(withRefresh),
+      clientAuthentication: strategy,
+    }).getProvider(D);
+
+    // The token API with a factory, no stored session.
+    const provider: IRefreshableTokenProvider = {
+      getTokens: async () => ({
+        authorizationToken: 'a-token',
+        authType: 'client_credentials',
+      }),
+      refreshTokens: async () => ({
+        authorizationToken: 'a-token',
+        authType: 'client_credentials',
+      }),
+    };
+    await new AuthBroker({
+      sessionStore: sessionStore(),
+      serviceKeyStore: keyStore(withRefresh),
+      clientAuthentication: strategy,
+      provider: () => provider,
+    }).getToken(D);
+
+    expect(seen).toHaveLength(2);
+    for (const ctx of seen) {
+      expect(Object.keys(ctx.client ?? {}).sort()).toEqual(allowlist);
+      expect(ctx.client).toEqual(SECRET_CLIENT);
+      expect(inspect(ctx.client)).not.toContain(
+        'refresh-the-key-store-answered',
+      );
+    }
+
+    // Without a strategy, 4.0.0: the token API's factory gets the key
+    // store's client as it is, its refresh token included.
+    const factory = jest.fn(
+      (_d: string, _a: IAuthorizationConfig | null) => provider,
+    );
+    await new AuthBroker({
+      sessionStore: sessionStore(),
+      serviceKeyStore: keyStore(withRefresh),
+      provider: factory,
+    }).getToken(D);
+    expect(factory.mock.calls[0][1]?.refreshToken).toBe(
+      'refresh-the-key-store-answered',
+    );
   });
 
   it('reads no certificate for a strategy that does not ask', async () => {

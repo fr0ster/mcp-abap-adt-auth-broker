@@ -67,7 +67,8 @@ export {
 `(context: ClientAuthenticationContext) => Promise<IClientAuthentication>`,
 called once per build of a destination whose grant (`ClientAuthenticationGrant`:
 the UAA and OIDC grants, `saml2_bearer`) authenticates a client; the context
-carries `destination`, `grant`, `client` (the key store's secret client or
+carries `destination`, `grant`, `client` (the key store's secret client —
+`uaaUrl`, `uaaClientId`, `uaaClientSecret` only, never a refresh token — or
 `null`) and a lazy `readCertificate()`. `fromServiceKeyCertificate()` answers
 auth-providers' `tlsClientCertificate` from the key store's certificate client
 (`<certUrl>/oauth/token`, material checked before answering);

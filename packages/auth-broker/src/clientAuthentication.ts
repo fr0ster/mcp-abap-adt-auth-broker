@@ -40,7 +40,11 @@ export type ClientAuthenticationGrant =
 export interface ClientAuthenticationContext {
   readonly destination: string;
   readonly grant: ClientAuthenticationGrant;
-  /** What the key store's `getAuthorizationConfig` answered (a secret client), or null. */
+  /**
+   * The secret client the key store's `getAuthorizationConfig` answered —
+   * `uaaUrl`, `uaaClientId`, `uaaClientSecret` only, never a refresh token —
+   * or null.
+   */
   readonly client: IAuthorizationConfig | null;
   /**
    * The key store's certificate client, read only when called and at most
@@ -139,8 +143,26 @@ export function fromServiceKeySecret(
 }
 
 /**
- * The context for one build: `readCertificate` lazy and memoised — the first
- * call reads, every later one gets the same answer.
+ * What a strategy is told of the secret client: an allowlist — who it is
+ * (`uaaUrl`, `uaaClientId`) and its secret (`uaaClientSecret`, which
+ * `fromServiceKeySecret` sends) — never a refresh token or any other field a
+ * store's `getAuthorizationConfig` carried, which no binding has checked.
+ */
+export function contextClient(
+  client: IAuthorizationConfig | null,
+): IAuthorizationConfig | null {
+  if (!client) return null;
+  return {
+    uaaUrl: client.uaaUrl,
+    uaaClientId: client.uaaClientId,
+    uaaClientSecret: client.uaaClientSecret,
+  };
+}
+
+/**
+ * The context for one build: the client through `contextClient`;
+ * `readCertificate` lazy and memoised — the first call reads, every later one
+ * gets the same answer.
  */
 export function clientAuthenticationContext(
   destination: string,
@@ -152,7 +174,7 @@ export function clientAuthenticationContext(
   return {
     destination,
     grant,
-    client,
+    client: contextClient(client),
     readCertificate: () => {
       certificate ??= read();
       return certificate;

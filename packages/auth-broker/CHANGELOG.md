@@ -28,7 +28,8 @@ exactly as by 4.0.0, and nothing certificate-related is read. Released with
   `passcode`, `oidc_authorization_code`, `device_code`, `password`,
   `token_exchange`, `saml2_bearer` — `ClientAuthenticationGrant`)
   authenticates. Called once per build with a `ClientAuthenticationContext`
-  (`destination`, `grant`, the key store's secret `client` or `null`, and a
+  (`destination`, `grant`, the key store's secret `client` — `uaaUrl`,
+  `uaaClientId`, `uaaClientSecret` only, never a refresh token — or `null`, and a
   lazy, memoised `readCertificate()`); its answer goes to the provider as
   `clientAuthentication`, with no client secret. No default and no "nothing"
   answer: a stated choice never falls back to the secret.

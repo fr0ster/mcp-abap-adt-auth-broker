@@ -439,9 +439,10 @@ destination's provider, with a `ClientAuthenticationContext`:
 
 - `destination` and `grant` (a `ClientAuthenticationGrant`, one of the eight
   above);
-- `client` — what the key store's `getAuthorizationConfig` answered: the
-  secret client, or `null` (an x509 key answers `null` there, never a client
-  with an empty secret);
+- `client` — the secret client the key store's `getAuthorizationConfig`
+  answered, as `uaaUrl`, `uaaClientId` and `uaaClientSecret` only — never a
+  refresh token or any other field the store answered with it — or `null`
+  (an x509 key answers `null` there, never a client with an empty secret);
 - `readCertificate()` — the key store's certificate client
   (`IClientCertificate`: `uaaUrl`, `clientId`, `certificate`, `key`,
   `certUrl`), read **only when called**, at most once per build; `null` when
