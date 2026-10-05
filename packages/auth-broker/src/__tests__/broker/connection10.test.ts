@@ -77,7 +77,7 @@ async function startAbap(endpoint: TokenEndpoint) {
       const status = accepted ? 200 : 401;
       seen.push({
         method: req.method ?? '',
-        path: (req.url ?? '').split('?')[0],
+        path: (req.url ?? '').split('?')[0]!,
         bearer,
         status,
       });
@@ -213,7 +213,7 @@ describe('through connection 10: getProvider → AdtCloudConnector → 401 → r
     expect(endpoint.requests.map((r) => r.grantType)).toEqual([
       'refresh_token',
     ]);
-    expect(endpoint.requests[0].params.refresh_token).toBe('stored-refresh');
+    expect(endpoint.requests[0]!.params.refresh_token).toBe('stored-refresh');
     const renewed = endpoint.issued[0];
     // What the server saw: connection 10's logon (its session preflight, then
     // the CSRF fetch) with the refused token — the 401 on the CSRF fetch is

@@ -89,13 +89,15 @@ export function clientAuthFlags(
       `--client-auth certificate needs ${missing.map(([flag]) => flag).join(' and ')}`,
     );
   }
-  const [certPath, keyPath] = certificateFlags.map(([flag, value]) => {
+  const resolveFile = ([flag, value]: (typeof certificateFlags)[number]) => {
     const resolved = path.resolve(value as string);
     if (!fs.statSync(resolved, { throwIfNoEntry: false })?.isFile()) {
       throw new Error(`${flag}: no file at ${resolved}`);
     }
     return resolved;
-  });
+  };
+  const certPath = resolveFile(certificateFlags[0]);
+  const keyPath = resolveFile(certificateFlags[1]);
   return { certPath, keyPath };
 }
 

@@ -49,7 +49,7 @@ export async function startLocalServer(tls?: {
       body += chunk;
     });
     req.on('end', () => {
-      const path = (req.url ?? '').split('?')[0];
+      const path = (req.url ?? '').split('?')[0]!;
       const form = Object.fromEntries(new URLSearchParams(body));
       const peer = tls
         ? (req.socket as TLSSocket).getPeerCertificate()
@@ -115,7 +115,7 @@ export function jwt(name: string): string {
 export function jwtName(token: string | undefined): string | undefined {
   if (!token) return undefined;
   try {
-    return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString())
+    return JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString())
       .sub;
   } catch {
     return undefined;

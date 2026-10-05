@@ -50,7 +50,7 @@ const issuedBy = (clientId: string) => `${KEYCLOAK_URL}?client_id=${clientId}`;
 const UNAUTHORIZED = { at: 'request', status: 401, error: null } as const;
 
 const claims = (jwt: string): Record<string, unknown> =>
-  JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
+  JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString('utf8'));
 
 async function bearer(provider: IAuthProvider): Promise<string> {
   let token = '';

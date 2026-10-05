@@ -50,6 +50,9 @@
 			"includes": ["**/__tests__/**", "**/*.test.ts", "**/*.spec.ts"],
 			"linter": {
 				"rules": {
+					"style": {
+						"noNonNullAssertion": "off"
+					},
 					"suspicious": {
 						"noExplicitAny": "off"
 					},

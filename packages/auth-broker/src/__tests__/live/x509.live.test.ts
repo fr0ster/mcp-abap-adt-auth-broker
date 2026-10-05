@@ -88,7 +88,7 @@ interface X509Key {
 const claims = (jwt: unknown): Record<string, unknown> => {
   try {
     return JSON.parse(
-      Buffer.from(String(jwt).split('.')[1], 'base64url').toString('utf8'),
+      Buffer.from(String(jwt).split('.')[1]!, 'base64url').toString('utf8'),
     );
   } catch {
     return {};
@@ -115,7 +115,7 @@ function readEnvKeys(file: string): Record<string, string> {
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
     const match = /^([A-Z0-9_]+)=(.*)$/.exec(line);
     if (!match) continue;
-    let value = match[2];
+    let value = match[2]!;
     const quote = value[0];
     if (
       value.length >= 2 &&
@@ -124,7 +124,7 @@ function readEnvKeys(file: string): Record<string, string> {
     ) {
       value = value.slice(1, -1);
     }
-    keys[match[1]] = value;
+    keys[match[1]!] = value;
   }
   return keys;
 }
@@ -280,7 +280,7 @@ describeWhere(
       const kept = fs
         .readFileSync(file, 'utf8')
         .split(/\r?\n/)
-        .filter((line) => !session.has(line.split('=')[0]));
+        .filter((line) => !session.has(line.split('=')[0]!));
       fs.writeFileSync(file, kept.join('\n'), { mode: 0o600 });
       expect(XSUAA_SESSION_VARS.AUTHORIZATION_TOKEN in readEnvKeys(file)).toBe(
         false,

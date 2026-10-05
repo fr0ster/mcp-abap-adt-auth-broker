@@ -135,7 +135,7 @@ describe('generate-env', () => {
         noBrowser,
       ),
     ).resolves.toBe(0);
-    expect(server.requests[0].form.grant_type).toBe('authorization_code');
+    expect(server.requests[0]!.form.grant_type).toBe('authorization_code');
     const dir = path.dirname(session);
     const means = await new EnvDestinationStore(dir, {
       variables: XSUAA_DESTINATION_VARS,
@@ -159,7 +159,7 @@ describe('generate-env', () => {
         noBrowser,
       ),
     ).resolves.toBe(0);
-    expect(server.requests[0].form.grant_type).toBe('client_credentials');
+    expect(server.requests[0]!.form.grant_type).toBe('client_credentials');
     const dir = path.dirname(session);
     expect(
       await new EnvDestinationStore(dir).getConnectionConfig('TRIAL'),
@@ -530,7 +530,7 @@ describe('generate-env --client-auth', () => {
 
       expect(server.requests).toHaveLength(0);
       expect(certServer.requests).toHaveLength(1);
-      const [request] = certServer.requests;
+      const request = certServer.requests[0]!;
       expect(request.path).toBe('/oauth/token');
       expect(request.form.grant_type).toBe('client_credentials');
       expect(request.form.client_id).toBe('key-client');
@@ -571,13 +571,13 @@ describe('generate-env --client-auth', () => {
         ),
       ).resolves.toBe(0);
       expect(certServer.requests).toHaveLength(1);
-      expect(certServer.requests[0].form).toEqual(
+      expect(certServer.requests[0]!.form).toEqual(
         expect.objectContaining({
           grant_type: 'authorization_code',
           code: 'the-code',
         }),
       );
-      expect(certServer.requests[0].clientCertificate).toBe(CLIENT_CN);
+      expect(certServer.requests[0]!.clientCertificate).toBe(CLIENT_CN);
 
       const keys = readEnvKeys(session);
       expect(keys.SAP_URL).toBe('https://abap.example.com');
@@ -708,7 +708,7 @@ describe('generate-env --client-auth', () => {
           ),
         ).resolves.toBe(0);
         expect(certServer.requests).toHaveLength(0);
-        const [request] = server.requests;
+        const request = server.requests[0]!;
         expect(request.form.grant_type).toBe('client_credentials');
         expect(request.form).not.toHaveProperty('client_secret');
         expect(request.authorization).toBe(
@@ -891,7 +891,7 @@ describe('generate-env --client-auth', () => {
       ),
     ).resolves.toBe(0);
     expect(certServer.requests).toHaveLength(1);
-    expect(certServer.requests[0].clientCertificate).toBe(CLIENT_CN);
+    expect(certServer.requests[0]!.clientCertificate).toBe(CLIENT_CN);
     expect(readEnvKeys(session).XSUAA_UAA_CERT_URL).toBe(certServer.url);
 
     // The run's work directory is gone; the .env alone, where it was written.

@@ -117,7 +117,7 @@ function rfcUnavailable(): string | null {
     return null;
   } catch (error) {
     const first = (error instanceof Error ? error.message : String(error))
-      .split('\n')[0]
+      .split('\n')[0]!
       .slice(0, 200);
     return `@mcp-abap-adt/sap-rfc-lite does not load here — install with SAPNWRFC_HOME set to the NW RFC SDK, and put its lib on the loader path (${first})`;
   }

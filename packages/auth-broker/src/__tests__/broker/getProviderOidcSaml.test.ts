@@ -349,8 +349,8 @@ describe('getProvider — the OIDC grants', () => {
 
       await (await broker.getProvider(D)).prepare();
 
-      expect(endpoint.requests[0].authorization).toBeUndefined();
-      expect(endpoint.requests[0].params.client_id).toBe('oidc-client');
+      expect(endpoint.requests[0]!.authorization).toBeUndefined();
+      expect(endpoint.requests[0]!.params.client_id).toBe('oidc-client');
     });
   });
 
@@ -370,7 +370,7 @@ describe('getProvider — the OIDC grants', () => {
 
       expect(oidcAuthorization.mock.calls).toEqual([[D]]);
       expect(oidc.urls).toHaveLength(1);
-      const url = new URL(oidc.urls[0]);
+      const url = new URL(oidc.urls[0]!);
       expect(`${url.origin}${url.pathname}`).toBe(
         'https://login.example.com/authorize',
       );
@@ -513,7 +513,7 @@ describe('getProvider — the OIDC grants', () => {
 
       await (await broker.getProvider(D)).prepare();
 
-      expect(endpoint.requests[0].params.scope).toBeUndefined();
+      expect(endpoint.requests[0]!.params.scope).toBeUndefined();
     });
   });
 
@@ -574,7 +574,7 @@ describe('getProvider — the OIDC grants', () => {
       expect(await provider.prepare()).toEqual({ ok: true });
 
       expect(endpoint.requests).toHaveLength(1);
-      expect(endpoint.requests[0].params.refresh_token).toBeUndefined();
+      expect(endpoint.requests[0]!.params.refresh_token).toBeUndefined();
       expect(await bearer(provider)).toBe(endpoint.issued[0]);
       expect(held()?.issuedBy).toBe(oidcBy());
     });
@@ -1201,11 +1201,11 @@ describe('getProvider — the SAML grants', () => {
       ]);
       // RFC 7522: the Assertion alone, base64url — taken from what the IdP issued.
       const assertion = Buffer.from(
-        endpoint.requests[0].params.assertion,
+        endpoint.requests[0]!.params.assertion!,
         'base64url',
       ).toString('utf8');
       expect(assertion).toMatch(/^<saml:Assertion\b/);
-      expect(assertionIssuer(saml.responses[0])).toBe(IDP_ENTITY);
+      expect(assertionIssuer(saml.responses[0]!)).toBe(IDP_ENTITY);
       expect(await bearer(provider)).toBe(endpoint.issued[0]);
       const [, written] = store.saveSession.mock.calls[0] as [
         string,
@@ -1308,7 +1308,7 @@ describe('getProvider — the SAML grants', () => {
 
       await (await broker.getProvider(D)).prepare();
 
-      expect(endpoint.requests[0].authorization).toBeUndefined();
+      expect(endpoint.requests[0]!.authorization).toBeUndefined();
     });
   });
 

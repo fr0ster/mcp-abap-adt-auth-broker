@@ -203,7 +203,7 @@ describe('the token API on the getProvider cache (no consumer provider)', () => 
     expect(endpoint.requests.map((r) => r.grantType)).toEqual([
       'refresh_token',
     ]);
-    expect(endpoint.requests[0].params.refresh_token).toBe('stored-refresh');
+    expect(endpoint.requests[0]!.params.refresh_token).toBe('stored-refresh');
     expect(token).toBe(endpoint.issued[0]);
     await expect(bearer(provider)).resolves.toBe(token);
     expect(store.saveSession).toHaveBeenCalledTimes(1);

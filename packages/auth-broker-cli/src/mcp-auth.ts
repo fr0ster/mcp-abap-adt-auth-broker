@@ -337,6 +337,7 @@ function parseArgs(
 
   // Parse arguments
   for (let i = 0; i < args.length; i++) {
+    const next = args[i + 1];
     if (args[i] === '--service-key' && i + 1 < args.length) {
       serviceKeyPath = args[i + 1];
       i++;
@@ -355,8 +356,8 @@ function parseArgs(
         process.exit(1);
       }
       i++;
-    } else if (args[i] === '--browser' && i + 1 < args.length) {
-      browser = args[i + 1];
+    } else if (args[i] === '--browser' && next !== undefined) {
+      browser = next;
       if (
         ![
           'none',
@@ -386,11 +387,11 @@ function parseArgs(
     } else if (args[i] === '--service-url' && i + 1 < args.length) {
       serviceUrl = args[i + 1];
       i++;
-    } else if (args[i] === '--redirect-port' && i + 1 < args.length) {
-      const port = parseInt(args[i + 1], 10);
+    } else if (args[i] === '--redirect-port' && next !== undefined) {
+      const port = parseInt(next, 10);
       if (Number.isNaN(port) || port < 1 || port > 65535) {
         console.error(
-          `Invalid redirect port: ${args[i + 1]}. Must be a number between 1 and 65535`,
+          `Invalid redirect port: ${next}. Must be a number between 1 and 65535`,
         );
         process.exit(1);
       }

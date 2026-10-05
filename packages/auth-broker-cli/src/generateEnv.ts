@@ -75,23 +75,30 @@ export async function runGenerateEnv(
   let grant: string | undefined;
   const flags: ClientAuthFlags = {};
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--grant') {
+    const arg = args[i];
+    if (arg === undefined) continue; // i < args.length: never
+    const flag = Object.hasOwn(CLIENT_AUTH_FLAGS, arg)
+      ? CLIENT_AUTH_FLAGS[arg]
+      : undefined;
+    if (arg === '--grant') {
       grant = args[i + 1];
       i++;
-    } else if (Object.hasOwn(CLIENT_AUTH_FLAGS, args[i])) {
-      if (i + 1 >= args.length) {
-        console.error(`❌ ${args[i]} needs a value`);
+    } else if (flag !== undefined) {
+      const value = args[i + 1];
+      if (value === undefined) {
+        console.error(`❌ ${arg} needs a value`);
         console.error(GENERATE_ENV_USAGE);
         return 1;
       }
-      flags[CLIENT_AUTH_FLAGS[args[i]]] = args[i + 1];
+      flags[flag] = value;
       i++;
     } else {
-      positional.push(args[i]);
+      positional.push(arg);
     }
   }
 
-  if (positional.length === 0) {
+  const [destination, serviceKeyPath, sessionPath] = positional;
+  if (destination === undefined) {
     console.error(GENERATE_ENV_USAGE);
     return 1;
   }
@@ -116,12 +123,11 @@ export async function runGenerateEnv(
     return 1;
   }
 
-  const destination = positional[0];
   const resolvedServiceKeyPath = path.resolve(
-    positional[1] || path.join(process.cwd(), `${destination}.json`),
+    serviceKeyPath || path.join(process.cwd(), `${destination}.json`),
   );
   const resolvedSessionPath = path.resolve(
-    positional[2] || path.join(process.cwd(), `${destination}.env`),
+    sessionPath || path.join(process.cwd(), `${destination}.env`),
   );
   const serviceKeyDir = path.dirname(resolvedServiceKeyPath);
 

@@ -51,7 +51,7 @@ const USER = { username: 'tester', password: 'tester' };
 const UNAUTHORIZED = { at: 'request', status: 401, error: null } as const;
 
 const claims = (jwt: string): Record<string, unknown> =>
-  JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
+  JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString('utf8'));
 
 const basic = (client: string) =>
   `Basic ${Buffer.from(`${client}:secret`).toString('base64')}`;
@@ -126,10 +126,10 @@ async function keycloakCertificates(): Promise<string[]> {
   for (const descriptor of metadata.matchAll(
     /<(?:\w+:)?KeyDescriptor\b[^>]*\buse="signing"[^>]*>([\s\S]*?)<\/(?:\w+:)?KeyDescriptor>/g,
   )) {
-    for (const certificate of descriptor[1].matchAll(
+    for (const certificate of descriptor[1]!.matchAll(
       /<(?:\w+:)?X509Certificate>([^<]+)</g,
     )) {
-      found.add(certificate[1].replace(/\s+/g, ''));
+      found.add(certificate[1]!.replace(/\s+/g, ''));
     }
   }
   if (found.size === 0) {
@@ -176,6 +176,7 @@ async function idpInitiatedSsoTo(acsUrl: string): Promise<string> {
       headers,
     })
   ).json()) as { id: string; attributes: Record<string, string> }[];
+  if (!client) throw new Error('Keycloak has no uaa-sp client');
   client.attributes = {
     ...client.attributes,
     saml_idp_initiated_sso_url_name: 'uaa-sp',

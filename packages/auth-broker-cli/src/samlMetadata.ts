@@ -70,11 +70,12 @@ interface Entity {
  * certificate.
  */
 function entitiesOf(xml: string): Entity[] {
+  // Both groups take part in every match; the defaults are never used.
   return [
     ...xml.matchAll(
       /<(?:[\w-]+:)?EntityDescriptor\b([^>]*)>([\s\S]*?)<\/(?:[\w-]+:)?EntityDescriptor>/g,
     ),
-  ].map(([, attributes, body]) => ({
+  ].map(([, attributes = '', body = '']) => ({
     entityId: attribute(attributes, 'entityID'),
     body,
   }));
@@ -114,17 +115,18 @@ function chooseEntity(
     }
     return match;
   }
-  if (candidates.length === 0) {
+  const [only, ...others] = candidates;
+  if (only === undefined) {
     throw new Error(`the metadata describes no ${role}`);
   }
-  if (candidates.length > 1) {
+  if (others.length > 0) {
     throw new Error(
       `the metadata describes ${candidates.length} ${role}s; name the one to use with ${flag}: ${candidates
         .map((entity) => JSON.stringify(entity.entityId))
         .join(', ')}`,
     );
   }
-  return candidates[0];
+  return only;
 }
 
 /**
@@ -152,10 +154,11 @@ export function readIdpMetadata(xml: string, entityId?: string): IdpMetadata {
   const keyDescriptors = descriptor.matchAll(
     /<(?:[\w-]+:)?KeyDescriptor\b([^>]*)>([\s\S]*?)<\/(?:[\w-]+:)?KeyDescriptor>/g,
   );
-  for (const [, attributes, body] of keyDescriptors) {
+  // Every group takes part in every match; the defaults are never used.
+  for (const [, attributes = '', body = ''] of keyDescriptors) {
     // No `use` means the key serves both purposes (SAML metadata 2.4.1.1).
     if (attribute(attributes, 'use') === 'encryption') continue;
-    for (const [, certificate] of body.matchAll(
+    for (const [, certificate = ''] of body.matchAll(
       /<(?:[\w-]+:)?X509Certificate>([^<]+)</g,
     )) {
       certificates.push(certificate.replace(/\s+/g, ''));

@@ -243,7 +243,7 @@ describe('getProvider — the UAA grants', () => {
 
       expect(authorization.mock.calls).toEqual([[D, 'authorization_code']]);
       expect(urls).toHaveLength(1);
-      const url = new URL(urls[0]);
+      const url = new URL(urls[0]!);
       expect(`${url.origin}${url.pathname}`).toBe(
         `${endpoint.url}/oauth/authorize`,
       );
@@ -341,7 +341,7 @@ describe('getProvider — the UAA grants', () => {
 
       await (await broker.getProvider(D)).prepare();
 
-      expect(endpoint.requests[0].authorization).toBe(
+      expect(endpoint.requests[0]!.authorization).toBe(
         basicAuth('broker-client', ''),
       );
     });
@@ -380,7 +380,7 @@ describe('getProvider — the UAA grants', () => {
 
       await (await broker.getProvider(D)).prepare();
 
-      const token = endpoint.issued[0];
+      const token = endpoint.issued[0]!;
       const redacted = `<redacted, ${token.length} chars>`;
       expect(logger.info.mock.calls).toEqual(
         expect.arrayContaining([
@@ -902,7 +902,7 @@ describe('persistence through onTokens', () => {
 
       const retry = timers.filter(({ ms }) => ms === 1_000);
       expect(retry).toHaveLength(1);
-      expect(retry[0].timer.hasRef()).toBe(false);
+      expect(retry[0]!.timer.hasRef()).toBe(false);
       await broker.flush();
     });
   });

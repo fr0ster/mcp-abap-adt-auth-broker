@@ -476,7 +476,7 @@ describe('mcp-sso CLI/config merge', () => {
         }),
       );
       asked.authorization('dest', 'passcode');
-      const { read } = manualPasscodeStrategy.mock.calls[0][0] as {
+      const { read } = manualPasscodeStrategy.mock.calls[0]![0] as {
         read: (prompt: string, signal: AbortSignal) => Promise<string>;
       };
       pastedInput.value = undefined;
@@ -500,7 +500,7 @@ describe('mcp-sso CLI/config merge', () => {
           ...FILE_TRUST,
         }),
       );
-      const { read } = manualSamlResponseStrategy.mock.calls[0][0] as {
+      const { read } = manualSamlResponseStrategy.mock.calls[0]![0] as {
         read: (prompt: string, signal: AbortSignal) => Promise<string>;
       };
       pastedInput.value = undefined;

@@ -89,7 +89,7 @@ const validateTokenExpiration = (token: string): boolean => {
     }
 
     // Decode payload
-    const payload = parts[1];
+    const payload = parts[1]!;
     const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
     const padded = base64 + '=='.substring(0, (4 - (base64.length % 4)) % 4);
     const decoded = Buffer.from(padded, 'base64').toString('utf8');
@@ -347,7 +347,7 @@ describe('AuthBroker Integration', () => {
       try {
         const parts = expiredToken.split('.');
         if (parts.length === 3) {
-          const payload = parts[1];
+          const payload = parts[1]!;
           const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
           const padded =
             base64 + '=='.substring(0, (4 - (base64.length % 4)) % 4);
