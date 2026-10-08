@@ -80,6 +80,17 @@ function clientUnavailable(missing: 'certificate' | 'secret'): Error {
 }
 
 /**
+ * `value` without the slashes it ends with, in one backwards pass: linear in
+ * the length, whatever the store answered — no regular expression on a
+ * stored value.
+ */
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return value.slice(0, end);
+}
+
+/**
  * `tls_client_auth` with the certificate and key the key store holds, against
  * `${certUrl}/oauth/token`. The material is handed over as given and checked
  * before the factory answers — auth-providers checks it only on first use, so
@@ -99,7 +110,7 @@ export function fromServiceKeyCertificate(): ClientAuthenticationStrategy {
     }
     const authentication = tlsClientCertificate({
       material: { cert: certificate.certificate, key: certificate.key },
-      endpoint: `${certificate.certUrl.replace(/\/+$/, '')}/oauth/token`,
+      endpoint: `${withoutTrailingSlashes(certificate.certUrl)}/oauth/token`,
     });
     if (typeof authentication.tlsMaterial !== 'function') {
       throw clientUnavailable('certificate');

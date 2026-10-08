@@ -204,6 +204,41 @@ describe('fromServiceKeyCertificate()', () => {
   });
 });
 
+describe('fromServiceKeyCertificate(): the token endpoint from certUrl', () => {
+  /** The endpoint the factory answers for a certificate client at `certUrl`. */
+  async function endpointFor(certUrl: string): Promise<string | undefined> {
+    const auth = await fromServiceKeyCertificate()(
+      context({ readCertificate: async () => ({ ...CERTIFICATE, certUrl }) }),
+    );
+    return (await auth.authenticate(DRAFT)).endpoint;
+  }
+
+  it.each([
+    ['https://cert.example.com', 'https://cert.example.com/oauth/token'],
+    ['https://cert.example.com/', 'https://cert.example.com/oauth/token'],
+    ['https://cert.example.com///', 'https://cert.example.com/oauth/token'],
+    ['https://cert.example.com/x/', 'https://cert.example.com/x/oauth/token'],
+  ])(
+    '%s → %s: trailing slashes dropped, nothing else',
+    async (url, expected) => {
+      expect(await endpointFor(url)).toBe(expected);
+    },
+  );
+
+  it('a very long run of slashes is handled in linear time: trailing, and not trailing', async () => {
+    // A quadratic strip (a backtracking `/\/+$/`) takes minutes here; the
+    // linear one answers at once — asserted by the result within Jest's
+    // own test timeout, never by a measured time.
+    const run = '/'.repeat(200_000);
+    expect(await endpointFor(`https://cert.example.com${run}`)).toBe(
+      'https://cert.example.com/oauth/token',
+    );
+    expect(await endpointFor(`https://cert.example.com${run}a`)).toBe(
+      `https://cert.example.com${run}a/oauth/token`,
+    );
+  });
+});
+
 describe('fromServiceKeySecret({ encoding })', () => {
   it("answers client_secret_basic with the id and secret as given for 'raw'", async () => {
     const auth = await fromServiceKeySecret({ encoding: 'raw' })(

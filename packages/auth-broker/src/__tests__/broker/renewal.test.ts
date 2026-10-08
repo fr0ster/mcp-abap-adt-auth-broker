@@ -304,6 +304,42 @@ describe('a renewal option that throws', () => {
   });
 });
 
+describe('a renewal strategy the provider cannot use', () => {
+  it.each(
+    ROWS.filter(([grant]) =>
+      ['client_credentials', 'password', 'saml2_pure'].includes(grant),
+    ).flatMap(([grant, means]) =>
+      [{}, { next: 5 }].map(
+        (unusable) =>
+          [grant, JSON.stringify(unusable), means, unusable] as const,
+      ),
+    ),
+  )(
+    '%s, renewal answering %s: the provider’s own refusal reaches the consumer, naming renewal; nothing cached',
+    async (grant, _shown, means, unusable) => {
+      const renewal = jest.fn(() => unusable as unknown as IRenewalStrategy);
+      const { broker: b } = broker(
+        { ...means, grantType: grant },
+        { renewal, onWriteFailure: 'fail' },
+      );
+      for (const _ of [1, 2]) {
+        const thrown = await rejection(b.getProvider(D));
+        expect(thrown).toBeInstanceOf(DestinationConfigError);
+        const error = thrown as DestinationConfigError;
+        expect(error.missingFields).toEqual(['renewal']);
+        // The provider's configuration error, as the provider made it.
+        expect(error.error?.kind).toBe('configuration');
+        expect(error.error?.facts).toEqual({
+          case: 'required-fields-missing',
+          fields: ['renewal'],
+        });
+        expect(error.message).toContain(`: ${error.error?.reason} (renewal)`);
+      }
+      expect(renewal).toHaveBeenCalledTimes(2);
+    },
+  );
+});
+
 describe('no onWriteFailure option', () => {
   it('a token row is refused naming onWriteFailure', async () => {
     const { broker: b } = broker(
