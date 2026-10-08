@@ -1052,14 +1052,13 @@ flags (§11.2's table):
 Every command builds its broker with explicit choices, in its own code (H1):
 
 - `renewal: () => refreshThenLogin()` for every grant — a user at a terminal
-  can log in. An `--env` rerun reuses a valid stored token bound to the
-  destination's means (no request); only when it has to — the token has
-  expired — it refreshes with the stored refresh token, and logs in when
-  that fails or there is none. **(D20)** 2.x refreshed on every `--env` run;
-  3.0.0 does not (ruled by the user, 2026-10-09): a refresh cannot invalidate
-  the old access token, which stays valid to its `exp`, and under
-  refresh-token rotation it would invalidate the refresh token another
-  process (the MCP server) holds from the same session.
+  can log in. **(D20)**
+- **The CLI is a generator (D25, ruled by the user, 2026-10-09).** Every run
+  obtains fresh tokens through a login and writes them to `--output`. The
+  CLI never reads a previous session: stored files can be anywhere, and it
+  knows nothing about earlier runs. Its private work-directory store starts
+  empty every run, so the broker seeds nothing. There is no `--env` option;
+  it is refused as an unknown option.
 - `onWriteFailure: 'fail'` — a command exits 1 and writes no output unless the
   secret landed; it calls `flush()` before copying the output, as 2.x. **(D20)**
 - `authDebug: true` only with `--auth-debug` (§10.7).
@@ -1074,10 +1073,9 @@ written the destination's means (`jwt` / `authorization_code` or
 `broker.getToken(destination, { signal })` without a `provider` option, so the
 provider is the broker's UAA row — the same composition the other subcommands and
 `generate-env` use (H5: one implementation of the row). `--client-auth` maps to
-the broker's `clientAuthentication` strategy as in 2.1.0. A session in the
-`--env` file seeds the login only when it is bound to the destination's means
-(§6); an unbound one is discarded with the broker's `warn` line and a login
-follows.
+the broker's `clientAuthentication` strategy as in 2.1.0. Every run logs in
+(D25); the output carries the binding record, so a broker consumer that reads
+the file (the server) can use the session.
 
 ### 10.3 `--browser` (Open 4; D13, D14, D15)
 
@@ -1278,8 +1276,7 @@ aborted login prints "the authorization was aborted".
 | "🔗 Authorization URL: …" preview of `mcp-auth` | gone; the URL is shown by the login's own prompt (stderr) |
 | `DEBUG_SSO=true` etc. for the `mcp-sso` log | `--verbose`; `--auth-debug` for the providers' debug line, with prepared secrets |
 | error output: a message and a stack trace | `reason — hint`, then the diagnostics line; no stack trace |
-| an `--env` session refreshed with its refresh token | a session written by CLI 2.x (or earlier) is not bound under 3.0.0's binding record: the first run after upgrading discards it with a warning and **logs in** (no refresh); later runs reuse it (below) |
-| every `--env` run refreshed the token | 3.0.0 reuses a valid stored token — no request; it refreshes (or logs in) only when the token has expired. Nothing to do; to log in anew, run without `--env` |
+| `--env <path>` reused or refreshed an earlier session | removed (D25): `mcp-auth` is a generator — every run logs in and writes fresh tokens; it never reads a previous session. Drop `--env` from the command line (it is refused as an unknown option) |
 | `mcp-sso … --cookie` sessions written by 2.x | refused naming `issuedBy` by 3.0.0: run `mcp-auth saml2-pure … --cookie` again |
 | the `mcp-sso` command | **gone in 3.0.0**: every form is an `mcp-auth` subcommand with the same flags (table below) |
 | `mcp-auth oidc` / `saml2-pure` / `saml2-bearer` started a second process (`mcp-sso`) | they run in `mcp-auth`'s process; a signal to it ends the login, frees the port and removes the work directory |
@@ -1915,8 +1912,7 @@ wait.
 **D12 — `mcp-auth` on `getProvider` or on its own factory.**
 (a) The broker's UAA row (drop the factory and the placeholder URL); (b) keep
 the factory, composing `renewal` and `authDebug` itself. *Recommended: (a)* —
-one composition of the row (H5); cost: an `--env` session without binding no
-longer refreshes (H3 requires that anyway).
+one composition of the row (H5).
 
 **D13 — `--browser`'s names.**
 (a) Keep 2.x's names, mapped per `process.platform` by §10.3's table, refused on
@@ -1968,8 +1964,9 @@ none` removed.
 
 **D20 — The CLI's own choices for the broker.**
 (a) `renewal: () => refreshThenLogin()` and `onWriteFailure: 'fail'` for every
-command; (b) `refreshOnly()` for `--env` runs (never a login when a refresh
-token exists). *Recommended: (a)* — 2.x's steps, and a command must know its
+command; (b) `refreshOnly()` (never a login when a refresh token exists) —
+moot since D25: the CLI reads no earlier session, so there is never a refresh
+token to start from. *Recommended: (a)* — 2.x's steps, and a command must know its
 secret landed before it writes the output.
 
 **D21 — Where the row is persisted in the session's binding.**
@@ -2046,3 +2043,10 @@ an option that does nothing is not kept; no code knows its name, and a 2.x
 script passing it is refused as an unknown option and told so in the
 migration note).
 
+**D25 — The CLI is a generator. Ruled by the user, 2026-10-09.** Every run
+of `mcp-auth` obtains fresh tokens through a login (a token and a refresh
+token) and writes them to `--output`. Stored files can be anywhere; the CLI
+knows nothing about earlier runs and never reads a previous session, so the
+`--env` option is removed (an unknown option) and the run's work-directory
+store starts empty. This replaces the earlier ruling that an `--env` rerun
+reuses a valid token.
