@@ -106,17 +106,13 @@ export class SessionWriter<T> {
     });
   }
 
-  /** Whether the destination's last write did not land and is still pending. */
-  isPending(destination: string): boolean {
-    return this.queues.get(destination)?.pending !== undefined;
-  }
-
   /**
-   * Queue one more attempt of the destination's pending write, after every
-   * write queued before it. Never rejects: resolves with what the attempt came
-   * to — landed when, by its turn, nothing is pending (a later write landed),
-   * else the attempt's own outcome. It writes the pending write as its turn
-   * finds it: the latest that failed.
+   * Wait for every write of the destination queued before this call, then
+   * write its pending write once more, if one is left. Never rejects:
+   * resolves landed when, by its turn, nothing is pending — every write
+   * queued before it landed, or the latest of them did, replacing a failed
+   * older one — else with the attempt's own outcome. It writes the pending
+   * write as its turn finds it: the latest that failed.
    */
   retry(destination: string): Promise<WriteOutcome> {
     return this.enqueue(destination, async (queue) => {

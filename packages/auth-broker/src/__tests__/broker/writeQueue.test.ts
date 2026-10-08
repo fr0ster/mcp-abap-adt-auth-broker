@@ -469,6 +469,64 @@ describe('a retired build', () => {
   });
 });
 
+describe('a build of one path never retires the other path', () => {
+  it("the row path rebuilt (a newer generation) while the consumer's instance lives: both paths' providers write, every write lands, in queue order", async () => {
+    const endpoint = await startTokenEndpoint();
+    try {
+      const memory = mergingStore();
+      const { store, control } = controlled(memory.store);
+      const client: IAuthorizationConfig = {
+        uaaUrl: endpoint.url,
+        uaaClientId: CLIENT,
+        uaaClientSecret: SECRET,
+      };
+      const keys: IServiceKeyStore = {
+        getServiceKey: async () => null,
+        getConnectionConfig: async () =>
+          ({
+            authType: 'jwt',
+            grantType: 'client_credentials',
+            serviceUrl: SERVICE_URL,
+            sapClient: '100',
+          }) as IConnectionConfig,
+        getAuthorizationConfig: async () => ({ ...client }),
+      };
+      const broker = new AuthBroker({
+        ...STATED,
+        sessionStore: store,
+        serviceKeyStore: keys,
+        // The instance's identity holds no secret: a secret change keeps it.
+        provider: consumerProvider('consumer'),
+      });
+
+      const first = asTokens(await broker.getProvider(D));
+      await first.getTokens();
+      // The row path's means change: its next build is a newer generation.
+      client.uaaClientSecret = 'S3CRET-rotated';
+      const second = asTokens(await broker.getProvider(D));
+      expect(second).not.toBe(first);
+      await second.getTokens();
+
+      // The consumer path is still on its first build, and both live.
+      await expect(broker.getToken(D)).resolves.toBe('consumer-1');
+      await second.refreshTokens();
+      await expect(broker.getToken(D)).resolves.toBe('consumer-2');
+
+      expect(control.attempts.map((a) => a.config.authorizationToken)).toEqual([
+        endpoint.issued[0],
+        endpoint.issued[1],
+        'consumer-1',
+        endpoint.issued[2],
+        'consumer-2',
+      ]);
+      expect(control.attempts.every((a) => a.ok)).toBe(true);
+      expect(memory.held(D).authorizationToken).toBe('consumer-2');
+    } finally {
+      await endpoint.close();
+    }
+  });
+});
+
 describe('no timer', () => {
   it('the writer schedules nothing: a failed write leaves no timer behind', async () => {
     jest.useFakeTimers({
@@ -1023,6 +1081,172 @@ describe('on the session files, with real providers', () => {
         const s = await discardWhileSuspended('continue', call);
         s.read.release();
         const outcome = await s.suspended;
+
+        expect(outcome.ok).toBe(true);
+        expect(s.control.attempts.map((a) => a.ok)).toEqual([false]);
+        expect(warnings(s.lines)).toHaveLength(1);
+        expectNothingLeaked(s.lines);
+      },
+    );
+
+    /**
+     * The same discard, but still in the store when `call` reaches its end —
+     * the store rejects it only afterwards. A write queued before the check
+     * is the check's: it is awaited, not missed.
+     *
+     * Only `getProvider` can get there: a `getToken` asking the provider
+     * while its forced refresh still awaits the discard's write joins that
+     * renewal and gets its answer — the provider's own report sequence holds
+     * it until the discard settled, which the cases above cover.
+     */
+    async function discardInFlightAtTheEnd(
+      policy: 'fail' | 'continue',
+      call: (b: AuthBroker) => Promise<unknown>,
+    ) {
+      await seededValid();
+      const holdable = holdableKeys();
+      const first = broker({
+        onWriteFailure: policy,
+        renewal: () => refreshOnly(),
+        keys: holdable.keys,
+      });
+      first.control.failing = () => diskError();
+      const provider = asTokens(await first.broker.getProvider(D));
+
+      const read = holdable.holdNextMeans();
+      let done = false;
+      const suspended = call(first.broker).then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      void suspended.then(() => {
+        done = true;
+      });
+      await read.arrived;
+
+      const save = first.control.holdNext();
+      endpoint.answerNext(REFUSED);
+      const refreshing = provider.refreshTokens().catch(() => undefined);
+      await save.arrived;
+      // The call resumes and gets to its end while the discard is in the
+      // store.
+      read.release();
+      for (let i = 0; i < 50; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      return { ...first, save, suspended, refreshing, done: () => done };
+    }
+
+    /**
+     * The cached `getToken`'s variant: the discard is a detached one — the
+     * provider's forced refresh cut by its own signal after dispatch
+     * (`ifCut: 'discard'`) — whose write is still in the store when the
+     * token API has the cached token and reaches its end.
+     */
+    async function cutDiscardInFlight(policy: 'fail' | 'continue') {
+      await seededValid();
+      const holdable = holdableKeys();
+      const first = broker({
+        onWriteFailure: policy,
+        renewal: () => refreshOnly(),
+        keys: holdable.keys,
+      });
+      first.control.failing = () => diskError();
+      const provider = asTokens(await first.broker.getProvider(D));
+
+      const read = holdable.holdNextMeans();
+      let done = false;
+      const suspended = first.broker.getToken(D).then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      void suspended.then(() => {
+        done = true;
+      });
+      await read.arrived;
+
+      const save = first.control.holdNext();
+      const held = endpoint.holdNext();
+      const controller = new AbortController();
+      const cut = provider
+        .refreshTokens({ signal: controller.signal })
+        .catch(() => undefined);
+      await held.arrived;
+      controller.abort();
+      await cut;
+      await save.arrived;
+      read.release();
+      for (let i = 0; i < 50; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      return { ...first, save, held, suspended, done: () => done };
+    }
+
+    it("'fail', a detached discard still in flight at the end: the cached getToken awaits it, retries it once, and is refused while the store rejects", async () => {
+      const s = await cutDiscardInFlight('fail');
+      expect(s.done()).toBe(false);
+
+      s.save.release();
+      const outcome = await s.suspended;
+
+      expect(outcome.ok).toBe(false);
+      expectPersistingFailed(!outcome.ok && outcome.error);
+      expect(s.control.attempts.map((a) => a.ok)).toEqual([false, false]);
+      expect(s.control.attempts[0]?.config).toEqual(
+        expect.objectContaining({ refreshToken: '' }),
+      );
+      expect(s.control.attempts[1]?.config).toEqual(
+        s.control.attempts[0]?.config,
+      );
+      expectNothingLeaked(s.lines, outcome);
+      s.held.release();
+      await s.control.settled(3);
+    });
+
+    it("'continue', a detached discard still in flight at the end: the cached getToken succeeds, and the failure is one warn line", async () => {
+      const s = await cutDiscardInFlight('continue');
+
+      const outcome = await s.suspended;
+      s.save.release();
+      await s.control.settled(1);
+
+      expect(outcome.ok).toBe(true);
+      expect(s.control.attempts.map((a) => a.ok)).toEqual([false]);
+      expect(warnings(s.lines)).toHaveLength(1);
+      expectNothingLeaked(s.lines);
+      s.held.release();
+      await s.control.settled(2);
+    });
+
+    it.each([calls[0]])(
+      "'fail', a discard still in flight at the end: %s awaits it, retries it once, and is refused while the store rejects",
+      async (_name, call) => {
+        const s = await discardInFlightAtTheEnd('fail', call);
+        expect(s.done()).toBe(false);
+
+        s.save.release();
+        const outcome = await s.suspended;
+        await s.refreshing;
+
+        expect(outcome.ok).toBe(false);
+        expectPersistingFailed(!outcome.ok && outcome.error);
+        expect(s.control.attempts.map((a) => a.ok)).toEqual([false, false]);
+        expect(s.control.attempts[1]?.config).toEqual(
+          s.control.attempts[0]?.config,
+        );
+        expectNothingLeaked(s.lines, outcome);
+      },
+    );
+
+    it.each([calls[0]])(
+      "'continue', a discard still in flight at the end: %s succeeds, and the failure is one warn line",
+      async (_name, call) => {
+        const s = await discardInFlightAtTheEnd('continue', call);
+
+        s.save.release();
+        const outcome = await s.suspended;
+        await s.refreshing;
+        await s.control.settled(1);
 
         expect(outcome.ok).toBe(true);
         expect(s.control.attempts.map((a) => a.ok)).toEqual([false]);

@@ -710,15 +710,20 @@ export class AuthBroker {
 
   /**
    * Under `onWriteFailure: 'fail'`, a call of the destination is refused while
-   * its last write is pending (§5.4): asked on entry and right before success.
-   * Pending: the write is retried — the destination's next write, queued like
-   * any other and awaited — and the call goes on once it lands, or rejects
-   * (`unknown`, `persisting-tokens`) while it fails. Under `'continue'`
-   * nothing is asked.
+   * its last write is pending (§5.4) — not yet landed: failed, or still queued
+   * or in flight. Asked on entry and right before success: the call awaits
+   * every write of the destination queued before this moment, and a failed
+   * one that no later write replaced is written once more — the destination's
+   * next write, queued like any other. All landed: on entry the call goes on,
+   * at the end it returns its success. Still failing: it rejects (`unknown`,
+   * `persisting-tokens`). A write queued after the check is not this call's.
+   * Under `'continue'` nothing is asked.
+   *
+   * The one wait is `writer.retry(destination)`'s promise; Task 7 races it
+   * with the call's signal (§7.5), and the write runs on.
    */
   private async settlePending(destination: string): Promise<void> {
     if (this.onWriteFailure !== 'fail') return;
-    if (!this.writer.isPending(destination)) return;
     const outcome = await this.writer.retry(destination);
     if (!outcome.landed) {
       throw new AuthProviderFailure(
