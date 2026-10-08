@@ -1210,8 +1210,10 @@ platform)`), shown in `--help`:
 - **`--auth-debug`** sets the broker's `authDebug: true` and nothing else
   beyond what it needs to be seen: it implies `--verbose`.
 - **`--verbose`** gives the broker (and so the providers it builds) the CLI's
-  logger at `debug`; without it the logger is at `warn`. The CLI's logger writes
-  every level to stderr.
+  logger at `debug`; without it the logger is at `info`, so the providers'
+  prompt lines that go through it — where the callback waits, the SSH-tunnel
+  hint, an authorization URL that cannot be shown — are seen by default. The
+  CLI's logger writes every level to stderr.
 - **Nothing from the environment.** No environment variable turns on either,
   or changes the log level; `DEBUG_AUTH_PROVIDERS` and its kin change nothing.
 - Without `--auth-debug` no line the CLI or a provider writes carries a secret
@@ -1968,8 +1970,9 @@ command has no stdio transport). *Recommended: (a)* — H2's stdout rule holds
 without arguing where the CLI runs, and a script can read stdout cleanly.
 
 **D17 — The CLI's log switches.**
-(a) `--verbose` (debug logger) and `--auth-debug` (implies `--verbose`, sets
-`authDebug`), no environment variables read; (b) `--auth-debug` alone, both
+(a) `--verbose` (debug logger; the default is `info`, on stderr) and
+`--auth-debug` (implies `--verbose`, sets `authDebug`), no environment
+variables read; (b) `--auth-debug` alone, both
 effects; (c) keep the `DEBUG_SSO` environment switch for the log level.
 *Recommended: (a)* — verbosity without exposing prepared secrets; "never from
 the environment" applied to all of the CLI's logging.
