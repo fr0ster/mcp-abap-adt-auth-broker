@@ -1018,6 +1018,31 @@ passed to them must honour `AuthorizationRequest.signal` (auth-providers 6.0.0).
 
 ## 10. The CLI
 
+**One command (D24, ruled by the user 2026-10-08).** CLI 3.0.0 ships one bin,
+`mcp-auth`; the `mcp-sso` bin is removed — in SAP, "SSO" reads as SNC or
+Kerberos, which it never did, and SNC has no secret for a credential CLI to
+write. Everything `mcp-sso` did is an `mcp-auth` subcommand with the same
+flags (§11.2's table):
+
+| `mcp-auth` subcommand | What it runs | 2.x `mcp-sso` form |
+|---|---|---|
+| (none) / `auth-code` | UAA authorization code or `--credential` client credentials | — (already `mcp-auth`) |
+| `oidc --flow browser\|device\|password\|token_exchange` | the OIDC grants; `--passcode` the UAA passcode grant; `--code` a code obtained elsewhere | `mcp-sso oidc --flow …`, `mcp-sso --protocol oidc --flow …` |
+| `saml2-pure` | SAML → session cookies; `--cookie` hands over cookies | `mcp-sso saml2 --flow pure …`, `mcp-sso --protocol saml2 --flow pure …` |
+| `saml2-bearer` | SAML assertion → OAuth token | `mcp-sso bearer …`, `mcp-sso saml2 --flow bearer …`, `mcp-sso --protocol saml2 --flow bearer …` |
+
+- `--config <file>` is a flag of the subcommand its protocol and flow name
+  (`mcp-auth oidc --config f`, `mcp-auth saml2-pure --config f`, `mcp-auth
+  saml2-bearer --config f`); a file whose `protocol` / `flow` names another
+  subcommand is a usage error naming `--config`. `--protocol` is not accepted:
+  the subcommand is the protocol and flow.
+- `saml2-bearer` no longer requires `--dev` (`mcp-sso bearer` never did);
+  `--dev` is still accepted, has no effect, and `--help` says so (D24).
+- The subcommands are `mcp-auth`'s own code paths: one process, one
+  interrupt, one work directory (§10.4). The internal modules
+  (`mcpSsoConfig.ts`, `runMcpSso.ts`, `samlMetadata.ts`) may keep their names;
+  the argument parser takes an argument array and reads no `process.argv`.
+
 ### 10.1 What the CLI states as a consumer of the broker
 
 Every command builds its broker with explicit choices, in its own code (H1):
@@ -1036,7 +1061,7 @@ Every command builds its broker with explicit choices, in its own code (H1):
 written the destination's means (`jwt` / `authorization_code` or
 `client_credentials`, the client or its certificate paths), it calls
 `broker.getToken(destination, { signal })` without a `provider` option, so the
-provider is the broker's UAA row — the same composition `mcp-sso` and
+provider is the broker's UAA row — the same composition the other subcommands and
 `generate-env` use (H5: one implementation of the row). `--client-auth` maps to
 the broker's `clientAuthentication` strategy as in 2.1.0. A session in the
 `--env` file seeds the login only when it is bound to the destination's means
@@ -1066,10 +1091,12 @@ platform)`), shown in `--help`:
   `--browser-program` is a usage error naming the flag ("`--browser <name>` has
   no launcher on this platform; use `--browser none`"), before anything is read
   or written; `none` / `headless` work everywhere. Nothing is guessed.
-- The same mapping serves `mcp-sso --browser`, the `browser` field of an
-  `mcp-sso --config` file (a string, mapped by the same function; an unknown
-  value refused naming `browser`), and `generate-env` (2.x hard-coded
-  `'system'`: it takes `--browser` too, default `auto`).
+- The same mapping, and the same default `auto`, serve **every flow that
+  opens a browser** — `mcp-auth` (authorization code), `mcp-auth oidc --flow
+  browser`, `mcp-auth saml2-pure` and `saml2-bearer` with the browser assertion
+  flow — the `browser` field of a `--config` file (a string, mapped by the same
+  function; an unknown value refused naming `browser`), and `generate-env`
+  (2.x hard-coded `'system'`: it takes `--browser` too, default `auto`).
 - A launch that fails does not end the login (auth-providers 6.0.0): the URL is
   shown on stderr and the callback keeps waiting.
 
@@ -1093,31 +1120,25 @@ platform)`), shown in `--help`:
   once, removing the work directory (D18). `SIGHUP` keeps 2.x's immediate exit
   (129). After the run, every listener it added is removed:
   `process.listenerCount('SIGINT' | 'SIGTERM')` returns to its value before.
-- **`mcp-auth`'s subcommands** (`oidc`, `saml2-pure`, `saml2-bearer`) **run
-  `mcp-sso`'s code in-process** instead of spawning `mcp-sso` (2.x's
-  `spawnSync` with inherited stdio). Chosen over supervising a child because it
-  is simpler and leaves nothing to forward: one process, one interrupt, one
-  work directory. A child relied on the terminal delivering the signal to both
-  processes; a `SIGTERM` sent to the parent's PID alone left the child's
-  unbounded login running with its port and its work directory. In 3.0.0
-  `mcp-sso.ts`'s argument parsing takes an argument array (`parseMcpSsoArgs(args)`,
-  no `process.argv` read inside), and `mcp-auth` calls it and `runMcpSso` with
-  its own run controller and work directory; exit codes, output and every flag
-  are as the `mcp-sso` command gives them.
+- **`mcp-auth`'s subcommands** (`oidc`, `saml2-pure`, `saml2-bearer`) run in
+  `mcp-auth`'s own process — 2.x spawned the `mcp-sso` bin with `spawnSync`,
+  so a `SIGTERM` to the parent's PID alone left the child's unbounded login
+  running with its port and work directory. With one command there is no
+  child: a signal to `mcp-auth` ends whatever login it runs.
 
 ### 10.5 The compositions, `state` and PKCE, and the manual SAML ACS
 
 - **Compositions.** The CLI's strategies are auth-providers 6.0.0's named
   compositions: `browserCallbackStrategy({ browser, port, signal })`
   (`mcp-auth`, `generate-env`), `oidcCallbackStrategy` and
-  `samlCallbackStrategy` (`mcp-sso` browser flows), `manualPasscodeStrategy({
+  `samlCallbackStrategy` (`mcp-auth oidc` / `saml2-*` browser flows), `manualPasscodeStrategy({
   read })`, `manualSamlResponseStrategy({ redirectUri, read })`,
   `staticCodeStrategy` (`--code`, `--passcode`, `--assertion`). Every
   listener is loopback-only, so `--redirect-port` keeps its meaning and a
   remote user tunnels (the providers' SSH hint).
 - **`state` and PKCE** come with the providers: every UAA authorization-code
   login (`mcp-auth`, `generate-env`) carries `state` and an S256 challenge;
-  every OIDC authorization-code login (`mcp-sso oidc --flow browser`) carries
+  every OIDC authorization-code login (`mcp-auth oidc --flow browser`) carries
   `state` and PKCE. A code handed over with `--code` has neither by nature (no
   URL is built); `--help` says so.
 - **The manual SAML login always declares its ACS.** `--assertion-flow manual`
@@ -1130,20 +1151,23 @@ platform)`), shown in `--help`:
   own (no URL exists to show), now honouring `AuthorizationRequest.signal` and
   returning the declared ACS as its `redirectUri`.
 - **Device code.** `consoleDeviceCodePresenter()` is given no logger, so the
-  code is always shown on stderr (2.x passed `mcp-sso`'s logger, which is off
+  code is always shown on stderr (2.x passed the `mcp-sso` logger, which is off
   unless an environment variable turns it on — a user could not see the code).
 
 ### 10.6 Flags, by command
 
-| Flag | `mcp-auth` | `mcp-sso` | `generate-env` | 3.0.0 |
+| Flag | `mcp-auth` (no subcommand / `auth-code`) | `mcp-auth oidc`, `saml2-pure`, `saml2-bearer` | `generate-env` | 3.0.0 |
 |---|---|---|---|---|
-| `--browser <name>` | ✓ | ✓ | new | mapped per platform (§10.3) |
+| `--browser <name>` (default `auto`) | ✓ | ✓ (2.x `mcp-sso`'s) | new | mapped per platform (§10.3) |
 | `--browser-program <program>` | new | new | new | §10.3 |
 | `--auth-debug` | new | new | new | §10.7 |
 | `--verbose` | new | new | new | §10.7 (D17) |
-| `--acs-url <url>` | (passed to `mcp-sso`) | required for a manual SAML login unless metadata or `--config` states it | — | §10.5 |
-| `--redirect-port`, `--client-auth`, `--basic-encoding`, `--cert-path`, `--key-path`, every other 2.1.0 flag | unchanged | unchanged | unchanged | |
-| `DEBUG_SSO`, `DEBUG_AUTH_SSO`, `DEBUG` (environment) | — | read | — | no longer read (D17) |
+| `--acs-url <url>` | — | required for a manual SAML login unless metadata or `--config` states it | — | §10.5 |
+| `--config <file>` | — | the subcommand's own; its protocol and flow must match | — | §10 (D24) |
+| `--protocol` | — | removed: the subcommand is the protocol | — | D24 |
+| `--dev` | — | accepted by `saml2-bearer`, no effect | — | D24 |
+| `--redirect-port`, `--client-auth`, `--basic-encoding`, `--cert-path`, `--key-path`, every other 2.1.0 flag of `mcp-auth` or `mcp-sso` | unchanged | unchanged | unchanged | |
+| `DEBUG_SSO`, `DEBUG_AUTH_SSO`, `DEBUG` (environment) | — | no longer read (2.x `mcp-sso` read them) | — | D17 |
 
 ### 10.7 Debug output (Open 6, CLI side; D17)
 
@@ -1241,11 +1265,27 @@ aborted login prints "the authorization was aborted".
 | manual SAML without `--acs-url` used `http://localhost:<port>/callback` | state the ACS: `--acs-url`, `--saml-metadata`, `--service-key`'s metadata, or `acsUrl` in `--config` |
 | progress and prompts on stdout | on stderr; stdout carries only `help` and `--version` |
 | "🔗 Authorization URL: …" preview of `mcp-auth` | gone; the URL is shown by the login's own prompt (stderr) |
-| `DEBUG_SSO=true` etc. for `mcp-sso`'s log | `--verbose`; `--auth-debug` for the providers' debug line, with prepared secrets |
+| `DEBUG_SSO=true` etc. for the `mcp-sso` log | `--verbose`; `--auth-debug` for the providers' debug line, with prepared secrets |
 | error output: a message and a stack trace | `reason — hint`, then the diagnostics line; no stack trace |
 | an `--env` session refreshed with its refresh token | a session written by CLI 2.x (or earlier) is not bound under 3.0.0's binding record: the first run after upgrading discards it with a warning and **logs in** (no refresh); later runs refresh as before |
-| `mcp-sso … --cookie` sessions written by 2.x | refused naming `issuedBy` by 3.0.0: run `--cookie` again |
-| `mcp-auth oidc` / `saml2-pure` / `saml2-bearer` started a second process (`mcp-sso`) | they run in one process; a signal to that process ends the login, frees the port and removes the work directory |
+| `mcp-sso … --cookie` sessions written by 2.x | refused naming `issuedBy` by 3.0.0: run `mcp-auth saml2-pure … --cookie` again |
+| the `mcp-sso` command | **gone in 3.0.0**: every form is an `mcp-auth` subcommand with the same flags (table below) |
+| `mcp-auth oidc` / `saml2-pure` / `saml2-bearer` started a second process (`mcp-sso`) | they run in `mcp-auth`'s process; a signal to it ends the login, frees the port and removes the work directory |
+| `mcp-auth saml2-bearer` required `--dev` | it does not; `--dev` is accepted and has no effect |
+
+**`mcp-sso` → `mcp-auth`:**
+
+| 2.x | 3.0.0 |
+|---|---|
+| `mcp-sso oidc --flow <browser\|device\|password\|token_exchange> …` | `mcp-auth oidc --flow <…> …` |
+| `mcp-sso --protocol oidc --flow <flow> …` | `mcp-auth oidc --flow <flow> …` |
+| `mcp-sso oidc … --passcode <p>` (the UAA passcode grant) | `mcp-auth oidc … --passcode <p>` |
+| `mcp-sso oidc --flow browser … --code <c>` | `mcp-auth oidc --flow browser … --code <c>` |
+| `mcp-sso saml2 --flow pure …` / `--protocol saml2 --flow pure …` | `mcp-auth saml2-pure …` |
+| `mcp-sso saml2 --flow pure … --cookie "<cookies>"` | `mcp-auth saml2-pure … --cookie "<cookies>"` |
+| `mcp-sso bearer …` / `saml2 --flow bearer …` / `--protocol saml2 --flow bearer …` | `mcp-auth saml2-bearer …` |
+| `mcp-sso --config <file> …` (protocol and flow in the file) | `mcp-auth <the subcommand the file names> --config <file> …` |
+| `mcp-sso --version`, `help` | `mcp-auth --version`, `mcp-auth <subcommand> --help` |
 | a callback reachable from another machine | loopback only (auth-providers 6.0.0): tunnel the port (`ssh -L`) |
 
 ## 12. Release order
@@ -1264,7 +1304,9 @@ aborted login prints "the authorization was aborted".
    sibling, and every third-party resolution is from the registry. After
    publishing: a clean install of both from the registry in an empty directory
    outside the repository; `npm ls` shows one `interfaces-auth` and one
-   `auth-errors`; `mcp-auth --version` and `mcp-sso --version` print 3.0.0; a
+   `auth-errors`; `mcp-auth --version` prints 3.0.0, `mcp-sso` is not
+   installed (no such bin), and `mcp-auth <subcommand> --help` answers for
+   every subcommand; a
    smoke script builds a broker over auth-stores 4.0.0, gets a `basic`
    provider and a refused token-API call, and prints `kind`.
 5. READMEs, CLAUDE.md, `docs/` and both CHANGELOGs describe 5.0.0 / 3.0.0
@@ -1614,7 +1656,7 @@ providers, each suite constructing `renewal` and `onWriteFailure` explicitly.
   browser; the `--config` `browser` field maps the same.
   **[break: fall back to a default browser on an unknown platform]**
 - `SIGINT`, and separately `SIGTERM`, delivered while each kind of login waits
-  — `mcp-auth` browser login, `mcp-sso` OIDC browser, SAML browser, manual SAML
+  — `mcp-auth` browser login, `mcp-auth oidc` browser, SAML browser, manual SAML
   paste, passcode paste, device code, `generate-env` — aborts it: "the
   authorization was aborted" on stderr, exit 130 / 143, no stack trace, the
   callback port bound by the test afterwards, the work directory gone, the
@@ -1626,14 +1668,18 @@ providers, each suite constructing `renewal` and `onWriteFailure` explicitly.
   `INTERACTIVE_LOGIN_TIMEOUT_MS`, `AbortSignal.timeout`, `timeoutMs` or
   `setTimeout` on a login path in the CLI.
 - A second signal exits at once and removes the work directory.
-- `mcp-auth oidc …` and `mcp-auth saml2-pure …` run in one process (no child
-  process is started — asserted by spawning the built bin and listing its
-  children): `SIGTERM` sent to that PID alone ends the login `aborted`, exit
-  143, the callback port bound by the test afterwards, the work directory
-  removed, the output file untouched; the same with `SIGINT` (130).
-  **[break: spawn `mcp-sso` again → red]**
-- `parseMcpSsoArgs` reads no `process.argv`: the same arguments through
-  `mcp-sso` and through `mcp-auth <subcommand>` give the same options.
+- `SIGTERM` ends a subcommand's login: `mcp-auth oidc …` and `mcp-auth
+  saml2-pure …` waiting on a login, `SIGTERM` to the process → `aborted`,
+  exit 143, the callback port bound by the test afterwards, the work
+  directory removed, the output file untouched; the same with `SIGINT` (130).
+- Every 2.x `mcp-sso` form of §11.2's table, given as its `mcp-auth` form,
+  yields the same options as 2.1.0's `mcp-sso` parse of the original
+  (`--protocol` refused naming it; a `--config` file naming another
+  subcommand refused naming `--config`; `saml2-bearer` with and without
+  `--dev` alike); the parser reads no `process.argv`. **[break: require
+  `--dev` for `saml2-bearer` again → red]**
+- The package's `bin` holds only `mcp-auth` (`check:packed`: `mcp-sso` is not
+  installed; `mcp-auth <subcommand> --help` answers for every subcommand).
 - Manual SAML with no ACS from any source: refused naming `--acs-url`, nothing
   read or written; with each source the strategy's `redirectUri` is that ACS;
   the IdP-initiated paste returns it. **[break: restore the localhost
@@ -1653,7 +1699,7 @@ providers, each suite constructing `renewal` and `onWriteFailure` explicitly.
   carrying an error prints its hint and diagnostics; no stack trace in any
   case.
 - `--auth-debug` hands `authDebug: true` to the broker in `mcp-auth`,
-  `mcp-sso` and `generate-env`; without it, not; environment variables alone
+  every `mcp-auth` subcommand and `generate-env`; without it, not; environment variables alone
   change nothing; without the flag a `400` with an `error_description` marker
   leaves no marker on either stream. **[break: drop the flag's wiring in one
   command]**
@@ -1677,8 +1723,8 @@ Recorded with date and result before the release; none runs in CI.
 - **`--browser none`** over SSH with a tunnel: the URL prompt on stderr, the
   login completes through the tunnel.
 - **Manual SAML with a declared ACS** against a real identity provider (IAS
-  or the Keycloak stand by hand), `mcp-sso saml2 --flow pure --assertion-flow
-  manual` and `bearer --idp-initiated`.
+  or the Keycloak stand by hand), `mcp-auth saml2-pure --assertion-flow
+  manual` and `mcp-auth saml2-bearer --idp-initiated`.
 - **Device code** at a real terminal (Keycloak stand): the code visible on
   stderr.
 - **Restart after a refused refresh** against the XSUAA trial with a revoked
@@ -1864,7 +1910,8 @@ longer refreshes (H3 requires that anyway).
 (a) Keep 2.x's names, mapped per `process.platform` by §10.3's table, refused on
 other platforms; (b) new names (`default`, `program:<x>`); (c) only
 `--browser-program`. *Recommended: (a)* — every 2.x invocation keeps working
-(H8), and the mapping is the CLI's explicit statement.
+(H8), and the mapping is the CLI's explicit statement. With one command
+(D24) the same names and table serve every subcommand.
 
 **D14 — `--browser-program <program>`.**
 (a) Add it (the launcher's program per platform, as given); (b) do not.
@@ -1874,7 +1921,9 @@ other platforms; (b) new names (`default`, `program:<x>`); (c) only
 **D15 — `--browser`'s default.**
 (a) `auto` — open the platform's default browser, as 2.x; (b) `none` — show
 the URL only. *Recommended: (a)* — 2.x behaviour, stated in help; a failed
-launch still shows the URL.
+launch still shows the URL. **Decided by the user (2026-10-08):** `auto` is
+the default for every flow that opens a browser — with one command (D24) the
+2.x `mcp-sso` default no longer exists as a separate question.
 
 **D16 — The CLI's stdout.**
 (a) Only `help` and `--version` on stdout; progress, prompts and logs on
@@ -1970,3 +2019,16 @@ pending, every wait raced against its owner's signal, and the store's contract
 and re-evaluation model of earlier drafts, built for a second renewal of the
 same destination while the first write hangs in the consumer's own store, is
 removed.
+
+**D24 — One command: `mcp-auth`. Ruled by the user, 2026-10-08.**
+CLI 3.0.0 removes the `mcp-sso` bin: its name misleads (in SAP, "SSO" reads
+as SNC or Kerberos, which it never did; SNC has no secret, so a credential CLI
+has nothing to write for it). Every `mcp-sso` form is an `mcp-auth`
+subcommand with the same flags (§10, §11.2); `package.json` `bin` keeps only
+`mcp-auth`. Two consequences the ruling leaves to choose, with the
+recommendation the spec is written with: `--config` belongs to the subcommand
+its protocol names, and a mismatch is refused (rather than a protocol-less
+`mcp-auth --config`); `saml2-bearer` no longer requires `--dev` — `mcp-sso
+bearer` never did — and `--dev` stays accepted with no effect, so 2.x
+scripts keep working (rather than refusing it).
+
