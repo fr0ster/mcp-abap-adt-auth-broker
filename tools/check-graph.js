@@ -31,11 +31,13 @@ const ALLOWED = {
     '@mcp-abap-adt/interfaces-auth-broker',
     '@mcp-abap-adt/interfaces-utils',
     '@mcp-abap-adt/auth-providers',
+    '@mcp-abap-adt/auth-errors',
   ],
   'auth-broker-cli': [
     '@mcp-abap-adt/auth-broker',
     '@mcp-abap-adt/auth-stores',
     '@mcp-abap-adt/auth-providers',
+    '@mcp-abap-adt/auth-errors',
     '@mcp-abap-adt/interfaces-auth',
     '@mcp-abap-adt/interfaces-auth-sap',
     '@mcp-abap-adt/interfaces-auth-broker',
