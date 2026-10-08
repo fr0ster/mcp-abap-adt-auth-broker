@@ -520,7 +520,7 @@ describe('AuthBroker', () => {
     });
   });
 
-  describe('the binding is fixed when the provider is built', () => {
+  describe('the binding is fixed when the provider is built; changed means build a new one (§6.3)', () => {
     /** A session store over a map: what is written is what a new broker reads. */
     function mapSessionStore(conn: () => IConnectionConfig | null) {
       const held = new Map<string, Record<string, unknown>>();
@@ -535,7 +535,7 @@ describe('AuthBroker', () => {
       return { store, held };
     }
 
-    it('a changed serviceUrl does not re-label what the cached factory provider obtained, and a fresh broker does not seed it for the new resource', async () => {
+    it('a changed serviceUrl: the factory is called again — what the first provider obtained keeps its binding, the new one writes the new resource — and a fresh broker does not seed it for the new resource', async () => {
       let serviceUrl = SERVICE_URL;
       const { store, held } = mapSessionStore(() => ({ serviceUrl }));
       const token = jwtExpiringIn(3600, { jti: 'obtained-for-A' });
@@ -554,17 +554,24 @@ describe('AuthBroker', () => {
       serviceUrl = 'https://other.example.com';
       await broker.getToken('DEST');
 
-      expect(factory).toHaveBeenCalledTimes(1);
-      expect(store.saveSession).toHaveBeenCalledTimes(2);
-      for (const [, written] of store.saveSession.mock.calls) {
-        expect(written).toEqual(
-          expect.objectContaining({
-            authorizationToken: token,
-            issuedFor: SERVICE_URI,
-            issuedBy: KEY_ISSUER,
-          }),
-        );
-      }
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(factory.mock.calls[1]?.[2]).toEqual({
+        serviceUrl: 'https://other.example.com',
+      });
+      expect(
+        store.saveSession.mock.calls.map(([, written]) => written),
+      ).toEqual([
+        expect.objectContaining({
+          authorizationToken: token,
+          issuedFor: SERVICE_URI,
+          issuedBy: KEY_ISSUER,
+        }),
+        expect.objectContaining({
+          authorizationToken: token,
+          issuedFor: 'https://other.example.com:443',
+          issuedBy: KEY_ISSUER,
+        }),
+      ]);
 
       // A new process whose means now name the other resource: the stored
       // token was obtained for SERVICE_URL, so it is not seeded — a login is
@@ -588,14 +595,18 @@ describe('AuthBroker', () => {
       expect(held.get('DEST')?.authorizationToken).toBe(token);
     });
 
-    it('a changed client does not re-label what the cached factory provider obtained', async () => {
+    it('a changed client: the factory is called again with it, and each provider’s writes carry its own client', async () => {
       const keys = mockServiceKeyStore();
       const store = mockSessionStore({ serviceUrl: SERVICE_URL });
+      const factory = jest.fn<
+        IRefreshableTokenProvider,
+        Parameters<TokenProviderFactory>
+      >(() => mockProvider());
       const broker = new AuthBroker({
         ...STATED,
         sessionStore: store,
         serviceKeyStore: keys,
-        provider: () => mockProvider(),
+        provider: factory,
       });
 
       await broker.getToken('DEST');
@@ -606,18 +617,32 @@ describe('AuthBroker', () => {
       });
       await broker.getToken('DEST');
 
-      expect(store.saveSession).toHaveBeenCalledTimes(2);
-      for (const [, written] of store.saveSession.mock.calls) {
-        expect(written).toEqual(
-          expect.objectContaining({
-            issuedFor: SERVICE_URI,
-            issuedBy: KEY_ISSUER,
-          }),
-        );
-      }
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(factory.mock.calls[1]?.[1]).toEqual(
+        expect.objectContaining({ uaaClientId: 'other-client' }),
+      );
+      expect(
+        store.saveSession.mock.calls.map(([, written]) => written),
+      ).toEqual([
+        expect.objectContaining({
+          issuedFor: SERVICE_URI,
+          issuedBy: KEY_ISSUER,
+        }),
+        expect.objectContaining({
+          issuedFor: SERVICE_URI,
+          issuedBy: record(
+            'provider/-',
+            {
+              clientId: 'other-client',
+              uaaUrl: 'https://other-uaa.example.com',
+            },
+            '',
+          ),
+        }),
+      ]);
     });
 
-    it('an instance: the binding is fixed at the destination’s first call', async () => {
+    it('an instance: the binding is fixed at the destination’s first call, and a change refuses the destination naming provider', async () => {
       let conn: IConnectionConfig = {
         serviceUrl: SERVICE_URL,
         sapClient: '100',
@@ -632,8 +657,12 @@ describe('AuthBroker', () => {
 
       await broker.getToken('DEST');
       conn = { serviceUrl: 'https://other.example.com', sapClient: '200' };
-      await broker.getToken('DEST');
+      await expect(broker.getToken('DEST')).rejects.toMatchObject({
+        name: 'DestinationConfigError',
+        missingFields: ['provider'],
+      });
 
+      expect(store.saveSession).toHaveBeenCalledTimes(1);
       for (const [, written] of store.saveSession.mock.calls) {
         expect(written).toEqual(
           expect.objectContaining({

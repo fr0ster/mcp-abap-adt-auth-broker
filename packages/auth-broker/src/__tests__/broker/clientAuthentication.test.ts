@@ -594,9 +594,10 @@ describe('getProvider with a clientAuthentication strategy: the guard', () => {
     const provider = await broker.getProvider(D);
     expect(provider).toBeDefined();
     expect(store.getClientCertificate).toHaveBeenCalledTimes(2);
-    // Built now, and kept: a third call reads nothing.
+    // Built now, and kept: a third call re-reads the certificate client the
+    // build read, finds it unchanged, and answers the same provider.
     await expect(broker.getProvider(D)).resolves.toBe(provider);
-    expect(store.getClientCertificate).toHaveBeenCalledTimes(2);
+    expect(store.getClientCertificate).toHaveBeenCalledTimes(3);
   });
 
   it('concurrent getProvider while the strategy throws: one build, the same error to both, not cached, the next call retries', async () => {

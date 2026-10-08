@@ -381,6 +381,19 @@ export function handedOverProvider(
 /** Every grant that obtains a secret: `DestinationGrant` without `'none'`. */
 export type TokenGrant = Exclude<DestinationGrant, 'none'>;
 
+/**
+ * A token row's provider, and the refresh token the builder handed it from
+ * the session — the very value in the provider's config, so what the broker
+ * takes as the refresh token the build owns at its start (§5.2) is what the
+ * provider was given, for every grant, and cannot drift from it:
+ * `client_credentials` is handed none (its row takes no seed), `saml2_pure`
+ * none (it holds cookies), and a build that started with nothing none.
+ */
+export interface RowBuild {
+  readonly provider: IAuthProvider;
+  readonly seededRefreshToken: string | undefined;
+}
+
 /** How the consumer's `renewal` option is shaped. */
 export type RenewalOption = (
   destination: string,
@@ -639,7 +652,7 @@ export function uaaRefusal(
  * strategy's answer (`clientAuthentication`) no secret is required and none
  * is passed: the provider authenticates its client with the answer.
  */
-export function uaaProvider(row: UaaRow): IAuthProvider {
+export function uaaProvider(row: UaaRow): RowBuild {
   const { destination, grant, client, secret, clientAuthentication } = row;
   const refusal = uaaRefusal({
     ...row,
@@ -664,18 +677,22 @@ export function uaaProvider(row: UaaRow): IAuthProvider {
   });
 
   if (grant === 'client_credentials') {
-    return constructed(
-      destination,
-      COMMON_FIELDS,
-      () =>
-        new ClientCredentialsProvider({
-          uaaUrl,
-          clientId,
-          ...(clientSecret === undefined ? {} : { clientSecret }),
-          logger: row.logger,
-          ...hooks(),
-        }),
-    );
+    // The client alone: no seed.
+    return {
+      provider: constructed(
+        destination,
+        COMMON_FIELDS,
+        () =>
+          new ClientCredentialsProvider({
+            uaaUrl,
+            clientId,
+            ...(clientSecret === undefined ? {} : { clientSecret }),
+            logger: row.logger,
+            ...hooks(),
+          }),
+      ),
+      seededRefreshToken: undefined,
+    };
   }
 
   const seed = tokenSeed(secret);
@@ -684,56 +701,45 @@ export function uaaProvider(row: UaaRow): IAuthProvider {
     row.authorization as NonNullable<UaaRow['authorization']>
   )(destination, grant);
   if (grant === 'authorization_code') {
-    return constructed(
+    return {
+      provider: constructed(
+        destination,
+        COMMON_FIELDS,
+        () =>
+          new AuthorizationCodeProvider(
+            asContract<AuthorizationCodeProviderConfig>({
+              uaaUrl,
+              clientId,
+              ...(clientSecret === undefined ? {} : { clientSecret }),
+              authorization,
+              ...seed,
+              logger: row.logger,
+              ...hooks(),
+            }),
+          ),
+      ),
+      seededRefreshToken: seed.refreshToken,
+    };
+  }
+  return {
+    provider: constructed(
       destination,
       COMMON_FIELDS,
       () =>
-        new AuthorizationCodeProvider(
-          asContract<AuthorizationCodeProviderConfig>({
+        new UaaPasscodeProvider(
+          asContract<UaaPasscodeProviderConfig>({
             uaaUrl,
             clientId,
-            ...(clientSecret === undefined ? {} : { clientSecret }),
+            clientSecret,
             authorization,
             ...seed,
             logger: row.logger,
             ...hooks(),
           }),
         ),
-    );
-  }
-  return constructed(
-    destination,
-    COMMON_FIELDS,
-    () =>
-      new UaaPasscodeProvider(
-        asContract<UaaPasscodeProviderConfig>({
-          uaaUrl,
-          clientId,
-          clientSecret,
-          authorization,
-          ...seed,
-          logger: row.logger,
-          ...hooks(),
-        }),
-      ),
-  );
-}
-
-/**
- * The refresh token a build of `grant` is seeded with from `secret` — the one
- * `tokenSeed` hands its provider — or `undefined`: none stored, or a grant
- * whose provider takes none (`client_credentials` obtains none, `saml2_pure`
- * holds cookies). This is the refresh token the build owns at its start
- * (§5.2); `secret` is the checked session, `null` when it is not bound here.
- */
-export function seededRefreshToken(
-  grant: TokenGrant,
-  secret: IConfig | null,
-): string | undefined {
-  if (grant === 'client_credentials' || grant === 'saml2_pure') {
-    return undefined;
-  }
-  return tokenSeed(secret).refreshToken;
+    ),
+    seededRefreshToken: seed.refreshToken,
+  };
 }
 
 /** The seed of a token provider: the stored token, its refresh token and expiry. */
@@ -872,7 +878,7 @@ export function oidcRefusal(
  * (`oidcRefusal`), before any collaborator is called. `token_exchange` takes
  * one scope string: the stored scopes joined by a space.
  */
-export function oidcProvider(row: OidcRow): IAuthProvider {
+export function oidcProvider(row: OidcRow): RowBuild {
   const { destination, grant, means, client } = row;
   const refusal = oidcRefusal({
     ...row,
@@ -884,6 +890,11 @@ export function oidcProvider(row: OidcRow): IAuthProvider {
       ? means.oidcScopes
       : undefined;
   const renewal = renewalFor(destination, grant, row.renewal);
+  const seed = tokenSeed(row.secret);
+  const built = (provider: IAuthProvider): RowBuild => ({
+    provider,
+    seededRefreshToken: seed.refreshToken,
+  });
   const common = () => ({
     issuerUrl: stated(means.oidcIssuerUrl),
     clientId: client?.uaaClientId as string,
@@ -892,7 +903,7 @@ export function oidcProvider(row: OidcRow): IAuthProvider {
       : stated(secretOf(client)),
     ...authenticatedBy(row.clientAuthentication),
     tokenEndpoint: stated(means.oidcTokenEndpoint),
-    ...tokenSeed(row.secret),
+    ...seed,
     logger: row.logger,
     renewal,
     persistence: persistenceFor(row),
@@ -904,70 +915,78 @@ export function oidcProvider(row: OidcRow): IAuthProvider {
       const authorization = (
         row.oidcAuthorization as NonNullable<OidcRow['oidcAuthorization']>
       )(destination);
-      return constructed(
-        destination,
-        OIDC_FIELDS,
-        () =>
-          new OidcBrowserProvider(
-            asContract<OidcBrowserProviderConfig>({
-              ...common(),
-              scopes,
-              authorizationEndpoint: stated(means.oidcAuthorizationEndpoint),
-              authorization,
-            }),
-          ),
+      return built(
+        constructed(
+          destination,
+          OIDC_FIELDS,
+          () =>
+            new OidcBrowserProvider(
+              asContract<OidcBrowserProviderConfig>({
+                ...common(),
+                scopes,
+                authorizationEndpoint: stated(means.oidcAuthorizationEndpoint),
+                authorization,
+              }),
+            ),
+        ),
       );
     }
     case 'device_code': {
       const presenter = (
         row.deviceCodePresenter as NonNullable<OidcRow['deviceCodePresenter']>
       )(destination);
-      return constructed(
-        destination,
-        OIDC_FIELDS,
-        () =>
-          new OidcDeviceFlowProvider(
-            asContract<OidcDeviceFlowProviderConfig>({
-              ...common(),
-              scopes,
-              deviceAuthorizationEndpoint: stated(
-                means.oidcDeviceAuthorizationEndpoint,
-              ),
-              presenter,
-            }),
-          ),
+      return built(
+        constructed(
+          destination,
+          OIDC_FIELDS,
+          () =>
+            new OidcDeviceFlowProvider(
+              asContract<OidcDeviceFlowProviderConfig>({
+                ...common(),
+                scopes,
+                deviceAuthorizationEndpoint: stated(
+                  means.oidcDeviceAuthorizationEndpoint,
+                ),
+                presenter,
+              }),
+            ),
+        ),
       );
     }
     case 'password':
-      return constructed(
-        destination,
-        OIDC_FIELDS,
-        () =>
-          new OidcPasswordProvider(
-            asContract<OidcPasswordProviderConfig>({
-              ...common(),
-              scopes,
-              username: means.username as string,
-              password: means.password as string,
-            }),
-          ),
+      return built(
+        constructed(
+          destination,
+          OIDC_FIELDS,
+          () =>
+            new OidcPasswordProvider(
+              asContract<OidcPasswordProviderConfig>({
+                ...common(),
+                scopes,
+                username: means.username as string,
+                password: means.password as string,
+              }),
+            ),
+        ),
       );
     case 'token_exchange':
-      return constructed(
-        destination,
-        OIDC_FIELDS,
-        () =>
-          new OidcTokenExchangeProvider(
-            asContract<OidcTokenExchangeProviderConfig>({
-              ...common(),
-              scope: scopes?.join(' '),
-              subjectToken: means.oidcSubjectToken as string,
-              subjectTokenType: means.oidcSubjectTokenType as string,
-              audience: stated(means.oidcAudience),
-              actorToken: stated(means.oidcActorToken),
-              actorTokenType: stated(means.oidcActorTokenType),
-            }),
-          ),
+      return built(
+        constructed(
+          destination,
+          OIDC_FIELDS,
+          () =>
+            new OidcTokenExchangeProvider(
+              asContract<OidcTokenExchangeProviderConfig>({
+                ...common(),
+                scope: scopes?.join(' '),
+                subjectToken: means.oidcSubjectToken as string,
+                subjectTokenType: means.oidcSubjectTokenType as string,
+                audience: stated(means.oidcAudience),
+                actorToken: stated(means.oidcActorToken),
+                actorTokenType: stated(means.oidcActorTokenType),
+              }),
+            ),
+        ),
       );
   }
 }
@@ -1071,7 +1090,7 @@ export function samlRefusal(
  * certificate the validator cannot read — by name, never the value, the
  * validator's error carried.
  */
-export function samlProvider(row: SamlRow): IAuthProvider {
+export function samlProvider(row: SamlRow): RowBuild {
   const { destination, grant, means, client } = row;
   const refusal = samlRefusal({
     ...row,
@@ -1137,39 +1156,47 @@ export function samlProvider(row: SamlRow): IAuthProvider {
     const cookieProvider = (
       row.samlCookies as NonNullable<SamlRow['samlCookies']>
     )(destination);
-    return constructed(
+    // The cookies and their expiry: no refresh token.
+    return {
+      provider: constructed(
+        destination,
+        SAML_FIELDS,
+        () =>
+          new Saml2PureProvider(
+            asContract<Saml2PureProviderConfig>({
+              ...common(),
+              cookieProvider,
+              accessToken: stated(secret?.sessionCookies),
+              expiresAt:
+                typeof secret?.expiresAt === 'number'
+                  ? secret.expiresAt
+                  : undefined,
+            }),
+          ),
+      ),
+      seededRefreshToken: undefined,
+    };
+  }
+  const seed = tokenSeed(row.secret);
+  return {
+    provider: constructed(
       destination,
       SAML_FIELDS,
       () =>
-        new Saml2PureProvider(
-          asContract<Saml2PureProviderConfig>({
+        new Saml2BearerProvider(
+          asContract<Saml2BearerProviderConfig>({
             ...common(),
-            cookieProvider,
-            accessToken: stated(secret?.sessionCookies),
-            expiresAt:
-              typeof secret?.expiresAt === 'number'
-                ? secret.expiresAt
-                : undefined,
+            tokenUrl: stated(means.samlTokenUrl),
+            uaaUrl: client?.uaaUrl as string,
+            clientId: client?.uaaClientId as string,
+            clientSecret: row.clientAuthentication
+              ? undefined
+              : stated(secretOf(client)),
+            ...authenticatedBy(row.clientAuthentication),
+            ...seed,
           }),
         ),
-    );
-  }
-  return constructed(
-    destination,
-    SAML_FIELDS,
-    () =>
-      new Saml2BearerProvider(
-        asContract<Saml2BearerProviderConfig>({
-          ...common(),
-          tokenUrl: stated(means.samlTokenUrl),
-          uaaUrl: client?.uaaUrl as string,
-          clientId: client?.uaaClientId as string,
-          clientSecret: row.clientAuthentication
-            ? undefined
-            : stated(secretOf(client)),
-          ...authenticatedBy(row.clientAuthentication),
-          ...tokenSeed(row.secret),
-        }),
-      ),
-  );
+    ),
+    seededRefreshToken: seed.refreshToken,
+  };
 }
