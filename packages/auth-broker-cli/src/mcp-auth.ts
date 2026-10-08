@@ -170,7 +170,7 @@ function showMainHelp(): void {
     '  --sp-entity-id <id>        SP entityID, the Audience (saml2-bearer: read from XSUAA metadata)',
   );
   console.log(
-    '  --acs-url <url>            The Recipient (saml2-bearer: read from XSUAA metadata)',
+    '  --acs-url <url>            The Recipient; a pasted login needs it (saml2-bearer: read from XSUAA metadata)',
   );
   console.log(
     '  --saml-metadata <path>     XSUAA SP metadata file; with --service-key <uaa.url>/saml/metadata is read',
@@ -402,7 +402,12 @@ function showSsoHelp(subcommand: SsoSubcommand): void {
     '  --scopes <csv>            Scopes list (comma or space-separated)',
   );
   console.log('  --scope <value>           Scope for token exchange');
-  console.log('  --code <value>            Authorization code (manual)');
+  console.log(
+    '  --code <value>            An authorization code obtained elsewhere: no URL is built, so the',
+  );
+  console.log(
+    '                            login carries no state or PKCE (the browser flow carries both)',
+  );
   console.log('  --username <value>        Username for password flow');
   console.log('  --password <value>        Password for password flow');
   console.log(
@@ -430,7 +435,13 @@ function showSsoHelp(subcommand: SsoSubcommand): void {
     '  --sp-entity-id <id>        SP Entity ID; also the Audience the assertion must name',
   );
   console.log(
-    '  --acs-url <url>            ACS URL; the Recipient the assertion must name',
+    '  --acs-url <url>            The ACS the IdP posts to; the Recipient the assertion must name.',
+  );
+  console.log(
+    '                             A pasted login (--assertion-flow manual, --idp-initiated) needs it:',
+  );
+  console.log(
+    '                             --acs-url, the XSUAA metadata (saml2-bearer), or acsUrl in --config',
   );
   console.log(
     '  --idp-cert <path>          IdP signing certificate file (PEM or DER); repeat for key rotation',

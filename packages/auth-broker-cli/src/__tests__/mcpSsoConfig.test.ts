@@ -120,6 +120,8 @@ import {
   SamlTrustMissingError,
   ssoBrowser,
 } from '../mcpSsoConfig';
+import { failureLines } from '../output';
+import { isUsageError } from '../subcommandArgs';
 
 // Trust for a SAML config whose test is about something else: since
 // auth-providers 5 the CLI builds the validator, and refuses without trust.
@@ -820,14 +822,50 @@ describe('mcp-sso CLI/config merge', () => {
           });
         });
 
-        it('with --idp-initiated and no --acs-url, names the default callback as the ACS', async () => {
+        it.each([
+          ['--idp-initiated', { idpInitiated: true }],
+          ['--assertion-flow manual', { assertionFlow: 'manual' as const }],
+          [
+            '--idp-initiated --assertion-flow manual',
+            { idpInitiated: true, assertionFlow: 'manual' as const },
+          ],
+        ])(
+          'with %s and no ACS: refused naming --acs-url, no localhost guess',
+          (_case, overrides) => {
+            let thrown: unknown;
+            try {
+              samlStrategyOf(
+                samlOptions(flow, { ...FILE_TRUST, ...overrides }),
+              );
+            } catch (error) {
+              thrown = error;
+            }
+            expect(isUsageError(thrown)).toBe(true);
+            expect(failureLines(thrown).join('\n')).toContain('--acs-url');
+            expect(exitSpy).not.toHaveBeenCalled();
+            expect(manualSamlResponseStrategy).not.toHaveBeenCalled();
+          },
+        );
+
+        it("with --idp-initiated, the paste stops at the request's signal", async () => {
           const strategy = samlStrategyOf(
-            samlOptions(flow, { ...FILE_TRUST, idpInitiated: true }),
+            samlOptions(flow, {
+              ...FILE_TRUST,
+              idpInitiated: true,
+              acsUrl: 'https://uaa.example/saml/SSO/alias/x',
+            }),
           );
-          const outcome = (await strategy.authorize({
+          pastedInput.value = undefined;
+          const controller = new AbortController();
+          const pasting = strategy.authorize({
             buildAuthorizationUrl: jest.fn(),
-          })) as { redirectUri: string };
-          expect(outcome.redirectUri).toBe('http://localhost:61001/callback');
+            signal: controller.signal,
+          });
+          const rejected = expect(pasting).rejects.toThrow('input abandoned');
+          controller.abort();
+          await rejected;
+          expect(interfaces.at(-1)?.closed).toBe(true);
+          pastedInput.value = 'PASTED-SAML-RESPONSE';
         });
 
         it('with --idp-initiated and --assertion, uses the static strategy', () => {
@@ -901,6 +939,22 @@ describe('readManualInput', () => {
   // left open holds stdin, and the process never exits.
   it('rejects when the signal aborts, and closes its readline', async () => {
     pastedInput.value = undefined;
+    const before = interfaces.length;
+    const controller = new AbortController();
+    const reading = readManualInput('Paste: ', controller.signal);
+    const rejected = expect(reading).rejects.toThrow(
+      'input abandoned at "Paste:"',
+    );
+    // The question is asked one turn later, after the URL prompt.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(interfaces.length).toBe(before + 1);
+    controller.abort();
+    await rejected;
+    expect(interfaces.at(-1)?.closed).toBe(true);
+  });
+
+  it('a signal aborted before the question is asked opens no readline', async () => {
+    const before = interfaces.length;
     const controller = new AbortController();
     const reading = readManualInput('Paste: ', controller.signal);
     const rejected = expect(reading).rejects.toThrow(
@@ -908,7 +962,7 @@ describe('readManualInput', () => {
     );
     controller.abort();
     await rejected;
-    expect(interfaces.at(-1)?.closed).toBe(true);
+    expect(interfaces.length).toBe(before);
   });
 
   it('opens no readline for a signal already aborted', async () => {

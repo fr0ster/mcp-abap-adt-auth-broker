@@ -13,7 +13,6 @@ import type { AuthBrokerConfig } from '@mcp-abap-adt/auth-broker';
 import {
   asOidcResult,
   consoleDeviceCodePresenter,
-  DEFAULT_CALLBACK_PORT,
   defaultReplayStore,
   manualPasscodeStrategy,
   manualSamlResponseStrategy,
@@ -25,6 +24,7 @@ import {
 } from '@mcp-abap-adt/auth-providers';
 import type { DestinationMeans } from '@mcp-abap-adt/auth-stores';
 import type {
+  AuthorizationRequest,
   IAuthorizationStrategy,
   IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
@@ -139,11 +139,11 @@ export interface McpSsoOptions {
 }
 
 /**
- * Reads one line from this CLI's stdin. `signal` is a manual strategy's: when
- * its deadline passes or it is disposed, the read is abandoned and its
- * `readline` closed — an open one holds stdin and keeps the process alive.
+ * Reads one line from this CLI's stdin, the question on stderr. `signal` is
+ * the login's: when it aborts, the read is abandoned and its `readline`
+ * closed — an open one holds stdin and keeps the process alive.
  */
-export function readManualInput(
+export async function readManualInput(
   prompt: string,
   signal?: AbortSignal,
 ): Promise<string> {
@@ -152,7 +152,16 @@ export function readManualInput(
       `input abandoned at "${prompt.trim()}": the read was aborted`,
     );
   if (signal?.aborted) {
-    return Promise.reject(abandoned());
+    throw abandoned();
+  }
+  // auth-providers' terminal compositions arm their paste — this read —
+  // before they present the URL, in the same turn. Asked one turn later, the
+  // question follows the URL prompt on a line of its own instead of having
+  // the URL's lead appended to it. A deferral, not a bound: nothing waits on
+  // a clock.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  if (signal?.aborted) {
+    throw abandoned();
   }
   const rl = createInterface({
     input: process.stdin,
@@ -838,6 +847,36 @@ export function buildPasscodeAuthorization(
 }
 
 /**
+ * Whether the run's SAML login is a paste — `--assertion-flow manual` (or an
+ * `assertion` flow given no value), or the IdP-initiated paste: the user
+ * lifts the SAMLResponse the identity provider posted to the ACS, so the ACS
+ * must be declared. Handed-over cookies and an `--assertion` paste nothing;
+ * an IdP-initiated browser flow is refused on its own.
+ */
+export function pastesSamlResponse(options: McpSsoOptions): boolean {
+  if (options.protocol !== 'saml2') return false;
+  if (options.cookie || options.assertion) return false;
+  if (options.idpInitiated) return options.assertionFlow !== 'browser';
+  return (options.assertionFlow ?? 'browser') !== 'browser';
+}
+
+/**
+ * The ACS a SAML paste declares — `--acs-url`, else the SP metadata's
+ * (`--saml-metadata`, `<uaa.url>/saml/metadata`), else the `--config` file's
+ * `acsUrl`, each already merged into `options` — or a usage error naming
+ * `--acs-url`. There is no fallback: a localhost callback is not where any
+ * identity provider posts.
+ */
+export function declaredAcs(options: McpSsoOptions): string {
+  if (options.acsUrl) return options.acsUrl;
+  throw new UsageError(
+    options.flow === 'bearer'
+      ? '--acs-url: a pasted SAML login needs the ACS the identity provider posts to; give --acs-url, the XSUAA metadata (--saml-metadata or --service-key), or acsUrl in the --config file'
+      : '--acs-url: a pasted SAML login needs the ACS the identity provider posts to; give --acs-url, or acsUrl in the --config file',
+  );
+}
+
+/**
  * Both SAML flows (bearer, pure) can open a browser; routes `--browser`,
  * `--redirect-port` and the manual/static assertion options into the
  * strategy that replaces them.
@@ -860,11 +899,10 @@ export function buildSamlAuthorization(
   const assertionFlow = options.assertionFlow || 'browser';
   if (assertionFlow !== 'browser') {
     // 'manual', and an 'assertion' flow given no value, both need a human to
-    // lift the SAMLResponse out of the POST body by hand.
-    // auth-providers 6.0.0 requires the ACS here: the redirect the identity
-    // provider posts to, never a localhost guess.
+    // lift the SAMLResponse out of the POST body by hand, at the ACS the
+    // identity provider posts to: declared, never a localhost guess.
     return manualSamlResponseStrategy({
-      redirectUri: requireOption(options.acsUrl, '--acs-url'),
+      redirectUri: declaredAcs(options),
       read: (prompt, signal) => readManualInput(prompt, signal),
     });
   }
@@ -895,14 +933,15 @@ function buildIdpInitiatedAuthorization(options: McpSsoOptions) {
     );
     process.exit(1);
   }
-  // The ACS the assertion names as its Recipient; the same fallback the
-  // auth-providers strategies use when none is declared.
-  const redirectUri =
-    options.acsUrl ?? `http://localhost:${DEFAULT_CALLBACK_PORT}/callback`;
+  // The ACS the assertion names as its Recipient: declared, never guessed.
+  const redirectUri = declaredAcs(options);
   return {
-    async authorize() {
+    async authorize(request: AuthorizationRequest) {
+      // The login's signal ends the paste: every waiter gone, the read is
+      // abandoned and its readline closed.
       const payload = await readManualInput(
         'Start the login at your identity provider, then paste the SAMLResponse (from the POST body): ',
+        request.signal,
       );
       if (!payload) {
         throw new UsageError('No SAMLResponse was provided');

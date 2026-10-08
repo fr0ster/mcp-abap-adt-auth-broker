@@ -29,9 +29,11 @@ import {
   applyFileConfig,
   buildCollaborators,
   buildDestinationMeans,
+  declaredAcs,
   type McpSsoOptions,
   normalizeProviderConfig,
   opensBrowser,
+  pastesSamlResponse,
   ssoBrowser,
   ssoRow,
 } from './mcpSsoConfig';
@@ -249,6 +251,13 @@ export async function runMcpSso(
       '❌ SAML pure flow is only supported for ABAP sessions (cookies)',
     );
     process.exit(1);
+  }
+
+  // A pasted SAML login declares its ACS — from --acs-url, the SP metadata
+  // or the --config file, all merged by now — or is refused naming
+  // --acs-url, before anything is read or written (§10.5).
+  if (pastesSamlResponse(options)) {
+    declaredAcs(options);
   }
 
   const files = openDestination(
