@@ -9,7 +9,11 @@
  * - none of the three certificate phrases the broker once copied from
  *   auth-providers: the provider's error carries its own words;
  * - in both packages' `src`: no `timeoutMs`, no `AbortSignal.timeout`, no
- *   `INTERACTIVE_LOGIN_TIMEOUT_MS` — no wait has a bound of the package's own.
+ *   `INTERACTIVE_LOGIN_TIMEOUT_MS`, no `setTimeout` / `setInterval` — no wait
+ *   has a bound of the package's own (§7.6);
+ * - the token API never calls `getProvider` (§7.3): nothing in the library
+ *   calls it at all — the token API reaches the row path's provider through
+ *   its own non-attaching waiter.
  *
  * Comments are left out of the code checks (a comment may say what is not
  * done); the phrase check reads the whole file.
@@ -137,11 +141,27 @@ describe('the library reads a failure only through auth-errors', () => {
 });
 
 describe('no wait has a bound of the package’s own (both packages)', () => {
-  it.each(['timeoutMs', 'AbortSignal.timeout', 'INTERACTIVE_LOGIN_TIMEOUT_MS'])(
-    'no %s',
-    (needle) => {
-      const found = both.flatMap(({ file, code }) => sites(file, code, needle));
-      expect(found).toEqual([]);
-    },
-  );
+  it.each([
+    'timeoutMs',
+    'AbortSignal.timeout',
+    'INTERACTIVE_LOGIN_TIMEOUT_MS',
+    'setTimeout',
+    'setInterval',
+  ])('no %s', (needle) => {
+    const found = both.flatMap(({ file, code }) => sites(file, code, needle));
+    expect(found).toEqual([]);
+  });
+});
+
+describe('the token API never calls getProvider (§7.3)', () => {
+  it('no call of getProvider in the library', () => {
+    const found = library.flatMap(({ file, text }) => {
+      const code = codeOf(text);
+      return [
+        ...sites(file, code, '.getProvider('),
+        ...sites(file, code, "['getProvider']"),
+      ];
+    });
+    expect(found).toEqual([]);
+  });
 });

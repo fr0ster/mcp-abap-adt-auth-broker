@@ -275,7 +275,7 @@ export function sncProvider(
   destination: string,
   means: IConnectionConfig,
   logger: ILogger,
-): IAuthProvider {
+): IAuthProvider & Attachable {
   if (!present(means.sncPartnerName)) {
     throw new DestinationConfigError(
       destination,
@@ -389,8 +389,17 @@ export type TokenGrant = Exclude<DestinationGrant, 'none'>;
  * `client_credentials` is handed none (its row takes no seed), `saml2_pure`
  * none (it holds cookies), and a build that started with nothing none.
  */
+/**
+ * A provider that has parties (§7.2): every token provider
+ * (`BaseTokenProvider.attach`) and the SNC one (`SncLogonProvider.attach`).
+ */
+export interface Attachable {
+  attach(signal: AbortSignal): () => void;
+}
+
 export interface RowBuild {
-  readonly provider: IAuthProvider;
+  /** A token provider: it has parties. */
+  readonly provider: IAuthProvider & Attachable;
   readonly seededRefreshToken: string | undefined;
 }
 
@@ -892,7 +901,7 @@ export function oidcProvider(row: OidcRow): RowBuild {
       : undefined;
   const renewal = renewalFor(destination, grant, row.renewal);
   const seed = tokenSeed(row.secret);
-  const built = (provider: IAuthProvider): RowBuild => ({
+  const built = (provider: IAuthProvider & Attachable): RowBuild => ({
     provider,
     seededRefreshToken: seed.refreshToken,
   });

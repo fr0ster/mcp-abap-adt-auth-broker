@@ -380,6 +380,7 @@ describe('with a strategy, every client row', () => {
         destination: D,
         grant: 'client_credentials',
         client: client(),
+        signal: new AbortController().signal,
         readCertificate: async () => certificateClient(),
       });
       expect(identity).toEqual({ uaaUrl: endpoint.url, uaaClientId: id });

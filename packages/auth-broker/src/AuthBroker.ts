@@ -27,9 +27,12 @@
  */
 
 import {
+  type AttemptContext,
   AuthProviderFailure,
   authError,
   classify,
+  type SharedAttempt,
+  sharedAttempt,
 } from '@mcp-abap-adt/auth-errors';
 import type {
   IDeviceCodePresenter,
@@ -75,6 +78,7 @@ import {
 import { asContract } from './contractShape';
 import { DestinationConfigError } from './DestinationConfigError';
 import {
+  type Attachable,
   basicProvider,
   handedOverProvider,
   isOidcGrant,
@@ -106,7 +110,7 @@ type Submitted =
   | ({ readonly written: true } & WriteOutcome)
   | { readonly written: false };
 
-const DROPPED: Submitted = { written: false };
+const DROPPED: Submitted = Object.freeze({ written: false });
 
 import type {
   IAuthorizationConfig,
@@ -121,6 +125,77 @@ const noOpLogger: ILogger = {
   warn: () => {},
   debug: () => {},
 };
+
+/** What a caller of `getProvider`, the token API and `flush()` may pass (§7). */
+export interface BrokerCallOptions {
+  /**
+   * This caller no longer needs the answer: an abort releases this caller
+   * alone, with auth-errors' `aborted` failure (`interactive-login`), while
+   * the work it waited on runs on for the others. No bound of the broker's
+   * own: a caller that wants one passes `AbortSignal.timeout(ms)`.
+   */
+  readonly signal?: AbortSignal | undefined;
+}
+
+/**
+ * A shared start's answer (§7.1): never thenable — no `then` member, frozen.
+ * Every start of the broker's slots resolves one and never throws, so the
+ * only failure a waiter gets from `sharedAttempt` itself is `aborted`; what
+ * the work threw is carried out as a value and rethrown, unchanged, outside
+ * `join`.
+ */
+type SlotOutcome<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly thrown: unknown };
+
+/** `work`'s result or what it threw, as a frozen outcome; never rejects. */
+async function outcomeOf<T>(work: () => Promise<T>): Promise<SlotOutcome<T>> {
+  try {
+    return Object.freeze({ ok: true, value: await work() });
+  } catch (thrown) {
+    return Object.freeze({ ok: false, thrown });
+  }
+}
+
+/**
+ * Joins `slot` with `start`'s work and the caller's signal, and unwraps the
+ * outcome outside `join`: the value, or the very value the work threw.
+ */
+async function joined<T>(
+  slot: SharedAttempt<SlotOutcome<T>>,
+  work: (attempt: AttemptContext) => Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  const outcome = await slot.join(
+    (attempt) => outcomeOf(() => work(attempt)),
+    signal,
+  );
+  if (!outcome.ok) throw outcome.thrown;
+  return outcome.value;
+}
+
+/**
+ * One wait of one caller — on the write queue, or a store read outside a
+ * resolution — as a waiter of a slot of its own (§7.5): the caller's signal
+ * releases that caller only, and the work runs on.
+ */
+function waitFor<T>(
+  work: () => Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  return joined(
+    sharedAttempt<SlotOutcome<T>>('persisting-tokens'),
+    work,
+    signal,
+  );
+}
+
+/** The provider a token API call is answered by, asked with the call's signal. */
+function tokenOptions(
+  signal: AbortSignal | undefined,
+): [] | [{ signal: AbortSignal }] {
+  return signal === undefined ? [] : [{ signal }];
+}
 
 /**
  * Builds the token API's provider for one destination, from the means and the
@@ -400,6 +475,21 @@ interface Resolved<P> {
 }
 
 /**
+ * The row path's resolution, with the provider's parties (§7.2): the provider
+ * itself when the row it was built from is a token row or `snc`, else
+ * `undefined` — decided by the row, never by looking at the instance.
+ */
+interface RowResolved extends Resolved<IAuthProvider> {
+  readonly parties: Attachable | undefined;
+}
+
+/** A row build: the provider, and its parties when it has any. */
+interface RowBuilt {
+  readonly provider: IAuthProvider;
+  readonly parties: Attachable | undefined;
+}
+
+/**
  * The consumer path's provider, with the binding fixed when it was built — or,
  * for an instance, first used. Every result it answers is written with this
  * binding, never one recomputed from means read later.
@@ -542,13 +632,23 @@ export class AuthBroker {
     | TokenProviderFactory
     | undefined;
   /** Per (destination, path): the provider handed out while unchanged. */
-  private readonly resolvedRow = new Map<string, Resolved<IAuthProvider>>();
+  private readonly resolvedRow = new Map<string, RowResolved>();
   private readonly resolvedConsumer = new Map<string, ConsumerResolved>();
   /**
-   * Per (destination, path): the resolution in flight, which every caller of
-   * that path arriving meanwhile joins.
+   * Per (destination, path): the slot of shared resolutions (§7.1) — every
+   * caller of that path is a waiter of its attempt.
    */
-  private readonly resolving = perPath<Promise<unknown>>();
+  private readonly rowSlots = new Map<
+    string,
+    SharedAttempt<SlotOutcome<RowResolved>>
+  >();
+  private readonly consumerSlots = new Map<
+    string,
+    SharedAttempt<SlotOutcome<ConsumerResolved>>
+  >();
+  /** The broker-wide slot every `flush()` caller joins (§7.5). */
+  private readonly flushSlot =
+    sharedAttempt<SlotOutcome<void>>('persisting-tokens');
   /** Per (destination, path): the last generation a build took. */
   private readonly generations = perPath<number>();
   /** Per (destination, path): the newest generation that queued a write. */
@@ -668,8 +768,11 @@ export class AuthBroker {
    *   `onWriteFailure` option; without a consumer `provider`, also for one
    *   whose provider obtains no token.
    */
-  async getToken(destination: string): Promise<string> {
-    return this.obtain(destination, 'getTokens');
+  async getToken(
+    destination: string,
+    options?: BrokerCallOptions,
+  ): Promise<string> {
+    return this.obtain(destination, 'getTokens', options?.signal);
   }
 
   /**
@@ -677,13 +780,23 @@ export class AuthBroker {
    * token the server has just refused. Calls the provider's `refreshTokens()`;
    * a renewal already in flight for the destination is joined, not repeated.
    */
-  async refreshToken(destination: string): Promise<string> {
-    return this.obtain(destination, 'refreshTokens');
+  async refreshToken(
+    destination: string,
+    options?: BrokerCallOptions,
+  ): Promise<string> {
+    return this.obtain(destination, 'refreshTokens', options?.signal);
   }
 
+  /**
+   * The token API's one body. The call's signal releases this caller from
+   * every wait it has — the write checks, the means read, the resolution
+   * (whose waiter it is, never attaching: §7.3), its own write — and is
+   * passed to the provider's `getTokens` / `refreshTokens`.
+   */
   private async obtain(
     destination: string,
     method: 'getTokens' | 'refreshTokens',
+    signal: AbortSignal | undefined,
   ): Promise<string> {
     if (this.provider && !isWriteFailurePolicy(this.onWriteFailure)) {
       // Every answer of the consumer's provider is written: what a failed
@@ -695,16 +808,19 @@ export class AuthBroker {
         'the token API writes the session secret: say what a failed write means',
       );
     }
-    await this.settlePending(destination);
+    await this.settlePending(destination, signal);
     // This call's reads: the means once, for the check and the resolution.
     const reads = this.storeReads(destination);
-    const means = await this.statedForTokens(destination, reads);
+    const means = await waitFor(
+      () => this.statedForTokens(destination, reads),
+      signal,
+    );
     const result = this.provider
-      ? await this.obtainFromConsumer(destination, method, reads)
-      : await this.obtainShared(destination, method, means, reads);
+      ? await this.obtainFromConsumer(destination, method, reads, signal)
+      : await this.obtainShared(destination, method, means, reads, signal);
     // A write queued meanwhile — a discard of the destination's provider the
     // store rejected, say — is caught here (§5.4).
-    await this.settlePending(destination);
+    await this.settlePending(destination, signal);
     return result.authorizationToken;
   }
 
@@ -719,12 +835,16 @@ export class AuthBroker {
    * `persisting-tokens`). A write queued after the check is not this call's.
    * Under `'continue'` nothing is asked.
    *
-   * The one wait is `writer.retry(destination)`'s promise; Task 7 races it
-   * with the call's signal (§7.5), and the write runs on.
+   * The one wait is `writer.retry(destination)`'s promise, a waiter of its
+   * own slot with the call's signal (§7.5): an abort releases the caller
+   * (`aborted`), never with success, and the write runs on.
    */
-  private async settlePending(destination: string): Promise<void> {
+  private async settlePending(
+    destination: string,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
     if (this.onWriteFailure !== 'fail') return;
-    const outcome = await this.writer.retry(destination);
+    const outcome = await waitFor(() => this.writer.retry(destination), signal);
     if (!outcome.landed) {
       throw new AuthProviderFailure(
         classify(outcome.error, 'persisting-tokens'),
@@ -766,6 +886,7 @@ export class AuthBroker {
     method: 'getTokens' | 'refreshTokens',
     means: IConnectionConfig | null,
     reads: StoreReads,
+    signal: AbortSignal | undefined,
   ): Promise<ITokenResult & { authorizationToken: string }> {
     if (!this.serviceKeyStore) {
       throw new DestinationConfigError(
@@ -784,7 +905,10 @@ export class AuthBroker {
         'a none destination presents a handed-over credential and obtains no token: use getProvider, or give the token API the provider option',
       );
     }
-    const { provider } = await this.resolveRow(destination, reads);
+    // The row path's provider, through a waiter of its slot that never
+    // attaches (§7.3): a token call can neither keep a later moment's login
+    // alive nor bound it.
+    const { provider } = await this.resolveRow(destination, signal, reads);
     if (!obtainsTokens(provider)) {
       throw new DestinationConfigError(
         destination,
@@ -795,7 +919,7 @@ export class AuthBroker {
     this.logger.debug(`[AuthBroker] ${method} for ${destination}`);
     // The provider's failure — a write its persistence awaited included — is
     // relayed as the same object.
-    return checked(await provider[method]());
+    return checked(await provider[method](...tokenOptions(signal)));
   }
 
   /**
@@ -808,15 +932,20 @@ export class AuthBroker {
     destination: string,
     method: 'getTokens' | 'refreshTokens',
     reads: StoreReads,
+    signal: AbortSignal | undefined,
   ): Promise<ITokenResult & { authorizationToken: string }> {
     const { provider, binding, generation } = await this.resolveConsumer(
       destination,
       reads,
+      signal,
     );
 
     this.logger.debug(`[AuthBroker] ${method} for ${destination}`);
-    const result = checked(await provider[method]());
-    const outcome = await this.submit('consumer', destination, generation, {
+    const result = checked(await provider[method](...tokenOptions(signal)));
+    // The call's own write, queued whatever the caller does next, and awaited
+    // raced against its signal (§5.5): an abort releases the caller
+    // (`aborted`, never success) and the write runs on.
+    const queued = this.submit('consumer', destination, generation, {
       credential: result.authorizationToken,
       cookies: result.tokenType === 'saml',
       expiresAt: expiryOf(result),
@@ -825,6 +954,7 @@ export class AuthBroker {
       refreshToken: present(result.refreshToken) ? result.refreshToken : '',
       binding,
     });
+    const outcome = await waitFor(() => queued, signal);
     if (outcome.written && !outcome.landed && this.onWriteFailure === 'fail') {
       throw new AuthProviderFailure(
         classify(outcome.error, 'persisting-tokens'),
@@ -834,26 +964,21 @@ export class AuthBroker {
   }
 
   /**
-   * One resolution per (destination, path) at a time: a caller of the path
-   * arriving while one is in flight joins it; the next caller after it
-   * settled starts its own. A failed resolution is not kept.
+   * The slot of one (destination, path)'s resolutions (§7.1): a caller of
+   * the path arriving while an attempt is active joins it; when every caller
+   * of an attempt has aborted, the attempt leaves the slot at once and the
+   * next caller starts afresh. A failed or aborted resolution is not kept.
    */
-  private shared<T>(
-    path: Path,
+  private slotOf<T>(
+    slots: Map<string, SharedAttempt<SlotOutcome<T>>>,
     destination: string,
-    start: () => Promise<T>,
-  ): Promise<T> {
-    const inflight = this.resolving[path].get(destination);
-    if (inflight) return inflight as Promise<T>;
-    const attempt = Promise.resolve().then(start);
-    this.resolving[path].set(destination, attempt);
-    const settled = () => {
-      if (this.resolving[path].get(destination) === attempt) {
-        this.resolving[path].delete(destination);
-      }
-    };
-    attempt.then(settled, settled);
-    return attempt;
+  ): SharedAttempt<SlotOutcome<T>> {
+    let slot = slots.get(destination);
+    if (slot === undefined) {
+      slot = sharedAttempt<SlotOutcome<T>>('token-source');
+      slots.set(destination, slot);
+    }
+    return slot;
   }
 
   /** Whether a build of this path was ever committed for the destination. */
@@ -890,7 +1015,10 @@ export class AuthBroker {
       return DROPPED;
     }
     this.newestWriter[path].set(destination, generation);
-    return { written: true, ...(await this.writer.submit(destination, write)) };
+    return Object.freeze({
+      written: true,
+      ...(await this.writer.submit(destination, write)),
+    });
   }
 
   /** This call's store reads: each source read at most once. */
@@ -938,31 +1066,44 @@ export class AuthBroker {
   private resolveConsumer(
     destination: string,
     reads: StoreReads,
+    signal: AbortSignal | undefined,
   ): Promise<ConsumerResolved> {
-    return this.shared('consumer', destination, async () => {
-      const instance = typeof this.provider !== 'function';
-      if (this.instanceRefused.has(destination)) {
-        throw instanceRefusal(destination);
-      }
-      const cached = this.resolvedConsumer.get(destination);
-      if (cached) {
-        if (await cached.identity.unchanged(reads)) return cached;
-        this.resolvedConsumer.delete(destination);
-        if (instance) {
-          this.instanceRefused.add(destination);
+    const slot = this.slotOf(this.consumerSlots, destination);
+    return joined(
+      slot,
+      async (attempt) => {
+        const instance = typeof this.provider !== 'function';
+        if (this.instanceRefused.has(destination)) {
           throw instanceRefusal(destination);
         }
-      }
-      const recorder = new IdentityRecorder(reads);
-      const built = await this.buildConsumer(destination, recorder);
-      const resolved: ConsumerResolved = {
-        ...built,
-        identity: recorder.seal(),
-        generation: this.nextGeneration('consumer', destination),
-      };
-      this.resolvedConsumer.set(destination, resolved);
-      return resolved;
-    });
+        const cached = this.resolvedConsumer.get(destination);
+        if (cached) {
+          if (await cached.identity.unchanged(reads)) return cached;
+          this.resolvedConsumer.delete(destination);
+          if (instance) {
+            this.instanceRefused.add(destination);
+            throw instanceRefusal(destination);
+          }
+        }
+        const recorder = new IdentityRecorder(reads);
+        const built = await this.buildConsumer(
+          destination,
+          recorder,
+          attempt.signal,
+        );
+        // The commit, one step, only if the attempt was not aborted: a build
+        // every caller left is never cached nor handed out (§7.1).
+        if (attempt.signal.aborted) throw attempt.signal.reason;
+        const resolved: ConsumerResolved = Object.freeze({
+          ...built,
+          identity: recorder.seal(),
+          generation: this.nextGeneration('consumer', destination),
+        });
+        this.resolvedConsumer.set(destination, resolved);
+        return resolved;
+      },
+      signal,
+    );
   }
 
   /**
@@ -976,6 +1117,7 @@ export class AuthBroker {
   private async buildConsumer(
     destination: string,
     recorder: IdentityRecorder,
+    signal: AbortSignal,
   ): Promise<{ provider: IRefreshableTokenProvider; binding: Binding }> {
     const provider = this.provider as
       | IRefreshableTokenProvider
@@ -1003,6 +1145,7 @@ export class AuthBroker {
       means,
       client,
       recorder,
+      signal,
     );
     let built: IRefreshableTokenProvider;
     let binding: Binding;
@@ -1059,6 +1202,7 @@ export class AuthBroker {
     means: IConnectionConfig | null,
     client: IAuthorizationConfig | null,
     recorder: IdentityRecorder,
+    signal: AbortSignal,
   ): Promise<{
     clientAuthentication: IClientAuthentication;
     identity: ClientIdentity | null;
@@ -1085,6 +1229,7 @@ export class AuthBroker {
       grant,
       client,
       () => recorder.read<IClientCertificate>('certificate'),
+      signal,
     );
     const clientAuthentication = await resolveClientAuthentication(
       strategy,
@@ -1281,13 +1426,27 @@ export class AuthBroker {
    * in `rejected()` after a 401 — back to the session store before it answers
    * (see `flush()`).
    *
+   * `options.signal` releases this caller from every wait (`aborted`), and is
+   * attached to the token or SNC provider answered — built or cached — so a
+   * login it starts later is aborted once every session holding it has gone
+   * (§7.2). Without a signal nothing is attached.
+   *
    * @throws DestinationConfigError when the destination lacks what its type
    *   needs — naming the fields or options, never a value.
    */
-  async getProvider(destination: string): Promise<IAuthProvider> {
-    await this.settlePending(destination);
-    const { provider } = await this.resolveRow(destination);
-    await this.settlePending(destination);
+  async getProvider(
+    destination: string,
+    options?: BrokerCallOptions,
+  ): Promise<IAuthProvider> {
+    const signal = options?.signal;
+    await this.settlePending(destination, signal);
+    const { provider, parties } = await this.resolveRow(destination, signal);
+    await this.settlePending(destination, signal);
+    // Attached after the resolution, to the provider answered — built or
+    // from the cache — so a login it starts later in a moment is aborted once
+    // every session holding it has gone (§7.2). Nothing kept to detach: a
+    // session ends by aborting its signal.
+    if (signal !== undefined) parties?.attach(signal);
     return provider;
   }
 
@@ -1298,45 +1457,64 @@ export class AuthBroker {
    */
   private resolveRow(
     destination: string,
+    signal: AbortSignal | undefined,
     reads: StoreReads = this.storeReads(destination),
-  ): Promise<Resolved<IAuthProvider>> {
-    return this.shared('row', destination, async () => {
-      const cached = this.resolvedRow.get(destination);
-      if (cached) {
-        if (await cached.identity.unchanged(reads)) return cached;
-        // Changed: never handed out again.
-        this.resolvedRow.delete(destination);
-      }
-      const recorder = new IdentityRecorder(reads);
-      const commit: Commit = { generation: 0 };
-      const provider = await this.build(destination, recorder, {
-        // Only a first build may start from the store; a replacement starts
-        // with nothing.
-        seeded: !this.everBuilt('row', destination),
-        commit,
-      });
-      commit.generation = this.nextGeneration('row', destination);
-      const resolved: Resolved<IAuthProvider> = {
-        provider,
-        identity: recorder.seal(),
-        generation: commit.generation,
-      };
-      this.resolvedRow.set(destination, resolved);
-      return resolved;
-    });
+  ): Promise<RowResolved> {
+    const slot = this.slotOf(this.rowSlots, destination);
+    return joined(
+      slot,
+      async (attempt) => {
+        const cached = this.resolvedRow.get(destination);
+        if (cached) {
+          if (await cached.identity.unchanged(reads)) return cached;
+          // Changed: never handed out again.
+          this.resolvedRow.delete(destination);
+        }
+        const recorder = new IdentityRecorder(reads);
+        const commit: Commit = { generation: 0 };
+        const { provider, parties } = await this.build(destination, recorder, {
+          // Only a first build may start from the store; a replacement starts
+          // with nothing.
+          seeded: !this.everBuilt('row', destination),
+          commit,
+          signal: attempt.signal,
+        });
+        // The commit — the cache set, the generation taken — is one step that
+        // runs only if the attempt was not aborted: a build every caller left
+        // is never cached, never handed out, and, never asked for a token,
+        // writes nothing (§7.1).
+        if (attempt.signal.aborted) throw attempt.signal.reason;
+        commit.generation = this.nextGeneration('row', destination);
+        const resolved: RowResolved = Object.freeze({
+          provider,
+          parties,
+          identity: recorder.seal(),
+          generation: commit.generation,
+        });
+        this.resolvedRow.set(destination, resolved);
+        return resolved;
+      },
+      signal,
+    );
   }
 
   /**
    * One build of the destination's row. Every store answer it reads goes
    * through `recorder` — what it read is its identity. `seeded`: whether the
    * build may start from the stored session; `commit`: the generation its
-   * writes carry, set when the build is committed.
+   * writes carry, set when the build is committed; `signal`: the build's
+   * attempt, handed to the `clientAuthentication` strategy (D11). Answers
+   * the provider and the row it stated.
    */
   private async build(
     destination: string,
     recorder: IdentityRecorder,
-    { seeded, commit }: { seeded: boolean; commit: Commit },
-  ): Promise<IAuthProvider> {
+    {
+      seeded,
+      commit,
+      signal,
+    }: { seeded: boolean; commit: Commit; signal: AbortSignal },
+  ): Promise<RowBuilt> {
     const serviceKeyStore = this.serviceKeyStore;
     if (!serviceKeyStore) {
       throw new DestinationConfigError(
@@ -1354,7 +1532,11 @@ export class AuthBroker {
     if (authType === 'basic') {
       provider = basicProvider(destination, stated);
     } else if (authType === 'snc') {
-      provider = sncProvider(destination, stated, this.logger);
+      const snc = sncProvider(destination, stated, this.logger);
+      this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
+        authType,
+      });
+      return { provider: snc, parties: snc };
     } else {
       const grant = statedGrant(destination, authType, stated);
       if (grant !== 'none') {
@@ -1399,6 +1581,7 @@ export class AuthBroker {
                 recorder.read<IClientCertificate>('certificate');
               return certificateRead;
             },
+            signal,
           );
           clientAuthentication = await resolveClientAuthentication(
             this.clientAuthentication,
@@ -1502,13 +1685,13 @@ export class AuthBroker {
           throw new Error(`unreachable grant ${grant satisfies never}`);
         }
         owned = built.seededRefreshToken;
-        provider = built.provider;
+        const tokenProvider = built.provider;
         this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
           authType,
           grant,
           seeded: !!secret,
         });
-        return provider;
+        return { provider: tokenProvider, parties: tokenProvider };
       }
       const secret = await this.read(destination, 'session', () =>
         this.sessionStore.loadSession(destination),
@@ -1527,7 +1710,7 @@ export class AuthBroker {
     this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
       authType,
     });
-    return provider;
+    return { provider, parties: undefined };
   }
 
   /**
@@ -1613,9 +1796,14 @@ export class AuthBroker {
    * `SessionWriteFailure`s). Nothing retries a pending write on its own: only
    * the destination's next write or `flush()` does, so call it on shutdown to
    * know whether every token a provider obtained is stored.
+   *
+   * Every caller joins one broker-wide slot (§7.5): its signal releases that
+   * caller alone (`aborted`); the attempts run on, and a write still failing
+   * stays pending. The `AggregateError` is rethrown as the same object to
+   * every caller (D9).
    */
-  flush(): Promise<void> {
-    return this.writer.flush();
+  flush(options?: BrokerCallOptions): Promise<void> {
+    return joined(this.flushSlot, () => this.writer.flush(), options?.signal);
   }
 
   /**
@@ -1686,12 +1874,17 @@ export class AuthBroker {
   /**
    * An `ITokenRefresher` for one destination, for injection into a connection:
    * `getToken()` is the broker's `getToken`, `refreshToken()` its forced
-   * `refreshToken`.
+   * `refreshToken` — each call a waiter with `options.signal` (D10), so a
+   * refresher held by a session ends with it.
    */
-  createTokenRefresher(destination: string): ITokenRefresher {
+  createTokenRefresher(
+    destination: string,
+    options?: BrokerCallOptions,
+  ): ITokenRefresher {
+    const signal = options?.signal;
     return {
-      getToken: () => this.getToken(destination),
-      refreshToken: () => this.refreshToken(destination),
+      getToken: () => this.getToken(destination, { signal }),
+      refreshToken: () => this.refreshToken(destination, { signal }),
     };
   }
 }

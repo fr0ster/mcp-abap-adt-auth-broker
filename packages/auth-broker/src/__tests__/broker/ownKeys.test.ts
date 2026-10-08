@@ -165,6 +165,8 @@ describe('own keys of what the token API hands out and writes', () => {
       'destination',
       'grant',
       'readCertificate',
+      // The build's attempt signal (D11).
+      'signal',
     ]);
     expect(shape(contexts[0]!.client)).toEqual([
       'uaaClientId',

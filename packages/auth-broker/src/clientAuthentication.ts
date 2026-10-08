@@ -53,6 +53,13 @@ export interface ClientAuthenticationContext {
    * `getClientCertificate`.
    */
   readCertificate(): Promise<IClientCertificate | null>;
+  /**
+   * The build's attempt: aborts when every caller waiting on the build has
+   * gone (D11). A strategy that waits on the network — a loader's
+   * `tlsMaterial()` — ends its wait on it; the broker sets no bound of its
+   * own.
+   */
+  readonly signal: AbortSignal;
 }
 
 /** The strategy `AuthBrokerConfig.clientAuthentication` takes. */
@@ -192,13 +199,14 @@ function certificateOf(
 /**
  * The context for one build: the client through `contextClient`;
  * `readCertificate` lazy and memoised — the first call reads, every later one
- * gets the same answer.
+ * gets the same answer; `signal`, the build's attempt.
  */
 export function clientAuthenticationContext(
   destination: string,
   grant: ClientAuthenticationGrant,
   client: IAuthorizationConfig | null,
   read: () => Promise<IClientCertificate | null>,
+  signal: AbortSignal,
 ): ClientAuthenticationContext {
   let certificate: Promise<IClientCertificate | null> | undefined;
   return {
@@ -209,6 +217,7 @@ export function clientAuthenticationContext(
       certificate ??= read().then(certificateOf);
       return certificate;
     },
+    signal,
   };
 }
 

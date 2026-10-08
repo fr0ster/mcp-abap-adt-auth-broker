@@ -21,6 +21,7 @@ export type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 export {
   AuthBroker,
   type AuthBrokerConfig,
+  type BrokerCallOptions,
   type StrategyGrant,
   type TokenProviderClient,
   type TokenProviderFactory,

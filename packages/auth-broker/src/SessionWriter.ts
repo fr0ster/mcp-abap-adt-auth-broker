@@ -49,7 +49,7 @@ export type WriteOutcome =
   | { readonly landed: true }
   | { readonly landed: false; readonly error: unknown };
 
-const LANDED: WriteOutcome = { landed: true };
+const LANDED: WriteOutcome = Object.freeze({ landed: true });
 
 /**
  * One destination whose session write still fails, in `flush()`'s
@@ -97,7 +97,7 @@ export class SessionWriter<T> {
       } catch (error) {
         queue.pending = { write: result, error };
         this.logFailure(destination, error);
-        return { landed: false, error };
+        return Object.freeze({ landed: false, error });
       }
       // Every write queued before this one has settled: a pending write is
       // older, and this one carries the state it was built from.
@@ -124,7 +124,7 @@ export class SessionWriter<T> {
         // Nothing else ran meanwhile: the queue runs one write at a time.
         pending.error = error;
         this.logFailure(destination, error);
-        return { landed: false, error };
+        return Object.freeze({ landed: false, error });
       }
       queue.pending = undefined;
       return LANDED;

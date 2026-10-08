@@ -30,8 +30,39 @@ import {
   DestinationConfigError,
   fromServiceKeyCertificate,
   isDestinationConfigError,
+  SessionWriteFailure,
 } from '../../index';
 import { fakeKeyStore, fakeSessionStore } from '../helpers/fakeStores';
+
+/**
+ * Every value a broker slot's `start` resolves, as auth-errors' real
+ * `sharedAttempt` receives it: the wrapper only records it (§7.1's outcome
+ * shape is asserted on what it saw).
+ */
+const slotOutcomes: unknown[] = [];
+jest.mock('@mcp-abap-adt/auth-errors', () => {
+  const actual = jest.requireActual('@mcp-abap-adt/auth-errors');
+  return {
+    ...actual,
+    sharedAttempt: (operation: string) => {
+      const slot = actual.sharedAttempt(operation);
+      return Object.freeze({
+        join: (
+          start: (context: unknown) => Promise<unknown>,
+          signal?: AbortSignal,
+        ) =>
+          slot.join(
+            (context: unknown) =>
+              start(context).then((outcome) => {
+                slotOutcomes.push(outcome);
+                return outcome;
+              }),
+            signal,
+          ),
+      });
+    },
+  };
+});
 
 const D = 'DEST';
 const FIXTURES = join(__dirname, '..', 'fixtures', 'certificates');
@@ -422,5 +453,215 @@ describe('isDestinationConfigError', () => {
     expect(isDestinationConfigError(hostile)).toBe(false);
     expect(isDestinationConfigError(null)).toBe(false);
     expect(isDestinationConfigError('DestinationConfigError')).toBe(false);
+  });
+});
+
+describe('error identity through the shared slots (§7.1, §7.5)', () => {
+  /** A manual promise. */
+  function gate(): { promise: Promise<void>; open: () => void } {
+    let open = () => {};
+    const promise = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { promise, open };
+  }
+
+  async function turns(count = 20): Promise<void> {
+    for (let i = 0; i < count; i += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+
+  /** A key store whose first means read waits for `held`. */
+  function heldKeyStore(held: Promise<void>, means = UAA_MEANS) {
+    const store = fakeKeyStore(means, {
+      uaaUrl: 'https://uaa.example.com',
+      uaaClientId: 'client',
+      uaaClientSecret: 'secret',
+    });
+    store.getConnectionConfig.mockImplementationOnce(async () => {
+      await held;
+      return means;
+    });
+    return store;
+  }
+
+  it('a DestinationConfigError thrown in the build reaches two waiters as that object', async () => {
+    const held = gate();
+    const strategyFailure = new AuthProviderFailure(
+      authError['client-certificate']({ problem: 'incomplete' }),
+    );
+    const broker = new AuthBroker(
+      stated({
+        sessionStore: fakeSessionStore(),
+        serviceKeyStore: heldKeyStore(held.promise),
+        clientAuthentication: async () => {
+          throw strategyFailure;
+        },
+      }),
+    );
+    const first = rejection(broker.getProvider(D));
+    const second = rejection(broker.getProvider(D));
+    await turns();
+    held.open();
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(b).toBe(a);
+    expect(a).toBeInstanceOf(DestinationConfigError);
+    const error = a as DestinationConfigError;
+    expect(error.destination).toBe(D);
+    expect(error.missingFields).toEqual(['clientAuthentication']);
+    expect(error.error).toEqual(
+      readFailure(strategyFailure, 'unfamiliar-error'),
+    );
+  });
+
+  it('a store’s own read error reaches two waiters as the store’s object', async () => {
+    const held = gate();
+    const own = Object.assign(new Error('the key store is broken'), {
+      code: 'EIO',
+    });
+    const store = fakeKeyStore(UAA_MEANS);
+    store.getConnectionConfig.mockImplementationOnce(async () => {
+      await held.promise;
+      throw own;
+    });
+    const broker = new AuthBroker(
+      stated({ sessionStore: fakeSessionStore(), serviceKeyStore: store }),
+    );
+    const first = rejection(broker.getProvider(D));
+    const second = rejection(broker.getProvider(D));
+    await turns();
+    held.open();
+    expect(await first).toBe(own);
+    expect(await second).toBe(own);
+  });
+
+  it('a provider’s AuthProviderFailure from a build reaches two waiters as that object', async () => {
+    const held = gate();
+    const failure = new AuthProviderFailure(
+      authError['request-failed']({
+        operation: 'token-request',
+        problem: 'refused',
+      }),
+    );
+    const sessionStore = fakeSessionStore();
+    sessionStore.getConnectionConfig.mockImplementationOnce(async () => {
+      await held.promise;
+      return null;
+    });
+    const broker = new AuthBroker(
+      stated({
+        sessionStore,
+        serviceKeyStore: fakeKeyStore(UAA_MEANS),
+        provider: () => {
+          throw failure;
+        },
+      }),
+    );
+    const first = rejection(broker.getToken(D));
+    const second = rejection(broker.getToken(D));
+    await turns();
+    held.open();
+    expect(await first).toBe(failure);
+    expect(await second).toBe(failure);
+  });
+
+  it('flush()’s rejection is the AggregateError itself, to every waiter', async () => {
+    const sessionStore = fakeSessionStore();
+    sessionStore.saveSession.mockRejectedValue(
+      Object.assign(new Error('disk full'), { code: 'EACCES' }),
+    );
+    const broker = new AuthBroker({
+      onWriteFailure: 'continue',
+      sessionStore,
+      serviceKeyStore: fakeKeyStore(UAA_MEANS),
+      provider: {
+        getTokens: async (): Promise<ITokenResult> => ({
+          authType: 'client_credentials',
+          authorizationToken: 'T',
+          expiresIn: 60,
+        }),
+        refreshTokens: async (): Promise<ITokenResult> => ({
+          authType: 'client_credentials',
+          authorizationToken: 'T',
+          expiresIn: 60,
+        }),
+      },
+    });
+    await broker.getToken(D);
+
+    const first = rejection(broker.flush());
+    const second = rejection(broker.flush());
+    const a = await first;
+    expect(await second).toBe(a);
+    expect(a).toBeInstanceOf(AggregateError);
+    const errors = (a as AggregateError).errors;
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(SessionWriteFailure);
+    expect((errors[0] as SessionWriteFailure).destination).toBe(D);
+  });
+
+  it('a waiter that aborts still gets auth-errors’ aborted; the other gets the build’s error', async () => {
+    const held = gate();
+    const broker = new AuthBroker({
+      sessionStore: fakeSessionStore(),
+      serviceKeyStore: heldKeyStore(held.promise),
+    });
+    const leaving = new AbortController();
+    const first = rejection(broker.getProvider(D, { signal: leaving.signal }));
+    const second = rejection(broker.getProvider(D));
+    await turns();
+    leaving.abort();
+    const aborted = await first;
+    expect(isAuthProviderFailure(aborted)).toBe(true);
+    expect(readFailure(aborted, 'unfamiliar-error')).toEqual(
+      readFailure(
+        new AuthProviderFailure(
+          authError['interactive-login']({ outcome: 'aborted' }),
+        ),
+        'unfamiliar-error',
+      ),
+    );
+    held.open();
+    // No renewal / onWriteFailure: the build's own refusal, as it was made.
+    expect(isDestinationConfigError(await second)).toBe(true);
+  });
+
+  it('every outcome a slot’s start resolves is frozen and has no then; so is its value', async () => {
+    slotOutcomes.length = 0;
+    const sessionStore = fakeSessionStore();
+    const broker = new AuthBroker(
+      stated({
+        sessionStore,
+        serviceKeyStore: fakeKeyStore({
+          authType: 'basic',
+          username: 'U',
+          password: 'P',
+        }),
+      }),
+    );
+    await broker.getProvider(D);
+    await rejection(
+      new AuthBroker({
+        sessionStore,
+        serviceKeyStore: fakeKeyStore(UAA_MEANS),
+      }).getProvider(D),
+    );
+    await broker.flush();
+    expect(slotOutcomes.length).toBeGreaterThanOrEqual(3);
+    for (const outcome of slotOutcomes) {
+      expect(typeof outcome).toBe('object');
+      expect(Object.isFrozen(outcome)).toBe(true);
+      expect('then' in (outcome as object)).toBe(false);
+      const value = (outcome as { ok: boolean; value?: unknown }).value;
+      if (value !== undefined && typeof value === 'object' && value !== null) {
+        expect(Object.isFrozen(value)).toBe(true);
+        expect('then' in value).toBe(false);
+      }
+    }
+    const kinds = slotOutcomes.map((o) => (o as { ok: boolean }).ok);
+    expect(kinds).toContain(true);
+    expect(kinds).toContain(false);
   });
 });

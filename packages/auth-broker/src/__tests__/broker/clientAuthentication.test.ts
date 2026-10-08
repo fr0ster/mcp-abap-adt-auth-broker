@@ -71,6 +71,7 @@ function context(
     grant: 'client_credentials',
     client: null,
     readCertificate: async () => CERTIFICATE,
+    signal: new AbortController().signal,
     ...extra,
   };
 }
