@@ -41,6 +41,7 @@ import type {
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthBroker, type StrategyGrant } from '../../index';
+import { samlBearerRecord, samlPureRecord } from '../helpers/bindingRecord';
 import { describeWhere } from '../helpers/describeWhere';
 import { STATED } from '../helpers/stated';
 import { FormBrowser } from './formLogin';
@@ -403,9 +404,10 @@ describeWhere(
         ].sort(),
       );
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_FOR)).toBe(UAA_URL);
-      // UAA_URL is http://localhost:<port>/uaa: the ACS is already canonical.
+      // The record of the row: the IdP and the ACS exactly as stated, and
+      // the trust digest of Keycloak's certificates and entity ids.
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        webSsoAcs,
+        samlPureRecord(samlMeans(webSsoAcs)),
       );
 
       // A new broker over the same stores reuses the cookies: no login.
@@ -469,7 +471,7 @@ describeWhere(
         ].sort(),
       );
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        `${UAA_URL}?client_id=saml_kc`,
+        samlBearerRecord(samlMeans(bearerAcs), UAA_URL as string, 'saml_kc'),
       );
 
       expect(await provider.rejected(UNAUTHORIZED)).toEqual({ ok: true });

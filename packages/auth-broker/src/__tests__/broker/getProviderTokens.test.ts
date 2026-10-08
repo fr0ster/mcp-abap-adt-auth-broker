@@ -31,6 +31,7 @@ import {
   SessionWriteFailure,
   type StrategyGrant,
 } from '../../index';
+import { uaaRecord } from '../helpers/bindingRecord';
 import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
@@ -88,11 +89,20 @@ function client(
  * out literally, never computed by the broker's function.
  */
 const FOR = 'https://abap.example.com:443?sap-client=100';
-const by = () => `${endpoint.url}?client_id=broker-client`;
+/** The `issuedBy` record of a UAA row with this endpoint and client. */
+const by = (
+  grant:
+    | 'authorization_code'
+    | 'client_credentials'
+    | 'passcode' = 'authorization_code',
+) => uaaRecord(grant, endpoint.url, 'broker-client');
 
 /** A stored session bound to this destination's resource and issuer. */
-function bound(secret: IConfig): IConfig {
-  return { ...secret, issuedFor: FOR, issuedBy: by() };
+function bound(
+  secret: IConfig,
+  grant: Parameters<typeof by>[0] = 'authorization_code',
+): IConfig {
+  return { ...secret, issuedFor: FOR, issuedBy: by(grant) };
 }
 
 /** A key store holding means only: three getters, no way to write. */
@@ -344,7 +354,7 @@ describe('getProvider — the UAA grants', () => {
         expiresAt: expect.any(Number),
         refreshToken: 'refresh-1',
         issuedFor: FOR,
-        issuedBy: by(),
+        issuedBy: by('passcode'),
       });
     });
 
@@ -436,11 +446,14 @@ describe('getProvider — the UAA grants', () => {
     (grant) => {
       it('reuses an opaque stored token until the stored expiresAt', async () => {
         const { broker } = brokerFor(grant, {
-          session: bound({
-            authorizationToken: 'opaque-stored-token',
-            expiresAt: Date.now() + 3_600_000,
-            refreshToken: 'stored-rt',
-          }),
+          session: bound(
+            {
+              authorizationToken: 'opaque-stored-token',
+              expiresAt: Date.now() + 3_600_000,
+              refreshToken: 'stored-rt',
+            },
+            grant,
+          ),
         });
 
         const provider = await broker.getProvider(D);
@@ -452,10 +465,13 @@ describe('getProvider — the UAA grants', () => {
 
       it('renews an opaque stored token with no expiresAt, by its stored refresh token', async () => {
         const { broker } = brokerFor(grant, {
-          session: bound({
-            authorizationToken: 'opaque-stored-token',
-            refreshToken: 'stored-rt',
-          }),
+          session: bound(
+            {
+              authorizationToken: 'opaque-stored-token',
+              refreshToken: 'stored-rt',
+            },
+            grant,
+          ),
         });
 
         const provider = await broker.getProvider(D);
@@ -653,7 +669,7 @@ describe('persistence through onTokens', () => {
 
   it('carries the stored refresh token forward when the result has none', async () => {
     const { broker, held } = brokerFor('client_credentials', {
-      session: bound({ refreshToken: 'kept-rt' }),
+      session: bound({ refreshToken: 'kept-rt' }, 'client_credentials'),
     });
 
     await (await broker.getProvider(D)).prepare();
@@ -663,7 +679,7 @@ describe('persistence through onTokens', () => {
       expiresAt: expect.any(Number),
       refreshToken: 'kept-rt',
       issuedFor: FOR,
-      issuedBy: by(),
+      issuedBy: by('client_credentials'),
     });
   });
 

@@ -32,7 +32,7 @@ import type {
   IAuthProvider,
   IAuthRejection,
 } from '@mcp-abap-adt/interfaces-auth';
-import { AuthBroker } from '../../index';
+import { AuthBroker, bindingOf } from '../../index';
 import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
@@ -178,8 +178,19 @@ describe('through connection 14: getProvider → AdtCloudConnector → 401 → r
     await sessions.saveSession(D, {
       authorizationToken: refused,
       refreshToken: 'stored-refresh',
-      issuedFor: abap.url,
-      issuedBy: `${endpoint.url}?client_id=broker-client`,
+      // Bound as 5.0.0 binds it: the record of the key file's row and client.
+      ...bindingOf(
+        {
+          serviceUrl: abap.url,
+          authType: 'jwt',
+          grantType: 'authorization_code',
+        },
+        {
+          uaaUrl: endpoint.url,
+          uaaClientId: 'broker-client',
+          uaaClientSecret: 'S3CRET-client',
+        },
+      ),
     });
     const broker = new AuthBroker({
       ...STATED,

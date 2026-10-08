@@ -1,20 +1,23 @@
 /**
  * A stored secret is bound to the resource it was obtained for and to the
- * issuer and client that issued it.
+ * row, client and addresses that obtained it.
  *
- * The broker computes `issuedFor` (from `serviceUrl` and `sapClient`) and
- * `issuedBy` (from `uaaUrl` and `uaaClientId`) from the key store's means,
- * canonicalises the session's values, and seeds a provider only when both are
- * equal. Otherwise the secret — refresh token included — is not used: a fresh
- * login, and a log line that carries no value. `persist` writes both with the
- * secret. A `none` destination presents a credential it cannot obtain again,
- * so a mismatch there is a `DestinationConfigError` naming the field.
+ * The broker computes `issuedFor` (from `serviceUrl` and `sapClient`,
+ * canonical, compared after canonicalising the stored value) and `issuedBy`
+ * (the version-2 record of the row, its client, its exact addresses and its
+ * trust, compared by exact equality) from the key store's means, and seeds a
+ * provider only when both are equal. Otherwise the secret — refresh token
+ * included — is not used: a fresh login, and a log line that carries no
+ * value. `persist` writes both with the secret. A `none` destination presents
+ * a credential it cannot obtain again, so a mismatch there is a
+ * `DestinationConfigError` naming the field.
  *
- * The expected URIs are written out literally here, never computed by the
- * broker's own function: a test that used it would agree with any bug in it.
+ * The expected values are assembled here from the spec's grammar
+ * (`helpers/bindingRecord`), never computed by the broker's own function: a
+ * test that used it would agree with any bug in it.
  *
  * Stores are in-memory fakes of the contract — and, for the legacy file, the
- * real `AbapSessionStore` of auth-stores 3.1.0; providers are real, against a
+ * real `AbapSessionStore` of auth-stores 4.0.0; providers are real, against a
  * local token endpoint; nothing opens a browser.
  */
 
@@ -38,6 +41,7 @@ import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { asContract, type WithUndefined } from '../../contractShape';
 import { AuthBroker, bindingOf, DestinationConfigError } from '../../index';
+import { record, uaaRecord } from '../helpers/bindingRecord';
 import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
@@ -58,14 +62,16 @@ const DISCARDED = `[AuthBroker] ${D}: secret bound to another resource, discarde
 type SeededGrant = 'authorization_code' | 'passcode';
 
 let endpoint: TokenEndpoint;
-/** The canonical `issuedBy` of the endpoint and CLIENT_ID. */
-let BY: string;
 
 beforeEach(async () => {
   endpoint = await startTokenEndpoint();
-  // 127.0.0.1 with an explicit port; `!` re-encoded by URLSearchParams.
-  BY = `${endpoint.url}?client_id=sb-broker%21t42`;
 });
+
+/** The `issuedBy` record of a UAA row with the endpoint and CLIENT_ID. */
+const by = (grant: SeededGrant | 'client_credentials' = 'authorization_code') =>
+  uaaRecord(grant, endpoint.url, CLIENT_ID);
+/** What 4.x wrote as `issuedBy`: the canonical issuer URI with its client. */
+const by4x = () => `${endpoint.url}?client_id=sb-broker%21t42`;
 
 afterEach(async () => {
   await endpoint.close();
@@ -202,13 +208,16 @@ function broker(
 }
 
 /** A stored secret bound as this destination's means bind it. */
-function storedSecret(extra: WithUndefined<Partial<IConfig>> = {}): IConfig {
+function storedSecret(
+  extra: WithUndefined<Partial<IConfig>> = {},
+  grant: SeededGrant = 'authorization_code',
+): IConfig {
   return asContract<IConfig>({
     authorizationToken: STORED_TOKEN,
     expiresAt: Date.now() + 3_600_000,
     refreshToken: STORED_RT,
     issuedFor: FOR,
-    issuedBy: BY,
+    issuedBy: by(grant),
     ...extra,
   });
 }
@@ -228,7 +237,11 @@ describe.each(['authorization_code', 'passcode'] as const)(
   'jwt / %s: the stored secret is used only where it is bound',
   (grant: SeededGrant) => {
     it('both stored values equal the computed ones → seeded: the stored token, no request, no login', async () => {
-      const { broker: b, login, logger } = broker(grant, storedSecret());
+      const {
+        broker: b,
+        login,
+        logger,
+      } = broker(grant, storedSecret({}, grant));
 
       const provider = await b.getProvider(D);
       expect(await provider.prepare()).toEqual({ ok: true });
@@ -300,8 +313,11 @@ describe.each(['authorization_code', 'passcode'] as const)(
           'issuedBy: another uaaUrl',
           () => ({
             session: {
-              issuedBy:
-                'https://uaa.elsewhere.example.com:443?client_id=sb-broker%21t42',
+              issuedBy: uaaRecord(
+                grant,
+                'https://uaa.elsewhere.example.com',
+                CLIENT_ID,
+              ),
             },
           }),
         ],
@@ -309,7 +325,48 @@ describe.each(['authorization_code', 'passcode'] as const)(
           'issuedBy: another client id',
           () => ({
             session: {
-              issuedBy: `${endpoint.url}?client_id=sb-other%21t42`,
+              issuedBy: uaaRecord(grant, endpoint.url, 'sb-other!t42'),
+            },
+          }),
+        ],
+        [
+          'issuedBy: another row, the same client and uaaUrl',
+          () => ({ session: { issuedBy: by('client_credentials') } }),
+        ],
+        [
+          'issuedBy: another trust (a client certificate)',
+          () => ({
+            session: {
+              issuedBy: uaaRecord(grant, endpoint.url, CLIENT_ID, {
+                certUrl: endpoint.url,
+                certificate: 'PEM',
+              }),
+            },
+          }),
+        ],
+        [
+          'issuedBy: the 4.x canonical issuer URI with its client',
+          () => ({ session: { issuedBy: by4x() } }),
+        ],
+        [
+          'issuedBy: the 4.x URI written another way (the client id unencoded)',
+          () => ({
+            session: { issuedBy: `${endpoint.url}?client_id=sb-broker!t42` },
+          }),
+        ],
+        [
+          'issuedBy: the record with uaaUrl in another case',
+          () => ({
+            session: {
+              issuedBy: uaaRecord(grant, endpoint.url.toUpperCase(), CLIENT_ID),
+            },
+          }),
+        ],
+        [
+          'issuedBy: the record with a trailing "/" on uaaUrl',
+          () => ({
+            session: {
+              issuedBy: uaaRecord(grant, `${endpoint.url}/`, CLIENT_ID),
             },
           }),
         ],
@@ -323,7 +380,7 @@ describe.each(['authorization_code', 'passcode'] as const)(
 
       it.each(cases)('%s', async (_label, setup) => {
         const { session, conn, noResource } = setup();
-        const stored = storedSecret(session);
+        const stored = storedSecret(session, grant);
         for (const key of Object.keys(session) as (keyof IConfig)[]) {
           if (session[key] === undefined) delete stored[key];
         }
@@ -363,7 +420,8 @@ describe.each(['authorization_code', 'passcode'] as const)(
           stored.issuedFor,
           stored.issuedBy,
           FOR,
-          BY,
+          by(grant),
+          'mcp-abap-adt-binding',
           'abap.example.com',
           'sap-client',
           'client_id',
@@ -381,14 +439,14 @@ describe.each(['authorization_code', 'passcode'] as const)(
           authorizationToken: endpoint.issued[0]!,
           expiresAt: expect.any(Number),
           refreshToken: 'refresh-1',
-          issuedBy: BY,
+          issuedBy: by(grant),
         };
         if (!noResource) expected.issuedFor = FOR;
         expect(held()).toEqual(expected);
       });
     });
 
-    describe('seeded — values that canonicalise equal', () => {
+    describe('seeded — an issuedFor that canonicalises equal (issuedBy is exact, see above)', () => {
       const variants: [
         string,
         () => {
@@ -455,28 +513,6 @@ describe.each(['authorization_code', 'passcode'] as const)(
             },
           }),
         ],
-        [
-          'the client id stored unencoded (as auth-stores composes it, encodeURIComponent)',
-          () => ({
-            session: { issuedBy: `${endpoint.url}?client_id=sb-broker!t42` },
-          }),
-        ],
-        [
-          'uaaUrl case and a trailing "/" in the stored issuer',
-          () => ({
-            session: {
-              issuedBy: `${endpoint.url.toUpperCase()}/?client_id=sb-broker%21t42`,
-            },
-          }),
-        ],
-        [
-          'another parameter beside client_id in the stored issuer',
-          () => ({
-            session: {
-              issuedBy: `${endpoint.url}?zone=a&client_id=sb-broker%21t42`,
-            },
-          }),
-        ],
       ];
 
       it.each(variants)('%s', async (_label, setup) => {
@@ -489,7 +525,7 @@ describe.each(['authorization_code', 'passcode'] as const)(
           broker: b,
           login,
           logger,
-        } = broker(grant, storedSecret(session), {
+        } = broker(grant, storedSecret(session, grant), {
           conn: m,
           auth: client(auth),
         });
@@ -505,7 +541,7 @@ describe.each(['authorization_code', 'passcode'] as const)(
     });
 
     it('a renewal by the stored refresh token writes both fields again', async () => {
-      const { broker: b, store } = broker(grant, storedSecret());
+      const { broker: b, store } = broker(grant, storedSecret({}, grant));
       const provider = await b.getProvider(D);
 
       expect(
@@ -528,7 +564,7 @@ describe.each(['authorization_code', 'passcode'] as const)(
         'refreshToken',
       ]);
       expect(written.issuedFor).toBe(FOR);
-      expect(written.issuedBy).toBe(BY);
+      expect(written.issuedBy).toBe(by(grant));
     });
   },
 );
@@ -556,7 +592,7 @@ describe('persist writes the binding with every secret, and nothing else', () =>
       expiresAt: expect.any(Number),
       refreshToken: undefined,
       issuedFor: FOR,
-      issuedBy: BY,
+      issuedBy: by('client_credentials'),
     });
   });
 
@@ -573,14 +609,14 @@ describe('persist writes the binding with every secret, and nothing else', () =>
       Record<string, unknown>,
     ];
     expect('issuedFor' in written).toBe(false);
-    expect(written.issuedBy).toBe(BY);
+    expect(written.issuedBy).toBe(by('client_credentials'));
   });
 
   it('carries a stored refresh token forward only when it is bound here', async () => {
     const { broker: b, held } = broker('client_credentials', {
       refreshToken: 'bound-rt',
       issuedFor: FOR,
-      issuedBy: BY,
+      issuedBy: by('client_credentials'),
     });
 
     await (await b.getProvider(D)).prepare();
@@ -592,14 +628,22 @@ describe('persist writes the binding with every secret, and nothing else', () =>
   it.each([
     [
       'another resource',
-      { issuedFor: 'https://other.example.com:443?sap-client=100' },
+      () => ({ issuedFor: 'https://other.example.com:443?sap-client=100' }),
     ],
     [
       'another issuer',
-      { issuedBy: 'https://uaa.other.example.com:443?client_id=x' },
+      () => ({
+        issuedBy: uaaRecord(
+          'client_credentials',
+          'https://uaa.other.example.com',
+          'x',
+        ),
+      }),
     ],
-    ['no binding', { issuedFor: undefined, issuedBy: undefined }],
-  ])(
+    ['another row', () => ({ issuedBy: by() })],
+    ['a 4.x binding', () => ({ issuedBy: by4x() })],
+    ['no binding', () => ({ issuedFor: undefined, issuedBy: undefined })],
+  ] as [string, () => WithUndefined<Partial<IConfig>>][])(
     'does not carry a stored refresh token bound to %s into the new secret',
     async (_label, binding) => {
       const { broker: b, held } = broker(
@@ -607,8 +651,8 @@ describe('persist writes the binding with every secret, and nothing else', () =>
         asContract<IConfig>({
           refreshToken: 'foreign-rt',
           issuedFor: FOR,
-          issuedBy: BY,
-          ...binding,
+          issuedBy: by('client_credentials'),
+          ...binding(),
         }),
       );
 
@@ -622,7 +666,7 @@ describe('persist writes the binding with every secret, and nothing else', () =>
   );
 });
 
-describe('a session file written before auth-stores 3.1.0 (the real AbapSessionStore)', () => {
+describe('a session file written before auth-stores 3.1.0 (the real AbapSessionStore of auth-stores 4.0.0)', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -657,7 +701,7 @@ describe('a session file written before auth-stores 3.1.0 (the real AbapSessionS
     );
   }
 
-  it('is seeded when its SAP_URL, SAP_CLIENT and SAP_UAA_* are this destination’s means', async () => {
+  it('is not seeded even when its SAP_URL, SAP_CLIENT and SAP_UAA_* are this destination’s means: the binding auth-stores composes is 4.x’s, no record', async () => {
     legacyFile('https://abap.example.com/sap/bc/adt/');
     const { broker: b, login } = broker('authorization_code', null, {
       sessions: new AbapSessionStore(dir),
@@ -665,10 +709,16 @@ describe('a session file written before auth-stores 3.1.0 (the real AbapSessionS
 
     const provider = await b.getProvider(D);
     expect(await provider.prepare()).toEqual({ ok: true });
+    await b.flush();
 
-    expect(await bearer(provider)).toBe(STORED_TOKEN);
-    expect(endpoint.requests).toEqual([]);
-    expect(login.authorize).not.toHaveBeenCalled();
+    expect(endpoint.requests.map((r) => r.grantType)).toEqual([
+      'authorization_code',
+    ]);
+    expect(JSON.stringify(endpoint.requests)).not.toContain(STORED_RT);
+    expect(login.authorize).toHaveBeenCalledTimes(1);
+    expect(await bearer(provider)).toBe(endpoint.issued[0]);
+    const file = fs.readFileSync(path.join(dir, `${D}.env`), 'utf8');
+    expect(file).toMatch(line(ABAP_SESSION_VARS.ISSUED_BY, by()));
   });
 
   it('is not seeded when its SAP_URL names another system; the new secret is written with the binding keys', async () => {
@@ -687,7 +737,7 @@ describe('a session file written before auth-stores 3.1.0 (the real AbapSessionS
     expect(await bearer(provider)).toBe(endpoint.issued[0]);
     const file = fs.readFileSync(path.join(dir, `${D}.env`), 'utf8');
     expect(file).toMatch(line(ABAP_SESSION_VARS.ISSUED_FOR, FOR));
-    expect(file).toMatch(line(ABAP_SESSION_VARS.ISSUED_BY, BY));
+    expect(file).toMatch(line(ABAP_SESSION_VARS.ISSUED_BY, by()));
     expect(file).not.toContain(STORED_RT);
   });
 });
@@ -740,23 +790,43 @@ describe('the none rows: a handed-over credential is refused, never discarded', 
 
   const TOKEN = 'handed-over-token';
 
+  /** The `jwt` / `none` record: the client id, `uaaUrl`, `oidcIssuerUrl`. */
+  const jwtNone = (
+    fields: { clientId?: string; uaaUrl?: string; oidcIssuerUrl?: string } = {},
+  ) => record('jwt/none', fields, '');
+  /** The `saml` / `none` record: the ACS. */
+  const samlNone = (samlAcsUrl?: string) =>
+    record('saml/none', samlAcsUrl ? { samlAcsUrl } : {}, '');
+
   describe('jwt / none', () => {
+    it('no issuer and no client in the means: the record of the row alone and a matching issuedFor → presented', async () => {
+      const provider = await noneBroker('jwt', {
+        authorizationToken: TOKEN,
+        issuedFor: 'https://ABAP.example.com/sap/bc/adt/?sap-client=100',
+        issuedBy: jwtNone(),
+      }).getProvider(D);
+
+      expect(await bearer(provider)).toBe(TOKEN);
+    });
+
     it.each([
       ['no issuedBy stored', undefined],
       [
-        'a foreign issuedBy stored',
+        'a 4.x issuer URI stored',
         'https://uaa.other.example.com:443?client_id=x',
       ],
+      ['another row’s record', record('saml/none', {}, '')],
     ])(
-      'no issuer in the means and a matching issuedFor → presented (%s)',
+      'no issuer in the means and %s → DestinationConfigError naming issuedBy: the record is always compared',
       async (_label, issuedBy) => {
-        const provider = await noneBroker('jwt', {
-          authorizationToken: TOKEN,
-          issuedFor: 'https://ABAP.example.com/sap/bc/adt/?sap-client=100',
-          ...(issuedBy ? { issuedBy } : {}),
-        }).getProvider(D);
-
-        expect(await bearer(provider)).toBe(TOKEN);
+        const error = await refusal(
+          noneBroker('jwt', {
+            authorizationToken: TOKEN,
+            issuedFor: FOR,
+            ...(issuedBy ? { issuedBy } : {}),
+          }).getProvider(D),
+        );
+        expect(error.missingFields).toEqual(['issuedBy']);
       },
     );
 
@@ -785,7 +855,7 @@ describe('the none rows: a handed-over credential is refused, never discarded', 
         const error = await refusal(
           noneBroker(
             'jwt',
-            { authorizationToken: TOKEN, ...binding },
+            { authorizationToken: TOKEN, issuedBy: jwtNone(), ...binding },
             conn,
           ).getProvider(D),
         );
@@ -801,15 +871,15 @@ describe('the none rows: a handed-over credential is refused, never discarded', 
       uaaClientId: CLIENT_ID,
       uaaClientSecret: '',
     };
+    const ISSUER_RECORD = jwtNone({
+      clientId: CLIENT_ID,
+      uaaUrl: 'https://uaa.example.com',
+    });
 
-    it('an issuer stated by the client and a canonical-equal issuedBy → presented', async () => {
+    it('a client stated: its exact record → presented', async () => {
       const provider = await noneBroker(
         'jwt',
-        {
-          authorizationToken: TOKEN,
-          issuedFor: FOR,
-          issuedBy: 'HTTPS://uaa.example.com:443/?client_id=sb-broker!t42',
-        },
+        { authorizationToken: TOKEN, issuedFor: FOR, issuedBy: ISSUER_RECORD },
         {},
         ISSUER,
       ).getProvider(D);
@@ -818,14 +888,28 @@ describe('the none rows: a handed-over credential is refused, never discarded', 
     });
 
     it.each([
-      ['another client id', 'https://uaa.example.com:443?client_id=sb-other'],
+      [
+        'another client id',
+        jwtNone({ clientId: 'sb-other', uaaUrl: 'https://uaa.example.com' }),
+      ],
       [
         'another issuer',
-        'https://uaa.other.example.com:443?client_id=sb-broker%21t42',
+        jwtNone({
+          clientId: CLIENT_ID,
+          uaaUrl: 'https://uaa.other.example.com',
+        }),
+      ],
+      [
+        'uaaUrl with a trailing "/"',
+        jwtNone({ clientId: CLIENT_ID, uaaUrl: 'https://uaa.example.com/' }),
+      ],
+      [
+        'the 4.x canonical-equal URI',
+        'HTTPS://uaa.example.com:443/?client_id=sb-broker!t42',
       ],
       ['issuedBy absent', undefined],
     ])(
-      'an issuer stated by the client and issuedBy not matching (%s) → DestinationConfigError naming issuedBy',
+      'a client stated and issuedBy not its record (%s) → DestinationConfigError naming issuedBy',
       async (_label, issuedBy) => {
         const error = await refusal(
           noneBroker(
@@ -844,7 +928,7 @@ describe('the none rows: a handed-over credential is refused, never discarded', 
       },
     );
 
-    it('an issuer stated by oidcIssuerUrl is compared, with the client id', async () => {
+    it('oidcIssuerUrl is in the record, exactly, beside the client', async () => {
       const broker = (issuedBy: string) =>
         noneBroker(
           'jwt',
@@ -860,27 +944,33 @@ describe('the none rows: a handed-over credential is refused, never discarded', 
       expect(
         await bearer(
           await broker(
-            'https://idp.example.com:443/realms/r?client_id=app',
+            jwtNone({
+              clientId: 'app',
+              uaaUrl: 'https://uaa.example.com',
+              oidcIssuerUrl: 'https://idp.example.com/realms/r/',
+            }),
           ).getProvider(D),
         ),
       ).toBe(TOKEN);
-      const error = await refusal(
-        broker('https://uaa.example.com:443?client_id=app').getProvider(D),
-      );
-      expect(error.missingFields).toEqual(['issuedBy']);
+      for (const issuedBy of [
+        jwtNone({
+          clientId: 'app',
+          uaaUrl: 'https://uaa.example.com',
+          oidcIssuerUrl: 'https://idp.example.com/realms/r',
+        }),
+        jwtNone({ clientId: 'app', uaaUrl: 'https://uaa.example.com' }),
+        'https://idp.example.com:443/realms/r?client_id=app',
+      ]) {
+        const error = await refusal(broker(issuedBy).getProvider(D));
+        expect(error.missingFields).toEqual(['issuedBy']);
+      }
     });
   });
 
   describe('saml / none', () => {
     const COOKIES = 'MYSAPSSO2=handed-over';
 
-    it('no samlAcsUrl in the means and a matching issuedFor → presented, whatever issuedBy', async () => {
-      const provider = await noneBroker('saml', {
-        sessionCookies: COOKIES,
-        issuedFor: FOR,
-        issuedBy: 'https://elsewhere.example.com:443/acs',
-      }).getProvider(D);
-
+    async function cookiesOf(provider: IAuthProvider): Promise<string[]> {
       const cookies: string[] = [];
       expect(
         await provider.authorize({
@@ -888,34 +978,59 @@ describe('the none rows: a handed-over credential is refused, never discarded', 
           cookies: (c) => cookies.push(c),
         }),
       ).toEqual({ ok: true });
-      expect(cookies).toEqual([COOKIES]);
+      return cookies;
+    }
+
+    it('no samlAcsUrl in the means: the record of the row alone → presented; an ACS’s record → refused', async () => {
+      const provider = await noneBroker('saml', {
+        sessionCookies: COOKIES,
+        issuedFor: FOR,
+        issuedBy: samlNone(),
+      }).getProvider(D);
+      expect(await cookiesOf(provider)).toEqual([COOKIES]);
+
+      const error = await refusal(
+        noneBroker('saml', {
+          sessionCookies: COOKIES,
+          issuedFor: FOR,
+          issuedBy: samlNone('https://elsewhere.example.com/acs'),
+        }).getProvider(D),
+      );
+      expect(error.missingFields).toEqual(['issuedBy']);
     });
 
-    it('samlAcsUrl stated: an ACS stored with a query and another case → presented', async () => {
+    it('samlAcsUrl stated: its exact record → presented', async () => {
       const provider = await noneBroker(
         'saml',
         {
           sessionCookies: COOKIES,
           issuedFor: FOR,
-          issuedBy:
-            'https://ABAP.example.com:443/sap/saml2/sp/acs/100/?saml2=disabled',
+          issuedBy: samlNone(SAML_ACS),
         },
         { samlAcsUrl: SAML_ACS },
       ).getProvider(D);
 
-      const cookies: string[] = [];
-      await provider.authorize({
-        header: () => {},
-        cookies: (c) => cookies.push(c),
-      });
-      expect(cookies).toEqual([COOKIES]);
+      expect(await cookiesOf(provider)).toEqual([COOKIES]);
     });
 
     it.each([
-      ['another ACS', 'https://abap.example.com:443/sap/saml2/sp/acs/200'],
+      [
+        'another ACS',
+        samlNone('https://abap.example.com/sap/saml2/sp/acs/200'),
+      ],
+      [
+        'the ACS written with a query and another case',
+        samlNone(
+          'https://ABAP.example.com:443/sap/saml2/sp/acs/100/?saml2=disabled',
+        ),
+      ],
+      [
+        'the 4.x canonical ACS URI',
+        'https://abap.example.com:443/sap/saml2/sp/acs/100',
+      ],
       ['issuedBy absent', undefined],
     ])(
-      'samlAcsUrl stated and issuedBy not matching (%s) → DestinationConfigError naming issuedBy',
+      'samlAcsUrl stated and issuedBy not its record (%s) → DestinationConfigError naming issuedBy',
       async (_label, issuedBy) => {
         const error = await refusal(
           noneBroker(
@@ -938,6 +1053,7 @@ describe('the none rows: a handed-over credential is refused, never discarded', 
         noneBroker('saml', {
           sessionCookies: COOKIES,
           issuedFor: 'https://other.example.com:443/sap/bc/adt?sap-client=100',
+          issuedBy: samlNone(),
         }).getProvider(D),
       );
       expect(error.missingFields).toEqual(['issuedFor']);
@@ -973,7 +1089,10 @@ describe('bindingOf: the binding a consumer writes beside a credential it hands 
         serviceUrl: SERVICE_URL,
         sapClient: '100',
       }),
-    ).toEqual({ issuedFor: FOR });
+    ).toEqual({
+      issuedFor: FOR,
+      issuedBy: `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`,
+    });
   });
 
   it.each([
@@ -1027,5 +1146,15 @@ describe('bindingOf: the binding a consumer writes beside a credential it hands 
       {},
     );
     expect(bindingOf({ authType: 'jwt', serviceUrl: SERVICE_URL })).toEqual({});
+    // A pair outside the closed list: nothing a row could compare.
+    expect(
+      bindingOf(
+        asContract<IConnectionConfig>({
+          authType: 'jwt',
+          grantType: 'saml2_pure',
+          serviceUrl: SERVICE_URL,
+        }),
+      ),
+    ).toEqual({});
   });
 });

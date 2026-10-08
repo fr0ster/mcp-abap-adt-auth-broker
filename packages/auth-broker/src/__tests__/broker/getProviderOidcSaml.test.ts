@@ -47,6 +47,12 @@ import {
   DestinationConfigError,
   type StrategyGrant,
 } from '../../index';
+import {
+  oidcRecord,
+  record,
+  samlBearerRecord,
+  samlPureRecord,
+} from '../helpers/bindingRecord';
 import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
@@ -219,8 +225,12 @@ function oidcClient(
   };
 }
 
-/** The issuer of these means (the local endpoint, its own issuer) with the client. */
-const oidcBy = () => `${endpoint.url}?client_id=oidc-client`;
+/** The `issuedBy` record of an OIDC row with these means and the client. */
+const oidcBy = (
+  grant: OidcGrant = 'password',
+  means: IConnectionConfig = oidcMeans(grant),
+  clientId = 'oidc-client',
+) => oidcRecord(grant, means, clientId);
 
 /** An OIDC strategy that plays the user: it records the URL and returns a code. */
 function oidcStrategy(): {
@@ -324,7 +334,7 @@ describe('getProvider — the OIDC grants', () => {
       });
     });
 
-    it('takes the explicit token endpoint without an issuer, and binds to uaaUrl then', async () => {
+    it('takes the explicit token endpoint without an issuer, and binds to the client and that endpoint, exactly', async () => {
       const conn = oidcMeans('password', {
         oidcTokenEndpoint: `${endpoint.url}/oauth/token`,
       });
@@ -339,8 +349,20 @@ describe('getProvider — the OIDC grants', () => {
       });
 
       expect(endpoint.requests.map((r) => r.grantType)).toEqual(['password']);
+      // uaaUrl is no address an OIDC provider receives: not in the record.
       expect(held()?.issuedBy).toBe(
-        'https://idp.example.com:443?client_id=oidc-client',
+        record(
+          'jwt/password',
+          {
+            clientId: 'oidc-client',
+            oidcTokenEndpoint: `${endpoint.url}/oauth/token`,
+          },
+          [
+            ['oidcScopes', ['openid', 'profile']],
+            ['username', 'alice'],
+            ['clientCertificate', null],
+          ],
+        ),
       );
     });
 
@@ -401,7 +423,7 @@ describe('getProvider — the OIDC grants', () => {
       ]);
       expect(await bearer(provider)).toBe(endpoint.issued[0]);
       expect(held()?.authorizationToken).toBe(endpoint.issued[0]);
-      expect(held()?.issuedBy).toBe(oidcBy());
+      expect(held()?.issuedBy).toBe(oidcBy('oidc_authorization_code', conn));
       expect(oidc.strategy.dispose).not.toHaveBeenCalled();
     });
   });
@@ -525,7 +547,6 @@ describe('getProvider — the OIDC grants', () => {
     'oidc_authorization_code',
     'device_code',
     'password',
-    'token_exchange',
   ] as const)('%s seeded from the session', (grant) => {
     it('presents the stored token and asks no one', async () => {
       const stored = jwtExpiringIn(3600, { jti: 'stored' });
@@ -534,7 +555,7 @@ describe('getProvider — the OIDC grants', () => {
           authorizationToken: stored,
           refreshToken: 'stored-rt',
           issuedFor: FOR,
-          issuedBy: oidcBy(),
+          issuedBy: oidcBy(grant),
         },
       });
 
@@ -553,7 +574,7 @@ describe('getProvider — the OIDC grants', () => {
           authorizationToken: 'opaque-stored-token',
           expiresAt: Date.now() + 3_600_000,
           issuedFor: FOR,
-          issuedBy: oidcBy(),
+          issuedBy: oidcBy(grant),
         },
       });
 
@@ -564,13 +585,13 @@ describe('getProvider — the OIDC grants', () => {
       expect(await bearer(provider)).toBe('opaque-stored-token');
     });
 
-    it('is not seeded from a session bound to another issuer: a fresh login, never the stored refresh token', async () => {
+    it('is not seeded from a session bound to another client: a fresh login, never the stored refresh token', async () => {
       const { broker, held } = oidcBroker(grant, {
         session: {
           authorizationToken: jwtExpiringIn(3600, { jti: 'foreign' }),
           refreshToken: 'foreign-rt',
           issuedFor: FOR,
-          issuedBy: `${endpoint.url}?client_id=another-client`,
+          issuedBy: oidcBy(grant, oidcMeans(grant), 'another-client'),
         },
       });
 
@@ -580,8 +601,30 @@ describe('getProvider — the OIDC grants', () => {
       expect(endpoint.requests).toHaveLength(1);
       expect(endpoint.requests[0]!.params.refresh_token).toBeUndefined();
       expect(await bearer(provider)).toBe(endpoint.issued[0]);
-      expect(held()?.issuedBy).toBe(oidcBy());
+      expect(held()?.issuedBy).toBe(oidcBy(grant));
     });
+  });
+
+  it('token_exchange is never seeded: a session holding its exact record still gets a fresh exchange', async () => {
+    const stored = jwtExpiringIn(3600, { jti: 'stored' });
+    const { broker, held } = oidcBroker('token_exchange', {
+      session: {
+        authorizationToken: stored,
+        refreshToken: 'stored-rt',
+        issuedFor: FOR,
+        issuedBy: oidcBy('token_exchange'),
+      },
+    });
+
+    const provider = await broker.getProvider(D);
+    expect(await provider.prepare()).toEqual({ ok: true });
+
+    expect(endpoint.requests.map((r) => r.grantType)).toEqual([
+      'urn:ietf:params:oauth:grant-type:token-exchange',
+    ]);
+    expect(JSON.stringify(endpoint.requests)).not.toContain('stored-rt');
+    expect(await bearer(provider)).toBe(endpoint.issued[0]);
+    expect(held()?.issuedBy).toBe(oidcBy('token_exchange'));
   });
 
   describe.each([
@@ -596,7 +639,7 @@ describe('getProvider — the OIDC grants', () => {
           authorizationToken: refused,
           refreshToken: 'stored-rt',
           issuedFor: FOR,
-          issuedBy: oidcBy(),
+          issuedBy: oidcBy(grant),
         },
       });
       const provider = await broker.getProvider(D);
@@ -639,7 +682,7 @@ describe('getProvider — the OIDC grants', () => {
       session: {
         authorizationToken: jwtExpiringIn(3600, { jti: 'refused' }),
         issuedFor: FOR,
-        issuedBy: oidcBy(),
+        issuedBy: oidcBy('token_exchange'),
       },
     });
     const provider = await broker.getProvider(D);
@@ -797,8 +840,8 @@ describe('getProvider — the OIDC grants', () => {
 const IDP_ENTITY = 'urn:test:idp';
 const SP_ENTITY = 'urn:test:sp';
 const ACS = 'https://abap.example.com/sap/saml2/sp/acs/100';
-/** ACS's canonical URI — what a `saml2_pure` session's `issuedBy` must hold. */
-const ACS_BY = 'https://abap.example.com:443/sap/saml2/sp/acs/100';
+/** What a `saml2_pure` session's `issuedBy` must hold: its record. */
+const acsBy = () => samlPureRecord(samlMeans('saml2_pure', signsResponse));
 const COOKIES = 'SAP_SESSIONID_ABC_100=stand-in; MYSAPSSO2=stand-in';
 
 /** Two identity providers: one signs the Response, the other the Assertion alone. */
@@ -896,7 +939,13 @@ function bearerClient(
   };
 }
 
-const bearerBy = () => `${endpoint.url}?client_id=saml-client`;
+/** What a `saml2_bearer` session's `issuedBy` must hold: its record. */
+const bearerBy = (clientId = 'saml-client') =>
+  samlBearerRecord(
+    samlMeans('saml2_bearer', signsAssertion),
+    endpoint.url,
+    clientId,
+  );
 
 function samlBroker(
   grant: SamlGrant,
@@ -997,7 +1046,7 @@ describe('getProvider — the SAML grants', () => {
         sessionCookies: COOKIES,
         expiresAt: expect.any(Number),
         issuedFor: FOR,
-        issuedBy: ACS_BY,
+        issuedBy: acsBy(),
       });
       expect(held()?.expiresAt).toBeGreaterThan(Date.now());
     });
@@ -1077,7 +1126,7 @@ describe('getProvider — the SAML grants', () => {
           sessionCookies: 'STORED=cookie',
           expiresAt: Date.now() + 3_600_000,
           issuedFor: FOR,
-          issuedBy: ACS_BY,
+          issuedBy: acsBy(),
         },
       });
 
@@ -1095,7 +1144,7 @@ describe('getProvider — the SAML grants', () => {
           sessionCookies: 'STORED=cookie',
           expiresAt: Date.now() - 1_000,
           issuedFor: FOR,
-          issuedBy: ACS_BY,
+          issuedBy: acsBy(),
         },
       });
 
@@ -1113,7 +1162,7 @@ describe('getProvider — the SAML grants', () => {
           sessionCookies: 'STORED=cookie',
           expiresAt: Date.now() + 3_600_000,
           issuedFor: FOR,
-          issuedBy: ACS_BY,
+          issuedBy: acsBy(),
         },
       });
       const provider = await broker.getProvider(D);
@@ -1130,7 +1179,11 @@ describe('getProvider — the SAML grants', () => {
           sessionCookies: 'FOREIGN=cookie',
           expiresAt: Date.now() + 3_600_000,
           issuedFor: FOR,
-          issuedBy: 'https://abap.example.com:443/sap/saml2/sp/acs/200',
+          issuedBy: samlPureRecord(
+            samlMeans('saml2_pure', signsResponse, {
+              samlAcsUrl: 'https://abap.example.com/sap/saml2/sp/acs/200',
+            }),
+          ),
         },
       });
 
@@ -1139,24 +1192,28 @@ describe('getProvider — the SAML grants', () => {
 
       expect(saml.strategy.authorize).toHaveBeenCalledTimes(1);
       expect((await presented(provider)).cookies).toBe(COOKIES);
-      expect(held()?.issuedBy).toBe(ACS_BY);
+      expect(held()?.issuedBy).toBe(acsBy());
     });
 
-    it('cookies set for the same ACS stated with a query and another case are used', async () => {
+    it('cookies recorded for the ACS written another way — a query, another case — are not used: the record is exact', async () => {
       const { broker, saml } = samlBroker('saml2_pure', {
         session: {
           sessionCookies: 'STORED=cookie',
           expiresAt: Date.now() + 3_600_000,
           issuedFor: FOR,
-          issuedBy: 'HTTPS://ABAP.example.com/sap/saml2/sp/acs/100/?x=1',
+          issuedBy: samlPureRecord(
+            samlMeans('saml2_pure', signsResponse, {
+              samlAcsUrl: 'HTTPS://ABAP.example.com/sap/saml2/sp/acs/100/?x=1',
+            }),
+          ),
         },
       });
 
       const provider = await broker.getProvider(D);
       await provider.prepare();
 
-      expect(saml.strategy.authorize).not.toHaveBeenCalled();
-      expect((await presented(provider)).cookies).toBe('STORED=cookie');
+      expect(saml.strategy.authorize).toHaveBeenCalledTimes(1);
+      expect((await presented(provider)).cookies).toBe(COOKIES);
     });
 
     it('samlIdpInitiated reaches the provider: a strategy asking for an AuthnRequest URL is refused', async () => {
@@ -1297,7 +1354,7 @@ describe('getProvider — the SAML grants', () => {
           authorizationToken: jwtExpiringIn(3600, { jti: 'foreign' }),
           refreshToken: 'foreign-rt',
           issuedFor: FOR,
-          issuedBy: `${endpoint.url}?client_id=another-client`,
+          issuedBy: bearerBy('another-client'),
         },
       });
 

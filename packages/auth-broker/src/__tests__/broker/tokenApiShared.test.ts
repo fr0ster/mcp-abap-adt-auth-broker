@@ -26,6 +26,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { AuthBroker, DestinationConfigError } from '../../index';
+import { uaaRecord } from '../helpers/bindingRecord';
 import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
@@ -58,7 +59,13 @@ function client(): IAuthorizationConfig {
 
 /** What a secret obtained for the means below is bound to. */
 const FOR = 'https://abap.example.com:443';
-const by = () => `${endpoint.url}?client_id=broker-client`;
+/** The `issuedBy` record of a UAA row with this endpoint and client. */
+const by = (
+  grant:
+    | 'authorization_code'
+    | 'client_credentials'
+    | 'passcode' = 'authorization_code',
+) => uaaRecord(grant, endpoint.url, 'broker-client');
 
 function keyStore(
   conn: IConnectionConfig | null,

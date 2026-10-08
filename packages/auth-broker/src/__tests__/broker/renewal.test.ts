@@ -29,6 +29,7 @@ import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import {
   AuthBroker,
   type AuthBrokerConfig,
+  bindingOf,
   DestinationConfigError,
   type TokenGrant,
 } from '../../index';
@@ -261,13 +262,24 @@ describe('no renewal option', () => {
       { authType: 'jwt', grantType: 'none' },
       {
         authorizationToken: 'token',
-        issuedFor: 'https://abap.example.com:443',
+        ...bindingOf({
+          serviceUrl: RESOURCE,
+          authType: 'jwt',
+          grantType: 'none',
+        }),
       },
     ],
     [
       'saml / none',
       { authType: 'saml', grantType: 'none' },
-      { sessionCookies: 'cookie', issuedFor: 'https://abap.example.com:443' },
+      {
+        sessionCookies: 'cookie',
+        ...bindingOf({
+          serviceUrl: RESOURCE,
+          authType: 'saml',
+          grantType: 'none',
+        }),
+      },
     ],
   ])(
     '%s builds without renewal and onWriteFailure',

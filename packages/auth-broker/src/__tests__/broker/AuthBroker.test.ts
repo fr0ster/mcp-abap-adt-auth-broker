@@ -38,6 +38,7 @@ import type {
   IServiceKeyStore,
   ISessionStore,
 } from '../../stores/interfaces';
+import { record } from '../helpers/bindingRecord';
 import { STATED } from '../helpers/stated';
 import { jwtExpiringIn } from '../helpers/tokenEndpoint';
 
@@ -49,8 +50,17 @@ const KEY_AUTH: IAuthorizationConfig = {
   uaaClientId: 'client-id',
   uaaClientSecret: 'client-secret-from-key',
 };
-/** `KEY_AUTH`'s issuer and client as the binding writes them. */
-const KEY_ISSUER = 'https://uaa.example.com:443?client_id=client-id';
+/**
+ * The token API's consumer provider, with means that state no row: the record
+ * `provider/-` — for a factory with `KEY_AUTH`'s client id and `uaaUrl`, for an
+ * instance (handed no client) with none.
+ */
+const KEY_ISSUER = record(
+  'provider/-',
+  { clientId: 'client-id', uaaUrl: 'https://uaa.example.com' },
+  '',
+);
+const INSTANCE_BY = record('provider/-', {}, '');
 
 type MockProvider = IRefreshableTokenProvider & {
   getTokens: jest.Mock<Promise<ITokenResult>, []>;
@@ -257,11 +267,12 @@ describe('AuthBroker', () => {
       expect(provider.getTokens).toHaveBeenCalledTimes(1);
       expect(provider.refreshTokens).not.toHaveBeenCalled();
       // No serviceUrl, no authType (3.x wrote both); an instance is handed no
-      // client by the broker, so no issuer is claimed for it.
+      // client by the broker, so its record names no client.
       expect(lastWrite(sessionStore)).toEqual({
         authorizationToken: 'cached-token',
         refreshToken: 'refresh-1',
         issuedFor: SERVICE_URI,
+        issuedBy: INSTANCE_BY,
       });
     });
 
@@ -281,6 +292,7 @@ describe('AuthBroker', () => {
         sessionCookies: 'MYSAPSSO2=abc',
         expiresAt: 1_900_000_000_000,
         issuedFor: SERVICE_URI,
+        issuedBy: INSTANCE_BY,
       });
     });
 
@@ -310,7 +322,7 @@ describe('AuthBroker', () => {
       });
     });
 
-    it('binds an instance’s token to no issuer: the broker hands an instance no client, whatever the key store states', async () => {
+    it('binds an instance’s token to no client: the broker hands an instance no client, whatever the key store states', async () => {
       const sessionStore = mockSessionStore();
       const broker = new AuthBroker({
         ...STATED,
@@ -324,6 +336,7 @@ describe('AuthBroker', () => {
       expect(lastWrite(sessionStore)).toEqual({
         authorizationToken: 'cached-token',
         issuedFor: SERVICE_URI,
+        issuedBy: INSTANCE_BY,
       });
     });
 
@@ -364,6 +377,7 @@ describe('AuthBroker', () => {
         authorizationToken: 'cached-token',
         refreshToken: 'new-refresh',
         issuedFor: SERVICE_URI,
+        issuedBy: INSTANCE_BY,
       });
       expect(everythingWritten(sessionStore)).not.toContain('session-secret');
     });
@@ -411,6 +425,7 @@ describe('AuthBroker', () => {
         authorizationToken: 'cached-token',
         refreshToken: 'stored-refresh',
         issuedFor: SERVICE_URI,
+        issuedBy: INSTANCE_BY,
       });
     });
 
@@ -791,7 +806,11 @@ describe('AuthBroker', () => {
       expect(lastWrite(sessionStore)).toEqual({
         authorizationToken: 'cached-token',
         issuedFor: `${SERVICE_URI}?sap-client=200`,
-        issuedBy: 'https://uaa.session:443?client_id=session-client',
+        issuedBy: record(
+          'provider/-',
+          { clientId: 'session-client', uaaUrl: 'https://uaa.session' },
+          '',
+        ),
       });
     });
 
@@ -910,6 +929,7 @@ describe('AuthBroker', () => {
         authorizationToken: 'fresh-token',
         refreshToken: 'refresh-2',
         issuedFor: SERVICE_URI,
+        issuedBy: INSTANCE_BY,
       });
     });
 

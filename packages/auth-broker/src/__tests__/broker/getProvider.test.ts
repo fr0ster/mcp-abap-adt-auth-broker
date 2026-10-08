@@ -36,6 +36,12 @@ const OK: AuthOutcome = { ok: true };
 /** A `none` destination's resource, and the canonical `issuedFor` its session holds. */
 const RESOURCE = 'https://abap.example.com';
 const BOUND_TO = 'https://abap.example.com:443';
+/**
+ * The `issuedBy` record of a `none` row whose means state no address: the
+ * row, eleven empty address fields and no trust.
+ */
+const JWT_NONE_BY = `mcp-abap-adt-binding/2;jwt/none${';'.repeat(12)}`;
+const SAML_NONE_BY = `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`;
 
 /** A key store holding means only: three getters, no way to write. */
 function keyStore(
@@ -378,6 +384,7 @@ describe('getProvider', () => {
         authorizationToken: 'stored-token',
         expiresAt: Date.now() + 60_000,
         issuedFor: BOUND_TO,
+        issuedBy: JWT_NONE_BY,
       });
       const broker = new AuthBroker({
         ...STATED,
@@ -402,6 +409,7 @@ describe('getProvider', () => {
       const store = sessionStore({
         sessionCookies: 'MYSAPSSO2=stored',
         issuedFor: BOUND_TO,
+        issuedBy: SAML_NONE_BY,
       });
       const broker = new AuthBroker({
         ...STATED,
@@ -564,6 +572,7 @@ describe('getProvider', () => {
         sessionStore: sessionStore({
           authorizationToken: 'from-session',
           issuedFor: BOUND_TO,
+          issuedBy: JWT_NONE_BY,
         }),
         serviceKeyStore: keyStore({
           authType: 'jwt',

@@ -35,6 +35,7 @@ import type {
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthBroker, type StrategyGrant } from '../../index';
+import { uaaRecord } from '../helpers/bindingRecord';
 import { describeWhere } from '../helpers/describeWhere';
 import { STATED } from '../helpers/stated';
 import { authorizeByForm, FormBrowser } from './formLogin';
@@ -46,8 +47,11 @@ const CALLBACK = 'http://localhost/callback';
 const SERVICE_URL = 'https://abap.stand.invalid';
 /** SERVICE_URL's canonical URI — what the session's `issuedFor` must hold. */
 const ISSUED_FOR = 'https://abap.stand.invalid:443';
-/** UAA_URL (`http://localhost:<port>/uaa`, already canonical) with the client. */
-const issuedBy = (clientId: string) => `${UAA_URL}?client_id=${clientId}`;
+/** The `issuedBy` record of the UAA row for UAA_URL and the client. */
+const issuedBy = (
+  grant: 'authorization_code' | 'client_credentials' | 'passcode',
+  clientId: string,
+) => uaaRecord(grant, UAA_URL as string, clientId);
 const UNAUTHORIZED = { at: 'request', status: 401, error: null } as const;
 
 const claims = (jwt: string): Record<string, unknown> =>
@@ -228,7 +232,7 @@ describeWhere(
         ISSUED_FOR,
       );
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        issuedBy('cc_client'),
+        issuedBy('client_credentials', 'cc_client'),
       );
       expect(fs.readFileSync(sessionFile, 'utf8')).not.toContain('secret');
     });
@@ -270,7 +274,7 @@ describeWhere(
         ISSUED_FOR,
       );
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        issuedBy('authcode'),
+        issuedBy('authorization_code', 'authcode'),
       );
 
       // The server refuses the token: the provider renews in rejected().
@@ -331,7 +335,7 @@ describeWhere(
       await b.flush();
       expect(keysOf(sessionFile).sort()).toEqual([...SECRET_KEYS].sort());
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        issuedBy('passcode_client'),
+        issuedBy('passcode', 'passcode_client'),
       );
       expect(fs.readFileSync(sessionFile, 'utf8')).not.toContain('secret');
     }, 60_000);
@@ -384,7 +388,7 @@ describeWhere(
         'https://moved.stand.invalid:443/sap?sap-client=200',
       );
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        issuedBy('authcode'),
+        issuedBy('authorization_code', 'authcode'),
       );
     }, 60_000);
   },
