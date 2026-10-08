@@ -89,6 +89,10 @@ name. Both contradict the chain's decisions.
    - **Not in logs, errors or terminal output.** No secret, server text,
      authorization URL or `state` appears in a log line, an error, a
      diagnostic, or what the CLI prints to the terminal.
+   - **The one exception is the login itself.** An interactive login may show
+     the user its authorization URL, `state` included, on stderr: it is how
+     the user reaches the login. It is shown only there, never in a log line,
+     an error or a diagnostic.
    - **Only through the provider's own debug channel:** a secret appears there
      only when the debug option is on, never otherwise.
    - **Only where the user asked for it:** credentials leave the CLI only in the

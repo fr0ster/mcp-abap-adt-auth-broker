@@ -873,8 +873,9 @@ platform)`), shown in `--help`:
 - **Never in what the CLI prints:** a token, a refresh token, a secret, a
   store's or a server's text, `state`, or an authorization URL of the CLI's own
   — `runMcpAuth.ts:386-393`'s "Authorization URL" preview is removed. The one
-  place the URL appears is the provider's prompt that sends the user there, on
-  stderr (D19).
+  place the URL appears, `state` included, is the provider's prompt that sends
+  the user there, on stderr: the goal's H2 exception for the login itself
+  (D19). It never reaches a log line, an error or a diagnostic.
 
 ### 10.9 Failures, as printed
 
@@ -1152,8 +1153,11 @@ providers, each suite constructing `renewal` and `onWriteFailure` explicitly.
   request a `code_verifier`; a callback without the `state` is refused.
 - Output streams: stdout of every command run is empty except `help` /
   `--version`; neither stream holds a token, refresh token, client secret,
-  `state` or a server-text marker; stderr holds the authorization URL only in
-  the provider's prompt (D19). **[break: print the URL preview again]**
+  server-text marker, and neither holds `state` or the authorization URL
+  outside the provider's login prompt on stderr — the one place both appear
+  (D19); no log line, error or diagnostic holds them, whatever the logger.
+  **[break: print the URL preview again]** **[break: send the provider's URL
+  prompt through the logger]**
 - `printFailure`: a failure with and without diagnostics; one from a second
   auth-errors copy prints the same reason — hint; a `DestinationConfigError`
   carrying an error prints its hint and diagnostics; no stack trace in any
@@ -1358,13 +1362,14 @@ second signal exiting at once; (b) exit 1 on any abort, no second-signal
 shortcut. *Recommended: (a)* — the codes `workDir.ts` already uses; a second
 Ctrl+C is the user's own bound if a consumer strategy does not settle.
 
-**D19 — The authorization URL on the terminal.**
-H2 forbids an authorization URL in what the CLI prints. (a) The provider's
-prompt that sends the user to the URL (`showUrl`, the browser fallback) stays
-on stderr — it is the login itself, the only way to finish with `--browser
-none` — and the CLI prints no URL of its own; (b) the CLI shows the URL only
-through `consumerPresentation` in a form of its own choosing; (c) no URL at
-all, `--browser none` removed. *Recommended: (a)* — confirm this reading of H2.
+**D19 — The authorization URL on the terminal. Decided (user, 2026-10-08):
+(a), and the goal's H2 now states the exception.** The provider's prompt that
+sends the user to the URL (`showUrl`, the browser fallback), `state` included,
+stays on stderr — it is the login itself, the only way to finish with
+`--browser none` — and the CLI prints no URL of its own; neither reaches a log
+line, an error or a diagnostic. Rejected: (b) the CLI showing the URL through
+`consumerPresentation` in a form of its own; (c) no URL at all, `--browser
+none` removed.
 
 **D20 — The CLI's own choices for the broker.**
 (a) `renewal: () => refreshThenLogin()` and `onWriteFailure: 'fail'` for every
