@@ -190,7 +190,10 @@ words:
 
 - **Aborted waits** (§7): the failure `sharedAttempt` rejects a waiter with —
   `interactive-login`, `outcome: 'aborted'` ("the authorization was
-  aborted").
+  aborted"). This is the only failure a waiter of the broker's slots gets from
+  `sharedAttempt` itself: every other outcome of a shared start is carried out
+  of the slot as a value and rethrown as it was thrown (§7.1), so no error of
+  §3.2, §3.4 or of a store passes through `classify` on its way.
 - **A session write that did not land, where the consumer chose `'fail'`**
   (§5.4): `new AuthProviderFailure(classify(storeError, 'persisting-tokens'))`
   — "persisting the tokens failed (unknown error[, CODE])", the code only when
@@ -305,17 +308,25 @@ providers the broker builds: the broker writes the binding beside the secret
 ### 5.2 What one write is
 
 `write(tokens)` becomes one `saveSession(destination, secret)` built from
-`tokens` and from nothing else of the provider:
+`tokens` and from nothing else of the provider. auth-stores 4.0.0's
+`saveSession` **merges**: a field left out keeps what is stored, whoever stored
+it. So no write the broker makes leaves the refresh token or the binding to the
+merge — every write states both, or (a credential-free write) states neither
+binding field and clears the refresh token:
 
 | `PersistedTokens` | Written |
 |---|---|
-| `tokenType: 'saml'` (`saml2_pure`) | `sessionCookies: authorizationToken`, `expiresAt` — SAML has no refresh token |
-| any other, `authorizationToken !== ''` | `authorizationToken`, `expiresAt` |
-| `authorizationToken === ''` (a discard before any credential is held) | no credential field at all — the stored token is neither replaced nor cleared |
+| `tokenType: 'saml'` (`saml2_pure`) | `sessionCookies: authorizationToken`, `expiresAt`, **`refreshToken: ''`** — SAML has none, and a refresh token stored beside earlier cookies or a token is not this credential's |
+| any other, `authorizationToken !== ''` | `authorizationToken`, `expiresAt`, and the refresh token by the rows below |
 | `refreshToken: <string>` | that refresh token |
 | `refreshToken: null` | `refreshToken: ''` — auth-stores 4.0.0's clearing operation; the stored one is never read |
-| `refreshToken: undefined` | the stored refresh token, read at write time, **only when the stored session is bound here** (4.x's `carry: 'bound'`); else none |
-| always | `issuedFor` / `issuedBy` of the build's binding (§6), each left out when the means lack its source |
+| `refreshToken: undefined` | the stored refresh token **written explicitly as its value** when the session read at write time is bound to this build's identity (§6); **otherwise `refreshToken: ''`** — never omitted, so a refresh token obtained under other means can never end up beside this credential and its binding |
+| beside every credential | `issuedFor` / `issuedBy` of the build's binding (§6), each written as `''` when the means lack its source — never left out, so no earlier binding survives the merge beside a new credential |
+| `authorizationToken === ''` (a discard before any credential is held — a credential-free write) | **only `refreshToken: ''`**: no credential field, no `expiresAt`, no binding field. The stored credential, whatever identity it was obtained for, keeps its own binding — the write never re-labels it — and loses its refresh token, which the provider discarded |
+
+Carrying a stored refresh token therefore never changes its binding: it is
+written only beside the binding it was already bound to. Every other refresh
+token in the store at write time is cleared by the write.
 
 `expiresAt` is the report's (`ReportedCredential.expiresAt`, absolute); the
 broker no longer derives one from `expiresIn` on this path. A destination the
@@ -406,10 +417,13 @@ every answer itself, cache hits included, through the same `SessionWriter`, as
 - **The result's refresh token is authoritative (D5).** auth-providers 6.0.0
   returns from `getTokens()` / `refreshTokens()` the refresh token the provider
   holds, or `refreshToken: undefined`. So a result with a refresh token writes
-  it; one without writes `refreshToken: ''`. The stored refresh token is never
-  carried into a consumer provider's write (4.x's `carry: 'any'` goes): a
-  refresh token the consumer's provider discarded never comes back from the
-  store.
+  it; one without writes `refreshToken: ''` — explicitly, since the store
+  merges. The stored refresh token is never carried into a consumer
+  provider's write (4.x's `carry: 'any'` goes): a refresh token the consumer's
+  provider discarded never comes back from the store, and one stored under
+  other means never ends up beside the consumer provider's credential. The
+  binding fields are written as §5.2 says (`''` for a source the means lack —
+  an instance's `issuedBy`).
 - **Seeds are bound-only** (§6.2): `carry: 'bound'` and `strategySeed`'s rule
   apply to every factory build, with or without a `clientAuthentication`
   strategy.
@@ -478,8 +492,21 @@ holding a credential for the old resource could be handed out for the new one.
 
 A write carries the binding fixed when its provider was built, never one
 recomputed later (4.x); a retried write keeps it; a retired build's write is
-dropped once a newer generation has written (§5.3). So no write files a
-credential under an identity other than the one it was obtained with.
+dropped once a newer generation has written (§5.3). Because the store merges,
+every write also states the refresh token — a value bound to the same identity,
+or `''` — and every credential write states both binding fields; a
+credential-free write states no binding at all (§5.2). So no write files a
+credential under an identity other than the one it was obtained with, and no
+write re-labels a credential another write left in the store.
+
+**Every write path, audited:** the provider's credential report (§5.2), the
+discard report with a credential held (§5.2: the held credential is rewritten
+with its own build's binding — the same build that obtained it), the
+credential-free discard (§5.2), `saml2_pure`'s cookies (§5.2), the token API
+with the consumer's provider (§5.5), every retry (it replays the latest
+submission whole, §5.3), and the CLI's `--cookie` hand-over (§10.8:
+`sessionCookies`, the binding from `bindingOf`, each binding field `''` when
+absent, and `refreshToken: ''`).
 
 ## 7. Cancellation (Open 3)
 
@@ -500,11 +527,40 @@ none of them.
 
 ### 7.1 The destination's resolution is a shared attempt
 
-One `sharedAttempt<Resolved>(...)` slot per destination (`Resolved` a plain
-record `{ provider, row, identity, generation }`, never thenable). Every
+One `sharedAttempt<SlotOutcome<Resolved>>(...)` slot per destination. Every
 `getProvider` and every token API call is a waiter: `join(start, signal)`.
 `start` reads the means, compares the identity (§6.3) and answers the cached
 build or builds; concurrent callers share one resolution.
+
+**Only cancellation goes through `sharedAttempt`'s failure path.** auth-errors
+2.1.1 rejects every waiter of a start that throws with a new
+`AuthProviderFailure(classify(thrown, operation))`, never the thrown value — a
+`DestinationConfigError` would lose `destination`, `missingFields` and its
+carried `error`, and a store's own error would be replaced. So `start` never
+throws: it catches everything its body throws and resolves a plain
+discriminated outcome, which each waiter unwraps **outside** `join`:
+
+```ts
+/** A shared start's answer: never thenable — no `then` member, frozen. */
+type SlotOutcome<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly thrown: unknown };
+
+const outcome = await slot.join(start, signal); // rejects only `aborted`
+if (!outcome.ok) throw outcome.thrown;          // the very value the build threw
+return outcome.value;
+```
+
+- `Resolved` is a plain record `{ provider, row, identity, generation }`; the
+  outcome object and the record are plain frozen objects with no `then` member
+  (sharedAttempt's start result must not be thenable — a provider instance is
+  only ever a field of the record, never the outcome itself).
+- Every waiter of one resolution rethrows the same `thrown` value: a
+  `DestinationConfigError` (its class, `destination`, `missingFields`,
+  `error`), a store's own read error (§3.4, D8), or a provider's
+  `AuthProviderFailure`, each unchanged.
+- A failed outcome is not cached: the slot is empty once the start settled, so
+  the next call resolves again.
 
 - One caller's abort rejects only its promise (`aborted`); the resolution runs
   on for the others.
@@ -553,10 +609,15 @@ parties, or its waiters) — the broker keeps nothing alive.
 ### 7.5 Every other wait
 
 - The `'fail'` gate of §5.4 (point 2) joins a per-destination `sharedAttempt`
-  slot whose `start` is the writer's immediate attempt; the caller's signal
-  releases the caller, the write runs on.
-- `flush({ signal })` joins one broker-wide slot; an abort releases the caller,
-  the attempts run on and the writer keeps retrying.
+  slot whose `start` is the writer's immediate attempt, resolving a
+  `SlotOutcome` (§7.1); a write that did not land is `{ ok: true, value:
+  { landed: false, error } }` and the waiter throws §3.3's failure for it
+  outside `join`. The caller's signal releases the caller, the write runs on.
+- `flush({ signal })` joins one broker-wide slot whose `start` resolves a
+  `SlotOutcome<void>`; the `AggregateError` of §3.4 is its `thrown`, rethrown
+  outside `join` as the same object (D9). An abort releases the caller, the
+  attempts run on and the writer keeps retrying.
+- Every slot of the broker uses this one pattern; no slot's `start` throws.
 - The consumer path's factory build is §7.1's resolution; the consumer's
   provider gets the call's signal through `getTokens({ signal })`.
 - `getAuthorizationConfig` / `getConnectionConfig` are store reads with no
@@ -928,6 +989,17 @@ expectation is attached before it is triggered.
   the three copied certificate phrases. **[break: re-add one phrase]**
 - `isDestinationConfigError` true for the class and its JSON copy, false for
   look-alikes missing a field.
+- **Error identity through the shared slots (§7.1, §7.5).** With two
+  concurrent waiters of one resolution: a `DestinationConfigError` thrown in
+  the build reaches both as that object — `instanceof DestinationConfigError`
+  (in the test only), its `destination`, `missingFields` and carried `error`
+  intact; a store's read error reaches both as the store's own object
+  (identity); a provider's `AuthProviderFailure` from a build likewise.
+  `flush()`'s rejection is the `AggregateError` itself, its `errors`
+  `SessionWriteFailure`s. A waiter that aborts still gets auth-errors'
+  `aborted` failure (`readFailure(…).kind === 'interactive-login'`, `outcome:
+  'aborted'`). The start's outcome has no `then` (a test reads the resolved
+  record). **[break: let `start` throw]**
 
 **Renewal (§4)**
 - Each token row's provider receives the very strategy `renewal(destination,
@@ -952,11 +1024,29 @@ endpoint**
   restart finds no R. **[break: build a retry from the single result instead of
   the latest submission]**
 - New R after a pending `''` wins (stored R new).
-- `credential`, `none` while `held`: the stored bound R kept; an unbound stored
-  R not carried.
-- A discard before any credential: the written session keeps its access token,
-  has no refresh token, keeps its binding.
-- `saml2_pure`: cookies written as `sessionCookies`, no refresh token.
+- `credential`, `none` while `held`: the stored bound R kept (written as its
+  value, the binding unchanged).
+- **A pre-existing session bound to other means.** The store holds token T0
+  and R_old bound to identity A; the means now state identity B. For each path
+  — a token-only login of a built provider (`authorization_code` returning no
+  refresh token, `client_credentials`), `saml2_pure` cookies, a consumer
+  factory's and a consumer instance's token-only result, the CLI's `--cookie`
+  — the test inspects the **resulting store state** (`loadSession`, not the
+  submitted write): no R_old, the binding B (or `''` where B lacks a source);
+  then a **restart** (a fresh broker on the same files): its provider is not
+  seeded with R_old, and its first renewal sends no refresh token (asserted on
+  the token endpoint). **[break: omit `refreshToken` instead of writing `''`
+  on the `undefined` branch]** **[break: leave a binding field out instead of
+  `''`]**
+- **A credential-free discard over another identity's session.** The store
+  holds T0 / R_old bound to A; a provider of identity B discards before any
+  credential: the resulting state keeps T0 with binding A (unchanged), no
+  refresh token; a restarted broker for B does not seed T0. **[break: write the
+  build's binding on a credential-free write]**
+- A discard before any credential over a session of the same identity: the
+  session keeps its access token and binding, has no refresh token.
+- `saml2_pure`: cookies written as `sessionCookies`, `refreshToken: ''` — a
+  refresh token stored before is gone from the resulting state.
 - Write order: a deferred older write completing after a newer one never
   overwrites it; a retired build's write is dropped once the newer generation
   wrote. **[break: drop the generation tag]**
@@ -1117,15 +1207,23 @@ Recorded with date and result before the release; none runs in CI.
   prints no URL, `state` or token of its own, and nothing but help and version
   to stdout (§10.8).
 - **H3 A credential stays bound.** §6: the identity is checked on every call;
-  seeds are bound-only; writes carry their build's binding and generation.
+  seeds are bound-only; writes carry their build's binding and generation; and
+  since auth-stores merges, every write states the refresh token (a value bound
+  to the same identity, or `''`) and every credential write both binding
+  fields, while a credential-free write states no binding — so no refresh
+  token of other means survives beside a new credential, and no write
+  re-labels a stored one (§5.2, §5.5, §6.4).
 - **H4 No built-in timeouts.** §7.6, §10.4; the writer's retry delay bounds no
   wait.
-- **H5 One implementation of each rule.** `sharedAttempt` (§7), `readFailure` /
+- **H5 One implementation of each rule.** `sharedAttempt` (§7) — for the
+  waiter and cancellation rules only; its results carried as plain outcomes so
+  the broker's own errors pass unchanged — `readFailure` /
   `classify` (§3), `refreshStatePersistence` (§5.1), the broker's UAA row for
   `mcp-auth` (§10.2).
 - **H6 Whoever holds an instance holds its rights.** Retired providers are
   not taken from their holders (§6.3); store errors are returned to the store's
-  owner (§3.4); moments are not wrapped (§5.4, D4).
+  owner as the same objects, through the shared slots too (§3.4, §7.1);
+  moments are not wrapped (§5.4, D4).
 - **H7 Registry only.** §2, §12.
 - **H8 What works today keeps working, or the note says what to do.** §11; no
   migration loosens H2 or H3.
@@ -1163,9 +1261,13 @@ the provider's identity (its `attach`, its type), duplicates the moments rule,
 and gates a request that needs no write.
 
 **D5 — The consumer provider's refresh token on the token API.**
-(a) The result is authoritative: none → `refreshToken: ''`; (b) keep 4.x's
+(a) The result is authoritative: none → `refreshToken: ''`, written
+explicitly (the store merges); (b) keep 4.x's
 carry of the stored one and state that the "discarded never comes back"
-guarantee covers only broker-built providers; (c) hand the factory a
+guarantee covers only broker-built providers — not available as stated,
+since on a merging store a carry under changed means leaves a refresh token of
+other means beside the new binding (H3), so (b) would need (a)'s `''` there
+anyway; (c) hand the factory a
 broker-built persistence strategy to compose into its provider. *Recommended:
 (a)* — it holds the goal for every path and matches 6.0.0's `getTokens()`
 contract; (c) adds an API for little gain.
@@ -1190,13 +1292,17 @@ and broker option names (out of scope). *Recommended: (a).*
 (b) classified (`unknown`, an operation, an allowlisted code). *Recommended:
 (a)* — whoever holds the store holds its errors (H6); the CLI never prints a
 foreign message anyway (§10.9). (b) needs an operation `interfaces-auth` does
-not list for store reads.
+not list for store reads. (a) holds through the shared resolution only because
+its start resolves an outcome instead of throwing (§7.1): `sharedAttempt`
+would otherwise classify the store's error.
 
 **D9 — `flush()`'s rejection.**
 (a) `AggregateError` of `SessionWriteFailure { destination, error }`;
 (b) `AggregateError` of `AuthProviderFailure`s (the destination lost);
 (c) keep 4.x's `Error("<dest>": <class>)`. *Recommended: (a)* — the
 destination stays, the words are auth-errors'; (c) reads a class name (H5).
+Whichever is taken, `flush()` rejects with that object itself: its shared slot
+carries it out as an outcome and rethrows it outside `join` (§7.5).
 
 **D10 — `createTokenRefresher` and cancellation.**
 (a) `createTokenRefresher(destination, { signal })`, every call of the
