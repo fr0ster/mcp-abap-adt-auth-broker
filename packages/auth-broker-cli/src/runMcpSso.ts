@@ -293,6 +293,9 @@ export async function runMcpSso(
     await broker.getProvider(destination);
     console.log(`✅ Session cookies stored`);
   }
+  // Whether the login threw, beside what it threw: a falsy value thrown
+  // (undefined, 0, '') is a failure too.
+  let failed = false;
   let obtainError: unknown;
   if (row.grantType !== 'none') {
     const provider = await broker.getProvider(destination);
@@ -313,12 +316,13 @@ export async function runMcpSso(
       await tokens.getTokens();
       console.log(`✅ Token obtained successfully`);
     } catch (error) {
+      failed = true;
       obtainError = error;
     }
   }
 
   const stored = await flushed(broker, (line) => console.error(line));
-  if (obtainError) {
+  if (failed) {
     throw obtainError;
   }
   if (!stored) {

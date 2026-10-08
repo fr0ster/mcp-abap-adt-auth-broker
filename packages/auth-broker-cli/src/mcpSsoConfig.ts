@@ -80,6 +80,8 @@ export interface McpSsoOptions {
   browser?: string | undefined;
   /** `--browser-program`: the platform's named-browser factory, the program as given. */
   browserProgram?: string | undefined;
+  /** Set by `applyFileConfig` when `browser` came from the `--config` file. */
+  browserFromConfig?: boolean | undefined;
   // Overrides the strategy's own callback port (auth-providers'
   // DEFAULT_CALLBACK_PORT) when set; otherwise the strategy decides.
   redirectPort?: number | undefined;
@@ -320,6 +322,7 @@ export function applyFileConfig(
       // since 2.0.0; typing it per field would mean validating it — a change
       // of behaviour, not of types.
       (options as unknown as Record<string, unknown>)[field] = fields[field];
+      if (field === 'browser') options.browserFromConfig = true;
     }
   }
 
@@ -702,13 +705,21 @@ export function buildDestinationMeans(options: McpSsoOptions): StatedMeans {
  * launcher this platform has none of. Reads and launches nothing.
  */
 export function ssoBrowser(
-  options: Pick<McpSsoOptions, 'browser' | 'browserProgram'>,
+  options: Pick<
+    McpSsoOptions,
+    'browser' | 'browserProgram' | 'browserFromConfig'
+  >,
   platform: string = process.platform,
   factories: BrowserFactories = SHIPPED_BROWSERS,
 ): IBrowser | undefined {
   if (options.browserProgram !== undefined) {
     if (options.browser !== undefined) {
-      throw new BrowserUsageError('--browser-program excludes --browser');
+      // Name what the user stated: the flag, or the --config file's field.
+      throw new BrowserUsageError(
+        options.browserFromConfig === true
+          ? "--browser-program excludes the --config file's browser"
+          : '--browser-program excludes --browser',
+      );
     }
     return browserProgramFor(options.browserProgram, platform, factories);
   }

@@ -529,6 +529,44 @@ describe('a secret the store does not take', () => {
   });
 });
 
+describe('a login that throws a falsy value', () => {
+  it.each([[undefined], [0], ['']])(
+    'getTokens() rejecting with %p fails the run: no output written',
+    async (value) => {
+      // The broker's own copy of auth-providers: the workspace installs one
+      // per package, so the CLI's import would be another class.
+      const brokersProviders = require(
+        require.resolve('@mcp-abap-adt/auth-providers', {
+          paths: [path.dirname(require.resolve('@mcp-abap-adt/auth-broker'))],
+        }),
+      ) as typeof import('@mcp-abap-adt/auth-providers');
+      const spy = jest
+        .spyOn(brokersProviders.BaseTokenProvider.prototype, 'getTokens')
+        .mockRejectedValue(value);
+      try {
+        const outcome = await run(
+          options({
+            protocol: 'oidc',
+            flow: 'password',
+            clientId: 'cli',
+            tokenEndpoint: `${server.url}/token`,
+            username: 'alice',
+            password: 'alice-password',
+          }),
+        ).then(
+          (code) => ({ resolved: code }),
+          (thrown: unknown) => ({ rejected: thrown }),
+        );
+        expect(outcome).toEqual({ rejected: value });
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(fs.existsSync(path.join(outDir, `${DEST}.env`))).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+});
+
 describe('a refused login', () => {
   it('leaves an existing output byte for byte as it was', async () => {
     const output = path.join(outDir, `${DEST}.env`);

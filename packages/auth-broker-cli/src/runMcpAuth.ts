@@ -32,6 +32,16 @@ import {
   JsonFileHandler,
   XsuaaServiceKeyStore,
 } from '@mcp-abap-adt/auth-stores';
+import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
+import {
+  BROWSER_NAMES,
+  type BrowserFactories,
+  BrowserUsageError,
+  browserFor,
+  browserProgramFor,
+  isBrowserName,
+  SHIPPED_BROWSERS,
+} from './browser';
 import {
   carriesCertificate,
   certificateNeedsFlag,
@@ -59,7 +69,8 @@ export interface McpAuthOptions {
   envFilePath?: string | undefined;
   outputFile: string;
   authType: 'abap' | 'xsuaa';
-  browser: string; // Browser for authorization_code flow (default: 'auto')
+  /** `--browser`: a name of the CLI's table (default `'auto'`), never a program. */
+  browser: string;
   /** `--browser-program`: the program to run as given; excludes `--browser`. */
   browserProgram?: string | undefined;
   credential: boolean; // Use client_credentials instead of authorization_code
@@ -78,6 +89,28 @@ export interface McpAuthOptions {
   /** `--cert-path` / `--key-path`: required with `clientAuth: 'certificate'`. */
   certPath?: string | undefined;
   keyPath?: string | undefined;
+}
+
+/**
+ * The browser a run states, for `platform`: `--browser-program` (its own
+ * option) as given, else `--browser` through the CLI's table; `undefined` for
+ * `none` / `headless`. Throws `BrowserUsageError` for a name the table does
+ * not hold, or a launcher `platform` has none of. Reads and launches nothing.
+ */
+export function mcpAuthBrowser(
+  options: Pick<McpAuthOptions, 'browser' | 'browserProgram'>,
+  platform: string = process.platform,
+  factories: BrowserFactories = SHIPPED_BROWSERS,
+): IBrowser | undefined {
+  if (options.browserProgram !== undefined) {
+    return browserProgramFor(options.browserProgram, platform, factories);
+  }
+  if (!isBrowserName(options.browser)) {
+    throw new BrowserUsageError(
+      `--browser must be one of: ${BROWSER_NAMES.join(', ')}`,
+    );
+  }
+  return browserFor(options.browser, platform, factories);
 }
 
 export interface McpAuthContext {
@@ -316,7 +349,9 @@ export async function runMcpAuth(
     );
   }
   if (!options.credential) {
-    console.log(`🌐 Browser: ${options.browser}`);
+    console.log(
+      `🌐 Browser: ${options.browserProgram === undefined ? options.browser : `program ${options.browserProgram}`}`,
+    );
   }
   console.log(`📄 Format: ${options.format}`);
   if (options.serviceUrl) {

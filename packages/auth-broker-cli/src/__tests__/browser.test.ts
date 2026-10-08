@@ -23,6 +23,7 @@ import {
   normalizeProviderConfig,
   ssoBrowser,
 } from '../mcpSsoConfig';
+import { mcpAuthBrowser } from '../runMcpAuth';
 
 /** A browser double: it records nothing and opens nothing. */
 interface Made extends IBrowser {
@@ -239,6 +240,14 @@ describe('mcp-sso: the flag and the --config field map the same', () => {
     ).toBeUndefined();
   });
 
+  it('--browser-program beside a --config file stating browser names the file’s field, not a flag never given', () => {
+    const options = fromFile('chrome');
+    options.browserProgram = 'firefox';
+    expect(() => ssoBrowser(options, 'linux', recording())).toThrow(
+      "--browser-program excludes the --config file's browser",
+    );
+  });
+
   it('--browser-program excludes --browser', () => {
     expect(() =>
       ssoBrowser(
@@ -247,5 +256,43 @@ describe('mcp-sso: the flag and the --config field map the same', () => {
         recording(),
       ),
     ).toThrow('--browser-program excludes --browser');
+  });
+});
+
+describe('mcp-auth: --browser and --browser-program are two options', () => {
+  it('--browser-program is read from its own option; --browser keeps its name', () => {
+    const factories = recording();
+    const browser = mcpAuthBrowser(
+      { browser: 'auto', browserProgram: '/opt/my browser/bin' },
+      'linux',
+      factories,
+    );
+    expect(browser).toBe(factories.made[0]);
+    expect(factories.made[0]).toMatchObject({
+      factory: 'linuxBrowser',
+      argument: '/opt/my browser/bin',
+    });
+  });
+
+  it('--browser alone maps by the table; none gives no browser', () => {
+    const factories = recording();
+    expect(mcpAuthBrowser({ browser: 'edge' }, 'win32', factories)).toBe(
+      factories.made[0],
+    );
+    expect(factories.made[0]).toMatchObject({
+      factory: 'windowsBrowser',
+      argument: 'msedge',
+    });
+    expect(mcpAuthBrowser({ browser: 'none' }, 'win32', factories)).toBe(
+      undefined,
+    );
+  });
+
+  it('a program in the browser option is not a browser name: refused, never run', () => {
+    const factories = recording();
+    expect(() =>
+      mcpAuthBrowser({ browser: '/opt/my browser/bin' }, 'linux', factories),
+    ).toThrow(BrowserUsageError);
+    expect(factories.made).toEqual([]);
   });
 });

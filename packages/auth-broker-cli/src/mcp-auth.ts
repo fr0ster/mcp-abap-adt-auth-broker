@@ -29,30 +29,10 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
-import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
-import {
-  BROWSER_NAMES,
-  browserFor,
-  browserProgramFor,
-  isBrowserName,
-} from './browser';
+import { BROWSER_NAMES, isBrowserName } from './browser';
 import { asContract } from './contractShape';
-import { type McpAuthOptions, runMcpAuth } from './runMcpAuth';
+import { type McpAuthOptions, mcpAuthBrowser, runMcpAuth } from './runMcpAuth';
 import { createWorkDir } from './workDir';
-
-/**
- * The browser a run states, for this platform: `--browser-program` as given,
- * else `--browser` through the CLI's table (`browserFor`); `undefined` for
- * `none` / `headless`. Throws a usage error on a platform with no launcher.
- */
-function runBrowser(options: McpAuthOptions): IBrowser | undefined {
-  if (options.browserProgram !== undefined) {
-    return browserProgramFor(options.browserProgram, process.platform);
-  }
-  return isBrowserName(options.browser)
-    ? browserFor(options.browser, process.platform)
-    : undefined;
-}
 
 function getVersion(): string {
   // This package's own manifest: dist/<bin>.js and src/<bin>.ts both sit one
@@ -494,7 +474,7 @@ function parseArgs(
     envFilePath,
     outputFile,
     authType,
-    browser: browserProgram ?? browser,
+    browser,
     browserProgram,
     credential,
     format,
@@ -508,7 +488,7 @@ function parseArgs(
   // The browser for this platform, before anything is read or written: a
   // name this platform has no launcher for is a usage error, never a guess.
   try {
-    runBrowser(options);
+    mcpAuthBrowser(options);
   } catch (error) {
     console.error(`Error: ${(error as Error).message}`);
     process.exit(1);
@@ -617,7 +597,7 @@ async function main() {
       authorization: (run) =>
         browserCallbackStrategy(
           asContract<Parameters<typeof browserCallbackStrategy>[0]>({
-            browser: runBrowser(run),
+            browser: mcpAuthBrowser(run),
             port: run.redirectPort,
           }),
         ),
