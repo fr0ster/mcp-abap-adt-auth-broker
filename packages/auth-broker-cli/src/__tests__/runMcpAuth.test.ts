@@ -18,7 +18,6 @@ import {
 } from '@mcp-abap-adt/auth-broker';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import {
-  BaseTokenProvider,
   refreshThenLogin,
   staticCodeStrategy,
 } from '@mcp-abap-adt/auth-providers';
@@ -196,8 +195,31 @@ async function expectSplit(type: 'abap' | 'xsuaa') {
   ]);
 }
 
+/** Sets one `KEY=value` line of a `.env` file, adding it when absent. */
+function rewriteEnvKey(file: string, key: string, value: string): void {
+  const lines = fs.readFileSync(file, 'utf8').split('\n');
+  const at = lines.findIndex((line) => line.startsWith(`${key}=`));
+  if (at === -1) lines.splice(lines.length - 1, 0, `${key}=${value}`);
+  else lines[at] = `${key}=${value}`;
+  fs.writeFileSync(file, lines.join('\n'));
+}
+
+/** The session in `file` holds a token that expired an hour ago. */
+function expireStoredToken(file: string, type: 'abap' | 'xsuaa'): void {
+  const prefix = type === 'abap' ? 'SAP' : 'XSUAA';
+  const past = Math.floor(Date.now() / 1000) - 3600;
+  const part = (value: object) =>
+    Buffer.from(JSON.stringify(value)).toString('base64url');
+  rewriteEnvKey(
+    file,
+    `${prefix}_JWT_TOKEN`,
+    `${part({ alg: 'none', typ: 'JWT' })}.${part({ sub: 'expired', exp: past })}.`,
+  );
+  rewriteEnvKey(file, `${prefix}_EXPIRES_AT`, String(past * 1000));
+}
+
 describe('mcp-auth (authorization_code)', () => {
-  it('writes jwt / authorization_code with the key client and URL; the token through the stated strategy; the token API’s record seeds no getProvider row', async () => {
+  it('writes jwt / authorization_code with the key client and URL; the token through the stated strategy; a getProvider broker over the output is seeded from it', async () => {
     server.answer('/oauth/token', tokenAnswer('uaa'));
     await expect(run(options({ serviceKeyPath: abapKey() }))).resolves.toBe(0);
     expect(strategyCalls).toBe(1);
@@ -226,17 +248,16 @@ describe('mcp-auth (authorization_code)', () => {
     expect(secret?.refreshToken).toBe('uaa-refresh-1');
     await expectSplit('abap');
 
-    // mcp-auth writes through the token API with its own factory: the record
-    // is the consumer path's (`provider/jwt/authorization_code`), never the
-    // row's, so getProvider over the output is not seeded from it — it logs
-    // in, and the strategy below refuses.
+    // mcp-auth's provider is the broker's UAA row (§10.2): the record is the
+    // row's, `jwt/authorization_code` — never the consumer path's.
     expect(
       secret?.issuedBy?.startsWith(
-        'mcp-abap-adt-binding/2;provider/jwt/authorization_code;',
+        'mcp-abap-adt-binding/2;jwt/authorization_code;',
       ),
     ).toBe(true);
+
+    // The server's view: getProvider over the output reuses the token.
     const before = server.requests.length;
-    let loginsRefused = 0;
     const broker = new AuthBroker({
       renewal: () => refreshThenLogin(),
       onWriteFailure: 'fail',
@@ -244,7 +265,6 @@ describe('mcp-auth (authorization_code)', () => {
       serviceKeyStore: storesOf('abap').keyStore,
       authorization: () => ({
         authorize: async () => {
-          loginsRefused += 1;
           throw new Error('no login expected');
         },
       }),
@@ -252,40 +272,51 @@ describe('mcp-auth (authorization_code)', () => {
     const provider = (await broker.getProvider(DEST)) as unknown as {
       getTokens: () => Promise<{ authorizationToken: string }>;
     };
-    const refused = await provider.getTokens().then(
-      () => undefined,
-      (e: unknown) => e,
-    );
-    expect(readFailure(refused, 'unfamiliar-error')).toEqual({
-      kind: 'unknown',
-      facts: { operation: 'token-request', grant: 'authorization_code' },
-      reason: 'authorization_code token request failed (unknown error)',
-    });
-    // The failure is the login the refusing strategy was asked for, once.
-    expect(loginsRefused).toBe(1);
+    const reused = await provider.getTokens();
+    expect(jwtName(reused.authorizationToken)).toBe('uaa-access-1');
     expect(server.requests.length).toBe(before);
   });
 
-  it('with --env, the token API is never seeded: the rerun logs in again, the stored refresh token sent nowhere', async () => {
+  it('with --env, the stored refresh token renews: no login', async () => {
     server.answer('/oauth/token', tokenAnswer('uaa'));
     await run(options({ serviceKeyPath: abapKey() }));
     const previous = path.join(root, `${DEST}.env`);
     fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
+    // The stored token has expired: the run must renew it.
+    expireStoredToken(previous, 'abap');
+    strategyCalls = 0;
+
+    await expect(
+      run(options({ serviceKeyPath: abapKey(), envFilePath: previous })),
+    ).resolves.toBe(0);
+    expect(strategyCalls).toBe(0);
+    expect(server.requests.at(-1)?.form).toEqual(
+      expect.objectContaining({
+        grant_type: 'refresh_token',
+        refresh_token: 'uaa-refresh-1',
+      }),
+    );
+    const renewed = await storesOf('abap').sessionStore.loadSession(DEST);
+    expect(jwtName(renewed?.authorizationToken)).toBe('uaa-access-2');
+  });
+
+  it('with --env holding a session bound elsewhere, the session is not used: a login follows, its refresh token sent nowhere', async () => {
+    server.answer('/oauth/token', tokenAnswer('uaa'));
+    await run(options({ serviceKeyPath: abapKey() }));
+    const previous = path.join(root, `${DEST}.env`);
+    fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
+    // A session written by CLI 2.x: its binding is not a 5.0.0 record.
+    rewriteEnvKey(previous, 'SAP_ISSUED_BY', 'key-client');
     strategyCalls = 0;
     const before = server.requests.length;
 
-    // mcp-auth writes through the token API with its own factory: the
-    // consumer path, which hands the factory no stored secret (§5.5).
     await expect(
       run(options({ serviceKeyPath: abapKey(), envFilePath: previous })),
     ).resolves.toBe(0);
     expect(strategyCalls).toBe(1);
-    expect(server.requests.at(-1)?.form).toEqual(
-      expect.objectContaining({ grant_type: 'authorization_code' }),
-    );
-    expect(JSON.stringify(server.requests.slice(before))).not.toContain(
-      'uaa-refresh-1',
-    );
+    const sent = server.requests.slice(before);
+    expect(sent.map((r) => r.form.grant_type)).toEqual(['authorization_code']);
+    expect(JSON.stringify(sent)).not.toContain('uaa-refresh-1');
     const renewed = await storesOf('abap').sessionStore.loadSession(DEST);
     expect(jwtName(renewed?.authorizationToken)).toBe('uaa-access-2');
   });
@@ -334,6 +365,12 @@ describe('mcp-auth --credential --type xsuaa', () => {
     expect(keys.XSUAA_GRANT_TYPE).toBe('client_credentials');
     expect(keys).not.toHaveProperty('XSUAA_MCP_URL');
     expect(jwtName(keys.XSUAA_JWT_TOKEN)).toBe('cc-access-1');
+    // The broker's UAA row obtained it: the row's record, no `provider/`.
+    expect(
+      keys.XSUAA_ISSUED_BY?.startsWith(
+        'mcp-abap-adt-binding/2;jwt/client_credentials;',
+      ),
+    ).toBe(true);
     await expectSplit('xsuaa');
   });
 });
@@ -349,8 +386,10 @@ describe('a secret the store does not take', () => {
     const thrown = await run(options({ serviceKeyPath: abapKey() })).catch(
       (error: unknown) => error,
     );
+    // The broker's row wrote it: its persistence names the grant.
     expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
       operation: 'persisting-tokens',
+      grant: 'authorization_code',
     });
     expect(String(thrown)).not.toContain('disk full');
     expect(server.requests).toHaveLength(1);
@@ -363,12 +402,11 @@ describe('a secret the store does not take', () => {
 
 describe('a login that throws a falsy value', () => {
   it.each([[undefined], [0], ['']])(
-    'getTokens() rejecting with %p fails the run: no output written',
+    'getToken() rejecting with %p fails the run: no output written',
     async (value) => {
-      // mcp-auth's own factory builds its providers from this package's copy
-      // of auth-providers.
+      // The broker's token API is the run's one call that obtains a token.
       const spy = jest
-        .spyOn(BaseTokenProvider.prototype, 'getTokens')
+        .spyOn(AuthBroker.prototype, 'getToken')
         .mockRejectedValue(value);
       try {
         const outcome = await run(
@@ -620,10 +658,15 @@ describe('mcp-auth --client-auth', () => {
       expect(keys.XSUAA_UAA_CERT_URL).toBe(certServer.url);
       expect(keys).not.toHaveProperty('XSUAA_UAA_CLIENT_SECRET');
       expect(jwtName(keys.XSUAA_JWT_TOKEN)).toBe('x509-access-1');
+      expect(
+        keys.XSUAA_ISSUED_BY?.startsWith(
+          'mcp-abap-adt-binding/2;jwt/client_credentials;',
+        ),
+      ).toBe(true);
       expect(pemCopies()).toEqual([]);
     });
 
-    it('authorization_code: the code exchanged at certurl with the certificate; beside the strategy the token API is never seeded — an --env rerun logs in again, and a fresh getProvider broker over the output does not reuse the token', async () => {
+    it('authorization_code: the code exchanged at certurl with the certificate; --env renews with the stored refresh token; a fresh broker over the output reuses the token', async () => {
       certServer.answer('/oauth/token', tokenAnswer('x509'));
       const o = options({
         serviceKeyPath: x509Key(),
@@ -647,26 +690,25 @@ describe('mcp-auth --client-auth', () => {
 
       const previous = path.join(root, `${DEST}.env`);
       fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
+      expireStoredToken(previous, 'abap');
       strategyCalls = 0;
       await expect(run({ ...o, envFilePath: previous })).resolves.toBe(0);
-      expect(strategyCalls).toBe(1);
+      expect(strategyCalls).toBe(0);
       expect(certServer.requests.at(-1)?.form).toEqual(
-        expect.objectContaining({ grant_type: 'authorization_code' }),
-      );
-      expect(JSON.stringify(certServer.requests.at(-1)?.form)).not.toContain(
-        'x509-refresh-1',
+        expect.objectContaining({
+          grant_type: 'refresh_token',
+          refresh_token: 'x509-refresh-1',
+        }),
       );
       expect(certServer.requests.at(-1)?.clientCertificate).toBe(
         'mcp-auth-test-client',
       );
       expect(pemCopies()).toEqual([]);
 
-      // A fresh getProvider broker over the output builds the row
-      // `jwt/authorization_code`: another record than the token API's, so the
-      // stored token does not seed it — it logs in, and the strategy refuses.
+      // A fresh broker over the output builds the certificate destination and
+      // presents the stored token without a new request.
       const before = certServer.requests.length;
       const { keyStore, sessionStore } = storesOf('abap');
-      let loginsRefused = 0;
       const broker = new AuthBroker({
         renewal: () => refreshThenLogin(),
         onWriteFailure: 'fail',
@@ -675,7 +717,6 @@ describe('mcp-auth --client-auth', () => {
         clientAuthentication: fromServiceKeyCertificate(),
         authorization: () => ({
           authorize: async () => {
-            loginsRefused += 1;
             throw new Error('no login expected');
           },
         }),
@@ -683,21 +724,12 @@ describe('mcp-auth --client-auth', () => {
       const provider = (await broker.getProvider(DEST)) as unknown as {
         getTokens: () => Promise<{ authorizationToken: string }>;
       };
-      const refused = await provider.getTokens().then(
-        () => undefined,
-        (e: unknown) => e,
-      );
-      expect(readFailure(refused, 'unfamiliar-error')).toEqual({
-        kind: 'unknown',
-        facts: { operation: 'token-request', grant: 'authorization_code' },
-        reason: 'authorization_code token request failed (unknown error)',
-      });
-      // The failure is the login the refusing strategy was asked for, once.
-      expect(loginsRefused).toBe(1);
+      const reused = await provider.getTokens();
+      expect(jwtName(reused.authorizationToken)).toBe('x509-access-2');
       expect(certServer.requests).toHaveLength(before);
     });
 
-    it('--type xsuaa with no service URL: beside the strategy an --env rerun is not seeded — it logs in again, the stored refresh token sent nowhere', async () => {
+    it('--type xsuaa with no service URL: an --env rerun refreshes with the stored refresh token', async () => {
       certServer.answer('/oauth/token', tokenAnswer('x509'));
       const o = options({
         authType: 'xsuaa',
@@ -707,15 +739,18 @@ describe('mcp-auth --client-auth', () => {
       await expect(run(o)).resolves.toBe(0);
       const keys = readEnvKeys(path.join(outDir, `${DEST}.env`));
       expect(keys).not.toHaveProperty('XSUAA_MCP_URL');
-      expect(keys.XSUAA_ISSUED_FOR ?? '').toBe('');
 
       const previous = path.join(root, `${DEST}.env`);
       fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
+      expireStoredToken(previous, 'xsuaa');
       strategyCalls = 0;
       await expect(run({ ...o, envFilePath: previous })).resolves.toBe(0);
-      expect(strategyCalls).toBe(1);
-      expect(JSON.stringify(certServer.requests)).not.toContain(
-        'x509-refresh-1',
+      expect(strategyCalls).toBe(0);
+      expect(certServer.requests.at(-1)?.form).toEqual(
+        expect.objectContaining({
+          grant_type: 'refresh_token',
+          refresh_token: 'x509-refresh-1',
+        }),
       );
     });
 
@@ -868,6 +903,11 @@ describe('mcp-auth --client-auth', () => {
       expect(keys.XSUAA_UAA_CLIENT_SECRET).toBe(CLIENT_SECRET);
       expect(keys).not.toHaveProperty('XSUAA_UAA_CLIENT_CERT_PATH');
       expect(keys).not.toHaveProperty('XSUAA_UAA_CERT_URL');
+      expect(
+        keys.XSUAA_ISSUED_BY?.startsWith(
+          'mcp-abap-adt-binding/2;jwt/client_credentials;',
+        ),
+      ).toBe(true);
       expect(pemCopies()).toEqual([]);
     });
 

@@ -4,9 +4,11 @@
  * A run writes a complete destination: first its means — `jwt`, the
  * grant (`authorization_code`, or `client_credentials` with `--credential`), the
  * client and `serviceUrl` from the service key — through the key store's own
- * write method; then the login through the broker's token API with this
- * command's own provider, which writes the secret it obtains — the
- * secret alone — to the session store. `flush()` before the output is written.
+ * write method; then the login through the broker's token API with no
+ * provider of its own: the broker's UAA row obtains the token and writes the
+ * secret — the secret alone — to the session store, bound to the means, so an
+ * `--env` rerun is seeded from it and a server's `getProvider` over the
+ * output reuses it. `flush()` before the output is written.
  *
  * How the client authenticates is the user's statement, never inferred from
  * the key: no `--client-auth` is the client secret, as 2.0.0;
@@ -19,11 +21,8 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { AuthBroker, type IServiceKeyStore } from '@mcp-abap-adt/auth-broker';
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
-  AuthorizationCodeProvider,
-  type AuthorizationCodeProviderConfig,
-  ClientCredentialsProvider,
   DEFAULT_CALLBACK_PORT,
   refreshThenLogin,
   type staticCodeStrategy,
@@ -51,7 +50,6 @@ import {
   present,
   serviceKeyStoreFor,
 } from './clientAuthentication';
-import { asContract } from './contractShape';
 import {
   completeMeans,
   flushed,
@@ -122,30 +120,6 @@ export interface McpAuthContext {
    * `--redirect-port`. Not called for `--credential`.
    */
   authorization: (options: McpAuthOptions) => AuthorizationStrategy;
-}
-
-/**
- * An XSUAA destination may state no URL: its token is for the services that
- * trust the XSUAA instance, not for one system. The token API with a
- * consumer's provider still requires a `serviceUrl` (the 3.x order),
- * so the broker's view of the key store answers a placeholder — never written
- * to the destination, and no binding is computed from it (it does not parse).
- */
-const PLACEHOLDER_SERVICE_URL = '<SERVICE_URL>';
-function withPlaceholderUrl(store: IServiceKeyStore): IServiceKeyStore {
-  const readCertificate = store.getClientCertificate?.bind(store);
-  return {
-    ...(readCertificate ? { getClientCertificate: readCertificate } : {}),
-    getServiceKey: (destination) => store.getServiceKey(destination),
-    getAuthorizationConfig: (destination) =>
-      store.getAuthorizationConfig(destination),
-    getConnectionConfig: async (destination) => {
-      const config = await store.getConnectionConfig(destination);
-      return config && !present(config.serviceUrl)
-        ? { ...config, serviceUrl: PLACEHOLDER_SERVICE_URL }
-        : config;
-    },
-  };
 }
 
 /** Runs `mcp-auth`; resolves the exit code. Usage errors exit the process. */
@@ -433,68 +407,21 @@ export async function runMcpAuth(
   // The user's choice as the broker's strategy; none without `--client-auth`.
   const clientAuthentication = clientAuthenticationStrategy(options);
 
-  // This command's own provider, built by the broker's factory form from the
-  // client the destination states and the refresh token its session holds —
-  // with `--client-auth`, from the strategy's answer and the client identity
-  // the factory's fourth argument carries, and no client secret. It renews as
-  // this CLI states (a refresh, then a login: a user at a terminal can log
-  // in), and a secret the store did not take fails the run.
+  // The provider is the broker's UAA row (§10.2), the same composition a
+  // server's getProvider builds over the output: the client the destination
+  // states — with `--client-auth`, the strategy's answer and no client secret
+  // — seeded from an `--env` session only when it is bound to these means. It
+  // renews as this CLI states (a refresh, then a login: a user at a terminal
+  // can log in), and a secret the store did not take fails the run.
   const broker = new AuthBroker({
     renewal: () => refreshThenLogin(),
     onWriteFailure: 'fail',
     sessionStore: files.sessionStore,
-    serviceKeyStore:
-      options.authType === 'xsuaa'
-        ? withPlaceholderUrl(files.keyStore)
-        : files.keyStore,
+    serviceKeyStore: files.keyStore,
     clientAuthentication,
-    provider: (_destination, auth, _connection, stated) => {
-      if (clientAuthentication) {
-        // A stated choice never falls back to the secret.
-        if (
-          !stated?.clientAuthentication ||
-          !present(stated.uaaUrl) ||
-          !present(stated.clientId)
-        ) {
-          throw new Error(`Missing client authentication for ${destination}`);
-        }
-        const authenticated = {
-          uaaUrl: stated.uaaUrl,
-          clientId: stated.clientId,
-          clientAuthentication: stated.clientAuthentication,
-          renewal: refreshThenLogin(),
-        };
-        return options.credential
-          ? new ClientCredentialsProvider(authenticated)
-          : new AuthorizationCodeProvider(
-              asContract<AuthorizationCodeProviderConfig>({
-                ...authenticated,
-                refreshToken: stated.refreshToken,
-                authorization: authorization(options),
-              }),
-            );
-      }
-      if (!auth) {
-        throw new Error(`Missing authorization config for ${destination}`);
-      }
-      return options.credential
-        ? new ClientCredentialsProvider({
-            uaaUrl: auth.uaaUrl,
-            clientId: auth.uaaClientId,
-            clientSecret: auth.uaaClientSecret,
-            renewal: refreshThenLogin(),
-          })
-        : new AuthorizationCodeProvider(
-            asContract<AuthorizationCodeProviderConfig>({
-              uaaUrl: auth.uaaUrl,
-              clientId: auth.uaaClientId,
-              clientSecret: auth.uaaClientSecret,
-              refreshToken: auth.refreshToken,
-              authorization: authorization(options),
-              renewal: refreshThenLogin(),
-            }),
-          );
-    },
+    // Asked only for the authorization_code row; `--credential` logs in
+    // with the client alone.
+    authorization: () => authorization(options),
   });
 
   console.log(`🔐 Getting token for destination "${destination}"...`);
