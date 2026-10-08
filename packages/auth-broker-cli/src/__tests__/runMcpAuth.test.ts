@@ -9,6 +9,7 @@
  * which presents the stored token without a new login.
  */
 
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -18,6 +19,7 @@ import {
 } from '@mcp-abap-adt/auth-broker';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import {
+  browserCallbackStrategy,
   refreshThenLogin,
   staticCodeStrategy,
 } from '@mcp-abap-adt/auth-providers';
@@ -1103,5 +1105,65 @@ describe('the browser is mapped only for a login that opens one', () => {
     expect(fs.readdirSync(workDir)).toEqual([]);
     expect(fs.existsSync(outDir)).toBe(false);
     expect(server.requests).toHaveLength(0);
+  });
+});
+
+describe('mcp-auth: state and PKCE come with the provider (§10.5)', () => {
+  it('the URL carries state and an S256 challenge, the exchange its verifier; a callback without the state is refused', async () => {
+    server.answer('/oauth/token', tokenAnswer('pkce'));
+    const opened: string[] = [];
+    const callbacks: Array<{ query: string; status: number }> = [];
+    // A browser double: it opens nothing, it plays the user's redirect —
+    // first without the state, then as the authorization server sends it.
+    const browser = {
+      open: async (url: string) => {
+        opened.push(url);
+        const authorization = new URL(url);
+        const redirect = authorization.searchParams.get('redirect_uri') ?? '';
+        const state = authorization.searchParams.get('state') ?? '';
+        for (const query of [
+          'code=the-code',
+          `code=the-code&state=${encodeURIComponent(state)}`,
+        ]) {
+          const response = await fetch(`${redirect}?${query}`);
+          await response.text();
+          callbacks.push({ query, status: response.status });
+        }
+      },
+    };
+    const code = await runMcpAuth(options({ serviceKeyPath: abapKey() }), {
+      logger: createCliLogger({ verbose: false }),
+      workDir,
+      authorization: () =>
+        browserCallbackStrategy({ browser, port: 0 } as never),
+    });
+    expect(code).toBe(0);
+
+    expect(opened).toHaveLength(1);
+    const url = new URL(opened[0]!);
+    const state = url.searchParams.get('state');
+    const challenge = url.searchParams.get('code_challenge');
+    expect(state).toEqual(expect.any(String));
+    expect(state?.length).toBeGreaterThan(20);
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(challenge).toEqual(expect.any(String));
+
+    // The callback without the state is not this login's: refused, and the
+    // login went on to the one that carries it.
+    expect(callbacks.map((c) => c.status)).toEqual([400, 200]);
+
+    expect(server.requests).toHaveLength(1);
+    const exchange = server.requests[0]!.form;
+    expect(exchange).toEqual(
+      expect.objectContaining({
+        grant_type: 'authorization_code',
+        code: 'the-code',
+      }),
+    );
+    const verifier = exchange.code_verifier ?? '';
+    expect(verifier.length).toBeGreaterThanOrEqual(43);
+    expect(createHash('sha256').update(verifier).digest('base64url')).toBe(
+      challenge,
+    );
   });
 });
