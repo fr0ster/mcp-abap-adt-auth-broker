@@ -728,3 +728,35 @@ describe('a --config file that does not name the subcommand', () => {
     },
   );
 });
+
+describe('--service-key whose UAA URL ends in a long run of slashes', () => {
+  it('the token and authorization endpoints are composed without them', async () => {
+    const uaa = `${server.url}/authentication`;
+    const file = path.join(root, `${DEST}.json`);
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        url: `${uaa}${'/'.repeat(100_000)}`,
+        clientid: 'key-client',
+        clientsecret: 'key-secret',
+      }),
+    );
+    server.answer('/authentication/oauth/token', tokenAnswer('slashes'));
+    const code = await run(
+      options({
+        serviceUrl: undefined,
+        ...form('oidc', ['--flow', 'password', '--type', 'xsuaa']),
+        serviceKeyPath: file,
+        username: 'alice',
+        password: 'alice-password',
+      }),
+    );
+    expect(code).toBe(0);
+    expect(server.requests.map((r) => r.path)).toEqual([
+      '/authentication/oauth/token',
+    ]);
+    expect(await keyStoreOf('xsuaa').getConnectionConfig(DEST)).toEqual(
+      expect.objectContaining({ oidcTokenEndpoint: `${uaa}/oauth/token` }),
+    );
+  });
+});

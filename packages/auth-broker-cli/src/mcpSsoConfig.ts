@@ -40,6 +40,7 @@ import {
 import { asContract } from './contractShape';
 import type { StatedMeans } from './destination';
 import { UsageError } from './subcommandArgs';
+import { withoutTrailingSlashes } from './urlText';
 
 /**
  * The identity provider to trust is missing: the fields, by name — refused
@@ -503,7 +504,7 @@ function resolveOidcTokenEndpoint(options: McpSsoOptions): string | undefined {
   return (
     options.tokenEndpoint ||
     (options.uaaUrl
-      ? `${options.uaaUrl.replace(/\/+$/, '')}/oauth/token`
+      ? `${withoutTrailingSlashes(options.uaaUrl)}/oauth/token`
       : undefined)
   );
 }

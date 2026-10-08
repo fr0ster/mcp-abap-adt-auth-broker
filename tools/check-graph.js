@@ -42,6 +42,9 @@ const ALLOWED = {
     '@mcp-abap-adt/interfaces-auth-sap',
     '@mcp-abap-adt/interfaces-auth-broker',
     '@mcp-abap-adt/interfaces-utils',
+    // The SAML metadata the CLI reads (`samlMetadata.ts`): parsed, never
+    // matched with regular expressions — the parser auth-providers uses.
+    '@xmldom/xmldom',
   ],
 };
 

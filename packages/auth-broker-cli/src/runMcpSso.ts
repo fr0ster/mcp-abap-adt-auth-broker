@@ -38,6 +38,7 @@ import {
 import { printFailure, progress } from './output';
 import { applySamlMetadata } from './samlMetadata';
 import { UsageError } from './subcommandArgs';
+import { withoutTrailingSlashes } from './urlText';
 
 export interface McpSsoContext {
   /** The CLI's logger (stderr): the broker's, and the providers' it builds. */
@@ -200,10 +201,10 @@ export async function runMcpSso(
       options.issuerUrl = uaaUrl;
     }
     if (!options.tokenEndpoint) {
-      options.tokenEndpoint = `${uaaUrl.replace(/\/+$/, '')}/oauth/token`;
+      options.tokenEndpoint = `${withoutTrailingSlashes(uaaUrl)}/oauth/token`;
     }
     if (!options.authorizationEndpoint) {
-      options.authorizationEndpoint = `${uaaUrl.replace(/\/+$/, '')}/oauth/authorize`;
+      options.authorizationEndpoint = `${withoutTrailingSlashes(uaaUrl)}/oauth/authorize`;
     }
   }
 

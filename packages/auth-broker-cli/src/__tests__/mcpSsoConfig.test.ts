@@ -863,6 +863,20 @@ describe('mcp-sso CLI/config merge', () => {
   });
 });
 
+describe('a UAA URL ending in a long run of slashes', () => {
+  it('the OIDC token endpoint is composed without them', () => {
+    const means = buildDestinationMeans({
+      authType: 'xsuaa',
+      format: 'env',
+      protocol: 'oidc',
+      flow: 'device',
+      clientId: 'c',
+      uaaUrl: `https://uaa.example${'/'.repeat(100_000)}`,
+    });
+    expect(means.oidcTokenEndpoint).toBe('https://uaa.example/oauth/token');
+  });
+});
+
 describe('readManualInput', () => {
   afterEach(() => {
     pastedInput.value = 'PASTED-SAML-RESPONSE';
