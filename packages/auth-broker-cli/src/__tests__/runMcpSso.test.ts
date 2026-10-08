@@ -462,6 +462,7 @@ describe('mcp-auth saml2-pure --cookie', () => {
     expect(sessionWrites.map((w) => w.config)).toEqual([
       {
         sessionCookies: 'SAP_SESSIONID=abc; MYSAPSSO2=def',
+        refreshToken: '',
         issuedFor: 'https://abap.example.com:443',
         issuedBy: `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`,
       },
@@ -504,6 +505,9 @@ describe('mcp-auth saml2-pure --cookie, the SAP client stated in --env', () => {
     expect(sessionWrites.map((w) => w.config)).toEqual([
       {
         sessionCookies: 'SAP_SESSIONID=abc',
+        // The store merges: SAML has no refresh token, and one stored beside
+        // earlier cookies or a token is not this credential's (§5.2).
+        refreshToken: '',
         issuedFor: 'https://abap.example.com:443?sap-client=100',
         issuedBy: `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`,
       },
@@ -515,6 +519,63 @@ describe('mcp-auth saml2-pure --cookie, the SAP client stated in --env', () => {
       serviceKeyStore: keyStoreOf('abap'),
     });
     await expect(broker.getProvider(DEST)).resolves.toBeDefined();
+  });
+});
+
+describe('mcp-auth saml2-pure --cookie over a pre-existing session bound to other means (§13.1, the CLI path)', () => {
+  it('the store holds the new record and no refresh token; a restart is not seeded with the old one', async () => {
+    const previous = path.join(root, `${DEST}.env`);
+    const OLD_RECORD = `mcp-abap-adt-binding/2;jwt/authorization_code${';'.repeat(12)}`;
+    fs.writeFileSync(
+      previous,
+      [
+        `SAP_URL=${SERVICE_URL}`,
+        'SAP_CLIENT=100',
+        'SAP_AUTH_TYPE=jwt',
+        'SAP_GRANT_TYPE=authorization_code',
+        'SAP_JWT_TOKEN=T0-OLD-TOKEN',
+        'SAP_REFRESH_TOKEN=R-OLD-MARKER',
+        'SAP_ISSUED_FOR=https://other.example.com:443',
+        `SAP_ISSUED_BY=${OLD_RECORD}`,
+        '',
+      ].join('\n'),
+    );
+    const code = await run(
+      options({
+        envFilePath: previous,
+        serviceUrl: undefined,
+        ...form('saml2-pure'),
+        cookie: 'SAP_SESSIONID=new',
+      }),
+    );
+    expect(code).toBe(0);
+
+    // The resulting store state, not the submitted write.
+    const session = await sessionStoreOf('abap').loadSession(DEST);
+    expect(session).toEqual(
+      expect.objectContaining({
+        sessionCookies: 'SAP_SESSIONID=new',
+        issuedFor: 'https://abap.example.com:443?sap-client=100',
+        issuedBy: `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`,
+      }),
+    );
+    expect(session?.refreshToken ?? '').toBe('');
+    const file = fs.readFileSync(path.join(outDir, `${DEST}.env`), 'utf8');
+    expect(file).not.toContain('R-OLD-MARKER');
+    expect(file).not.toContain(OLD_RECORD);
+
+    // A restart: a fresh broker over the same files is seeded with no
+    // refresh token — none is left to seed it with.
+    const broker = new AuthBroker({
+      renewal: () => refreshThenLogin(),
+      onWriteFailure: 'fail',
+      sessionStore: sessionStoreOf('abap'),
+      serviceKeyStore: keyStoreOf('abap'),
+    });
+    await expect(broker.getProvider(DEST)).resolves.toBeDefined();
+    const reread = await sessionStoreOf('abap').loadSession(DEST);
+    expect(reread?.refreshToken ?? '').toBe('');
+    expect(JSON.stringify(reread)).not.toContain('R-OLD-MARKER');
   });
 });
 

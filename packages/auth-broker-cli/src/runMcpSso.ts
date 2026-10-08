@@ -306,11 +306,18 @@ export async function runMcpSso(
     // The cookies were handed over, not obtained: the CLI writes them, with
     // the binding the broker computes for this destination's means — the
     // resource with its SAP client — so the broker presents them there and
-    // nowhere else. The CLI composes no binding of its own.
+    // nowhere else. The CLI composes no binding of its own. The store
+    // merges, so the write states everything a credential write states
+    // (§5.2, §6.4): both binding fields (`issuedFor` '' when the means lack
+    // its source) and `refreshToken: ''` — SAML has none, and one left
+    // beside earlier cookies or a token is not this credential's.
     const stated = await files.keyStore.getConnectionConfig(destination);
+    const binding = bindingOf(stated ?? {});
     await files.sessionStore.saveSession(destination, {
       sessionCookies: options.cookie,
-      ...bindingOf(stated ?? {}),
+      refreshToken: '',
+      issuedFor: binding.issuedFor ?? '',
+      issuedBy: binding.issuedBy ?? '',
     });
     // The destination as the broker will read it: refused here, not later.
     await broker.getProvider(destination);
