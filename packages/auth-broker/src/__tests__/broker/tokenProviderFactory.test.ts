@@ -110,7 +110,14 @@ function sessions(): {
       map.set(d, { ...(c as IConfig) });
     },
     getAuthorizationConfig: async () => null,
-    getConnectionConfig: async () => null,
+    // As auth-stores' session stores answer: the secret without its refresh
+    // token, `null` while none is held.
+    getConnectionConfig: async (d) => {
+      const s = map.get(d);
+      if (!s) return null;
+      const { refreshToken: _refresh, ...connection } = s;
+      return connection as IConnectionConfig;
+    },
     setAuthorizationConfig: async () => {},
     setConnectionConfig: async () => {},
     deleteSession: async (d) => {

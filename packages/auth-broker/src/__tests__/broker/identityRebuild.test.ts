@@ -158,11 +158,24 @@ function sessionStore(initial: IConfig | null = null): {
         session = next;
       },
       getAuthorizationConfig: async () => null,
-      getConnectionConfig: async () => null,
+      // As auth-stores' session stores answer: the secret without its
+      // refresh token, `null` while none is held.
+      getConnectionConfig: async () => connectionOf(session),
       setAuthorizationConfig: async () => {},
       setConnectionConfig: async () => {},
     },
   };
+}
+
+/** A session store's connection answer: the session without its refresh token. */
+function connectionOf(
+  session: Record<string, unknown> | null,
+): IConnectionConfig | null {
+  if (!session) return null;
+  const { refreshToken: _refresh, ...connection } = session;
+  return Object.keys(connection).length > 0
+    ? (connection as IConnectionConfig)
+    : null;
 }
 
 function recordingLogger(): ILogger & { lines: () => string } {

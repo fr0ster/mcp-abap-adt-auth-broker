@@ -86,7 +86,18 @@ type Entry =
       readonly source: SourceName;
       readonly kind: 'keys';
       readonly value: readonly string[];
+    }
+  | {
+      readonly kind: 'derived';
+      readonly value: unknown;
+      readonly derive: (reads: StoreReads) => Promise<unknown>;
     };
+
+/**
+ * Properties a promise or a serialiser looks up on any object — awaiting an
+ * answer reads its `then` — which are no field a build reads: never noted.
+ */
+const NOT_FIELDS: ReadonlySet<string> = new Set(['then', 'toJSON']);
 
 /** A copy of a value as read: arrays and plain objects copied, element by element. */
 function copied(value: unknown): unknown {
@@ -141,7 +152,8 @@ export class IdentityRecorder {
   private readonly noted = new Set<string>();
   private sealed = false;
 
-  constructor(private readonly reads: StoreReads) {}
+  /** @param reads The call's reads, which every recorded source goes through. */
+  constructor(readonly reads: StoreReads) {}
 
   /**
    * The source's answer, behind the recording proxy, or `null`. A read that
@@ -163,6 +175,21 @@ export class IdentityRecorder {
     return answer ? (this.watched(name, answer) as T) : null;
   }
 
+  /**
+   * Notes a value the build derived from sources it reads without the
+   * recording proxy, with how to derive it again from a later call's reads.
+   * For sources whose answers change for reasons that are no change of the
+   * means — the session store's, which the broker's own writes change: the
+   * identity is what the build took from them, never what else they hold.
+   */
+  derived(
+    value: unknown,
+    derive: (reads: StoreReads) => Promise<unknown>,
+  ): void {
+    if (this.sealed) return;
+    this.entries.push({ kind: 'derived', value: copied(value), derive });
+  }
+
   /** The identity as read so far; nothing read later is recorded. */
   seal(): BuildIdentity {
     this.sealed = true;
@@ -179,7 +206,7 @@ export class IdentityRecorder {
     return new Proxy(target, {
       get: (object, property) => {
         const value: unknown = Reflect.get(object, property);
-        if (typeof property === 'string') {
+        if (typeof property === 'string' && !NOT_FIELDS.has(property)) {
           this.note(`${source}.get.${property}`, {
             source,
             kind: 'get',
@@ -191,7 +218,7 @@ export class IdentityRecorder {
       },
       has: (object, property) => {
         const value = Reflect.has(object, property);
-        if (typeof property === 'string') {
+        if (typeof property === 'string' && !NOT_FIELDS.has(property)) {
           this.note(`${source}.has.${property}`, {
             source,
             kind: 'has',
@@ -229,6 +256,14 @@ export class BuildIdentity {
   async unchanged(reads: StoreReads): Promise<boolean> {
     const answers = new Map<SourceName, object | null | 'failed'>();
     for (const entry of this.entries) {
+      if (entry.kind === 'derived') {
+        const now = await entry.derive(reads).then(
+          (value) => ({ value }),
+          () => undefined,
+        );
+        if (!now || !sameValue(entry.value, now.value)) return false;
+        continue;
+      }
       let answer = answers.get(entry.source);
       if (answer === undefined) {
         answer = await reads.read(entry.source).then(
@@ -243,7 +278,10 @@ export class BuildIdentity {
   }
 }
 
-function sameFact(entry: Entry, answer: object | null | 'failed'): boolean {
+function sameFact(
+  entry: Exclude<Entry, { kind: 'derived' }>,
+  answer: object | null | 'failed',
+): boolean {
   if (entry.kind === 'answer') {
     const now = answer === 'failed' ? 'failed' : answer ? 'some' : 'none';
     return entry.value === now;

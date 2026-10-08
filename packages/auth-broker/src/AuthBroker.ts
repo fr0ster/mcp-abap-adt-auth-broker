@@ -426,6 +426,37 @@ function consumerClient(read: AuthorizationRead): IAuthorizationConfig | null {
     : null;
 }
 
+/** What the consumer path takes from its stores (`consumerInputs`). */
+interface ConsumerInputs {
+  readonly means: IConnectionConfig | null;
+  readonly serviceUrl: string;
+  readonly sapClient: string | undefined;
+  readonly row: string;
+  readonly client: IAuthorizationConfig | null;
+  readonly seed: IConnectionConfig;
+}
+
+/**
+ * The consumer path's identity (§6.3). A factory's: everything it is handed —
+ * the client, the seed — and what its binding is made of — the row, the
+ * resource. An instance's, which is handed nothing: the destination's
+ * identity it was first used for — the row, the resource, the issuer
+ * (`uaaUrl`, `oidcIssuerUrl`) and the client id, no secret.
+ */
+function consumerIdentity(inputs: ConsumerInputs, instance: boolean): unknown {
+  const { row, serviceUrl, sapClient, client } = inputs;
+  return instance
+    ? {
+        row,
+        serviceUrl,
+        sapClient,
+        uaaUrl: client?.uaaUrl,
+        clientId: client?.uaaClientId,
+        oidcIssuerUrl: inputs.means?.oidcIssuerUrl,
+      }
+    : { row, serviceUrl, sapClient, client, seed: inputs.seed };
+}
+
 /**
  * The token API's refusal of a destination whose means changed under the
  * consumer's instance: the instance cannot be rebuilt, and the identity of
@@ -901,16 +932,14 @@ export class AuthBroker {
     const provider = this.provider as
       | IRefreshableTokenProvider
       | TokenProviderFactory;
-    const means = this.serviceKeyStore
-      ? await recorder.read<IConnectionConfig>('means')
-      : null;
-    const connConfig =
-      await recorder.read<IConnectionConfig>('sessionConnection');
-    const serviceUrl = this.serviceUrlOf(destination, connConfig, means);
-    const sapClient = present(connConfig?.sapClient)
-      ? connConfig.sapClient
-      : means?.sapClient;
-    const row = consumerRow(means);
+    const instance = typeof provider !== 'function';
+    // The identity is what this path takes from its stores — never what else
+    // the session store holds, which this broker's own writes change (§6.3).
+    const inputs = await this.consumerInputs(destination, recorder.reads);
+    recorder.derived(consumerIdentity(inputs, instance), async (reads) =>
+      consumerIdentity(await this.consumerInputs(destination, reads), instance),
+    );
+    const { means, serviceUrl, sapClient, row, client, seed } = inputs;
     if (typeof provider !== 'function') {
       return {
         provider,
@@ -921,8 +950,6 @@ export class AuthBroker {
     // only — no stored token, cookies, expiry or refresh token, in any
     // argument, whatever the stored session's record says. The broker
     // cannot know what the factory composes from what it is handed.
-    const client = consumerClient(await this.readAuthorization(recorder));
-    const seed = consumerSeed(connConfig, serviceUrl);
     const strategic = await this.consumerClientAuthentication(
       destination,
       means,
@@ -1026,17 +1053,48 @@ export class AuthBroker {
    * answers no client, so the key store's is what is found.
    */
   private async readAuthorization(
-    recorder: IdentityRecorder,
+    reads: StoreReads,
   ): Promise<AuthorizationRead> {
-    const sessionAuth =
-      await recorder.read<IAuthorizationConfig>('sessionClient');
+    const sessionAuth = (await reads.read(
+      'sessionClient',
+    )) as IAuthorizationConfig | null;
     if (sessionAuth) {
       return { sessionAuth, keyAuth: null };
     }
     const keyAuth = this.serviceKeyStore
-      ? await recorder.read<IAuthorizationConfig>('client')
+      ? ((await reads.read('client')) as IAuthorizationConfig | null)
       : null;
     return { sessionAuth: null, keyAuth };
+  }
+
+  /**
+   * What the consumer path takes from its stores for one destination, read
+   * from `reads` — the same function for a build and for every later call's
+   * comparison: the means, the `serviceUrl` (the session's, else the key
+   * store's), the SAP client, the row, the client through its allowlist, and
+   * the factory's seed of allowlisted connection means.
+   */
+  private async consumerInputs(
+    destination: string,
+    reads: StoreReads,
+  ): Promise<ConsumerInputs> {
+    const means = this.serviceKeyStore
+      ? ((await reads.read('means')) as IConnectionConfig | null)
+      : null;
+    const connConfig = (await reads.read(
+      'sessionConnection',
+    )) as IConnectionConfig | null;
+    const serviceUrl = this.serviceUrlOf(destination, connConfig, means);
+    return {
+      means,
+      serviceUrl,
+      sapClient: present(connConfig?.sapClient)
+        ? connConfig.sapClient
+        : means?.sapClient,
+      row: consumerRow(means),
+      client: consumerClient(await this.readAuthorization(reads)),
+      seed: consumerSeed(connConfig, serviceUrl),
+    };
   }
 
   /**

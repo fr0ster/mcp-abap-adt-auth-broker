@@ -83,7 +83,14 @@ function sessionStore(): { store: ISessionStore; writes: IConfig[] } {
         session = next;
       },
       getAuthorizationConfig: async () => null,
-      getConnectionConfig: async () => null,
+      // As auth-stores' session stores answer: the secret without its
+      // refresh token, `null` while none is held.
+      getConnectionConfig: async () => {
+        const { refreshToken: _refresh, ...connection } = session;
+        return Object.keys(connection).length > 0
+          ? (connection as IConnectionConfig)
+          : null;
+      },
       setAuthorizationConfig: async () => {},
       setConnectionConfig: async () => {},
     },
