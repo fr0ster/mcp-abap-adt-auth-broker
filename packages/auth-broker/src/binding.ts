@@ -139,8 +139,11 @@ type TrustValue = string | number | boolean | string[] | null;
 
 /**
  * A value of the trust input as the means state it — a string, a number, a
- * boolean, an array of strings — or `null` for an absent one or one of any
- * other shape (a row refuses such a value before it builds).
+ * boolean, an array of strings — or `null` for an absent one. A row refuses a
+ * trust input of any other shape before it builds (`trustShaped`,
+ * `samlRefusal`, the certificate check in `getProvider`), so `null` never
+ * stands for a malformed value a built provider received; only `bindingOf`,
+ * whose means `getProvider` would refuse, can reach it.
  */
 function trustValue(value: unknown): TrustValue {
   if (typeof value === 'string' || typeof value === 'boolean') return value;

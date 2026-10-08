@@ -1180,6 +1180,15 @@ export class AuthBroker {
         const certificate = certificateRead
           ? await certificateRead.catch(() => null)
           : null;
+        // Its certificate is hashed into the binding: one that is no PEM
+        // string is refused, never hashed as if the build had read none.
+        if (certificate && !present(certificate.certificate)) {
+          throw new DestinationConfigError(
+            destination,
+            ['clientAuthentication'],
+            'the client certificate the key store answered holds no certificate',
+          );
+        }
         const computed = destinationBinding(
           authType,
           grant,

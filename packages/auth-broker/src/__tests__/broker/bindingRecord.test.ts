@@ -55,6 +55,7 @@ import {
   type RecordField,
   TRUST_PREFIX,
 } from '../helpers/bindingRecord';
+import { fakeKeyStore, fakeSessionStore } from '../helpers/fakeStores';
 import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
@@ -725,6 +726,118 @@ describe('fully stated, per §6.1’s table', () => {
       false,
     );
   });
+});
+
+describe('a trust input not of its expected shape is refused, never collapsed into the digest', () => {
+  const D = 'TRUST';
+  const answer = {
+    authenticate: async () => ({ headers: { Authorization: 'Strategy x' } }),
+  };
+
+  async function refusedFields(
+    means: WithUndefined<Partial<IConnectionConfig>>,
+    options: {
+      certificate?: unknown;
+    } = {},
+  ): Promise<string[]> {
+    const stated = asContract<IConnectionConfig>({ ...ALL, ...means });
+    const broker = new AuthBroker({
+      ...STATED,
+      sessionStore: fakeSessionStore(),
+      serviceKeyStore:
+        options.certificate === undefined
+          ? fakeKeyStore(stated, CLIENT)
+          : fakeKeyStore(stated, null, {
+              uaaUrl: 'https://uaa.example.com',
+              clientId: 'cert-client',
+              certificate: options.certificate as string,
+              key: 'KEY',
+              certUrl: 'https://cert.example.com',
+            }),
+      authorization: () => ({
+        authorize: async () => ({ payload: 'x', redirectUri: 'x' }),
+      }),
+      samlCookies: () => async () => 'cookies',
+      assertionReplayStore: () => ({ recordIfUnseen: async () => true }),
+      ...(options.certificate === undefined
+        ? {}
+        : {
+            clientAuthentication: async (context: {
+              readCertificate(): Promise<unknown>;
+            }) => {
+              await context.readCertificate();
+              return answer;
+            },
+          }),
+    });
+    const error = await broker.getProvider(D).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DestinationConfigError);
+    return (error as DestinationConfigError).missingFields;
+  }
+
+  const PASSWORD = { authType: 'jwt', grantType: 'password' } as const;
+
+  it.each([
+    ['[1]', [1]],
+    ['[2]', [2]],
+    ['[{}]', [{}]],
+    ['a string', 'openid adt'],
+  ] as [string, unknown][])(
+    'oidcScopes %s → refused naming oidcScopes',
+    async (_label, oidcScopes) => {
+      expect(
+        await refusedFields({
+          ...PASSWORD,
+          oidcScopes: oidcScopes as string[],
+        }),
+      ).toEqual(['oidcScopes']);
+    },
+  );
+
+  it('well-formed distinct scopes give distinct digests; absent scopes build', () => {
+    const one = bindingFor('jwt', 'password', { oidcScopes: ['a'] });
+    const two = bindingFor('jwt', 'password', { oidcScopes: ['b'] });
+    expect(one.issuedBy).not.toBe(two.issuedBy);
+  });
+
+  it('oidcActorTokenType not a string → refused naming it', async () => {
+    expect(
+      await refusedFields({
+        authType: 'jwt',
+        grantType: 'token_exchange',
+        oidcActorTokenType: 7 as unknown as string,
+      }),
+    ).toEqual(['oidcActorTokenType']);
+  });
+
+  it.each([['saml2_pure'], ['saml2_bearer']] as [DestinationGrant][])(
+    '%s: samlIdpInitiated not a boolean → refused naming it',
+    async (grant) => {
+      expect(
+        await refusedFields({
+          authType: 'saml',
+          grantType: grant,
+          samlIdpInitiated: 'yes' as unknown as boolean,
+        }),
+      ).toEqual(['samlIdpInitiated']);
+    },
+  );
+
+  it.each([
+    ['a number', 42],
+    ['an object', { pem: 'x' }],
+    ['""', ''],
+  ])(
+    'a certificate client whose certificate is %s → refused naming clientAuthentication',
+    async (_label, certificate) => {
+      expect(
+        await refusedFields(
+          { authType: 'jwt', grantType: 'client_credentials' },
+          { certificate },
+        ),
+      ).toEqual(['clientAuthentication']);
+    },
+  );
 });
 
 describe('a 4.x-format binding reads as unbound', () => {

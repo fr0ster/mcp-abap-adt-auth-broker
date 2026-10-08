@@ -104,6 +104,30 @@ function present(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
 }
 
+/** Not stated: absent or `null`. */
+function unstated(value: unknown): boolean {
+  return value === undefined || value === null;
+}
+
+/**
+ * Whether a trust input the binding hashes (§6.1) has its expected shape —
+ * or is not stated. One of another shape is refused naming it, never hashed
+ * as if it were absent: two different malformed values would otherwise give
+ * one digest.
+ */
+function trustShaped(
+  value: unknown,
+  shape: 'strings' | 'string' | 'boolean',
+): boolean {
+  if (unstated(value)) return true;
+  if (shape === 'string') return typeof value === 'string';
+  if (shape === 'boolean') return typeof value === 'boolean';
+  return (
+    Array.isArray(value) &&
+    value.every((element) => typeof element === 'string')
+  );
+}
+
 /** The stated `authType`, or the error naming it. */
 export function statedAuthType(
   destination: string,
@@ -790,6 +814,7 @@ export function oidcRefusal(
     );
     if (endpoints.length > 0) lacking.push('oidcIssuerUrl', ...endpoints);
   }
+  if (!trustShaped(means.oidcScopes, 'strings')) lacking.push('oidcScopes');
   if (grant === 'password') {
     lacking.push(...missing(means, ['username', 'password']));
   }
@@ -797,6 +822,9 @@ export function oidcRefusal(
     lacking.push(
       ...missing(means, ['oidcSubjectToken', 'oidcSubjectTokenType']),
     );
+    if (!trustShaped(means.oidcActorTokenType, 'string')) {
+      lacking.push('oidcActorTokenType');
+    }
   }
   if (grant === 'oidc_authorization_code' && !check.oidcAuthorization) {
     lacking.push('oidcAuthorization');
@@ -980,6 +1008,9 @@ export function samlRefusal(
     !certificates.every(present)
   ) {
     lacking.push('samlIdpCertificates');
+  }
+  if (!trustShaped(means.samlIdpInitiated, 'boolean')) {
+    lacking.push('samlIdpInitiated');
   }
   if (grant === 'saml2_bearer' && client !== undefined) {
     lacking.push(...missing(client, ['uaaUrl', 'uaaClientId']));

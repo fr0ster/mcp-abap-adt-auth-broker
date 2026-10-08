@@ -67,13 +67,23 @@ export interface SecretBinding {
 
 /**
  * The binding the broker writes beside a secret for a destination with these
- * means and this client — exactly what `getProvider` compares a stored secret
- * against: `issuedFor` the canonical resource, `issuedBy` the version-2
- * record of the row the means state. For a consumer that hands over a
- * credential the broker cannot obtain (a `none` destination: a token or
- * cookies it was given) and writes it to the session store itself: written
- * with this binding, `getProvider` presents it; written with any other — a
- * 4.x `bindingOf`'s included — it refuses.
+ * means and this client: `issuedFor` the canonical resource, `issuedBy` the
+ * version-2 record of the row the means state, built from `means` and
+ * `client` alone.
+ *
+ * It is exactly what `getProvider` compares for a `none` row — its use: a
+ * consumer that hands over a credential the broker cannot obtain (a token or
+ * cookies it was given) writes it with this binding, and `getProvider`
+ * presents it; written with any other — a 4.x `bindingOf`'s included — it
+ * refuses. It is also exactly what `getProvider` writes for a token row built
+ * without a `clientAuthentication` strategy.
+ *
+ * It is **not** what a token row writes beside a `clientAuthentication`
+ * strategy: there the row's record also holds what the build read of the
+ * certificate client — its `certUrl`, and its certificate in the trust
+ * digest — and its client identity may be the certificate client's, none of
+ * which `bindingOf` is given. Nor is it the token API's record for a
+ * consumer's provider (`provider/…`).
  *
  * `means` are the key store's (`authType`, `grantType`, `serviceUrl`,
  * `sapClient`, the addresses and trust the row reads); `client` is the key
