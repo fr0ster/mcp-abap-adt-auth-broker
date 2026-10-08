@@ -684,3 +684,38 @@ describe('the browser is mapped only for a login that opens one', () => {
     expect(server.requests).toHaveLength(0);
   });
 });
+
+describe('a --config file that does not name the subcommand', () => {
+  it.each([
+    ['no protocol', { flow: 'device', clientId: 'c' }, 'states no protocol'],
+    [
+      'a provider without a protocol',
+      { provider: { flow: 'device' } },
+      'states no protocol',
+    ],
+    [
+      'another subcommand',
+      { protocol: 'saml2', flow: 'pure' },
+      'names another subcommand',
+    ],
+    ['no JSON object', [1, 2], 'holds no JSON object'],
+  ])(
+    '%s: refused naming --config before anything is written',
+    async (_kind, content, words) => {
+      const file = path.join(root, 'provider.json');
+      fs.writeFileSync(file, JSON.stringify(content));
+      await expect(
+        run(
+          options({
+            ...form('oidc', ['--flow', 'device', '--config', file]),
+          }),
+        ),
+      ).rejects.toThrow('process.exit(1)');
+      const printed = (console.error as jest.Mock).mock.calls.flat().join('\n');
+      expect(printed).toContain('--config');
+      expect(printed).toContain(words);
+      expect(fs.readdirSync(workDir)).toEqual([]);
+      expect(server.requests).toHaveLength(0);
+    },
+  );
+});

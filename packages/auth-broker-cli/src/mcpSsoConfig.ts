@@ -178,26 +178,30 @@ export function readManualInput(
   });
 }
 
+/**
+ * A `--config` file's provider config: its `provider` object, or the file's
+ * own `protocol`, `flow` and fields (under `config`, else the rest of the
+ * file). A missing `protocol` or `flow` is kept missing — `applyFileConfig`
+ * refuses a file that does not name the run's subcommand, naming what it
+ * lacks. `null` only for a file that is not a JSON object.
+ */
 export function normalizeProviderConfig(
   input: unknown,
 ): SsoProviderConfig | null {
-  if (!input || typeof input !== 'object') {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return null;
   }
   // A parsed JSON file: read as a record, its shape checked field by field.
   const raw = input as Record<string, unknown>;
-  if (raw.provider) {
+  if (raw.provider && typeof raw.provider === 'object') {
     return raw.provider as SsoProviderConfig;
   }
-  if (raw.protocol && raw.flow) {
-    const { protocol, flow, config, ...rest } = raw;
-    return {
-      protocol,
-      flow,
-      config: config ?? rest,
-    } as SsoProviderConfig;
-  }
-  return null;
+  const { protocol, flow, config, ...rest } = raw;
+  return {
+    protocol,
+    flow,
+    config: config ?? rest,
+  } as SsoProviderConfig;
 }
 
 /**
@@ -294,19 +298,27 @@ export function applyFileConfig(
   }
 
   // The file belongs to the subcommand its protocol and flow name (D24): a
-  // run's protocol — and a SAML run's flow — is the subcommand's, and a file
-  // naming another one is refused, never merged. An OIDC file's flow fills a
-  // flow the command line left out, as 2.x.
+  // run's protocol — and a SAML run's flow — is the subcommand's. A file
+  // that names no protocol, a SAML file that names no flow, and a file naming
+  // another subcommand are refused, never merged. An OIDC file names `oidc`
+  // by its protocol; its flow fills a flow the command line left out, as 2.x.
   if (options.protocol !== undefined) {
-    const another =
-      fileConfig.protocol !== options.protocol ||
-      (options.protocol === 'saml2' && fileConfig.flow !== options.flow);
-    if (another) {
+    const own = subcommandOf(options);
+    const refuse = (why: string) => {
       console.error(
-        `❌ --config: the file names another subcommand than mcp-auth ${subcommandOf(options)}; ` +
-          'run the subcommand its protocol and flow name (oidc, saml2-pure, saml2-bearer).',
+        `❌ --config: the file ${why}; mcp-auth ${own} takes a file whose protocol and flow name it (oidc, saml2-pure, saml2-bearer).`,
       );
       process.exit(1);
+    };
+    if (fileConfig.protocol === undefined || fileConfig.protocol === null) {
+      refuse('states no protocol');
+    } else if (options.protocol === 'saml2' && !fileConfig.flow) {
+      refuse('states no flow');
+    } else if (
+      fileConfig.protocol !== options.protocol ||
+      (options.protocol === 'saml2' && fileConfig.flow !== options.flow)
+    ) {
+      refuse(`names another subcommand than mcp-auth ${own}`);
     }
   }
   options.protocol = options.protocol ?? fileConfig.protocol;

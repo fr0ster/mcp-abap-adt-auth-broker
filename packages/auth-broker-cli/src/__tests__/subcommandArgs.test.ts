@@ -345,6 +345,69 @@ describe('--config belongs to the subcommand its protocol and flow name', () => 
       withFile(ssoOptions(parseSubcommandArgs('oidc', args)), FILES.oidc),
     ).toEqual(withFile(parse210(['oidc', ...args]), FILES.oidc));
   });
+
+  it('an oidc file without a flow names mcp-auth oidc: its fields are applied, the flow is --flow', () => {
+    const options = withFile(
+      ssoOptions(
+        parseSubcommandArgs('oidc', ['--flow', 'device', '--config', 'f']),
+      ),
+      { protocol: 'oidc', clientId: 'from-file', issuerUrl: 'https://i' },
+    );
+    expect(options).toMatchObject({
+      protocol: 'oidc',
+      flow: 'device',
+      clientId: 'from-file',
+      issuerUrl: 'https://i',
+    });
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it.each([['saml2-pure'], ['saml2-bearer']] as const)(
+    'mcp-auth %s --config <a saml2 file without a flow> is refused naming --config and flow',
+    (subcommand) => {
+      const options = ssoOptions(
+        parseSubcommandArgs(subcommand, ['--config', 'f']),
+      );
+      expect(() =>
+        withFile(options, {
+          protocol: 'saml2',
+          idpSsoUrl: 'https://idp.example.com/sso',
+        }),
+      ).toThrow('process.exit(1)');
+      expect(error).toHaveBeenCalledTimes(1);
+      const words = String(error.mock.calls[0]?.[0]);
+      expect(words).toContain('--config');
+      expect(words).toContain('states no flow');
+      expect(words).toContain(`mcp-auth ${subcommand}`);
+    },
+  );
+
+  it.each(
+    SUBCOMMANDS.filter((s) => s !== 'auth-code').flatMap((subcommand) => [
+      [
+        subcommand,
+        'a provider file',
+        { provider: { flow: 'pure', config: {} } },
+      ],
+      [subcommand, 'a flat file', { flow: 'device', clientId: 'c' }],
+      [subcommand, 'a file of fields alone', { clientId: 'c' }],
+    ]),
+  )(
+    'mcp-auth %s --config <%s without a protocol> is refused naming --config and protocol',
+    (subcommand, _kind, file) => {
+      const options = ssoOptions(
+        parseSubcommandArgs(subcommand as Subcommand, ['--config', 'f']),
+      );
+      expect(() => withFile(options, file as object)).toThrow(
+        'process.exit(1)',
+      );
+      expect(error).toHaveBeenCalledTimes(1);
+      const words = String(error.mock.calls[0]?.[0]);
+      expect(words).toContain('--config');
+      expect(words).toContain('states no protocol');
+      expect(words).toContain(`mcp-auth ${subcommand}`);
+    },
+  );
 });
 
 describe('help, version and the command', () => {

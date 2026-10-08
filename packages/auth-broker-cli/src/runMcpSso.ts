@@ -141,7 +141,7 @@ export async function runMcpSso(
     }
     providerConfigFromFile = normalizeProviderConfig(raw);
     if (!providerConfigFromFile) {
-      console.error(`❌ Config file does not contain provider config`);
+      console.error('❌ --config: the file holds no JSON object');
       process.exit(1);
     }
   }
