@@ -342,9 +342,12 @@ canonicalised on **both** sides, with what the session holds:
   `samlAcsUrl`, a session written without them) — the secret is not used,
   **refresh token included**: the
   provider is built as with no session and logs in afresh by its grant, and
-  the log says only `<destination>: secret bound to another resource,
-  discarded` — never a URI, never a token. The new secret is written with
-  both fields.
+  one `warn` line says only `<destination>: the stored session secret was
+  not issued under the destination's current means; not used, the provider
+  obtains a new one` — never a URI, a record or a token. A destination whose
+  means never state everything a secret is bound to (`token_exchange`, or a
+  client missing) is never seeded, on every start: that is a `debug` line,
+  not a `warn`. The new secret is written with both fields.
 - **The `none` rows** present a credential the broker cannot obtain again, so
   a mismatch is refused, not discarded: a `DestinationConfigError` naming
   `issuedFor` when the stored resource differs or is absent (or the means

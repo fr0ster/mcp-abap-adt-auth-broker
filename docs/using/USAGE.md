@@ -213,8 +213,11 @@ re-encoded) and compares:
 
 - **The grants that obtain a secret** (UAA, OIDC, SAML): both equal → the session seeds the provider. Otherwise the
   secret is not used, refresh token included: the provider logs in afresh,
-  the log says only `<destination>: secret bound to another resource,
-  discarded`, and the new secret is written with this destination's binding.
+  one `warn` line says only `<destination>: the stored session secret was
+  not issued under the destination's current means; not used, the provider
+  obtains a new one` (a `debug` line instead for a destination that is never
+  seeded, such as `token_exchange`), and the new secret is written with this
+  destination's binding.
   A destination without `serviceUrl` gets its provider, but never reuses a
   stored secret.
 - **`none`:** a stored `issuedFor` that is not the destination's (or none) is
