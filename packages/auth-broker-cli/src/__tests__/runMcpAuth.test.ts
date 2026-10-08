@@ -18,6 +18,7 @@ import {
 } from '@mcp-abap-adt/auth-broker';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import {
+  BaseTokenProvider,
   refreshThenLogin,
   staticCodeStrategy,
 } from '@mcp-abap-adt/auth-providers';
@@ -336,6 +337,32 @@ describe('a secret the store does not take', () => {
       expect.stringContaining('The session was not stored'),
     );
   });
+});
+
+describe('a login that throws a falsy value', () => {
+  it.each([[undefined], [0], ['']])(
+    'getTokens() rejecting with %p fails the run: no output written',
+    async (value) => {
+      // mcp-auth's own factory builds its providers from this package's copy
+      // of auth-providers.
+      const spy = jest
+        .spyOn(BaseTokenProvider.prototype, 'getTokens')
+        .mockRejectedValue(value);
+      try {
+        const outcome = await run(
+          options({ serviceKeyPath: abapKey(), credential: true }),
+        ).then(
+          (code) => ({ resolved: code }),
+          (thrown: unknown) => ({ rejected: thrown }),
+        );
+        expect(outcome).toEqual({ rejected: value });
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(fs.existsSync(path.join(outDir, `${DEST}.env`))).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
 });
 
 describe('a refused login', () => {

@@ -498,6 +498,9 @@ export async function runMcpAuth(
   });
 
   console.log(`🔐 Getting token for destination "${destination}"...`);
+  // Whether the login threw, beside what it threw: a falsy value thrown
+  // (undefined, 0, '') is a failure too.
+  let failed = false;
   let obtainError: unknown;
   try {
     await broker.getToken(destination);
@@ -505,10 +508,11 @@ export async function runMcpAuth(
   } catch (error) {
     // A failed login, or a token obtained whose write failed: either way the
     // run fails, after one more attempt at any write still pending.
+    failed = true;
     obtainError = error;
   }
   const stored = await flushed(broker, (line) => console.error(line));
-  if (obtainError) {
+  if (failed) {
     throw obtainError;
   }
   if (!stored) {
