@@ -1036,8 +1036,9 @@ flags (§11.2's table):
   saml2-bearer --config f`); a file whose `protocol` / `flow` names another
   subcommand is a usage error naming `--config`. `--protocol` is not accepted:
   the subcommand is the protocol and flow.
-- `saml2-bearer` no longer requires `--dev` (`mcp-sso bearer` never did);
-  `--dev` is still accepted, has no effect, and `--help` says so (D24).
+- `saml2-bearer` no longer requires `--dev` (`mcp-sso bearer` never did), and
+  `--dev` is removed: no code knows it, so it is refused as an unknown option,
+  like any other (D24).
 - The subcommands are `mcp-auth`'s own code paths: one process, one
   interrupt, one work directory (§10.4). The internal modules
   (`mcpSsoConfig.ts`, `runMcpSso.ts`, `samlMetadata.ts`) may keep their names;
@@ -1165,7 +1166,7 @@ platform)`), shown in `--help`:
 | `--acs-url <url>` | — | required for a manual SAML login unless metadata or `--config` states it | — | §10.5 |
 | `--config <file>` | — | the subcommand's own; its protocol and flow must match | — | §10 (D24) |
 | `--protocol` | — | removed: the subcommand is the protocol | — | D24 |
-| `--dev` | — | accepted by `saml2-bearer`, no effect | — | D24 |
+| `--dev` | — | removed: an unknown option | — | D24 |
 | `--redirect-port`, `--client-auth`, `--basic-encoding`, `--cert-path`, `--key-path`, every other 2.1.0 flag of `mcp-auth` or `mcp-sso` | unchanged | unchanged | unchanged | |
 | `DEBUG_SSO`, `DEBUG_AUTH_SSO`, `DEBUG` (environment) | — | no longer read (2.x `mcp-sso` read them) | — | D17 |
 
@@ -1271,7 +1272,7 @@ aborted login prints "the authorization was aborted".
 | `mcp-sso … --cookie` sessions written by 2.x | refused naming `issuedBy` by 3.0.0: run `mcp-auth saml2-pure … --cookie` again |
 | the `mcp-sso` command | **gone in 3.0.0**: every form is an `mcp-auth` subcommand with the same flags (table below) |
 | `mcp-auth oidc` / `saml2-pure` / `saml2-bearer` started a second process (`mcp-sso`) | they run in `mcp-auth`'s process; a signal to it ends the login, frees the port and removes the work directory |
-| `mcp-auth saml2-bearer` required `--dev` | it does not; `--dev` is accepted and has no effect |
+| `mcp-auth saml2-bearer` required `--dev` | it does not, and `--dev` is removed: drop it from the command line (it is refused as an unknown option) |
 
 **`mcp-sso` → `mcp-auth`:**
 
@@ -1675,9 +1676,9 @@ providers, each suite constructing `renewal` and `onWriteFailure` explicitly.
 - Every 2.x `mcp-sso` form of §11.2's table, given as its `mcp-auth` form,
   yields the same options as 2.1.0's `mcp-sso` parse of the original
   (`--protocol` refused naming it; a `--config` file naming another
-  subcommand refused naming `--config`; `saml2-bearer` with and without
-  `--dev` alike); the parser reads no `process.argv`. **[break: require
-  `--dev` for `saml2-bearer` again → red]**
+  subcommand refused naming `--config`; `saml2-bearer` works without `--dev`,
+  and `--dev` is refused as an unknown option); the parser reads no
+  `process.argv`. **[break: require `--dev` for `saml2-bearer` again → red]**
 - The package's `bin` holds only `mcp-auth` (`check:packed`: `mcp-sso` is not
   installed; `mcp-auth <subcommand> --help` answers for every subcommand).
 - Manual SAML with no ACS from any source: refused naming `--acs-url`, nothing
@@ -2029,6 +2030,8 @@ subcommand with the same flags (§10, §11.2); `package.json` `bin` keeps only
 recommendation the spec is written with: `--config` belongs to the subcommand
 its protocol names, and a mismatch is refused (rather than a protocol-less
 `mcp-auth --config`); `saml2-bearer` no longer requires `--dev` — `mcp-sso
-bearer` never did — and `--dev` stays accepted with no effect, so 2.x
-scripts keep working (rather than refusing it).
+bearer` never did — and `--dev` is removed (decided by the user, 2026-10-08:
+an option that does nothing is not kept; no code knows its name, and a 2.x
+script passing it is refused as an unknown option and told so in the
+migration note).
 
