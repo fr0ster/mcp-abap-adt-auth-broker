@@ -320,7 +320,7 @@ binding field and clears the refresh token:
 | any other, `authorizationToken !== ''` | `authorizationToken`, `expiresAt`, and the refresh token by the rows below |
 | `refreshToken: <string>` | that refresh token |
 | `refreshToken: null` | `refreshToken: ''` — auth-stores 4.0.0's clearing operation; the stored one is never read |
-| `refreshToken: undefined` | the stored refresh token **written explicitly as its value** when the session read at write time is bound to this build's identity (§6) — its `issuedFor` and its complete `issuedBy` record equal — row, client and every server address, each exact — and the binding fully stated (§6.1: the client and every address its credential goes to), so a refresh token obtained for another grant, client, server or endpoint is never carried; **otherwise `refreshToken: ''`** (always so for a binding that is not fully stated) — never omitted, so a refresh token obtained under other means can never end up beside this credential and its binding |
+| `refreshToken: undefined` | the stored refresh token **written explicitly as its value** when the session read at write time is bound to this build's identity (§6) — its `issuedFor` and its complete `issuedBy` record equal — row, client, every server address and the trust digest, each exact — and the binding fully stated (§6.1: the client and every address its credential goes to), so a refresh token obtained for another grant, client, server or endpoint is never carried; **otherwise `refreshToken: ''`** (always so for a binding that is not fully stated) — never omitted, so a refresh token obtained under other means can never end up beside this credential and its binding |
 | beside every credential | `issuedFor` of the build's binding, `''` when the means lack its source, and `issuedBy` — the build's version-2 record (§6.1), always present — never left out, so no earlier binding survives the merge beside a new credential |
 | `authorizationToken === ''` (a discard before any credential is held — a credential-free write) | **only `refreshToken: ''`**: no credential field, no `expiresAt`, no binding field. The stored credential, whatever identity it was obtained for, keeps its own binding — the write never re-labels it — and loses its refresh token, which the provider discarded |
 
@@ -481,7 +481,9 @@ fields   = enc(clientId) ";" enc(uaaUrl) ";" enc(oidcIssuerUrl) ";"
            enc(oidcTokenEndpoint) ";" enc(oidcAuthorizationEndpoint) ";"
            enc(oidcDeviceAuthorizationEndpoint) ";" enc(oidcAudience) ";"
            enc(samlIdpSsoUrl) ";" enc(samlAcsUrl) ";" enc(samlTokenUrl) ";"
-           enc(certUrl)                             always eleven fields, in this order
+           enc(certUrl) ";" trust                   always twelve fields, in this order
+trust    = lower-case hex SHA-256 of the row's trust input (below), or "" for a
+           row that has none
 enc(x)   = encodeURIComponent(x) of the exact string the row hands the provider,
            or "" when the row hands it none
 row      = authType "/" grantType                   a row getProvider builds:
@@ -529,6 +531,48 @@ provider, no others:
   credential is sent there by the connector, not by the provider.
 - **Version 2**, since no released broker has written a version-2 record.
 
+**The trust field.** A session obtained under other trust must not seed a
+provider built under new trust (a removed, compromised IdP certificate; another
+expected IdP). The record's twelfth field is a digest of the row's **non-secret
+values that decide what is accepted or whose credential it is**:
+
+| Row | Trust input, in this order |
+|---|---|
+| `saml2_pure`, `saml2_bearer` | `samlIdpCertificates` (the array as the means state it, order kept), `samlIdpEntityId`, `samlSpEntityId`, `samlClockSkewMs`, `samlIdpInitiated`; for `saml2_bearer` also `clientCertificate` |
+| OIDC rows | `oidcScopes`; `username` (`password`: whose credential it is); `oidcSubjectTokenType`, `oidcActorTokenType` (`token_exchange`); `clientCertificate` |
+| UAA rows | `clientCertificate` |
+| `none` rows, the consumer path | none: the field is `""` |
+
+`clientCertificate` is the certificate client's public certificate PEM, as the
+store answered it, when the build read it for the `clientAuthentication`
+strategy — never its key. The validator a row uses is decided by its grant,
+already in the record.
+
+- **Serialisation for hashing**, deterministic and never parsed back: the
+  UTF-8 bytes of `"mcp-abap-adt-binding/2/trust\n"` followed by
+  `JSON.stringify` of an array of `[name, value]` pairs in the row's fixed
+  order — each value a string, an array of strings, a number, a boolean, or
+  `null` for an absent one, exactly as the means state it (no trimming, no
+  canonicalisation). `JSON.stringify` of arrays and primitives has one output,
+  so equal inputs give equal bytes. The digest is `createHash('sha256')`
+  (`node:crypto`), hex, lower case.
+- **No secret goes into it**, nor into any other field: not the password, the
+  client secret, a private key, a subject or actor token. A hash of a secret
+  in a session file can be checked offline against guesses — a password or a
+  short client secret falls to that — and it still identifies the secret. So
+  secrets take part only in the in-memory identity (§6.2). The consequence,
+  stated: after a restart, a session obtained under a previous password or
+  client secret of the **same** user or client may seed (the secret is not the
+  identity; a revoked credential is refused by the server and renewed through
+  the renewal strategy); within one process a secret change always makes a new
+  provider.
+- **A row whose identity is a secret never seeds:** `token_exchange` — its
+  subject (and actor) token decides whose credential it obtains, and cannot be
+  recorded. It is not fully stated (below) and obtains a fresh token after
+  every restart (a token request, no user interaction).
+- **Credentials obtained under previous trust never seed a provider built
+  under new trust**: a different digest is a different record (decided).
+
 **Fully stated, and what is not.** A binding is **fully stated** when its
 record holds the client the row authenticates and every server address its
 provider sends a credential to — the token, the refresh token, the code, the
@@ -542,6 +586,7 @@ client's authentication, the assertion. Per row (the table above):
 | `saml2_pure` | `samlIdpSsoUrl` and `samlAcsUrl` (the system that sets the cookies) |
 | the consumer factory | `clientId` and `uaaUrl` of the client it was handed |
 | the consumer instance | never: it is handed no client |
+| `token_exchange` | never: its subject is a secret the record cannot hold |
 
 A fully stated binding may be seeded from — and carry the refresh token of —
 a session whose record equals it exactly. **An issuer-less OIDC row with
@@ -563,7 +608,7 @@ credential the consumer handed over, it seeds no renewal.
   lists (checked by `statedAuthType` / `statedGrant` before any binding is
   computed), so neither holds `;` or `/`; every field is
   `encodeURIComponent`-encoded, so it holds no `;`, `#`, `=`, space or line
-  break, and the eleven fields are always present — unambiguous without being
+  break, and the twelve fields are always present — unambiguous without being
   parsed — and the string round-trips through every auth-stores session store,
   the `.env` files included.
 - **Never parsed.** The broker computes the expected `issuedBy` for a build
@@ -594,25 +639,43 @@ credential the consumer handed over, it seeds no renewal.
 ### 6.2 One rule: a provider is never changed — changed means get a new one
 
 **A provider is never changed or re-seeded in place.** The broker builds a
-destination's provider once for its identity and hands that one out while the
-identity stays the same. The identity is the persisted pair — `issuedFor`
-and the complete `issuedBy` record of §6.1, which holds the client and every
-server address the row hands its provider, exactly — so what the cache
-compares and what a session is seeded against are one value. Every call of
-`getProvider` and of the token API reads the means (§7.1) and computes it.
+destination's provider once and hands that one out while nothing it was built
+from has changed. Two identities, one rule:
 
-- **Unchanged identity:** the cached provider is answered, as it is.
-- **Anything really changed** — the resource or SAP client, the row, the
-  client, or any server address in the record, by a single character: the broker builds a **new provider**. The old one is dropped from
+- **The build identity (in memory)** is **everything the build read** to make
+  the provider: every value of the means, the client and the certificate client
+  the row's builder reads — trust (certificates, IdP and SP entity ids, clock
+  skew, `samlIdpInitiated`), scopes, audience, user, password, client secret,
+  subject and actor tokens, certificate and key material, endpoints and
+  addresses — recorded by the build through one recording accessor, so the
+  set of fields is the row's own and cannot drift from the builder. Each value
+  is kept as given and compared exactly (arrays element by element, an absent
+  value distinct from `''`). Secrets take part **only here**: held in memory
+  beside the provider, which holds them anyway, never logged, never persisted,
+  never hashed into anything persisted. Every call of `getProvider` and of the
+  token API re-reads the means (§7.1) — and, for a build that read it, the
+  certificate client — and compares.
+- **The persisted identity** is `issuedFor` and the complete `issuedBy` record
+  of §6.1 — the client, every server address, and the trust digest — what a
+  stored session is compared with.
+
+The broker's own options (`renewal`, `authorization`, `onWriteFailure`, …) are
+fixed for the broker's life and so cannot change under a provider; what a
+collaborator option returns is part of the build it was called for, and is
+called again for a new build.
+
+- **Unchanged build identity:** the cached provider is answered, as it is.
+- **Anything really changed** — any value the build read, by a single
+  character (trust, a secret, an address, the row): the broker builds a **new provider**. The old one is dropped from
   the cache and never handed out again for that destination; whoever already
   holds it keeps it (H6), and its late writes are dropped once the new build
   has written (§5.3).
 - **A new provider for changed means starts with nothing** — nothing from the
   old provider (no token, refresh token, pinned material or state is carried
   across) and nothing from a session written under other means: it logs in.
-- **A provider may start from a stored session only when its complete
+- **A provider may start from a stored session only when its persisted
   identity equals the session's stored binding** — `issuedFor` and the exact
-  `issuedBy` record — and the binding is fully stated (§6.1: the client and
+  `issuedBy` record, trust digest included — and the binding is fully stated (§6.1: the client and
   every address its credential goes to): the
   case of a restart, or a first build, with unchanged means. Then the token,
   cookies and expiry come from that same read (`strategySeed`), and the refresh
@@ -1075,6 +1138,9 @@ aborted login prints "the authorization was aborted".
 | providers' 30 s / 300 s login timeouts | none: a login waits until it ends or a signal aborts; bound it with your own signal or strategy option |
 | collaborator strategies of 5.x (`browserCallbackStrategy({ browser: 'system', timeoutMs })`, `openUrl`) | 6.0.0's: `browser` an `IBrowser`, `signal` instead of `timeoutMs`, `redirectUri` required for the manual ones; a strategy of yours must honour `AuthorizationRequest.signal` |
 | a stored session bound by `issuedFor` / `issuedBy` (issuer and client) | the binding also names the row: `issuedBy` is a versioned record (§6.1). **Every session written before 5.0.0 reads as unbound once**: for each token destination the stored token and refresh token are discarded (one `warn` line) and the provider's first renewal is a **login, not a refresh** — interactive for `authorization_code`, `passcode`, `oidc_authorization_code`, `device_code` and the SAML grants; a token request for `client_credentials`, `password`, `token_exchange`. A headless consumer must run that login once per destination after upgrading. A handed-over credential (`none`) is refused naming `issuedBy` until written again with 5.0.0's `bindingOf`. A switch of grant with unchanged resource and client no longer reuses the other grant's credential |
+| SAML trust (`samlIdpCertificates`, `samlIdpEntityId`, `samlSpEntityId`, `samlClockSkewMs`, `samlIdpInitiated`), OIDC scopes, the `password` grant's user, the certificate client's certificate, changed | the destination **logs in once** — within a running broker and after a restart; 4.x kept the cached provider and its session, accepting assertions under the trust it was built with |
+| any other value a build reads changed (a password, a client secret, a subject token, an option of the means) | within a running broker: a new provider, **one login**; after a restart, only a change the record holds (above) forces a login — a secret is not persisted in any form |
+| a `token_exchange` destination | obtains a fresh token after every restart (one token request, no interaction): its subject is a secret and cannot bind a stored session |
 | a server address the destination states changed (`uaaUrl`, `oidcIssuerUrl`, the three OIDC endpoints, `oidcAudience`, `samlIdpSsoUrl`, `samlAcsUrl`, `samlTokenUrl`, a certificate client's `certUrl`) or its client id | the stored token and refresh token are not reused: the destination **logs in once** after the change (4.x refreshed with the old refresh token at the new address, or kept its token). **Even a cosmetic change counts** — a trailing `/`, a case change, a port written out: the strings are compared exactly, so editing an endpoint's spelling costs one login |
 | an OIDC destination with explicit endpoints only (no `oidcIssuerUrl`, no `uaaUrl`) — 4.x never seeded its session | **now reused after a restart** when its means are unchanged, byte for byte: its record names its client and every endpoint (§6.1). Only a destination whose means lack the client the row authenticates, or an address its credential goes to (table in §6.1), is never seeded and logs in after every restart |
 | means changed under a running broker were picked up by a new broker | picked up at the next call: a changed identity (resource, SAP client, issuer, client, row) rebuilds the destination's provider, unseeded from a session bound elsewhere; an instance `provider` is refused for that destination until a new broker |
@@ -1255,6 +1321,35 @@ endpoint**
   endpoints).
 - **A certificate client's `certUrl` switch** on the `clientAuthentication`
   strategy path: the same assertions.
+- **A removed signing certificate.** A SAML destination (`saml2_pure`, and
+  `saml2_bearer`) trusting certificates C1 and C2 logs in with an assertion
+  signed by C1; C1 is removed from `samlIdpCertificates`, endpoints and
+  everything else unchanged. **Within one broker:** the next resolution builds
+  a new provider (not the cached one), the stored session is not seeded, and an
+  assertion signed by C1 handed to the new login is refused (`saml-assertion`);
+  one signed by C2 is accepted. **After a restart** (fresh broker, same files):
+  the old session does not seed (its record's trust digest differs) — the
+  stored token or cookies are presented nowhere, the refresh token is sent
+  nowhere. **[break: leave trust out of the build identity → the in-process
+  case red]** **[break: leave the trust digest out of the record → the restart
+  case red]**
+- **Another expected IdP.** `samlIdpEntityId` changed, all else unchanged: the
+  same assertions, within one broker and after a restart.
+- **Another user.** An OIDC `password` row whose `username` changes: within
+  one broker and after a restart the old user's token and refresh token are
+  never presented or sent.
+- **A secret changed.** The password of a `password` row, and separately the
+  client secret of a UAA row, changed: within one process the next resolution
+  builds a new provider that starts with nothing (the old token not presented,
+  the old refresh token not sent); the session file and every log line hold no
+  trace of either secret, its length or a hash of it (asserted on the file's
+  bytes against the secret and its SHA-256 / SHA-1 / MD5 hex and base64).
+- **`token_exchange` never seeds:** after a restart with unchanged means, it
+  requests a fresh token; the stored one is presented nowhere.
+- **The trust digest is deterministic:** the same inputs give the same field
+  across processes; each trust input changed alone (one certificate, its order,
+  an entity id, the clock skew, `samlIdpInitiated`, a scope, the username)
+  gives another.
 - **A trailing slash is a different endpoint.** `oidcTokenEndpoint`
   `…/token` → `…/token/`, the two paths served by distinct handlers of the
   local server: within one broker's life and after a restart, T1 is presented
@@ -1265,7 +1360,7 @@ endpoint**
   process and after a restart the stored token is not presented and R1 is not
   sent (asserted at the token endpoint); the login goes to the new IdP.
   **[break: omit `samlIdpSsoUrl` from the record → red]**
-- **The record round-trips byte for byte**, every one of its eleven fields
+- **The record round-trips byte for byte**, every one of its twelve fields
   populated (with `/`, `?`, `&`, `=`, `%`, `;`, `#` and a space in the raw
   values), through each session store of **the published, installed
   `@mcp-abap-adt/auth-stores` 4.0.0** — `AbapSessionStore`,
@@ -1463,9 +1558,12 @@ Recorded with date and result before the release; none runs in CI.
   (an issuer-less OIDC row with explicit endpoints and a client does hold
   them, and may be seeded only from an exactly equal record), and the
   persisted record holds the client and every server address the row hands its
-  provider, as exact strings, so any change of them — a trailing slash
-  included — never reuses a credential; the cache and the seed check compare
-  the same one value (§6.1–§6.3).
+  provider, as exact strings, and a digest of the non-secret trust values, so
+  any change of them — a trailing slash, a removed certificate included —
+  never reuses a credential after a restart; within one process a provider is
+  rebuilt, starting with nothing, when anything its build read changes, secrets
+  included, held in memory only (§6.1–§6.3). No secret and no hash of one is
+  persisted.
   One rule (§6.2): a provider is never changed or re-seeded in place; when the
   means really change, a new provider is built that starts with nothing and
   logs in, and only a provider whose complete identity equals the stored
@@ -1537,9 +1635,12 @@ contract; (c) adds an API for little gain.
 
 **D6 — What "the means changed" compares, and the instance case.**
 The re-check on every call is dictated by H3; its granularity is not:
-(a) the binding plus the row (`authType`, `grantType`) — the row persisted
-in the `issuedBy` record (§6.1, D21) together with the client and every
-server address the row hands its provider, as exact strings (ruled, not open);
+**Ruled, on the user's rule — a provider is never changed; when anything
+really changes, a new one:** the in-memory build identity is everything the
+build read, secrets included; the persisted identity is the binding with the
+row, the client, every server address as exact strings and the trust digest
+(§6.1, §6.2, D21). The options below are kept for the record:
+(a) the binding plus the row (`authType`, `grantType`);
 (b) every means field
 the row reads (scopes, endpoints, trust, user and password); (c) the binding
 only. For a consumer instance after a change: (i) refuse the destination until
@@ -1642,7 +1743,7 @@ secret landed before it writes the output.
 **D21 — Where the row is persisted in the session's binding.**
 The store holds two binding strings and nothing else; the row must go into
 one of them (H3). (a) A versioned record in `issuedBy`:
-`mcp-abap-adt-binding/2;<authType>/<grantType>;<eleven exact, encoded fields>`,
+`mcp-abap-adt-binding/2;<authType>/<grantType>;<eleven exact, encoded address fields>;<trust digest>`,
 compared by exact equality (§6.1); (b) extra query parameters on the issuer URI
 (`…?client_id=x&grant_type=…`), canonicalised by `URL` — no `issuedBy` exists
 for rows without an issuer (`saml2_pure`, means without one), so the row would
@@ -1664,8 +1765,23 @@ something really changes, make a new provider": the client id, `uaaUrl`,
 `samlAcsUrl`, `samlTokenUrl` and the certificate client's `certUrl` — each the
 **exact string** the provider receives, **not canonicalised** (a canonical form
 aliased `…/token` and `…/token/`, which a server may route differently),
-`encodeURIComponent`-encoded, absent ones empty, eleven fields in a fixed
-order (§6.1). Only `issuedFor`, the resource, stays canonical. Leaving endpoints out of the record
+`encodeURIComponent`-encoded, absent ones empty, eleven address fields in a fixed
+order (§6.1). Only `issuedFor`, the resource, stays canonical. **And a
+twelfth field, the trust digest** (ruled on the same principle): SHA-256 hex
+over the row's non-secret trust and validation values, serialised as §6.1
+defines; no secret, and no hash of one, is ever persisted; credentials obtained
+under previous trust never seed a provider built under new trust.
+
+**D22 — What the trust digest covers beyond SAML trust.**
+The SAML trust values (certificates, entity ids, clock skew, IdP-initiated) and
+the certificate client's public certificate are dictated by the ruling. Real
+alternatives remain for the rest: (a) also `oidcScopes`, the `password`
+grant's `username` and the token-exchange token types — values that decide
+whose credential it is or what it may do; (b) SAML trust and the certificate
+only — a scope or user change is then seen only within one process (the
+in-memory identity), and after a restart another user's session could seed a
+`password` row. *Recommended: (a)* — a user change is an identity change (H3);
+a scope change costs one login. Leaving endpoints out of the record
 (4.x's strength) was rejected: within one process a rebuild for an endpoint
 change would still be seeded from the session matching the shorter record, and
 refresh-first renewal would send R, obtained at the old endpoint, to the new
