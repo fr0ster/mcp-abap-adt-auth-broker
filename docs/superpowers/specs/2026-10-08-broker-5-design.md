@@ -320,13 +320,23 @@ binding field and clears the refresh token:
 | any other, `authorizationToken !== ''` | `authorizationToken`, `expiresAt`, and the refresh token by the rows below |
 | `refreshToken: <string>` | that refresh token |
 | `refreshToken: null` | `refreshToken: ''` — auth-stores 4.0.0's clearing operation; the stored one is never read |
-| `refreshToken: undefined` | the stored refresh token **written explicitly as its value** when the session read at write time is bound to this build's identity (§6) — its `issuedFor` and its complete `issuedBy` record equal — row, client, every server address and the trust digest, each exact — and the binding fully stated (§6.1: the client and every address its credential goes to), so a refresh token obtained for another grant, client, server or endpoint is never carried; **otherwise `refreshToken: ''`** (always so for a binding that is not fully stated) — never omitted, so a refresh token obtained under other means can never end up beside this credential and its binding |
+| `refreshToken: undefined` | **the refresh token this build owns, written explicitly as its value — or `refreshToken: ''` when it owns none.** Never read from the store at write time, never decided by comparing records (§6.2: a provider persists only refresh state it owns) — never omitted, so no refresh token of other means, or of a provider replaced in this process, ends up beside this credential |
 | beside every credential | `issuedFor` of the build's binding, `''` when the means lack its source, and `issuedBy` — the build's version-2 record (§6.1), always present — never left out, so no earlier binding survives the merge beside a new credential |
 | `authorizationToken === ''` (a discard before any credential is held — a credential-free write) | **only `refreshToken: ''`**: no credential field, no `expiresAt`, no binding field. The stored credential, whatever identity it was obtained for, keeps its own binding — the write never re-labels it — and loses its refresh token, which the provider discarded |
 
-Carrying a stored refresh token therefore never changes its binding: it is
-written only beside the binding it was already bound to. Every other refresh
-token in the store at write time is cleared by the write.
+**The refresh token a build owns.** Each build keeps, in memory, the refresh
+token it owns: at build, the one it was **seeded with** from the checked
+session (§6.2) — none for a build that started with nothing: every replacement
+after a change, every build of a binding that is not fully stated,
+`token_exchange`, `client_credentials`; then each write updates it — a string
+written makes it owned, `null` (a discard) makes it none. `undefined` writes
+the owned one or `''`. So a refresh token is persisted only by the build that
+obtained it or was seeded with it and has not discarded or replaced it since;
+a session written by an earlier provider of the destination — even under an
+identical record, as after a password or client-secret change within one
+process — never lends its refresh token to a new one. A carried refresh token
+therefore never changes its binding, and every other refresh token in the
+store at write time is cleared by the write.
 
 `expiresAt` is the report's (`ReportedCredential.expiresAt`, absolute); the
 broker no longer derives one from `expiresIn` on this path. A destination the
@@ -443,7 +453,7 @@ to its means (§6), with its refresh token only when it is non-empty. Hence:
 | R discarded (refused refresh, `sentRefreshToken: 'discard'`, `ifCut: 'discard'`) and its `''` write landed | no refresh token: the provider's renewal strategy decides (with `refreshThenLogin()`, a login) |
 | the same, the `''` write still pending at exit | `'fail'`: noticed — every call failed and `flush()` rejected before exit; `'continue'`: R comes back (README) |
 | a new R2 landed | R2 |
-| a token-only result while R held (`none`, state `held`) | R (the stored one, bound) |
+| a token-only result while R held (`none`, state `held`) | R — the one that build owned (seeded with it, or obtained it) |
 | a credential under other means (§6) | discarded, not seeded |
 
 Remaining limit, auth-providers' own and restated in the README: a process that
@@ -588,8 +598,8 @@ client's authentication, the assertion. Per row (the table above):
 | the consumer instance | never: it is handed no client |
 | `token_exchange` | never: its subject is a secret the record cannot hold |
 
-A fully stated binding may be seeded from — and carry the refresh token of —
-a session whose record equals it exactly. **An issuer-less OIDC row with
+A fully stated binding may be seeded from — and, through the refresh token it
+was seeded with, carry (§5.2) — a session whose record equals it exactly. **An issuer-less OIDC row with
 explicit endpoints and a client is therefore fully stated** (ruled
 2026-10-08, relaxing round 3's rule now that the record is exact): its record
 names its client and every endpoint it sends a credential to, so a session
@@ -683,9 +693,13 @@ called again for a new build.
   (`strategyAuthorization`), never from another read; 4.x's unbound carry on
   the factory path (`composeAuthorization`, `AuthBroker.ts:341-356`) goes.
 
-The same rule decides the refresh-token carry of a write (§5.2): only a stored
-refresh token whose session binding equals the writing build's complete
-identity is carried; anything else is cleared.
+**A provider persists only refresh state it owns** (§5.2). Carrying a
+refresh token is a property of the build, not of record equality: a write may
+keep a refresh token only when this build was itself seeded with it from the
+checked session, or obtained it, and still holds it — no discard, no newer
+one since. A build that started with nothing writes `refreshToken: ''` unless
+it obtained a new one; it never inherits one from the store, whatever the
+store's record says.
 
 ### 6.3 Who the rule applies to
 
@@ -1255,8 +1269,19 @@ endpoint**
   restart finds no R. **[break: build a retry from the single result instead of
   the latest submission]**
 - New R after a pending `''` wins (stored R new).
-- `credential`, `none` while `held`: the stored bound R kept (written as its
-  value, the binding unchanged).
+- `credential`, `none` while `held`, for a build seeded with R: R written as
+  its value, the binding unchanged; the same for a build that obtained R itself
+  earlier.
+- **A provider persists only refresh state it owns.** A UAA row seeded with
+  R_old; its client secret (and separately an OIDC `password` row's password)
+  changes within one process → the next resolution builds a new provider that
+  starts with nothing → its login returns a token and no refresh token → the
+  resulting store state holds the new token and **no** R_old (`loadSession`) →
+  restart (fresh broker, same files, record unchanged): R_old is sent to no
+  token endpoint (asserted at the endpoint), and with no refresh token stored
+  the provider logs in. Also: a replacement after a trust change, and a
+  `client_credentials` result, write `''`. **[break: carry by record equality
+  (re-read the stored session at write time) → red]**
 - **A pre-existing session bound to other means.** The store holds token T0
   and R_old bound to identity A; the means now state identity B. For each path
   — a token-only login of a built provider (`authorization_code` returning no
@@ -1574,6 +1599,10 @@ Recorded with date and result before the release; none runs in CI.
   fields, while a credential-free write states no binding — so no refresh
   token of other means survives beside a new credential, and no write
   re-labels a stored one (§5.2, §5.5, §6.4).
+  A provider persists only refresh state it owns: a write carries a refresh
+  token only when that build was seeded with it or obtained it and still holds
+  it, so a replacement provider never inherits a refresh token from the store
+  (§5.2, §6.2).
 - **H4 No built-in timeouts.** §7.6, §10.4; the writer's retry delay bounds no
   wait.
 - **H5 One implementation of each rule.** `sharedAttempt` (§7) — for the
