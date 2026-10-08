@@ -7,8 +7,11 @@
  * IDs and certificates are substituted; the structure is as served.
  */
 import * as fs from 'node:fs';
+import * as http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import * as path from 'node:path';
 import { parseSamlTrustArg } from '../mcpSsoConfig';
+import { failureLines } from '../output';
 import {
   applySamlMetadata,
   loadMetadata,
@@ -16,6 +19,7 @@ import {
   readSpMetadata,
   type SamlMetadataTarget,
 } from '../samlMetadata';
+import { isUsageError } from '../subcommandArgs';
 
 const fixture = (name: string) =>
   fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
@@ -91,9 +95,111 @@ describe('readSpMetadata', () => {
 
 describe('loadMetadata', () => {
   it('refuses plain http to anything but loopback: it carries trust', async () => {
-    await expect(loadMetadata('http://idp.example/metadata')).rejects.toThrow(
-      /must come over https/,
+    await expect(
+      loadMetadata('http://idp.example/metadata', '--idp-metadata'),
+    ).rejects.toThrow(/must come over https/);
+  });
+
+  /** What a load rejects with, and that it is the CLI's own words. */
+  async function refusal(load: Promise<string>): Promise<string> {
+    const thrown = await load.then(
+      () => undefined,
+      (error: unknown) => error,
     );
+    expect(isUsageError(thrown)).toBe(true);
+    return failureLines(thrown).join('\n');
+  }
+
+  it("a file that is not there: the flag, the path and ENOENT — never the reader's message", async () => {
+    const missing = path.resolve('no-such-metadata.xml');
+    const words = await refusal(loadMetadata(missing, '--idp-metadata'));
+    expect(words).toBe(`❌ --idp-metadata: ${missing} cannot be read (ENOENT)`);
+  });
+
+  it('a directory: the flag, the path and its code', async () => {
+    const words = await refusal(loadMetadata(__dirname, '--saml-metadata'));
+    expect(words).toBe(
+      `❌ --saml-metadata: ${__dirname} cannot be read (EISDIR)`,
+    );
+  });
+
+  it('an unreachable URL: the flag and the code, never the URL (it may carry a query or userinfo)', async () => {
+    const probe = http.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const { port } = probe.address() as AddressInfo;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const url = `http://127.0.0.1:${port}/meta?sig=SIG-MARKER`;
+    const words = await refusal(loadMetadata(url, '--idp-metadata'));
+    expect(words).toBe(
+      '❌ --idp-metadata: the metadata could not be fetched (ECONNREFUSED)',
+    );
+    // A URL with userinfo, which fetch refuses outright: still no URL.
+    const withUser = await refusal(
+      loadMetadata(
+        `http://user:PASS-MARKER@127.0.0.1:${port}/meta`,
+        '--idp-metadata',
+      ),
+    );
+    expect(withUser).toBe(
+      '❌ --idp-metadata: the metadata could not be fetched',
+    );
+  });
+
+  it('a server that answers an error status: the flag and the status, never the URL', async () => {
+    const server = http.createServer((_request, response) => {
+      response.writeHead(500);
+      response.end('SERVER-TEXT-MARKER');
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const { port } = server.address() as AddressInfo;
+    try {
+      const words = await refusal(
+        loadMetadata(
+          `http://127.0.0.1:${port}/meta?sig=SIG-MARKER`,
+          '--idp-metadata',
+        ),
+      );
+      expect(words).toBe('❌ --idp-metadata: the metadata server answered 500');
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('applySamlMetadata names the flag that stated each source', async () => {
+    const asked: string[] = [];
+    const load = async (source: string, flag: string) => {
+      asked.push(flag);
+      return source === IAS_URL ? IAS : XSUAA;
+    };
+    await applySamlMetadata(
+      {
+        protocol: 'saml2',
+        flow: 'bearer',
+        idpMetadata: IAS_URL,
+        uaaUrl: UAA_URL,
+      },
+      undefined,
+      load,
+    );
+    await applySamlMetadata(
+      {
+        protocol: 'saml2',
+        flow: 'bearer',
+        idpMetadata: IAS_URL,
+        samlMetadataPath: './sp.xml',
+      },
+      undefined,
+      load,
+    );
+    expect(asked).toEqual([
+      '--idp-metadata',
+      '--service-key',
+      '--idp-metadata',
+      '--saml-metadata',
+    ]);
   });
 });
 

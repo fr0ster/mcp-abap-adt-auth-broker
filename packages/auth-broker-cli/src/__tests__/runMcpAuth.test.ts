@@ -27,8 +27,9 @@ import {
   XSUAA_DESTINATION_VARS,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
-import { createCliLogger } from '../output';
+import { createCliLogger, failureLines } from '../output';
 import { type McpAuthOptions, runMcpAuth } from '../runMcpAuth';
+import { isUsageError } from '../subcommandArgs';
 import {
   CLIENT_CRT,
   CLIENT_CRT_PATH,
@@ -346,6 +347,27 @@ describe('mcp-auth (authorization_code)', () => {
       `[warn] [AuthBroker] ${DEST}: the stored session secret is not recorded as issued under the destination's current means; not used, the provider obtains a new one`,
     );
   });
+
+  it.each(['env', 'json'] as const)(
+    "an --output that cannot be written (--format %s): the flag, the path and its code — never the writer's message",
+    async (format) => {
+      server.answer('/oauth/token', tokenAnswer('uaa'));
+      const locked = path.join(root, 'locked');
+      fs.mkdirSync(locked, { mode: 0o500 });
+      const output = path.join(locked, 'sub', `${DEST}.${format}`);
+      const thrown = await run(
+        options({ serviceKeyPath: abapKey(), format, outputFile: output }),
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      fs.chmodSync(locked, 0o700);
+      expect(isUsageError(thrown)).toBe(true);
+      expect(failureLines(thrown)).toEqual([
+        `❌ --output: ${output} cannot be written (EACCES)`,
+      ]);
+    },
+  );
 
   it('--format json writes the 1.x fields from the stores', async () => {
     server.answer('/oauth/token', tokenAnswer('uaa'));

@@ -266,6 +266,119 @@ function readsAsWritten(body: string, read: string): boolean {
   return false;
 }
 
+/** Whether `name` occurs in `text` as a whole identifier. */
+function hasToken(text: string, name: string): boolean {
+  const identifier = (c: string | undefined) =>
+    c !== undefined &&
+    (c === '_' ||
+      c === '$' ||
+      (c >= '0' && c <= '9') ||
+      c.toLowerCase() !== c.toUpperCase());
+  let at = text.indexOf(name);
+  while (at !== -1) {
+    if (!identifier(text[at - 1]) && !identifier(text[at + name.length])) {
+      return true;
+    }
+    at = text.indexOf(name, at + 1);
+  }
+  return false;
+}
+
+/**
+ * Every name that holds a caught value: a `catch` binding, a rejection
+ * handler's `unknown` parameter, the usual names, and — to a fixpoint — any
+ * name assigned from one of them (`obtainError = error`).
+ */
+function caughtNames(body: string): Set<string> {
+  const bound = new Set<string>(['error', 'err', 'e', 'thrown', 'reason']);
+  for (const m of body.matchAll(/catch\s*\(\s*([A-Za-z_$][\w$]*)/g)) {
+    bound.add(m[1] as string);
+  }
+  for (const m of body.matchAll(
+    /\(\s*([A-Za-z_$][\w$]*)\s*:\s*unknown\s*\)\s*=>/g,
+  )) {
+    bound.add(m[1] as string);
+  }
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const m of body.matchAll(
+      /([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*[;,)]/g,
+    )) {
+      if (bound.has(m[2] as string) && !bound.has(m[1] as string)) {
+        bound.add(m[1] as string);
+        grew = true;
+      }
+    }
+  }
+  return bound;
+}
+
+/**
+ * Every call that prints: a `console` or logger method (`.log`, `.info`,
+ * `.warn`, `.error`, `.debug`), a stream `.write`, `toStderr`, `progress`,
+ * `write` — with its whole argument text, parentheses balanced.
+ */
+function printingCalls(body: string): { callee: string; argument: string }[] {
+  const calls: { callee: string; argument: string }[] = [];
+  for (const m of body.matchAll(
+    /(\.(?:log|info|warn|error|debug|write)|\btoStderr|\bprogress|\bwrite)\s*\(/g,
+  )) {
+    let depth = 1;
+    let i = (m.index ?? 0) + m[0].length;
+    const start = i;
+    let quote: string | undefined;
+    while (i < body.length && depth > 0) {
+      const c = body[i] as string;
+      if (quote) {
+        if (c === '\\') i += 1;
+        else if (c === quote) quote = undefined;
+      } else if (c === "'" || c === '"' || c === '`') quote = c;
+      else if (c === '(') depth += 1;
+      else if (c === ')') depth -= 1;
+      i += 1;
+    }
+    calls.push({ callee: m[1] as string, argument: body.slice(start, i - 1) });
+  }
+  return calls;
+}
+
+/** The code of an argument: string text dropped, a template's `${…}` kept. */
+function withoutStringText(text: string): string {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i] as string;
+    if (c === "'" || c === '"') {
+      i += 1;
+      while (i < text.length && text[i] !== c) i += text[i] === '\\' ? 2 : 1;
+      i += 1;
+      out += '""';
+    } else if (c === '`') {
+      i += 1;
+      while (i < text.length && text[i] !== '`') {
+        if (text[i] === '\\') i += 2;
+        else if (text[i] === '$' && text[i + 1] === '{') {
+          let depth = 1;
+          i += 2;
+          while (i < text.length && depth > 0) {
+            if (text[i] === '{') depth += 1;
+            else if (text[i] === '}') depth -= 1;
+            if (depth > 0) out += text[i];
+            i += 1;
+          }
+          out += ' ';
+        } else i += 1;
+      }
+      i += 1;
+    } else {
+      out += c;
+      i += 1;
+    }
+  }
+  return out;
+}
+
 describe('sources (CLI src)', () => {
   it('reads every runtime source', () => {
     expect(SOURCES.map((s) => s.file)).toEqual(
@@ -291,20 +404,7 @@ describe('sources (CLI src)', () => {
   it("no .message, .stack or .name of a caught value is read — output.ts reads a recognised value's message, through its own data", () => {
     for (const { file, text } of SOURCES) {
       const body = code(text);
-      // Every name a catch or a rejection handler binds.
-      const bound = new Set<string>();
-      for (const m of body.matchAll(/catch\s*\(\s*([A-Za-z_$][\w$]*)/g)) {
-        bound.add(m[1] as string);
-      }
-      // A rejection handler: a parameter typed unknown, or named as one.
-      for (const m of body.matchAll(
-        /\(\s*([A-Za-z_$][\w$]*)\s*:\s*unknown\s*\)\s*=>/g,
-      )) {
-        bound.add(m[1] as string);
-      }
-      for (const name of ['error', 'err', 'e', 'thrown', 'reason']) {
-        bound.add(name);
-      }
+      const bound = caughtNames(body);
       const reads: string[] = [];
       for (const name of bound) {
         for (const read of [
@@ -332,17 +432,19 @@ describe('sources (CLI src)', () => {
     }
   });
 
-  it('every catch prints through printFailure (or the CLI words its own), never console with the caught value', () => {
+  it('no caught value reaches a console, logger, stream or progress call — only printFailure prints one', () => {
     for (const { file, text } of SOURCES) {
       const body = code(text);
-      for (const m of body.matchAll(
-        /console\.(?:error|log|warn)\(([^)]*)\)/g,
-      )) {
-        const argument = m[1] as string;
-        for (const name of ['error', 'err', 'e', 'thrown', 'reason']) {
-          expect([file, argument.trim() === name]).toEqual([file, false]);
+      const bound = caughtNames(body);
+      const printed: string[] = [];
+      for (const call of printingCalls(body)) {
+        const expressions = withoutStringText(call.argument);
+        for (const name of bound) {
+          if (hasToken(expressions, name))
+            printed.push(`${call.callee}(${name})`);
         }
       }
+      expect([file, printed]).toEqual([file, []]);
     }
   });
 

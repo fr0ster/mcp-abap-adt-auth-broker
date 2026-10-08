@@ -17,6 +17,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
+import { systemCodeOf } from './output';
 import { UsageError } from './subcommandArgs';
 
 export interface IdpMetadata {
@@ -35,24 +36,49 @@ export interface SpMetadata {
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-/** A metadata document from an https URL, a loopback http URL, or a file. */
-export async function loadMetadata(source: string): Promise<string> {
+/**
+ * A metadata document from an https URL, a loopback http URL, or a file.
+ * `flag` is where the source came from (`--idp-metadata`, `--saml-metadata`,
+ * `--service-key`): a failure of the CLI's own read or fetch is refused naming
+ * it — the path the user gave, or no URL at all (it may carry a query or
+ * userinfo) — with an allowlisted system code, never the failure's message.
+ */
+export async function loadMetadata(
+  source: string,
+  flag: string,
+): Promise<string> {
   if (/^https?:\/\//i.test(source)) {
     const url = new URL(source);
     if (url.protocol !== 'https:' && !LOOPBACK.has(url.hostname)) {
       throw new UsageError(
-        `refusing SAML metadata over ${url.protocol} from ${url.hostname}: it carries the certificates assertions are verified against, so it must come over https`,
+        `${flag}: refusing SAML metadata over ${url.protocol}: it carries the certificates assertions are verified against, so it must come over https`,
       );
     }
-    const response = await fetch(url);
+    let response: Response;
+    let text: string;
+    try {
+      response = await fetch(url);
+      text = await response.text();
+    } catch (error) {
+      throw new UsageError(
+        `${flag}: the metadata could not be fetched${systemCodeOf(error)}`,
+      );
+    }
     if (!response.ok) {
       throw new UsageError(
-        `SAML metadata ${source} answered ${response.status}`,
+        `${flag}: the metadata server answered ${response.status}`,
       );
     }
-    return response.text();
+    return text;
   }
-  return readFileSync(resolvePath(source), 'utf8');
+  const file = resolvePath(source);
+  try {
+    return readFileSync(file, 'utf8');
+  } catch (error) {
+    throw new UsageError(
+      `${flag}: ${file} cannot be read${systemCodeOf(error)}`,
+    );
+  }
 }
 
 function attribute(tag: string, name: string): string | undefined {
@@ -230,13 +256,13 @@ export interface SamlMetadataTarget {
 export async function applySamlMetadata(
   options: SamlMetadataTarget,
   explicitTokenEndpoint: string | undefined,
-  load: (source: string) => Promise<string> = loadMetadata,
+  load: (source: string, flag: string) => Promise<string> = loadMetadata,
 ): Promise<void> {
   if (options.protocol !== 'saml2') return;
 
   if (options.idpMetadata) {
     const idp = readIdpMetadata(
-      await load(options.idpMetadata),
+      await load(options.idpMetadata, '--idp-metadata'),
       options.idpEntityId,
     );
     options.idpEntityId ??= idp.entityId;
@@ -260,10 +286,14 @@ export async function applySamlMetadata(
       : undefined);
   if (!spSource) return;
 
-  const sp = readSpMetadata(await load(spSource), options.spEntityId);
+  const spFlag =
+    options.samlMetadataPath !== undefined
+      ? '--saml-metadata'
+      : '--service-key';
+  const sp = readSpMetadata(await load(spSource, spFlag), options.spEntityId);
   if (!sp.bearerAcsUrl) {
     throw new UsageError(
-      `${spSource} names no /oauth/token/alias/ endpoint: not an XSUAA service provider's metadata`,
+      `${spFlag}: the metadata names no /oauth/token/alias/ endpoint: not an XSUAA service provider's metadata`,
     );
   }
   options.spEntityId ??= sp.entityId;

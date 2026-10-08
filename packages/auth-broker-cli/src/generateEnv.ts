@@ -322,7 +322,7 @@ export async function runGenerateEnv(
       authDebug,
     },
     // The script's logger: stderr, from debug with --verbose (or
-    // --auth-debug, which implies it), else from warn.
+    // --auth-debug, which implies it), else from info.
     createCliLogger({ verbose: verbose || authDebug }),
   );
 
@@ -353,7 +353,7 @@ export async function runGenerateEnv(
     toStderr(`   ${resolvedSessionPath} is unchanged.`);
     return 1;
   }
-  writeOutputFile(files, resolvedSessionPath);
+  writeOutputFile(files, resolvedSessionPath, 'the session path');
   progress(`✅ Session file written: ${resolvedSessionPath}`);
   return 0;
 }

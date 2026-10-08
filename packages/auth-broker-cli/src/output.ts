@@ -44,7 +44,7 @@ const LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 type Level = (typeof LEVELS)[number];
 
 export interface CliLoggerOptions {
-  /** `--verbose` (or `--auth-debug`, which implies it): `debug`; else `warn`. */
+  /** `--verbose` (or `--auth-debug`, which implies it): `debug`; else `info`. */
   verbose: boolean;
 }
 
@@ -61,14 +61,16 @@ function renderMeta(meta: unknown): string {
 
 /**
  * The CLI's logger: every level to stderr, from `debug` with `--verbose`,
- * from `warn` without it. No environment variable is read: what it writes
+ * from `info` without it — the providers' prompt lines that go through a
+ * logger (where the callback waits, the SSH-tunnel hint, a URL that cannot
+ * be shown) are seen by default. No environment variable is read: what it writes
  * is what the command line says (D17). It never throws.
  */
 export function createCliLogger(
   { verbose }: CliLoggerOptions,
   write: LineWriter = toStderr,
 ): ILogger {
-  const from = LEVELS.indexOf(verbose ? 'debug' : 'warn');
+  const from = LEVELS.indexOf(verbose ? 'debug' : 'info');
   const line =
     (level: Level) =>
     (message: string, meta?: unknown): void => {
@@ -98,6 +100,52 @@ function ownData(value: unknown, key: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The system codes the CLI names when its own file or network I/O fails —
+ * facts, never a message. Anything else is not named.
+ */
+const SYSTEM_CODES: ReadonlySet<string> = new Set([
+  'ENOENT',
+  'EACCES',
+  'EPERM',
+  'EISDIR',
+  'ENOTDIR',
+  'EROFS',
+  'ENOSPC',
+  'EEXIST',
+  'EMFILE',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EPIPE',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_SOCKET',
+  'CERT_HAS_EXPIRED',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+]);
+
+/**
+ * ` (CODE)` for a thrown value whose own `code` — or its `cause`'s, as
+ * `fetch` reports a network failure — is on `SYSTEM_CODES`; else `''`.
+ * Own data properties only, read once each; total.
+ */
+export function systemCodeOf(thrown: unknown): string {
+  for (const holder of [thrown, ownData(thrown, 'cause')]) {
+    const code = ownData(holder, 'code');
+    if (typeof code === 'string' && SYSTEM_CODES.has(code)) {
+      return ` (${code})`;
+    }
+  }
+  return '';
 }
 
 /** `❌ reason`, or `❌ reason — hint`; then the diagnostics, when there are any. */

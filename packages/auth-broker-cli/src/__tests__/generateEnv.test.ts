@@ -23,6 +23,8 @@ import {
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
 import { runGenerateEnv } from '../generateEnv';
+import { failureLines } from '../output';
+import { isUsageError } from '../subcommandArgs';
 import {
   CLIENT_CN,
   CLIENT_CRT,
@@ -205,6 +207,25 @@ describe('generate-env', () => {
     expect(JSON.stringify(jest.mocked(console.error).mock.calls)).not.toContain(
       'disk full',
     );
+  });
+
+  it('a session path that cannot be written: refused naming it, its path and code', async () => {
+    server.answer('/oauth/token', tokenAnswer('cc', false));
+    const locked = path.join(root, 'locked');
+    fs.mkdirSync(locked, { mode: 0o500 });
+    const session = path.join(locked, 'sub', 'TRIAL.env');
+    const thrown = await runGenerateEnv(
+      ['TRIAL', abapKey(), session, '--grant', 'client_credentials'],
+      noBrowser,
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    fs.chmodSync(locked, 0o700);
+    expect(isUsageError(thrown)).toBe(true);
+    expect(failureLines(thrown)).toEqual([
+      `❌ the session path: ${session} cannot be written (EACCES)`,
+    ]);
   });
 
   describe('the session file is changed only once the secret is stored', () => {

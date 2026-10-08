@@ -14,7 +14,7 @@
  * <grant>: authorization_code (opens a browser, as --browser states — default
  *   auto, the platform's default browser) or client_credentials.
  *
- * --verbose: log lines from debug on (default: warn and error), on stderr.
+ * --verbose: log lines from debug on (default: from info), on stderr.
  * --auth-debug: the broker's authDebug — the providers' debug line names the
  *   request's secrets; implies --verbose. No environment variable does either.
  *

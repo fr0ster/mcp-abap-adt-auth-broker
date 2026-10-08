@@ -136,7 +136,7 @@ function showMainHelp(): void {
     '  --key-path <path>       With --client-auth certificate (required): its private key PEM file',
   );
   console.log(
-    '  --verbose               Log lines from debug on (default: warn and error only), on stderr',
+    '  --verbose               Log lines from debug on (default: from info), on stderr',
   );
   console.log(
     "  --auth-debug            The providers' debug line names the request's secrets (implies --verbose)",
@@ -385,7 +385,7 @@ function showSsoHelp(subcommand: SsoSubcommand): void {
     '  --redirect-uri <uri>      Custom redirect URI (OOB/manual code flows)',
   );
   console.log(
-    '  --verbose                 Log lines from debug on (default: warn and error only), on stderr',
+    '  --verbose                 Log lines from debug on (default: from info), on stderr',
   );
   console.log(
     "  --auth-debug              The providers' debug line names the request's secrets (implies --verbose)",

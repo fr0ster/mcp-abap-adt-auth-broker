@@ -31,7 +31,13 @@ import {
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
 import type { WithUndefined } from './contractShape';
-import { type LineWriter, toStderr, writeFailureLines } from './output';
+import {
+  type LineWriter,
+  systemCodeOf,
+  toStderr,
+  writeFailureLines,
+} from './output';
+import { UsageError } from './subcommandArgs';
 
 /** Which key names the destination file uses: `SAP_*` or `XSUAA_*`. */
 export type DestinationType = 'abap' | 'xsuaa';
@@ -152,10 +158,31 @@ export async function flushed(
   }
 }
 
-/** Copies the destination file to `--output`, creating its directory. */
-export function writeOutputFile(files: DestinationFiles, output: string): void {
-  fs.mkdirSync(path.dirname(output), { recursive: true });
-  fs.copyFileSync(files.file, output);
+/**
+ * Runs the CLI's own write of `output`; a failure is refused naming `what`
+ * (`--output`, the session path), the path the user gave and an allowlisted
+ * system code — never the writer's message.
+ */
+function writing(output: string, what: string, write: () => void): void {
+  try {
+    write();
+  } catch (error) {
+    throw new UsageError(
+      `${what}: ${output} cannot be written${systemCodeOf(error)}`,
+    );
+  }
+}
+
+/** Copies the destination file to `output`, creating its directory. */
+export function writeOutputFile(
+  files: DestinationFiles,
+  output: string,
+  what = '--output',
+): void {
+  writing(output, what, () => {
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.copyFileSync(files.file, output);
+  });
 }
 
 /**
@@ -200,9 +227,11 @@ export function writeJsonFile(
   output: string,
   data: Record<string, unknown>,
 ): void {
-  fs.mkdirSync(path.dirname(output), { recursive: true });
-  fs.writeFileSync(output, JSON.stringify(data, null, 2), {
-    encoding: 'utf8',
-    mode: 0o600,
+  writing(output, '--output', () => {
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.writeFileSync(output, JSON.stringify(data, null, 2), {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
   });
 }

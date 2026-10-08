@@ -72,28 +72,51 @@ let root: string;
 let tmp: string;
 let children: ChildProcess[];
 
+/** Every `.ts` under `dir`, tests left out, recursively. */
+function sourcesUnder(dir: string): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      return entry.name === '__tests__' ? [] : sourcesUnder(file);
+    }
+    return entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts')
+      ? [file]
+      : [];
+  });
+}
+
+/**
+ * The sources of `packageDir` whose compiled `dist` file is missing or older:
+ * the bin runs the CLI's dist and the workspace-linked broker's dist.
+ */
+function staleSources(packageDir: string, skip: readonly string[]): string[] {
+  const src = path.join(packageDir, 'src');
+  return sourcesUnder(src)
+    .filter((file) => !skip.includes(path.basename(file)))
+    .filter((file) => {
+      const output = path.join(
+        packageDir,
+        'dist',
+        path.relative(src, file).replace(/\.ts$/, '.js'),
+      );
+      const built = fs.statSync(output, { throwIfNoEntry: false });
+      return !built || built.mtimeMs < fs.statSync(file).mtimeMs;
+    })
+    .map((file) => path.relative(path.dirname(packageDir), file));
+}
+
 beforeAll(() => {
-  const built = fs.statSync(BIN, { throwIfNoEntry: false });
-  if (!built) {
+  if (!fs.statSync(BIN, { throwIfNoEntry: false })) {
     throw new Error(`${BIN} is missing: run npm run build first`);
   }
-  // Every source the bin is built from (generate-env is not built).
-  const stale = fs
-    .readdirSync(path.join(PACKAGE_ROOT, 'src'))
-    .filter(
-      (file) =>
-        file.endsWith('.ts') &&
-        file !== 'generateEnv.ts' &&
-        file !== 'generate-env-from-service-key.ts',
-    )
-    .filter((file) => {
-      const source = fs.statSync(path.join(PACKAGE_ROOT, 'src', file));
-      const output = fs.statSync(
-        path.join(PACKAGE_ROOT, 'dist', file.replace(/\.ts$/, '.js')),
-        { throwIfNoEntry: false },
-      );
-      return !output || output.mtimeMs < source.mtimeMs;
-    });
+  const stale = [
+    // generate-env is a development script: not built.
+    ...staleSources(PACKAGE_ROOT, [
+      'generateEnv.ts',
+      'generate-env-from-service-key.ts',
+    ]),
+    ...staleSources(path.join(PACKAGE_ROOT, '..', 'auth-broker'), []),
+  ];
   if (stale.length > 0) {
     throw new Error(
       `dist is older than ${stale.join(', ')}: run npm run build first`,
@@ -310,6 +333,80 @@ describe('mcp-auth (authorization code), --browser none', () => {
     expect(fs.readdirSync(tmp)).toEqual([]);
   });
 
+  it("at the default level the provider's waiting line and SSH-tunnel hint reach stderr — a remote user needs them; no debug line", async () => {
+    server.answer('/oauth/token', TOKENS);
+    const port = await freePort();
+    const browser = answerPrompt(CODE);
+    const run = await runBin(
+      [
+        '--service-key',
+        serviceKey(),
+        '--output',
+        path.join(root, 'out', 'TRIAL.env'),
+        '--browser',
+        'none',
+        '--redirect-port',
+        String(port),
+      ],
+      { onStderr: browser.onStderr },
+    );
+    expect(run.code).toBe(0);
+    expect(run.stderr).toContain(
+      `Waiting for callback on http://localhost:${port}/callback`,
+    );
+    expect(run.stderr).toContain(`ssh -L ${port}:localhost:${port}`);
+    expect(run.stderr).not.toContain('[debug]');
+    expectNoSecrets(run);
+    const prompt = browser.prompt();
+    if (!prompt) throw new Error('no prompt on stderr');
+    expectUrlOnlyInPrompt(run, prompt);
+  });
+
+  it('at the default level an authorization URL that cannot be shown is said so on stderr', async () => {
+    const key = path.join(root, 'TRIAL.json');
+    fs.writeFileSync(
+      key,
+      JSON.stringify({
+        uaa: {
+          // Not an http(s) URL: the provider's prompt refuses to show it.
+          url: 'ftp://127.0.0.1:1',
+          clientid: 'key-client',
+          clientsecret: CLIENT_SECRET,
+        },
+        abap: { url: 'https://abap.example.com' },
+      }),
+    );
+    const port = await freePort();
+    const child = { said: false };
+    const run = await runBin(
+      [
+        '--service-key',
+        key,
+        '--output',
+        path.join(root, 'out', 'TRIAL.env'),
+        '--browser',
+        'none',
+        '--redirect-port',
+        String(port),
+      ],
+      {
+        onStderr: (soFar) => {
+          if (
+            !child.said &&
+            soFar.includes('is not an http(s) URL that can be shown')
+          ) {
+            child.said = true;
+            // The login waits for a callback no one can reach: end it.
+            children.at(-1)?.kill('SIGTERM');
+          }
+        },
+      },
+    );
+    expect(child.said).toBe(true);
+    expect(run.stdout).toBe('');
+    expectNoSecrets(run);
+  });
+
   it('--verbose: log lines on stderr, still no secret, the URL and state only in the prompt', async () => {
     server.answer('/oauth/token', TOKENS);
     const port = await freePort();
@@ -457,6 +554,66 @@ describe('mcp-auth --credential', () => {
     ]);
     expect(run.code).toBe(0);
     expect(run.stdout).toBe('');
+    expectNoSecrets(run);
+  });
+});
+
+describe("the CLI's own I/O: refused in its own words naming the flag", () => {
+  it('a missing --idp-metadata file: the flag, the path and ENOENT; never the unfamiliar words', async () => {
+    const missing = path.join(root, 'nope.xml');
+    const run = await runBin([
+      'saml2-bearer',
+      '--idp-metadata',
+      missing,
+      '--idp-initiated',
+      '--output',
+      path.join(root, 'out', 'sso.env'),
+    ]);
+    expect(run.code).toBe(1);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toContain(
+      `❌ SAML metadata: --idp-metadata: ${missing} cannot be read (ENOENT)`,
+    );
+    expect(run.stderr).not.toContain('does not know');
+  });
+
+  it('an unreachable --idp-metadata URL: the flag and the code, never the URL', async () => {
+    const port = await freePort();
+    const run = await runBin([
+      'saml2-bearer',
+      '--idp-metadata',
+      `http://127.0.0.1:${port}/meta?sig=SIG-MARKER`,
+      '--idp-initiated',
+      '--output',
+      path.join(root, 'out', 'sso.env'),
+    ]);
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain(
+      '❌ SAML metadata: --idp-metadata: the metadata could not be fetched (ECONNREFUSED)',
+    );
+    expect(run.stderr).not.toContain('SIG-MARKER');
+    expect(run.stderr).not.toContain(`127.0.0.1:${port}`);
+  });
+
+  it('an --output that cannot be written: the flag, the path and EACCES', async () => {
+    server.answer('/oauth/token', TOKENS);
+    const locked = path.join(root, 'locked');
+    fs.mkdirSync(locked, { mode: 0o500 });
+    const output = path.join(locked, 'sub', 'TRIAL.env');
+    const run = await runBin([
+      '--service-key',
+      serviceKey(),
+      '--output',
+      output,
+      '--credential',
+    ]);
+    fs.chmodSync(locked, 0o700);
+    expect(run.code).toBe(1);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toContain(
+      `❌ --output: ${output} cannot be written (EACCES)`,
+    );
+    expect(run.stderr).not.toContain('does not know');
     expectNoSecrets(run);
   });
 });

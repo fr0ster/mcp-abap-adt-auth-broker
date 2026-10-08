@@ -300,8 +300,9 @@ describe('the CLI logger', () => {
     return lines;
   }
 
-  it('without --verbose: warn and error only', () => {
+  it('without --verbose: from info — no debug line', () => {
     expect(written(false)).toEqual([
+      '[info] an info line {"n":1}',
       '[warn] a warn line',
       '[error] an error line',
     ]);
@@ -319,6 +320,7 @@ describe('the CLI logger', () => {
   it('no environment variable changes its level', () => {
     Object.assign(process.env, DEBUG_ENVIRONMENT);
     expect(written(false)).toEqual([
+      '[info] an info line {"n":1}',
       '[warn] a warn line',
       '[error] an error line',
     ]);
