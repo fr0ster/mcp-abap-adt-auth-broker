@@ -1045,13 +1045,15 @@ describe('getProvider — the SAML grants', () => {
       expect(held()).toEqual({
         sessionCookies: COOKIES,
         expiresAt: expect.any(Number),
+        // SAML has no refresh token: '' clears any the store holds (§5.2).
+        refreshToken: '',
         issuedFor: FOR,
         issuedBy: acsBy(),
       });
       expect(held()?.expiresAt).toBeGreaterThan(Date.now());
     });
 
-    it('writes the cookies as cookies, with expiresAt and the binding — nothing else', async () => {
+    it('writes the cookies as cookies, with expiresAt, refreshToken "" and the binding — nothing else', async () => {
       const { broker, store } = samlBroker('saml2_pure');
 
       await (await broker.getProvider(D)).prepare();
@@ -1065,8 +1067,10 @@ describe('getProvider — the SAML grants', () => {
         'expiresAt',
         'issuedBy',
         'issuedFor',
+        'refreshToken',
         'sessionCookies',
       ]);
+      expect(written.refreshToken).toBe('');
       expect(store.setConnectionConfig).not.toHaveBeenCalled();
       expect(store.setAuthorizationConfig).not.toHaveBeenCalled();
     });

@@ -139,7 +139,8 @@ describe('own keys of what the token API hands out and writes', () => {
       'expiresAt',
       'issuedBy',
       'issuedFor',
-      'refreshToken=undefined',
+      // Always stated: the result's refresh token, or '' (§5.5).
+      'refreshToken',
     ]);
   });
 
@@ -176,7 +177,8 @@ describe('own keys of what the token API hands out and writes', () => {
       'expiresAt',
       'issuedBy',
       'issuedFor',
-      'refreshToken=undefined',
+      // Always stated: the result's refresh token, or '' (§5.5).
+      'refreshToken',
     ]);
   });
 });

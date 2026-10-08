@@ -773,7 +773,8 @@ describe('the token API factory beside a strategy', () => {
         certificateStrategy,
       );
       const session = await store.loadSession(D);
-      expect(session).not.toHaveProperty('issuedFor');
+      // Written as '' — no resource — never left to the merge (§5.2).
+      expect(session?.issuedFor).toBe('');
       expect(session?.issuedBy).toBe(certClientRecord());
 
       const call = await factoryCall(
@@ -804,7 +805,7 @@ describe('the token API factory beside a strategy', () => {
       });
       await broker.refreshToken(D);
       await broker.flush();
-      expect((await store.loadSession(D))?.refreshToken).toBeUndefined();
+      expect((await store.loadSession(D))?.refreshToken).toBe('');
     });
 
     it('no client identity: a session stating neither resource nor issuer is not bound', async () => {
@@ -974,7 +975,7 @@ describe('a session obtained for another client, on the strategy path', () => {
       expect(JSON.stringify(callB)).not.toContain(tokenA);
       expect(JSON.stringify(callB)).not.toContain('refresh-of-A');
       expect(held()?.authorizationToken).toBe(tokenB);
-      expect(held()?.refreshToken).toBeUndefined();
+      expect(held()?.refreshToken).toBe('');
       expect(JSON.stringify(held())).not.toContain('refresh-of-A');
 
       // The next broker for B: nothing seeds it — not even B's own secret,
@@ -1013,10 +1014,10 @@ describe('a session obtained for another client, on the strategy path', () => {
       expect(call[2]).not.toHaveProperty(key);
     }
     expect(call[3]).not.toHaveProperty('refreshToken');
-    expect(held()?.refreshToken).toBeUndefined();
+    expect(held()?.refreshToken).toBe('');
   });
 
-  it("without a strategy 4.0.0 stays: A's access token seeds B and A's refresh token is carried into B's secret", async () => {
+  it("without a strategy the factory is still seeded as 4.0.0, but A's refresh token is never written into B's secret: B's result has none, so '' is written (D5)", async () => {
     const { store, held } = secretSessions();
     const tokenA = jwtExpiringIn(3600, { jti: 'A' });
     await tokenApi(
@@ -1037,7 +1038,7 @@ describe('a session obtained for another client, on the strategy path', () => {
       expect.objectContaining({ authorizationToken: tokenA }),
     );
     expect(callB[1]?.refreshToken).toBe('refresh-of-A');
-    expect(held()?.refreshToken).toBe('refresh-of-A');
+    expect(held()?.refreshToken).toBe('');
   });
 
   it("a session store holding its own client: on the strategy path no refresh token reaches the factory — neither the client read's nor the session's, whatever its record", async () => {

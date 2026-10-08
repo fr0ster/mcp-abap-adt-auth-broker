@@ -291,6 +291,7 @@ describe('AuthBroker', () => {
       expect(lastWrite(sessionStore)).toEqual({
         sessionCookies: 'MYSAPSSO2=abc',
         expiresAt: 1_900_000_000_000,
+        refreshToken: '',
         issuedFor: SERVICE_URI,
         issuedBy: INSTANCE_BY,
       });
@@ -317,6 +318,7 @@ describe('AuthBroker', () => {
       // A factory is handed the client: the issuer it is bound to.
       expect(lastWrite(sessionStore)).toEqual({
         authorizationToken: 'cached-token',
+        refreshToken: '',
         issuedFor: SERVICE_URI,
         issuedBy: KEY_ISSUER,
       });
@@ -335,6 +337,7 @@ describe('AuthBroker', () => {
 
       expect(lastWrite(sessionStore)).toEqual({
         authorizationToken: 'cached-token',
+        refreshToken: '',
         issuedFor: SERVICE_URI,
         issuedBy: INSTANCE_BY,
       });
@@ -408,7 +411,7 @@ describe('AuthBroker', () => {
       expect(everythingWritten(sessionStore)).not.toContain('uaaClientSecret');
     });
 
-    it('carries the stored refresh token forward when the result has none — wherever the stored session is bound, as the provider was seeded with it', async () => {
+    it('writes refreshToken "" when the result has none: the stored one is never carried (D5)', async () => {
       const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL }, null, {
         refreshToken: 'stored-refresh',
         issuedFor: 'https://elsewhere.example.com:443',
@@ -423,10 +426,11 @@ describe('AuthBroker', () => {
 
       expect(lastWrite(sessionStore)).toEqual({
         authorizationToken: 'cached-token',
-        refreshToken: 'stored-refresh',
+        refreshToken: '',
         issuedFor: SERVICE_URI,
         issuedBy: INSTANCE_BY,
       });
+      expect(everythingWritten(sessionStore)).not.toContain('stored-refresh');
     });
 
     it('writes after every call, cache hits included', async () => {
@@ -805,6 +809,7 @@ describe('AuthBroker', () => {
       // Bound to what the provider was handed: the session's URL and client.
       expect(lastWrite(sessionStore)).toEqual({
         authorizationToken: 'cached-token',
+        refreshToken: '',
         issuedFor: `${SERVICE_URI}?sap-client=200`,
         issuedBy: record(
           'provider/-',

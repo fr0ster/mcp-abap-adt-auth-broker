@@ -77,6 +77,7 @@ import {
   type RowClient,
   samlProvider,
   samlRefusal,
+  seededRefreshToken,
   sncProvider,
   statedAuthType,
   statedGrant,
@@ -318,20 +319,26 @@ interface SecretWrite {
   /** Fixed when the credential arrived, never when a retry writes it. */
   expiresAt: number | undefined;
   /**
-   * A string: write it. `null`: clear the stored one. `undefined`: the
-   * result carried none — see `carry`.
+   * The refresh token written beside the credential, decided when the write
+   * was submitted — the one its build owns, or `''`, which clears the stored
+   * one — never read from the store at write time (§5.2).
    */
-  refreshToken: string | null | undefined;
+  refreshToken: string;
   binding: Binding;
-  /**
-   * Which stored refresh token a result without one carries forward: only one
-   * bound where this secret is (`bound`: the providers the broker builds, and
-   * a consumer's factory beside a `clientAuthentication` strategy — a secret
-   * is reused only where it is bound), or whichever the session holds (`any`:
-   * a consumer's provider without a strategy, which the token API seeds with
-   * it whatever its binding, as 3.x did).
-   */
-  carry: 'bound' | 'any';
+}
+
+/**
+ * The refresh token a build owns, after one reported refresh token (§5.2): a
+ * string written makes it owned; `null` (a discard) writes `''` and makes it
+ * none; `undefined` writes the owned one, or `''` when the build owns none.
+ */
+function ownedAfter(
+  owned: string | undefined,
+  reported: string | null | undefined,
+): { written: string; owned: string | undefined } {
+  if (present(reported)) return { written: reported, owned: reported };
+  if (reported === null) return { written: '', owned: undefined };
+  return { written: owned ?? '', owned };
 }
 
 /**
@@ -346,12 +353,6 @@ interface SecretWrite {
 interface ConsumerBuilt {
   provider: IRefreshableTokenProvider;
   binding: Binding;
-  /**
-   * `any` as 4.0.0 (the provider was seeded with whatever the session held);
-   * `bound` on the strategy path, whose provider was seeded only with a
-   * session bound to this resource and client identity.
-   */
-  carry: 'bound' | 'any';
 }
 
 /** A provider `getProvider` built that obtains tokens: a token provider. */
@@ -451,12 +452,11 @@ function checked(
 /** A token write of the provider's persistence: the report's own facts. */
 function persisted(
   tokens: PersistedTokens,
-): Pick<SecretWrite, 'credential' | 'cookies' | 'expiresAt' | 'refreshToken'> {
+): Pick<SecretWrite, 'credential' | 'cookies' | 'expiresAt'> {
   return {
     credential: tokens.authorizationToken,
     cookies: tokens.tokenType === 'saml',
     expiresAt: tokens.expiresAt,
-    refreshToken: tokens.refreshToken,
   };
 }
 
@@ -703,7 +703,7 @@ export class AuthBroker {
       () => this.sessionStore.getConnectionConfig(destination),
     );
     const serviceUrl = await this.resolveServiceUrl(destination, connConfig);
-    const { provider, binding, carry } = await this.consumerProviderFor(
+    const { provider, binding } = await this.consumerProviderFor(
       destination,
       serviceUrl,
       connConfig,
@@ -716,11 +716,10 @@ export class AuthBroker {
       credential: result.authorizationToken,
       cookies: result.tokenType === 'saml',
       expiresAt: expiryOf(result),
-      refreshToken: present(result.refreshToken)
-        ? result.refreshToken
-        : undefined,
+      // The result is authoritative: no refresh token in it writes `''` — the
+      // store merges, and the stored one is never carried (§5.5).
+      refreshToken: present(result.refreshToken) ? result.refreshToken : '',
       binding,
-      carry,
     });
     if (!outcome.landed && this.onWriteFailure === 'fail') {
       throw new AuthProviderFailure(
@@ -760,7 +759,6 @@ export class AuthBroker {
         return {
           provider,
           binding: consumerBinding(row, serviceUrl, sapClient, null),
-          carry: 'any',
         };
       }
       const read = await this.readAuthorization(destination);
@@ -773,7 +771,6 @@ export class AuthBroker {
       let built: IRefreshableTokenProvider;
       let client: IAuthorizationConfig | null;
       let binding: Binding;
-      let carry: ConsumerBuilt['carry'];
       if (strategic) {
         // The strategy's answer and the client identity, resolved before the
         // factory; the factory called inside the same guard: a throw is fixed
@@ -800,7 +797,6 @@ export class AuthBroker {
         // carries — another process may have written between the two reads —
         // else only the means seed the provider.
         const seed = strategySeed(connConfig, binding, serviceUrl);
-        carry = 'bound';
         const refreshToken = client ? client.refreshToken : boundRefreshToken;
         const fourth: TokenProviderClient = {
           clientAuthentication: strategic.clientAuthentication,
@@ -825,7 +821,6 @@ export class AuthBroker {
         // 4.0.0: the stored secret and refresh token carried over as read.
         client = composeAuthorization(read, storedRefreshTokenOf(read.session));
         binding = consumerBinding(row, serviceUrl, sapClient, client);
-        carry = 'any';
         built = provider(destination, client, {
           ...(connConfig ?? {}),
           serviceUrl,
@@ -838,7 +833,7 @@ export class AuthBroker {
           connConfig?.authorizationToken || connConfig?.sessionCookies
         ),
       });
-      return { provider: built, binding, carry };
+      return { provider: built, binding };
     });
     this.consumerBuilt.set(destination, build);
     build.catch(() => {
@@ -1207,14 +1202,20 @@ export class AuthBroker {
                 this.sessionStore.loadSession(destination),
               );
         const secret = this.boundOrDiscarded(destination, stored, binding);
+        // The refresh token this build owns: the one it was seeded with from
+        // the checked session, then whatever each of its writes made of it —
+        // never one read from the store at write time (§5.2, §6.2).
+        let owned = seededRefreshToken(grant, secret);
         // The provider's persistence writes through here: resolved when the
         // write landed, rejected with the store's error when it did not —
         // refreshStatePersistence then does what onWriteFailure says.
         const write = async (tokens: PersistedTokens): Promise<void> => {
+          const next = ownedAfter(owned, tokens.refreshToken);
+          owned = next.owned;
           const outcome = await this.writer.submit(destination, {
             ...persisted(tokens),
+            refreshToken: next.written,
             binding,
-            carry: 'bound',
           });
           if (!outcome.landed) throw outcome.error;
         };
@@ -1371,25 +1372,24 @@ export class AuthBroker {
   }
 
   /**
-   * One write of the destination's session secret — and nothing else:
-   * `{ authorizationToken, expiresAt, refreshToken, issuedFor, issuedBy }` in
-   * one `saveSession` — or, for `saml2_pure`'s cookies (`tokenType: 'saml'`),
-   * `{ sessionCookies, expiresAt, issuedFor, issuedBy }`. No means is ever
-   * written: not `serviceUrl`, not `authType`, not the client — they live in
-   * the key store, which the broker never writes.
+   * One write of the destination's session secret — and nothing else — in one
+   * `saveSession`, built from the write alone: the store merges, so every
+   * field that must not survive from an earlier write is stated (§5.2).
    *
+   * - A credential: `{ authorizationToken, expiresAt, refreshToken, issuedFor,
+   *   issuedBy }`, or for `saml2_pure`'s cookies (`tokenType: 'saml'`)
+   *   `{ sessionCookies, expiresAt, refreshToken: '', issuedFor, issuedBy }` —
+   *   SAML has no refresh token, and one stored beside earlier cookies or a
+   *   token is not this credential's.
+   * - `refreshToken`: decided when the write was submitted — the build's own,
+   *   or `''`, the store's clearing operation. The store is never read here.
+   * - `issuedFor` / `issuedBy`: the binding fixed when the provider was built,
+   *   `issuedFor` written as `''` when the means lack its source — never left
+   *   out, so no earlier binding survives beside a new credential.
    * - A write that holds no credential (a refresh token discarded before any
    *   was held) writes only `refreshToken: ''`: the stored credential keeps
-   *   its own binding and loses its refresh token.
+   *   its own binding — never re-labelled — and loses its refresh token.
    * - `expiresAt`: fixed when the credential arrived.
-   * - `refreshToken`: a string is written; `null` (discarded) is written as
-   *   `''`, the store's clearing operation; `undefined` carries the one the
-   *   session holds, read at write time — for a provider the broker built,
-   *   only a stored one bound where this one is. A consumer's provider
-   *   without a strategy was seeded with whatever the session held, so
-   *   whatever it holds is carried (4.0.0).
-   * - `issuedFor` / `issuedBy`: the binding computed when the provider was
-   *   built, each left out when the means lack its source.
    * - A destination the key store now states as `basic` or `snc` is not
    *   written: those obtain no session secret.
    */
@@ -1397,7 +1397,7 @@ export class AuthBroker {
     destination: string,
     write: SecretWrite,
   ): Promise<void> {
-    const { binding, carry } = write;
+    const { binding } = write;
     const serviceKeyStore = this.serviceKeyStore;
     const means = serviceKeyStore
       ? await this.read(destination, 'means', () =>
@@ -1418,38 +1418,16 @@ export class AuthBroker {
       this.logger.info(`[AuthBroker] Refresh token cleared for ${destination}`);
       return;
     }
-    let secret: IConfig;
-    if (write.cookies) {
-      // saml2_pure: the cookies are the credential, and SAML has no refresh
-      // token to carry.
-      secret = asContract<IConfig>({
-        sessionCookies: write.credential,
-        expiresAt: write.expiresAt,
-      });
-    } else {
-      let refreshToken: string | undefined;
-      if (typeof write.refreshToken === 'string') {
-        refreshToken = write.refreshToken;
-      } else if (write.refreshToken === null) {
-        refreshToken = '';
-      } else {
-        const stored = await this.read(destination, 'session', () =>
-          this.sessionStore.loadSession(destination),
-        );
-        refreshToken =
-          present(stored?.refreshToken) &&
-          (carry === 'any' || boundHere(stored, binding))
-            ? stored.refreshToken
-            : undefined;
-      }
-      secret = asContract<IConfig>({
-        authorizationToken: write.credential,
-        expiresAt: write.expiresAt,
-        refreshToken,
-      });
-    }
-    if (binding.issuedFor !== undefined) secret.issuedFor = binding.issuedFor;
-    if (binding.issuedBy !== undefined) secret.issuedBy = binding.issuedBy;
+    const secret = asContract<IConfig>({
+      ...(write.cookies
+        ? { sessionCookies: write.credential }
+        : { authorizationToken: write.credential }),
+      expiresAt: write.expiresAt,
+      // saml2_pure: the cookies are the credential, and SAML has none.
+      refreshToken: write.cookies ? '' : write.refreshToken,
+      issuedFor: binding.issuedFor ?? '',
+      issuedBy: binding.issuedBy,
+    });
     await this.sessionStore.saveSession(destination, secret);
     this.logger.info(`[AuthBroker] Session secret saved for ${destination}`, {
       credential: write.cookies ? 'cookies' : 'token',

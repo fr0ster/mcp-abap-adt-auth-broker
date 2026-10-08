@@ -667,7 +667,7 @@ describe('persistence through onTokens', () => {
     expect(store.deleteSession).not.toHaveBeenCalled();
   });
 
-  it('carries the stored refresh token forward when the result has none', async () => {
+  it('a build that owns no refresh token writes "" — a stored one, even bound here, is not carried', async () => {
     const { broker, held } = brokerFor('client_credentials', {
       session: bound({ refreshToken: 'kept-rt' }, 'client_credentials'),
     });
@@ -677,7 +677,7 @@ describe('persistence through onTokens', () => {
     expect(held()).toEqual({
       authorizationToken: endpoint.issued[0],
       expiresAt: expect.any(Number),
-      refreshToken: 'kept-rt',
+      refreshToken: '',
       issuedFor: FOR,
       issuedBy: by('client_credentials'),
     });

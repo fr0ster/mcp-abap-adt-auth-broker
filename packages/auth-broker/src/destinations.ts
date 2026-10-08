@@ -718,6 +718,24 @@ export function uaaProvider(row: UaaRow): IAuthProvider {
       ),
   );
 }
+
+/**
+ * The refresh token a build of `grant` is seeded with from `secret` — the one
+ * `tokenSeed` hands its provider — or `undefined`: none stored, or a grant
+ * whose provider takes none (`client_credentials` obtains none, `saml2_pure`
+ * holds cookies). This is the refresh token the build owns at its start
+ * (§5.2); `secret` is the checked session, `null` when it is not bound here.
+ */
+export function seededRefreshToken(
+  grant: TokenGrant,
+  secret: IConfig | null,
+): string | undefined {
+  if (grant === 'client_credentials' || grant === 'saml2_pure') {
+    return undefined;
+  }
+  return tokenSeed(secret).refreshToken;
+}
+
 /** The seed of a token provider: the stored token, its refresh token and expiry. */
 function tokenSeed(secret: IConfig | null): {
   accessToken?: string | undefined;

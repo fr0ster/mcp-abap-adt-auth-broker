@@ -439,9 +439,10 @@ describe.each(['authorization_code', 'passcode'] as const)(
           authorizationToken: endpoint.issued[0]!,
           expiresAt: expect.any(Number),
           refreshToken: 'refresh-1',
+          // Stated even when the means lack its source: '' (§5.2).
+          issuedFor: noResource ? '' : FOR,
           issuedBy: by(grant),
         };
-        if (!noResource) expected.issuedFor = FOR;
         expect(held()).toEqual(expected);
       });
     });
@@ -590,13 +591,15 @@ describe('persist writes the binding with every secret, and nothing else', () =>
     expect(written).toEqual({
       authorizationToken: endpoint.issued[0],
       expiresAt: expect.any(Number),
-      refreshToken: undefined,
+      // client_credentials obtains none, so the build owns none: '' clears
+      // whatever the merging store holds (§5.2).
+      refreshToken: '',
       issuedFor: FOR,
       issuedBy: by('client_credentials'),
     });
   });
 
-  it('a field whose source the means lack is not written at all', async () => {
+  it('a field whose source the means lack is written as "": no earlier binding survives the merge', async () => {
     const conn = means('client_credentials');
     delete conn.serviceUrl;
     const { broker: b, store } = broker('client_credentials', null, { conn });
@@ -608,11 +611,11 @@ describe('persist writes the binding with every secret, and nothing else', () =>
       string,
       Record<string, unknown>,
     ];
-    expect('issuedFor' in written).toBe(false);
+    expect(written.issuedFor).toBe('');
     expect(written.issuedBy).toBe(by('client_credentials'));
   });
 
-  it('carries a stored refresh token forward only when it is bound here', async () => {
+  it('never carries a stored refresh token, even one bound here: client_credentials owns none', async () => {
     const { broker: b, held } = broker('client_credentials', {
       refreshToken: 'bound-rt',
       issuedFor: FOR,
@@ -622,7 +625,7 @@ describe('persist writes the binding with every secret, and nothing else', () =>
     await (await b.getProvider(D)).prepare();
     await b.flush();
 
-    expect(held()?.refreshToken).toBe('bound-rt');
+    expect(held()?.refreshToken).toBe('');
   });
 
   it.each([
@@ -660,7 +663,7 @@ describe('persist writes the binding with every secret, and nothing else', () =>
       await b.flush();
 
       expect(held()?.authorizationToken).toBe(endpoint.issued[0]);
-      expect(held()?.refreshToken).toBeUndefined();
+      expect(held()?.refreshToken).toBe('');
       expect(JSON.stringify(held())).not.toContain('foreign-rt');
     },
   );
