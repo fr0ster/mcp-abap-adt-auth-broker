@@ -411,7 +411,10 @@ and every token API call throw `DestinationConfigError(['onWriteFailure'])`;
    `refreshToken` ask "is the destination's last write pending" **twice: on
    entry, and once more right before they return success** — a write an
    already-held provider queued meanwhile (a discard its store rejected, say)
-   is caught by the second check. Each time the answer is yes, the call
+   is caught by the second check. "Pending" means not yet landed: failed,
+   in flight, or queued (ruled 2026-10-08 after Task 6's review) — each check
+   awaits every write of the destination queued before it, and a write
+   submitted after the check is not this call's. Each time the answer is yes, the call
    retries that write (it is the destination's next write, queued like any
    other, awaited and raced against the call's signal): it lands → the call
    goes on (on entry) or returns (at the end); it fails → the call rejects
