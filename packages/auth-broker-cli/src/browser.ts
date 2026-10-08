@@ -31,6 +31,7 @@ import {
   windowsDefaultBrowser,
 } from '@mcp-abap-adt/auth-providers';
 import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
+import { UsageError } from './subcommandArgs';
 
 /** The names `--browser` (and a `--config` file's `browser`) take. */
 export const BROWSER_NAMES = [
@@ -73,7 +74,7 @@ export const SHIPPED_BROWSERS: BrowserFactories = {
 };
 
 /** A browser choice this platform cannot honour: a usage error naming the flag. */
-export class BrowserUsageError extends Error {
+export class BrowserUsageError extends UsageError {
   constructor(message: string) {
     super(message);
     this.name = 'BrowserUsageError';

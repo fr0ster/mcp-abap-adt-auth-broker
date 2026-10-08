@@ -120,13 +120,22 @@ export interface McpAuthContext {
    * `--redirect-port`. Not called for `--credential`.
    */
   authorization: (options: McpAuthOptions) => AuthorizationStrategy;
+  /** The platform the browser is mapped for; `process.platform` when absent. */
+  platform?: string | undefined;
 }
 
 /** Runs `mcp-auth`; resolves the exit code. Usage errors exit the process. */
 export async function runMcpAuth(
   options: McpAuthOptions,
-  { workDir, authorization }: McpAuthContext,
+  { workDir, authorization, platform }: McpAuthContext,
 ): Promise<number> {
+  // The browser is mapped only for the login that opens one — the
+  // authorization code login — and then before anything is read or written:
+  // a name this platform has no launcher for is a usage error, never a
+  // guess. `--credential` opens none, so nothing is mapped or refused.
+  if (!options.credential) {
+    mcpAuthBrowser(options, platform ?? process.platform);
+  }
   const certificateFiles = clientAuthFlags(options);
   const resolvedOutputPath = path.resolve(options.outputFile);
   const resolvedEnvPath = options.envFilePath

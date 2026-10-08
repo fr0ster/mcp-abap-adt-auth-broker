@@ -543,15 +543,6 @@ function showHelp(subcommand: Subcommand | undefined): void {
 
 /** `mcp-auth [auth-code]`: the authorization code or client credentials login. */
 async function runAuthCode(options: McpAuthOptions): Promise<number> {
-  // The browser for this platform, before anything is read or written: a
-  // name this platform has no launcher for is a usage error, never a guess.
-  try {
-    mcpAuthBrowser(options);
-  } catch (error) {
-    // BrowserUsageError: fixed words naming the flag.
-    console.error(`❌ ${(error as Error).message}`);
-    return 1;
-  }
   // Removed on any exit, error and signal included: it holds the secret.
   const workDir = createWorkDir('mcp-auth');
   return runMcpAuth(options, {
@@ -604,6 +595,11 @@ main().then(
   // Exit explicitly to close any open handles (e.g., OAuth callback server)
   (code) => process.exit(code),
   (error: unknown) => {
+    if (isUsageError(error)) {
+      // Fixed words naming the flag: no stack.
+      console.error(`❌ ${error.message}`);
+      process.exit(1);
+    }
     const message = error instanceof Error ? error.message : String(error);
     console.error(`❌ Error: ${message}`);
     if (error instanceof Error && error.stack) {

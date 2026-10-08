@@ -1018,3 +1018,42 @@ describe('a service key that is not JSON', () => {
     },
   );
 });
+
+describe('the browser is mapped only for a login that opens one', () => {
+  it('--credential on a platform with no launcher runs: no browser is opened, so none is refused', async () => {
+    server.answer('/oauth/token', tokenAnswer('cc', false));
+    for (const browser of ['auto', 'chrome']) {
+      fs.rmSync(outDir, { recursive: true, force: true });
+      await expect(
+        runMcpAuth(
+          options({ serviceKeyPath: abapKey(), credential: true, browser }),
+          {
+            workDir,
+            platform: 'freebsd',
+            authorization: () => {
+              throw new Error('no login expected');
+            },
+          },
+        ),
+      ).resolves.toBe(0);
+      expect(fs.existsSync(path.join(outDir, `${DEST}.env`))).toBe(true);
+    }
+  });
+
+  it('the authorization code login there is refused before anything is read or written', async () => {
+    await expect(
+      runMcpAuth(options({ serviceKeyPath: abapKey(), browser: 'auto' }), {
+        workDir,
+        platform: 'freebsd',
+        authorization: () => {
+          throw new Error('no login expected');
+        },
+      }),
+    ).rejects.toThrow(
+      '--browser auto has no launcher on this platform; use --browser none',
+    );
+    expect(fs.readdirSync(workDir)).toEqual([]);
+    expect(fs.existsSync(outDir)).toBe(false);
+    expect(server.requests).toHaveLength(0);
+  });
+});

@@ -641,3 +641,46 @@ describe('a file that is not JSON', () => {
     expect(server.requests).toHaveLength(0);
   });
 });
+
+describe('the browser is mapped only for a login that opens one', () => {
+  const onFreebsd = (o: McpSsoOptions) =>
+    runMcpSso(o, { logger, workDir, platform: 'freebsd' });
+
+  it('a password login on a platform with no launcher runs, whatever --browser says', async () => {
+    server.answer('/token', tokenAnswer('pw'));
+    for (const browser of [undefined, 'auto', 'chrome']) {
+      fs.rmSync(outDir, { recursive: true, force: true });
+      await expect(
+        onFreebsd(
+          options({
+            ...form('oidc', ['--flow', 'password']),
+            clientId: 'cli',
+            clientSecret: 'cli-secret',
+            tokenEndpoint: `${server.url}/token`,
+            username: 'user',
+            password: 'pass',
+            browser,
+          }),
+        ),
+      ).resolves.toBe(0);
+    }
+  });
+
+  it('an OIDC browser login there is refused before anything is written', async () => {
+    await expect(
+      onFreebsd(
+        options({
+          ...form('oidc', ['--flow', 'browser']),
+          clientId: 'cli',
+          authorizationEndpoint: `${server.url}/authorize`,
+          tokenEndpoint: `${server.url}/token`,
+        }),
+      ),
+    ).rejects.toThrow('process.exit(1)');
+    expect(console.error).toHaveBeenCalledWith(
+      '❌ --browser auto has no launcher on this platform; use --browser none',
+    );
+    expect(fs.readdirSync(workDir)).toEqual([]);
+    expect(server.requests).toHaveLength(0);
+  });
+});

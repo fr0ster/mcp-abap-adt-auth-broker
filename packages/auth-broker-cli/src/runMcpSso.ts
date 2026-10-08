@@ -42,12 +42,14 @@ export interface McpSsoContext {
   logger: ILogger;
   /** The run's private directory (`createWorkDir`), removed by its creator. */
   workDir: string;
+  /** The platform the browser is mapped for; `process.platform` when absent. */
+  platform?: string | undefined;
 }
 
 /** Runs one of those subcommands; resolves the exit code. Usage errors exit the process. */
 export async function runMcpSso(
   options: McpSsoOptions,
-  { logger, workDir }: McpSsoContext,
+  { logger, workDir, platform }: McpSsoContext,
 ): Promise<number> {
   if (!options.outputFile) {
     console.error('❌ Missing required --output');
@@ -153,18 +155,14 @@ export async function runMcpSso(
   // when --config wasn't given.
   applyFileConfig(options, providerConfigFromFile);
 
-  // The browser the run states — from a flag or the --config file, else
-  // `auto` for a login that opens one — mapped for this platform before
+  // The browser is mapped only for a login that opens one — what the run
+  // states, from a flag or the --config file, else `auto` — and then before
   // anything else is read or written: a name this platform has no launcher
-  // for is a usage error, never a guess. A login that opens none is not
-  // refused for a default it never uses.
+  // for is a usage error, never a guess. A login that opens none maps no
+  // browser and refuses none.
   try {
-    if (
-      options.browser !== undefined ||
-      options.browserProgram !== undefined ||
-      opensBrowser(options)
-    ) {
-      ssoBrowser(options);
+    if (opensBrowser(options)) {
+      ssoBrowser(options, platform ?? process.platform);
     }
   } catch (error) {
     console.error(`❌ ${(error as Error).message}`);
