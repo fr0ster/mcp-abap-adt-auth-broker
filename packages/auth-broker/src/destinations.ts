@@ -382,14 +382,6 @@ export function handedOverProvider(
 export type TokenGrant = Exclude<DestinationGrant, 'none'>;
 
 /**
- * A token row's provider, and the refresh token the builder handed it from
- * the session — the very value in the provider's config, so what the broker
- * takes as the refresh token the build owns at its start (§5.2) is what the
- * provider was given, for every grant, and cannot drift from it:
- * `client_credentials` is handed none (its row takes no seed), `saml2_pure`
- * none (it holds cookies), and a build that started with nothing none.
- */
-/**
  * A provider that has parties (§7.2): every token provider
  * (`BaseTokenProvider.attach`) and the SNC one (`SncLogonProvider.attach`).
  */
@@ -397,6 +389,14 @@ export interface Attachable {
   attach(signal: AbortSignal): () => void;
 }
 
+/**
+ * A token row's provider, and the refresh token the builder handed it from
+ * the session — the very value in the provider's config, so what the broker
+ * takes as the refresh token the build owns at its start (§5.2) is what the
+ * provider was given, for every grant, and cannot drift from it:
+ * `client_credentials` is handed none (its row takes no seed), `saml2_pure`
+ * none (it holds cookies), and a build that started with nothing none.
+ */
 export interface RowBuild {
   /** A token provider: it has parties. */
   readonly provider: IAuthProvider & Attachable;

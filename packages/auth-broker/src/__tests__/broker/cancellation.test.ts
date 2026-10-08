@@ -474,6 +474,234 @@ describe('one resolution per (destination, path), through sharedAttempt', () => 
   });
 });
 
+// ---- a doomed attempt changes nothing -----------------------------------------
+
+describe('a doomed attempt never removes what a fresh attempt committed (§7.1, §7.4)', () => {
+  it('the row path: the doomed identity re-read answers "changed" after a fresh build was committed — the fresh provider stays cached', async () => {
+    const conn: IConnectionConfig = means('client_credentials');
+    let hold: Promise<void> | undefined;
+    const keys: jest.Mocked<IServiceKeyStore> = {
+      getServiceKey: jest.fn(async (_d: string) => null),
+      getAuthorizationConfig: jest.fn(async (_d: string) => client()),
+      getConnectionConfig: jest.fn(async (_d: string) => {
+        const held = hold;
+        hold = undefined;
+        // What the store holds when asked, answered when released.
+        const answer = { ...conn };
+        if (held) await held;
+        return answer;
+      }),
+    };
+    const renewal = jest.fn(() => refreshThenLogin());
+    const broker = new AuthBroker({
+      renewal,
+      onWriteFailure: 'fail',
+      sessionStore: sessionStore().store,
+      serviceKeyStore: keys,
+    });
+
+    const first = await broker.getProvider(D);
+    conn.serviceUrl = 'https://other.example.com'; // the means change
+    const read = gate();
+    hold = read.promise;
+    const leaving = new AbortController();
+    const doomed = rejection(broker.getProvider(D, { signal: leaving.signal }));
+    await turns();
+    leaving.abort();
+    expectAborted(await doomed);
+
+    // A fresh attempt: the means changed, so it builds and commits.
+    const fresh = await broker.getProvider(D);
+    expect(fresh).not.toBe(first);
+    expect(renewal).toHaveBeenCalledTimes(2);
+
+    // The doomed attempt's re-read now answers "changed".
+    read.open();
+    await turns();
+    expect(await broker.getProvider(D)).toBe(fresh);
+    expect(renewal).toHaveBeenCalledTimes(2);
+    // The builds stay at three: the first, the fresh one, and none after.
+    await broker.getProvider(D);
+    expect(renewal).toHaveBeenCalledTimes(2);
+  });
+
+  it('the consumer path: the same for the factory’s provider', async () => {
+    const sessions = sessionStore();
+    const factory = jest.fn(() => consumerProvider());
+    const broker = new AuthBroker({
+      onWriteFailure: 'fail',
+      sessionStore: sessions.store,
+      serviceKeyStore: keyStore(means('client_credentials')).store,
+      provider: factory,
+    });
+    let serviceUrl = SERVICE_URL;
+    let hold: Promise<void> | undefined;
+    // The consumer path's identity holds the session's serviceUrl.
+    sessions.store.getConnectionConfig.mockImplementation(async () => {
+      const held = hold;
+      hold = undefined;
+      const answer = { serviceUrl };
+      if (held) await held;
+      return answer;
+    });
+
+    await broker.getToken(D);
+    expect(factory).toHaveBeenCalledTimes(1);
+    serviceUrl = 'https://other.example.com';
+    const read = gate();
+    hold = read.promise;
+    const leaving = new AbortController();
+    const doomed = rejection(broker.getToken(D, { signal: leaving.signal }));
+    await turns();
+    leaving.abort();
+    expectAborted(await doomed);
+
+    await broker.getToken(D);
+    expect(factory).toHaveBeenCalledTimes(2);
+    const fresh = factory.mock.results[1]?.value;
+
+    read.open();
+    await turns();
+    await broker.getToken(D);
+    expect(factory).toHaveBeenCalledTimes(2);
+    expect(fresh.count).toBe(2);
+  });
+});
+
+// ---- a signal that aborts after the last wait --------------------------------
+
+/**
+ * A consumer's signal that turns aborted, without dispatching, when a
+ * listener is removed once it is armed — that is, once the wait it took part
+ * in settled: armed during the call's last wait, the abort falls between that
+ * wait and the call's answer. Armed from the start: at the first wait's end.
+ */
+function abortsAfterItsLastWait(armed = true): {
+  signal: AbortSignal;
+  arm: () => void;
+} {
+  let live = armed;
+  const signal = {
+    aborted: false,
+    reason: undefined,
+    addEventListener: () => {},
+    removeEventListener: () => {
+      if (live) signal.aborted = true;
+    },
+    dispatchEvent: () => false,
+    onabort: null,
+    throwIfAborted: () => {},
+  };
+  return {
+    signal: signal as unknown as AbortSignal,
+    arm: () => {
+      live = true;
+    },
+  };
+}
+
+describe('a signal that aborts after the last wait: never success', () => {
+  it('getProvider under continue rejects aborted and attaches nothing', async () => {
+    const attach = jest.spyOn(BaseTokenProvider.prototype, 'attach');
+    const sessions = sessionStore();
+    const { broker } = credentialsBroker(sessions, {
+      onWriteFailure: 'continue',
+    });
+    const { signal } = abortsAfterItsLastWait();
+
+    expectAborted(await rejection(broker.getProvider(D, { signal })));
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it.each(['fail', 'continue'] as const)(
+    'getToken under %s rejects aborted at its first wait’s end',
+    async (onWriteFailure) => {
+      const sessions = sessionStore();
+      const { broker } = credentialsBroker(sessions, { onWriteFailure });
+      const { signal } = abortsAfterItsLastWait();
+      expectAborted(await rejection(broker.getToken(D, { signal })));
+    },
+  );
+
+  it('getToken under continue, the row path: armed while the provider’s write runs — the last wait — rejects aborted', async () => {
+    const sessions = sessionStore();
+    const { broker } = credentialsBroker(sessions, {
+      onWriteFailure: 'continue',
+    });
+    const { signal, arm } = abortsAfterItsLastWait(false);
+    const save = sessions.store.saveSession.getMockImplementation();
+    sessions.store.saveSession.mockImplementationOnce(async (d, c) => {
+      arm();
+      await save?.(d, c);
+    });
+    expectAborted(await rejection(broker.getToken(D, { signal })));
+    expect(sessions.stored()?.authorizationToken).toBe(endpoint.issued[0]);
+  });
+
+  it('getToken under continue, the consumer path: armed while its own write runs — the last wait — rejects aborted', async () => {
+    const sessions = sessionStore();
+    const broker = new AuthBroker({
+      onWriteFailure: 'continue',
+      sessionStore: sessions.store,
+      serviceKeyStore: keyStore(means('client_credentials')).store,
+      provider: consumerProvider(),
+    });
+    const { signal, arm } = abortsAfterItsLastWait(false);
+    const save = sessions.store.saveSession.getMockImplementation();
+    sessions.store.saveSession.mockImplementationOnce(async (d, c) => {
+      arm();
+      await save?.(d, c);
+    });
+    expectAborted(await rejection(broker.getToken(D, { signal })));
+    expect(sessions.landed).toHaveLength(1);
+  });
+
+  it('the consumer path: a write whose wait never started leaves no unhandled rejection, even when the logger throws', async () => {
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', record);
+    try {
+      const sessions = sessionStore();
+      sessions.failNextSave();
+      const request = new AbortController();
+      const provider = consumerProvider();
+      const answering = provider.getTokens;
+      // The caller leaves while the provider answers: the write is queued,
+      // and its wait is refused at once.
+      provider.getTokens = async () => {
+        const result = await answering();
+        request.abort();
+        return result;
+      };
+      const throwing = {
+        info: () => {},
+        debug: () => {},
+        error: () => {},
+        warn: () => {
+          throw new Error('the logger failed');
+        },
+      };
+      const broker = new AuthBroker(
+        {
+          onWriteFailure: 'continue',
+          sessionStore: sessions.store,
+          serviceKeyStore: keyStore(means('client_credentials')).store,
+          provider,
+        },
+        throwing,
+      );
+      expectAborted(
+        await rejection(broker.getToken(D, { signal: request.signal })),
+      );
+      await turns(50);
+      expect(sessions.store.saveSession).toHaveBeenCalledTimes(1);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', record);
+    }
+  });
+});
+
 // ---- what getProvider's signal attaches -------------------------------------
 
 describe('getProvider’s signal is attached to the provider it answers', () => {

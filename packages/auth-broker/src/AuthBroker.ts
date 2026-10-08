@@ -190,6 +190,15 @@ function waitFor<T>(
   );
 }
 
+/**
+ * Rejects `aborted` when the caller's signal has aborted by now — after its
+ * last wait, before its success — through the same one implementation: a
+ * waiter that joins with an aborted signal is refused at once.
+ */
+async function stillWanted(signal: AbortSignal | undefined): Promise<void> {
+  if (signal !== undefined) await waitFor(async () => undefined, signal);
+}
+
 /** The provider a token API call is answered by, asked with the call's signal. */
 function tokenOptions(
   signal: AbortSignal | undefined,
@@ -821,6 +830,8 @@ export class AuthBroker {
     // A write queued meanwhile — a discard of the destination's provider the
     // store rejected, say — is caught here (§5.4).
     await this.settlePending(destination, signal);
+    // A signal that aborted after the last wait: never success.
+    await stillWanted(signal);
     return result.authorizationToken;
   }
 
@@ -954,6 +965,10 @@ export class AuthBroker {
       refreshToken: present(result.refreshToken) ? result.refreshToken : '',
       binding,
     });
+    // Handled here too: a wait refused at once (the signal already aborted)
+    // never awaits it, and it may still reject (a consumer logger throwing
+    // while it reports a failed write).
+    queued.catch(() => {});
     const outcome = await waitFor(() => queued, signal);
     if (outcome.written && !outcome.landed && this.onWriteFailure === 'fail') {
       throw new AuthProviderFailure(
@@ -1079,6 +1094,11 @@ export class AuthBroker {
         const cached = this.resolvedConsumer.get(destination);
         if (cached) {
           if (await cached.identity.unchanged(reads)) return cached;
+          // A doomed attempt changes nothing (§7.1): every caller left while
+          // it re-read, and a fresh attempt may have committed meanwhile —
+          // the entry is no longer this attempt's to remove. A live attempt
+          // is the slot's only one, so the entry is still the one it read.
+          if (attempt.signal.aborted) throw attempt.signal.reason;
           this.resolvedConsumer.delete(destination);
           if (instance) {
             this.instanceRefused.add(destination);
@@ -1442,6 +1462,8 @@ export class AuthBroker {
     await this.settlePending(destination, signal);
     const { provider, parties } = await this.resolveRow(destination, signal);
     await this.settlePending(destination, signal);
+    // A signal that aborted after the last wait: never success.
+    await stillWanted(signal);
     // Attached after the resolution, to the provider answered — built or
     // from the cache — so a login it starts later in a moment is aborted once
     // every session holding it has gone (§7.2). Nothing kept to detach: a
@@ -1467,6 +1489,11 @@ export class AuthBroker {
         const cached = this.resolvedRow.get(destination);
         if (cached) {
           if (await cached.identity.unchanged(reads)) return cached;
+          // A doomed attempt changes nothing (§7.1): every caller left while
+          // it re-read, and a fresh attempt may have committed meanwhile —
+          // the entry is no longer this attempt's to remove. A live attempt
+          // is the slot's only one, so the entry is still the one it read.
+          if (attempt.signal.aborted) throw attempt.signal.reason;
           // Changed: never handed out again.
           this.resolvedRow.delete(destination);
         }
