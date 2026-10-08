@@ -456,9 +456,18 @@ every answer itself, cache hits included, through the same `SessionWriter`, as
   provider wrote is never seeded into a provider `getProvider` builds, nor the
   reverse (4.x achieved one direction by writing no `issuedBy` for an
   instance).
-- **Seeds are bound-only** (§6.2): `carry: 'bound'` and `strategySeed`'s rule
-  apply to every factory build, with or without a `clientAuthentication`
-  strategy.
+- **Never seeded from the store** (ruled 2026-10-08: the package does not
+  guess what the consumer composes). The broker cannot know what a factory
+  reads from what it is handed — it may build a `password` provider from
+  `connConfig`, so a record of client and `uaaUrl` cannot say whose credential
+  a stored session is. So the consumer path — factory **and** instance — is
+  never fully stated (§6.1): the factory is handed the means and the client,
+  **never a stored secret** (no token, cookies, expiry or refresh token in
+  `authConfig`, `connConfig` or the fourth argument), and the broker never
+  carries a stored refresh token into this path's writes — it writes what the
+  provider returned, `''` when it returned none (owned refresh state, §5.2). A
+  consumer whose provider must resume after a restart composes that itself:
+  its provider's own seed and persistence.
 
 **Its own path.** The consumer's provider is resolved, cached and identified on
 the consumer path (§7.1): its own slot, its own cache entry, its own
@@ -466,8 +475,9 @@ identity (the means it was handed, the client of the `provider/…` record) and
 binding. `getProvider` never uses it and never shares its resolution — a
 destination with a `provider` option and a `getProvider` caller has two
 providers, each writing the same session with its own record (4.x's "two
-token sources" caveat, kept in the README: use one path per destination); each
-path seeds only from a session whose record is its own (§6.2).
+token sources" caveat, kept in the README: use one path per destination). Its
+writes keep the `provider/…` record, so the row path never seeds from them;
+the consumer path itself seeds from nothing.
 
 `onWriteFailure` governs this path as §5.4 says.
 
@@ -622,7 +632,7 @@ client's authentication, the assertion. Per row (the table above):
 | OIDC rows | `clientId`; the token endpoint — `oidcTokenEndpoint`, or `oidcIssuerUrl` from which it is discovered; for `oidc_authorization_code` the authorization endpoint (`oidcAuthorizationEndpoint`, or the issuer); for `device_code` the device endpoint (`oidcDeviceAuthorizationEndpoint`, or the issuer); `certUrl` as above |
 | `saml2_bearer` | `clientId`, `samlIdpSsoUrl`, and the token endpoint — `samlTokenUrl`, or `uaaUrl`; `samlAcsUrl` when stated; `certUrl` as above |
 | `saml2_pure` | `samlIdpSsoUrl` and `samlAcsUrl` (the system that sets the cookies) |
-| the consumer factory | `clientId` and `uaaUrl` of the client it was handed |
+| the consumer factory | never: the broker cannot know what the factory composes from what it is handed (ruled 2026-10-08) |
 | the consumer instance | never: it is handed no client |
 | `token_exchange` | never: its subject is a secret the record cannot hold |
 
@@ -718,8 +728,10 @@ called again for a new build.
   case of a restart, or a first build, with unchanged means. Then the token,
   cookies and expiry come from that same read (`strategySeed`), and the refresh
   token from that same read whose binding was checked
-  (`strategyAuthorization`), never from another read; 4.x's unbound carry on
-  the factory path (`composeAuthorization`, `AuthBroker.ts:341-356`) goes.
+  (`strategyAuthorization`), never from another read. This is the row path
+  only: the consumer path is never seeded (§5.5), so 4.x's seeding of the
+  factory (`composeAuthorization`, `AuthBroker.ts:341-356`, and the strategy
+  path's bound seed) goes.
 
 **A provider persists only refresh state it owns** (§5.2). Carrying a
 refresh token is a property of the build, not of record equality: a write may
@@ -736,9 +748,11 @@ store's record says.
   so a change is seen at the next call — 4.x cached a destination's provider for the
   broker's life and "picked up" a change only in a new broker.
 - **The consumer's factory** (the consumer path, its own resolution and cache
-  entry): the same — a change of its identity makes the broker call the
-  factory again, seeding it only as §6.2 allows. A change seen on one path
-  rebuilds that path's provider only.
+  entry): the same rebuild rule — its in-memory identity is everything the
+  broker hands the factory (the means and the client); a change makes the
+  broker call the factory again, and the new provider starts with nothing. It
+  is **never seeded from the store**, after a restart or otherwise (§5.5). A
+  change seen on one path rebuilds that path's provider only.
 - **The consumer's instance** cannot be rebuilt, and the identity of the
   credential it holds is unknown to the broker: after the identity it was first
   used for changes, the token API refuses the destination
@@ -987,7 +1001,8 @@ export interface ClientAuthenticationContext {
 }
 
 export type TokenProviderFactory = (destination, authConfig, connConfig, client?) => IRefreshableTokenProvider;
-// signature unchanged; authConfig.refreshToken and connConfig's secret fields carry only bound secrets (§6.2)
+// signature unchanged; it is handed the means and the client only — no stored token, cookies,
+// expiry or refresh token in authConfig, connConfig or the fourth argument (§5.5)
 
 export { DestinationConfigError, isDestinationConfigError, SessionWriteFailure };
 export type { BrokerCallOptions, TokenGrant };
@@ -1212,7 +1227,7 @@ aborted login prints "the authorization was aborted".
 | a server address the destination states changed (`uaaUrl`, `oidcIssuerUrl`, the three OIDC endpoints, `oidcAudience`, `samlIdpSsoUrl`, `samlAcsUrl`, `samlTokenUrl`, a certificate client's `certUrl`) or its client id | the stored token and refresh token are not reused: the destination **logs in once** after the change (4.x refreshed with the old refresh token at the new address, or kept its token). **Even a cosmetic change counts** — a trailing `/`, a case change, a port written out: the strings are compared exactly, so editing an endpoint's spelling costs one login |
 | an OIDC destination with explicit endpoints only (no `oidcIssuerUrl`, no `uaaUrl`) — 4.x never seeded its session | **now reused after a restart** when its means are unchanged, byte for byte: its record names its client and every endpoint (§6.1). Only a destination whose means lack the client the row authenticates, or an address its credential goes to (table in §6.1), is never seeded and logs in after every restart |
 | means changed under a running broker were picked up by a new broker | picked up at the next call: a changed identity (resource, SAP client, issuer, client, row) rebuilds the destination's provider, unseeded from a session bound elsewhere; an instance `provider` is refused for that destination until a new broker |
-| the token API's factory seeded with whatever the session held | seeded only with secrets bound to the destination; an unbound session seeds nothing and the provider logs in |
+| the token API's factory seeded with whatever the session held (`authConfig.refreshToken`, `connConfig`'s token and expiry, the fourth argument's `refreshToken`) | **handed no stored secret at all**: the means and the client only. A factory that relied on being handed the stored session to resume after a restart must compose that itself — give its provider its own persistence (e.g. `refreshStatePersistence` over a store of yours) and its own seed — or use `getProvider`'s path, whose providers the broker seeds from a matching record. The broker still writes what the provider returns, with the `provider/…` record |
 | a consumer provider's result without a refresh token kept the stored one | it clears it (`refreshToken: ''`): 6.0.0 providers return the refresh token they hold |
 | `onTokens` of the built providers | `persistence` (internal; nothing to do) |
 | `DEBUG_*` environment variables | the broker reads none; `authDebug: true` for the providers' debug line |
@@ -1382,7 +1397,7 @@ endpoint**
 - **A row that is not fully stated is never seeded.** The rows that build
   without being fully stated (every other row refuses at build without its
   client and addresses, §3.2): `saml2_pure` without `samlAcsUrl`; the token
-  API's consumer instance; a consumer factory whose stores state no client.
+  API's consumer instance; the consumer factory (never, §5.5).
   After a restart with unchanged means each logs in, the stored token or
   cookies are presented nowhere and the stored refresh token is sent nowhere;
   the resulting store state holds no refresh token.
@@ -1509,9 +1524,17 @@ endpoint**
   destination still failing; `flush({ signal })` releases its caller on abort.
 - No `onWriteFailure`: a token row and the token API refused naming it;
   `basic` built.
-- Consumer factory path: a result without a refresh token writes `''`; a
-  session not bound to the destination seeds the factory with no refresh token
-  and no token. **[break: carry the stored token]**
+- Consumer factory path: a result without a refresh token writes `''`; the
+  factory is handed no stored token, cookies, expiry or refresh token, even
+  with a session whose record matches. **[break: carry the stored token]**
+- **The consumer path is never seeded.** A factory composing an OIDC `password`
+  provider from `connConfig` obtains Alice's token and refresh token; restart
+  (fresh broker, same files) with (1) `username` changed to Bob, resource,
+  client and grant unchanged, and (2) separately the token endpoint changed,
+  and (3) nothing changed: in every case the factory's arguments hold no
+  stored token or refresh token, the new provider presents neither, and the
+  token endpoint never receives Alice's refresh token. **[break: seed the
+  factory from a matching record → red]**
 - No line and no error holds a token, a refresh token or a store message
   marker.
 
@@ -1712,7 +1735,9 @@ Recorded with date and result before the release; none runs in CI.
   before they return success — are refused while its last write is pending
   (§5.4), so no call succeeds over a discard the store rejected. The row path and the consumer path are resolved,
   cached and identified separately (§7.1), so no caller is handed the other
-  path's provider or binding.
+  path's provider or binding. The consumer path is never seeded from the store:
+  the broker cannot know what a consumer's provider composes, so it hands it no
+  stored secret (§5.5).
 - **H4 No built-in timeouts.** §7.6, §10.4; the writer has no timer — a
   failed write is retried by the next write or `flush()` — and every wait on
   the queue ends when the write settles or its owner aborts; the CLI's
@@ -1773,7 +1798,9 @@ other means beside the new binding (H3), so (b) would need (a)'s `''` there
 anyway; (c) hand the factory a
 broker-built persistence strategy to compose into its provider. *Recommended:
 (a)* — it holds the goal for every path and matches 6.0.0's `getTokens()`
-contract; (c) adds an API for little gain.
+contract; (c) adds an API for little gain. Ruled since (2026-10-08): the
+consumer path is never seeded from the store either (§5.5); a consumer that
+wants its provider to resume composes its own seed and persistence.
 
 **D6 — What "the means changed" compares, and the instance case.**
 The re-check on every call is dictated by H3; its granularity is not:
@@ -1781,7 +1808,9 @@ The re-check on every call is dictated by H3; its granularity is not:
 really changes, a new one:** the in-memory build identity is everything the
 build read, secrets included; the persisted identity is the binding with the
 row, the client, every server address as exact strings and the trust digest
-(§6.1, §6.2, D21). The options below are kept for the record:
+(§6.1, §6.2, D21). The consumer path has an in-memory identity (what the
+factory is handed) but no persisted one: it is never seeded (§5.5). The
+options below are kept for the record:
 (a) the binding plus the row (`authType`, `grantType`);
 (b) every means field
 the row reads (scopes, endpoints, trust, user and password); (c) the binding
