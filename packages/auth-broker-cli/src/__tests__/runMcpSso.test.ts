@@ -447,6 +447,7 @@ describe('mcp-sso saml2 --flow pure --cookie', () => {
       {
         sessionCookies: 'SAP_SESSIONID=abc; MYSAPSSO2=def',
         issuedFor: 'https://abap.example.com:443',
+        issuedBy: `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`,
       },
     ]);
     await expectSplit('abap');
@@ -489,6 +490,7 @@ describe('mcp-sso saml2 --flow pure --cookie, the SAP client stated in --env', (
       {
         sessionCookies: 'SAP_SESSIONID=abc',
         issuedFor: 'https://abap.example.com:443?sap-client=100',
+        issuedBy: `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`,
       },
     ]);
     const broker = new AuthBroker({

@@ -197,7 +197,7 @@ async function expectSplit(type: 'abap' | 'xsuaa') {
 }
 
 describe('mcp-auth (authorization_code)', () => {
-  it('writes jwt / authorization_code with the key client and URL; the token through the stated strategy', async () => {
+  it('writes jwt / authorization_code with the key client and URL; the token through the stated strategy; the token API’s record seeds no getProvider row', async () => {
     server.answer('/oauth/token', tokenAnswer('uaa'));
     await expect(run(options({ serviceKeyPath: abapKey() }))).resolves.toBe(0);
     expect(strategyCalls).toBe(1);
@@ -226,7 +226,15 @@ describe('mcp-auth (authorization_code)', () => {
     expect(secret?.refreshToken).toBe('uaa-refresh-1');
     await expectSplit('abap');
 
-    // The server's view: getProvider over the output reuses the token.
+    // mcp-auth writes through the token API with its own factory: the record
+    // is the consumer path's (`provider/jwt/authorization_code`), never the
+    // row's, so getProvider over the output is not seeded from it — it logs
+    // in, and the strategy below refuses.
+    expect(
+      secret?.issuedBy?.startsWith(
+        'mcp-abap-adt-binding/2;provider/jwt/authorization_code;',
+      ),
+    ).toBe(true);
     const before = server.requests.length;
     const broker = new AuthBroker({
       renewal: () => refreshThenLogin(),
@@ -242,8 +250,7 @@ describe('mcp-auth (authorization_code)', () => {
     const provider = (await broker.getProvider(DEST)) as unknown as {
       getTokens: () => Promise<{ authorizationToken: string }>;
     };
-    const reused = await provider.getTokens();
-    expect(jwtName(reused.authorizationToken)).toBe('uaa-access-1');
+    await expect(provider.getTokens()).rejects.toBeDefined();
     expect(server.requests.length).toBe(before);
   });
 
@@ -601,7 +608,7 @@ describe('mcp-auth --client-auth', () => {
       expect(pemCopies()).toEqual([]);
     });
 
-    it('authorization_code: the code exchanged at certurl with the certificate; --env renews with the stored refresh token; a fresh broker over the output reuses the token', async () => {
+    it('authorization_code: the code exchanged at certurl with the certificate; beside the strategy the token API is never seeded — an --env rerun logs in again, and a fresh getProvider broker over the output does not reuse the token', async () => {
       certServer.answer('/oauth/token', tokenAnswer('x509'));
       const o = options({
         serviceKeyPath: x509Key(),
@@ -627,20 +634,21 @@ describe('mcp-auth --client-auth', () => {
       fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
       strategyCalls = 0;
       await expect(run({ ...o, envFilePath: previous })).resolves.toBe(0);
-      expect(strategyCalls).toBe(0);
+      expect(strategyCalls).toBe(1);
       expect(certServer.requests.at(-1)?.form).toEqual(
-        expect.objectContaining({
-          grant_type: 'refresh_token',
-          refresh_token: 'x509-refresh-1',
-        }),
+        expect.objectContaining({ grant_type: 'authorization_code' }),
+      );
+      expect(JSON.stringify(certServer.requests.at(-1)?.form)).not.toContain(
+        'x509-refresh-1',
       );
       expect(certServer.requests.at(-1)?.clientCertificate).toBe(
         'mcp-auth-test-client',
       );
       expect(pemCopies()).toEqual([]);
 
-      // A fresh broker over the output builds the certificate destination and
-      // presents the stored token without a new request.
+      // A fresh getProvider broker over the output builds the row
+      // `jwt/authorization_code`: another record than the token API's, so the
+      // stored token does not seed it — it logs in, and the strategy refuses.
       const before = certServer.requests.length;
       const { keyStore, sessionStore } = storesOf('abap');
       const broker = new AuthBroker({
@@ -658,12 +666,11 @@ describe('mcp-auth --client-auth', () => {
       const provider = (await broker.getProvider(DEST)) as unknown as {
         getTokens: () => Promise<{ authorizationToken: string }>;
       };
-      const reused = await provider.getTokens();
-      expect(jwtName(reused.authorizationToken)).toBe('x509-access-2');
+      await expect(provider.getTokens()).rejects.toBeDefined();
       expect(certServer.requests).toHaveLength(before);
     });
 
-    it('--type xsuaa with no service URL: an --env rerun refreshes with the stored refresh token (Ruling 14)', async () => {
+    it('--type xsuaa with no service URL: beside the strategy an --env rerun is not seeded — it logs in again, the stored refresh token sent nowhere', async () => {
       certServer.answer('/oauth/token', tokenAnswer('x509'));
       const o = options({
         authType: 'xsuaa',
@@ -679,12 +686,9 @@ describe('mcp-auth --client-auth', () => {
       fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
       strategyCalls = 0;
       await expect(run({ ...o, envFilePath: previous })).resolves.toBe(0);
-      expect(strategyCalls).toBe(0);
-      expect(certServer.requests.at(-1)?.form).toEqual(
-        expect.objectContaining({
-          grant_type: 'refresh_token',
-          refresh_token: 'x509-refresh-1',
-        }),
+      expect(strategyCalls).toBe(1);
+      expect(JSON.stringify(certServer.requests)).not.toContain(
+        'x509-refresh-1',
       );
     });
 
