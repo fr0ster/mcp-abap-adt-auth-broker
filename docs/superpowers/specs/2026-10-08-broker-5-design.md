@@ -1069,10 +1069,21 @@ Every command builds its broker with explicit choices, in its own code (H1):
   - **`--destination <name>`: the named destination in the standard folder** —
     `<dir>/sessions/<name>.env` when it exists (handled as `--env`), else
     `<dir>/service-keys/<name>.json` (handled as `--service-key`, the session
-    then written to `<dir>/sessions/<name>.env`). `<dir>` is
-    `~/.config/mcp-abap-adt` on Unix and `Documents/mcp-abap-adt` on Windows,
-    stated in the CLI's own code and help, never guessed;
-    `--destination-dir <dir>` overrides it.
+    then written to `<dir>/sessions/<name>.env`). `<dir>`, first that is given
+    (ruled by the user, 2026-10-09):
+    1. `--destination-dir <dir>`;
+    2. the environment variable `AUTH_BROKER_PATH` — the variable the server
+       `mcp-abap-adt` already reads for the same folder, so the CLI and the
+       server see the same destinations; like the server, it may list several
+       base folders (separated by `;`, and on Unix also `:`, split by plain
+       code, never a regex): a destination is read from the first folder that
+       holds it, and a new session is written to the first folder;
+    3. the standard folder: `~/.config/mcp-abap-adt` on Unix,
+       `Documents/mcp-abap-adt` under the user's home on Windows — stated in
+       the CLI's own code and help, never guessed.
+    This location variable is the one environment variable the CLI reads; its
+    log level and `--auth-debug` are still never taken from the environment
+    (D17).
 - `onWriteFailure: 'fail'` — a command exits 1 and writes no output unless the
   secret landed; it calls `flush()` before copying the output, as 2.x. **(D20)**
 - `authDebug: true` only with `--auth-debug` (§10.7).
@@ -2065,5 +2076,5 @@ works on the session file at that path (it holds the means): reuse a valid
 bound token, refresh an expired one, else log in, written back. `--destination
 <name>` takes the named destination from the standard folder (the session file
 if present, else the service key; folder stated per platform,
-`--destination-dir` to override). One source per run. This replaces the Task 9
+`--destination-dir`, then `AUTH_BROKER_PATH`, then the standard folder). One source per run. This replaces the Task 9
 ruling and the earlier drafts of D25.
