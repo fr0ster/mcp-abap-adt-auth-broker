@@ -100,6 +100,7 @@ import {
   uaaProvider,
   uaaRefusal,
 } from './destinations';
+import { quietLogger } from './quietLogger';
 import { SessionWriter, type WriteOutcome } from './SessionWriter';
 
 /**
@@ -118,13 +119,6 @@ import type {
   IServiceKeyStore,
   ISessionStore,
 } from './stores/interfaces';
-
-const noOpLogger: ILogger = {
-  info: () => {},
-  error: () => {},
-  warn: () => {},
-  debug: () => {},
-};
 
 /** What a caller of `getProvider`, the token API and `flush()` may pass (§7). */
 export interface BrokerCallOptions {
@@ -370,6 +364,16 @@ export interface AuthBrokerConfig {
    * of the token API; no default.
    */
   onWriteFailure?: 'fail' | 'continue' | undefined;
+  /**
+   * Passed to every token provider the broker builds; on only for `true`
+   * itself — absent, `false`, `'true'` or `1` is off. Never read from the
+   * environment. With it, a provider's one debug line for a refused token
+   * request names the request's secrets in its prepared form (the first and
+   * last four characters around a length marker), never the server's text;
+   * the line goes to the broker's logger. A consumer's `provider` — an
+   * instance or what a factory builds — keeps its own setting.
+   */
+  authDebug?: boolean | undefined;
 }
 
 /** The session secret's fields on a connection config — never means. */
@@ -675,6 +679,8 @@ export class AuthBroker {
   private readonly clientAuthentication: AuthBrokerConfig['clientAuthentication'];
   private readonly renewal: AuthBrokerConfig['renewal'];
   private readonly onWriteFailure: AuthBrokerConfig['onWriteFailure'];
+  /** `config.authDebug === true`: what every token provider it builds is told. */
+  private readonly authDebug: boolean;
   /** Every write of the session secret: one plain queue per destination. */
   private readonly writer: SessionWriter<SecretWrite>;
 
@@ -739,7 +745,11 @@ export class AuthBroker {
     this.clientAuthentication = config.clientAuthentication;
     this.renewal = config.renewal;
     this.onWriteFailure = config.onWriteFailure;
-    this.logger = logger ?? noOpLogger;
+    // Every line the broker writes, and every line of a provider it builds,
+    // goes through one guard: a consumer logger that throws or rejects
+    // changes no outcome (§8.1).
+    this.logger = quietLogger(logger);
+    this.authDebug = config.authDebug === true;
     this.writer = new SessionWriter<SecretWrite>(
       (destination, write) => this.writeSecret(destination, write),
       this.logger,
@@ -966,8 +976,8 @@ export class AuthBroker {
       binding,
     });
     // Handled here too: a wait refused at once (the signal already aborted)
-    // never awaits it, and it may still reject (a consumer logger throwing
-    // while it reports a failed write).
+    // never awaits it. It does not reject — the writer never does, and its
+    // log lines go through the quiet logger — but nothing here relies on it.
     queued.catch(() => {});
     const outcome = await waitFor(() => queued, signal);
     if (outcome.written && !outcome.landed && this.onWriteFailure === 'fail') {
@@ -1682,6 +1692,7 @@ export class AuthBroker {
           onWriteFailure: this.onWriteFailure,
           write,
           logger: this.logger,
+          authDebug: this.authDebug,
         };
         let built: RowBuild;
         if (isUaaGrant(grant)) {
@@ -1795,8 +1806,15 @@ export class AuthBroker {
   /**
    * The stored secret when it is bound to this destination's resource and
    * issuer, else `null`: the provider is then built as with no session
-   * and logs in afresh — the refresh token is not spent either. The log line
-   * names the destination only: never a URI, never a token.
+   * and logs in afresh — the refresh token is not spent either.
+   *
+   * A stored credential not taken is logged in fixed words naming the
+   * destination only — never a URI, a record or a token: a `warn` when the
+   * binding is fully stated (the secret was issued under other means — another
+   * resource, row, client, endpoint or trust, or a 4.x record), a `debug`
+   * line when it is not — a row that is never seeded by design
+   * (`token_exchange`) or whose means lack what the record needs — since that
+   * holds on every start and nothing was "discarded" by a change.
    */
   private boundOrDiscarded(
     destination: string,
@@ -1809,9 +1827,15 @@ export class AuthBroker {
       present(stored.sessionCookies) ||
       present(stored.refreshToken)
     ) {
-      this.logger.warn(
-        `[AuthBroker] ${destination}: secret bound to another resource, discarded`,
-      );
+      if (binding.fullyStated) {
+        this.logger.warn(
+          `[AuthBroker] ${destination}: the stored session secret was not issued under the destination's current means; not used, the provider obtains a new one`,
+        );
+      } else {
+        this.logger.debug(
+          `[AuthBroker] ${destination}: the destination's means do not state everything a session secret is bound to; a stored one is never used`,
+        );
+      }
     }
     return null;
   }

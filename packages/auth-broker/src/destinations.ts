@@ -423,6 +423,11 @@ export interface TokenRowOptions {
    */
   write: (tokens: PersistedTokens) => Promise<void>;
   logger: ILogger;
+  /**
+   * The consumer's `authDebug === true`, decided once by the broker: every
+   * token provider a row builds is given it (§8.2).
+   */
+  authDebug: boolean;
 }
 
 /** `onWriteFailure` as given: `'fail'` or `'continue'`, nothing else. */
@@ -680,10 +685,12 @@ export function uaaProvider(row: UaaRow): RowBuild {
     renewal: IRenewalStrategy;
     persistence: ITokenPersistence;
     clientAuthentication?: IClientAuthentication;
+    authDebug: boolean;
   } => ({
     renewal,
     persistence: persistenceFor(row),
     ...authenticatedBy(clientAuthentication),
+    authDebug: row.authDebug,
   });
 
   if (grant === 'client_credentials') {
@@ -915,6 +922,7 @@ export function oidcProvider(row: OidcRow): RowBuild {
     tokenEndpoint: stated(means.oidcTokenEndpoint),
     ...seed,
     logger: row.logger,
+    authDebug: row.authDebug,
     renewal,
     persistence: persistenceFor(row),
   });
@@ -1157,6 +1165,7 @@ export function samlProvider(row: SamlRow): RowBuild {
     assertionValidator,
     authorization,
     logger: row.logger,
+    authDebug: row.authDebug,
     renewal,
     persistence: persistenceFor(row),
   });

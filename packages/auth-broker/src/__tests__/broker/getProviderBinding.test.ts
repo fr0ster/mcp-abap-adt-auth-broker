@@ -57,7 +57,7 @@ const FOR = 'https://abap.example.com:443/sap/bc/adt?sap-client=100';
 const CLIENT_ID = 'sb-broker!t42';
 const CLIENT_SECRET = 'S3CRET-client-must-not-leak';
 const REDIRECT = 'http://localhost/callback';
-const DISCARDED = `[AuthBroker] ${D}: secret bound to another resource, discarded`;
+const DISCARDED = `[AuthBroker] ${D}: the stored session secret was not issued under the destination's current means; not used, the provider obtains a new one`;
 
 type SeededGrant = 'authorization_code' | 'passcode';
 
@@ -249,7 +249,9 @@ describe.each(['authorization_code', 'passcode'] as const)(
       expect(await bearer(provider)).toBe(STORED_TOKEN);
       expect(endpoint.requests).toEqual([]);
       expect(login.authorize).not.toHaveBeenCalled();
-      expect(allLogged(logger)).not.toContain('bound to another resource');
+      expect(allLogged(logger)).not.toContain(
+        'not issued under the destination',
+      );
     });
 
     describe('not seeded — a fresh login, nothing of the old secret used or logged', () => {
@@ -412,7 +414,9 @@ describe.each(['authorization_code', 'passcode'] as const)(
         // means; a stored issuedBy equal to the bare uaaUrl is that value.)
         expect(logger.warn.mock.calls).toEqual([[DISCARDED]]);
         const logged = allLogged(logger);
-        expect(logged.split('bound to another resource')).toHaveLength(2);
+        expect(logged.split('not issued under the destination')).toHaveLength(
+          2,
+        );
         for (const value of [
           STORED_TOKEN,
           STORED_TOKEN.split('.')[1],
@@ -537,7 +541,9 @@ describe.each(['authorization_code', 'passcode'] as const)(
         expect(await bearer(provider)).toBe(STORED_TOKEN);
         expect(endpoint.requests).toEqual([]);
         expect(login.authorize).not.toHaveBeenCalled();
-        expect(allLogged(logger)).not.toContain('bound to another resource');
+        expect(allLogged(logger)).not.toContain(
+          'not issued under the destination',
+        );
       });
     });
 

@@ -955,7 +955,9 @@ describe('a 4.x-format binding reads as unbound', () => {
       expect(JSON.stringify(endpoint.requests)).not.toContain(STORED_RT);
       expect(await bearer(provider)).toBe(endpoint.issued[0]);
       expect(log.warn.mock.calls).toEqual([
-        [`[AuthBroker] ${D}: secret bound to another resource, discarded`],
+        [
+          `[AuthBroker] ${D}: the stored session secret was not issued under the destination's current means; not used, the provider obtains a new one`,
+        ],
       ]);
     },
   );

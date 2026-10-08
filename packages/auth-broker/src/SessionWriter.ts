@@ -22,7 +22,9 @@
  *   the consumer's. The writer builds no machinery against it.
  * - **Failures are logged once each, with `logFields`** of auth-errors'
  *   classification (`persisting-tokens`) — never a message: the store holds
- *   tokens, and its errors are foreign text.
+ *   tokens, and its errors are foreign text. Each failed attempt is one
+ *   `warn` line, written here only: the row's persistence is given no logger.
+ *   A retry that fails again is a new attempt, and its own line.
  * - **`flush()`** retries every pending write once, after everything queued
  *   before it, and rejects naming the destinations still pending.
  */
@@ -78,6 +80,9 @@ export class SessionWriter<T> {
   /**
    * @param write Writes one result for a destination; throws when the store
    *   does not take it.
+   * @param logger The broker's quiet logger (`quietLogger`): a line never
+   *   throws and never rejects, so what a write came to is the store's answer
+   *   alone, and `submit` / `retry` never reject.
    */
   constructor(
     private readonly write: (destination: string, result: T) => Promise<void>,
