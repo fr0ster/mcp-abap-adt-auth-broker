@@ -685,17 +685,7 @@ describe('AuthBroker', () => {
       expect(error.facts).toEqual({ operation: 'persisting-tokens' });
     }
 
-    beforeEach(() => {
-      jest.useFakeTimers({
-        doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'],
-      });
-    });
-
-    afterEach(() => {
-      jest.useRealTimers();
-    });
-
-    it("fails getToken's caller with persisting-tokens, and the broker keeps retrying it", async () => {
+    it("fails getToken's caller with persisting-tokens; the write stays pending, and the next call retries it first", async () => {
       const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL });
       const disk = new StoreDiskError('disk full');
       sessionStore.saveSession.mockRejectedValueOnce(disk);
@@ -711,9 +701,10 @@ describe('AuthBroker', () => {
       );
       expect(sessionStore.saveSession).toHaveBeenCalledTimes(1);
 
-      await jest.advanceTimersByTimeAsync(1_000);
-
-      expect(sessionStore.saveSession).toHaveBeenCalledTimes(2);
+      // The next call retries the pending write before anything else; it
+      // lands, and the call goes on to its own write.
+      await expect(broker.getToken('DEST')).resolves.toBeDefined();
+      expect(sessionStore.saveSession).toHaveBeenCalledTimes(3);
       expect(sessionStore.saveSession.mock.calls[1]).toEqual(
         sessionStore.saveSession.mock.calls[0],
       );

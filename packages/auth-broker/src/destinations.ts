@@ -472,7 +472,8 @@ function persistenceFor(options: TokenRowOptions): ITokenPersistence {
     asContract<Parameters<typeof refreshStatePersistence>[1]>({
       // Checked by optionsLacking before any row gets here.
       onWriteFailure: options.onWriteFailure as 'fail' | 'continue',
-      logger: options.logger,
+      // No logger: the broker's writer logs every failed write once, naming
+      // the destination; the persistence's own line would repeat it.
     }),
   );
 }

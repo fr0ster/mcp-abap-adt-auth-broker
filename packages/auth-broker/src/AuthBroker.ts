@@ -5,8 +5,9 @@
  * means its service key store holds and the secret its session store holds.
  * Every token provider it builds renews through the consumer's `renewal` and
  * writes what it obtains back to the session store through auth-providers'
- * `refreshStatePersistence` — the secret alone, retried by the broker when the
- * store fails (`SessionWriter`), a failed write meaning what the consumer's
+ * `refreshStatePersistence` — the secret alone, through one plain queue per
+ * destination (`SessionWriter`): a failed write stays pending until the
+ * destination's next write or `flush()`, and means what the consumer's
  * `onWriteFailure` says; `flush()` reports what is still pending.
  * The token API (`getToken`, `refreshToken`, `createTokenRefresher`) asks that
  * same provider — the row path's — or, when the consumer gives one, the
@@ -96,6 +97,17 @@ import {
   uaaRefusal,
 } from './destinations';
 import { SessionWriter, type WriteOutcome } from './SessionWriter';
+
+/**
+ * What queuing a write came to: written (landed, or the store's error), or
+ * dropped — a retired build's write, never written (§5.3).
+ */
+type Submitted =
+  | ({ readonly written: true } & WriteOutcome)
+  | { readonly written: false };
+
+const DROPPED: Submitted = { written: false };
+
 import type {
   IAuthorizationConfig,
   IConnectionConfig,
@@ -263,8 +275,13 @@ export interface AuthBrokerConfig {
   renewal?: RenewalOption | undefined;
   /**
    * What a session write that did not land means — `'fail'`: the call that
-   * caused it fails (`unknown`, `persisting-tokens`); `'continue'`: it is
-   * logged and retried, and the call goes on. Required for every destination
+   * caused it fails (`unknown`, `persisting-tokens`), and while the
+   * destination's write is pending every `getProvider` / `getToken` /
+   * `refreshToken` of it retries the write first, and once more right before
+   * it succeeds, and is refused while it fails; `'continue'`: it is logged
+   * and the call goes on. Either way the write stays pending until the
+   * destination's next write or `flush()` — nothing retries it on its own.
+   * Required for every destination
    * that writes a secret — a token row built by `getProvider`, and every call
    * of the token API; no default.
    */
@@ -549,7 +566,7 @@ export class AuthBroker {
   private readonly clientAuthentication: AuthBrokerConfig['clientAuthentication'];
   private readonly renewal: AuthBrokerConfig['renewal'];
   private readonly onWriteFailure: AuthBrokerConfig['onWriteFailure'];
-  /** Every write of the session secret, retried on its own. */
+  /** Every write of the session secret: one plain queue per destination. */
   private readonly writer: SessionWriter<SecretWrite>;
 
   /**
@@ -642,8 +659,9 @@ export class AuthBroker {
    * A provider's failure is relayed as the same object; a store's read
    * failure reaches the caller as the store raised it. A write that did not
    * land fails the call under `onWriteFailure: 'fail'` (`unknown`,
-   * `persisting-tokens`) — the token stands and the broker keeps retrying the
-   * write — and is only logged under `'continue'`.
+   * `persisting-tokens`) — the token stands, and the write stays pending: the
+   * destination's next call retries it first and is refused while it fails —
+   * and is only logged under `'continue'`.
    *
    * @throws DestinationConfigError for a destination the key store states as
    *   `basic` or `snc`, before any provider is asked; without the
@@ -677,13 +695,36 @@ export class AuthBroker {
         'the token API writes the session secret: say what a failed write means',
       );
     }
+    await this.settlePending(destination);
     // This call's reads: the means once, for the check and the resolution.
     const reads = this.storeReads(destination);
     const means = await this.statedForTokens(destination, reads);
     const result = this.provider
       ? await this.obtainFromConsumer(destination, method, reads)
       : await this.obtainShared(destination, method, means, reads);
+    // A write queued meanwhile — a discard of the destination's provider the
+    // store rejected, say — is caught here (§5.4).
+    await this.settlePending(destination);
     return result.authorizationToken;
+  }
+
+  /**
+   * Under `onWriteFailure: 'fail'`, a call of the destination is refused while
+   * its last write is pending (§5.4): asked on entry and right before success.
+   * Pending: the write is retried — the destination's next write, queued like
+   * any other and awaited — and the call goes on once it lands, or rejects
+   * (`unknown`, `persisting-tokens`) while it fails. Under `'continue'`
+   * nothing is asked.
+   */
+  private async settlePending(destination: string): Promise<void> {
+    if (this.onWriteFailure !== 'fail') return;
+    if (!this.writer.isPending(destination)) return;
+    const outcome = await this.writer.retry(destination);
+    if (!outcome.landed) {
+      throw new AuthProviderFailure(
+        classify(outcome.error, 'persisting-tokens'),
+      );
+    }
   }
 
   /**
@@ -779,7 +820,7 @@ export class AuthBroker {
       refreshToken: present(result.refreshToken) ? result.refreshToken : '',
       binding,
     });
-    if (!outcome.landed && this.onWriteFailure === 'fail') {
+    if (outcome.written && !outcome.landed && this.onWriteFailure === 'fail') {
       throw new AuthProviderFailure(
         classify(outcome.error, 'persisting-tokens'),
       );
@@ -825,24 +866,26 @@ export class AuthBroker {
   /**
    * Queues one write of a build of `path`. A write of a build older than the
    * newest build of the same path that has queued a write for the destination
-   * is dropped — never written (§5.3); a build of the other path never
-   * retires this one.
+   * is dropped — never written, never pending (§5.3); a build of the other
+   * path never retires this one. A dropped write is not a failed one: the
+   * retired provider's holder keeps it (§6.2), and the destination's session
+   * is the newer build's.
    */
-  private submit(
+  private async submit(
     path: Path,
     destination: string,
     generation: number,
     write: SecretWrite,
-  ): Promise<WriteOutcome> {
+  ): Promise<Submitted> {
     const newest = this.newestWriter[path].get(destination) ?? 0;
     if (generation < newest) {
       this.logger.debug(
         `[AuthBroker] A replaced provider's session write for ${destination} dropped`,
       );
-      return Promise.resolve({ landed: true });
+      return DROPPED;
     }
     this.newestWriter[path].set(destination, generation);
-    return this.writer.submit(destination, write);
+    return { written: true, ...(await this.writer.submit(destination, write)) };
   }
 
   /** This call's store reads: each source read at most once. */
@@ -1236,8 +1279,11 @@ export class AuthBroker {
    * @throws DestinationConfigError when the destination lacks what its type
    *   needs — naming the fields or options, never a value.
    */
-  getProvider(destination: string): Promise<IAuthProvider> {
-    return this.resolveRow(destination).then(({ provider }) => provider);
+  async getProvider(destination: string): Promise<IAuthProvider> {
+    await this.settlePending(destination);
+    const { provider } = await this.resolveRow(destination);
+    await this.settlePending(destination);
+    return provider;
   }
 
   /**
@@ -1410,7 +1456,7 @@ export class AuthBroker {
               binding,
             },
           );
-          if (!outcome.landed) throw outcome.error;
+          if (outcome.written && !outcome.landed) throw outcome.error;
         };
         const common = {
           destination,
@@ -1556,10 +1602,12 @@ export class AuthBroker {
   }
 
   /**
-   * Waits for the session writes still pending — each gets one more attempt —
-   * and rejects naming the destinations whose store still refuses. Call it on
-   * shutdown to know whether every token a provider obtained is stored; the
-   * broker keeps retrying after a rejection.
+   * Waits for every session write queued so far and gives each pending one —
+   * a write that did not land — one more attempt; rejects naming the
+   * destinations whose store still refuses (an `AggregateError` of
+   * `SessionWriteFailure`s). Nothing retries a pending write on its own: only
+   * the destination's next write or `flush()` does, so call it on shutdown to
+   * know whether every token a provider obtained is stored.
    */
   flush(): Promise<void> {
     return this.writer.flush();

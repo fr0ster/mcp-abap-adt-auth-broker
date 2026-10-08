@@ -268,13 +268,7 @@ describe('the token API on the getProvider cache (no consumer provider)', () => 
       );
     }
 
-    beforeEach(() => {
-      jest.useFakeTimers({
-        doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'],
-      });
-    });
-
-    it("fails getToken with persisting-tokens (onWriteFailure: fail), while the provider keeps the token and the broker's retry writes it", async () => {
+    it('fails getToken with persisting-tokens (onWriteFailure: fail), while the provider keeps the token, and the next call retries the write first', async () => {
       const { broker, store, held } = clientCredentials();
       const disk = new StoreDiskError('disk full');
       store.saveSession.mockRejectedValueOnce(disk);
@@ -284,14 +278,13 @@ describe('the token API on the getProvider cache (no consumer provider)', () => 
         disk,
       );
       expect(endpoint.requests).toHaveLength(1);
-      // The token stands: the provider holds it and presents it.
-      const provider = await broker.getProvider(D);
-      await expect(bearer(provider)).resolves.toBe(endpoint.issued[0]);
       expect(held()).toBeUndefined();
-
-      await jest.advanceTimersByTimeAsync(1_000);
-
+      // The next call retries the pending write first; it lands. The token
+      // stands: the provider holds it and presents it.
+      const provider = await broker.getProvider(D);
+      expect(store.saveSession).toHaveBeenCalledTimes(2);
       expect(held()?.authorizationToken).toBe(endpoint.issued[0]);
+      await expect(bearer(provider)).resolves.toBe(endpoint.issued[0]);
       expect(endpoint.requests).toHaveLength(1);
     });
 

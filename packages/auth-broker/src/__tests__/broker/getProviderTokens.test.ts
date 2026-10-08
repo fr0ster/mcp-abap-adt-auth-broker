@@ -740,13 +740,7 @@ describe('persistence through onTokens', () => {
       writePolicy = 'fail';
     });
 
-    beforeEach(() => {
-      jest.useFakeTimers({
-        doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'],
-      });
-    });
-
-    it('does not fail the authentication, and is retried by the broker with no further call to the provider', async () => {
+    it('does not fail the authentication; the write stays pending, and flush() writes it with no further call to the provider', async () => {
       const { broker, store, held } = seeded();
       store.saveSession.mockRejectedValueOnce(new StoreDiskError('disk full'));
       const provider = await broker.getProvider(D);
@@ -754,8 +748,9 @@ describe('persistence through onTokens', () => {
       expect(await provider.rejected(UNAUTHORIZED)).toEqual({ ok: true });
       expect(await bearer(provider)).toBe(endpoint.issued[0]);
       expect(held()?.authorizationToken).not.toBe(endpoint.issued[0]);
+      expect(store.saveSession).toHaveBeenCalledTimes(1);
 
-      await jest.advanceTimersByTimeAsync(1_000);
+      await expect(broker.flush()).resolves.toBeUndefined();
 
       expect(store.saveSession).toHaveBeenCalledTimes(2);
       expect(store.saveSession.mock.calls[1]).toEqual(
@@ -763,27 +758,6 @@ describe('persistence through onTokens', () => {
       );
       expect(held()?.authorizationToken).toBe(endpoint.issued[0]);
       expect(endpoint.requests).toHaveLength(1);
-      await jest.advanceTimersByTimeAsync(600_000);
-      expect(store.saveSession).toHaveBeenCalledTimes(2);
-    });
-
-    it('retries with a growing delay: one second, doubling, capped at one minute', async () => {
-      const { broker, store } = seeded();
-      store.saveSession.mockRejectedValue(new StoreDiskError('disk full'));
-      const provider = await broker.getProvider(D);
-      await provider.rejected(UNAUTHORIZED);
-
-      const attemptsAt: number[] = [];
-      const start = Date.now();
-      store.saveSession.mockImplementation(async () => {
-        attemptsAt.push(Date.now() - start);
-        throw new StoreDiskError('disk full');
-      });
-      await jest.advanceTimersByTimeAsync(300_000);
-
-      expect(attemptsAt.slice(0, 9)).toEqual([
-        1_000, 3_000, 7_000, 15_000, 31_000, 63_000, 123_000, 183_000, 243_000,
-      ]);
     });
 
     it('logs the failure with logFields, never its message', async () => {
@@ -806,14 +780,14 @@ describe('persistence through onTokens', () => {
       expect(logged).not.toContain(CLIENT_SECRET);
     });
 
-    it('a newer result replaces the pending one: only the latest is ever written', async () => {
+    it('a newer write that lands replaces the pending one: the older is never written again', async () => {
       const { broker, store, held } = seeded();
       store.saveSession.mockRejectedValueOnce(new StoreDiskError('disk full'));
       const provider = await broker.getProvider(D);
 
       await provider.rejected(UNAUTHORIZED); // token-1: its write fails
       await provider.rejected(UNAUTHORIZED); // token-2: written
-      await jest.advanceTimersByTimeAsync(600_000);
+      await expect(broker.flush()).resolves.toBeUndefined();
 
       const written = store.saveSession.mock.calls.map(
         ([, c]) => (c as IConfig).authorizationToken,
@@ -838,7 +812,7 @@ describe('persistence through onTokens', () => {
           }
           if (sessions.length === 1) {
             sessions.push(c as IConfig);
-            // The timer's retry hangs until released.
+            // flush()'s retry hangs until released.
             await new Promise<void>((resolve) => {
               release = resolve;
             });
@@ -851,13 +825,22 @@ describe('persistence through onTokens', () => {
       });
       const provider = await broker.getProvider(D);
       await provider.rejected(UNAUTHORIZED); // token-1 fails
-      await jest.advanceTimersByTimeAsync(1_000); // retry of token-1 hangs
+      const flushed = broker.flush(); // the retry of token-1 hangs
+      while (sessions.length < 2) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
 
       const second = provider.rejected(UNAUTHORIZED); // token-2 waits its turn
-      await jest.advanceTimersByTimeAsync(10);
+      while (endpoint.issued.length < 2) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      for (let i = 0; i < 10; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
       expect(sessions).toHaveLength(2);
       release();
       expect(await second).toEqual({ ok: true });
+      await flushed;
 
       expect(most).toBe(1);
       expect(sessions.map((s) => s.authorizationToken)).toEqual([
@@ -930,33 +913,6 @@ describe('persistence through onTokens', () => {
       expect(
         (flushed?.errors[0] as SessionWriteFailure | undefined)?.destination,
       ).toBe(D);
-    });
-
-    it('the retry timer does not keep the process alive', async () => {
-      const { broker, store } = seeded();
-      const provider = await broker.getProvider(D);
-      store.saveSession.mockRejectedValueOnce(new StoreDiskError('disk full'));
-      // Only the timers started while the failed write is handled.
-      const timers: { timer: NodeJS.Timeout; ms?: number | undefined }[] = [];
-      const realSetTimeout = global.setTimeout;
-      const spy = jest.spyOn(global, 'setTimeout').mockImplementation(((
-        fn: () => void,
-        ms?: number,
-      ) => {
-        const timer = realSetTimeout(fn, ms);
-        timers.push({ timer, ms });
-        return timer;
-      }) as typeof setTimeout);
-      try {
-        await provider.rejected(UNAUTHORIZED);
-      } finally {
-        spy.mockRestore();
-      }
-
-      const retry = timers.filter(({ ms }) => ms === 1_000);
-      expect(retry).toHaveLength(1);
-      expect(retry[0]!.timer.hasRef()).toBe(false);
-      await broker.flush();
     });
   });
 });
