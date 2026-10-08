@@ -75,7 +75,11 @@ export function jwtExpiringIn(
   });
 }
 
-export async function startTokenEndpoint(): Promise<TokenEndpoint> {
+/**
+ * @param prefix Put before every token's `jti` and every refresh token, so
+ *   two endpoints of one test never issue equal values.
+ */
+export async function startTokenEndpoint(prefix = ''): Promise<TokenEndpoint> {
   const requests: TokenRequest[] = [];
   const paths: string[] = [];
   const deviceRequests: Record<string, string>[] = [];
@@ -155,7 +159,7 @@ export async function startTokenEndpoint(): Promise<TokenEndpoint> {
   function fresh(grantType: string | undefined): TokenAnswer {
     const n = issued.length + 1;
     const token = jwtExpiringIn(3600, {
-      jti: `token-${n}`,
+      jti: `${prefix}token-${n}`,
       grant_type: grantType,
     });
     issued.push(token);
@@ -167,7 +171,7 @@ export async function startTokenEndpoint(): Promise<TokenEndpoint> {
         expires_in: 3600,
         ...(grantType === 'client_credentials'
           ? {}
-          : { refresh_token: `refresh-${n}` }),
+          : { refresh_token: `${prefix}refresh-${n}` }),
       },
     };
   }
