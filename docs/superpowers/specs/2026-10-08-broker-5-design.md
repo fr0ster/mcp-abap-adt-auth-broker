@@ -370,6 +370,37 @@ writer until it lands or a newer one of the same or a newer generation replaces
 it, whether or not another report comes; `flush()` gives each pending write one
 more attempt and names the destinations still failing (§3.4).
 
+**Revisions and their outcomes** (in memory only, per destination). Every
+submission gets the next **revision** number of its destination. Each revision
+ends in exactly one outcome:
+
+| Outcome | When |
+|---|---|
+| **landed** | an attempt that wrote it succeeded |
+| **pending** | it is the writer's pending write — failed and waiting for a retry, or its attempt in flight |
+| **superseded by m** | while it was pending, a later submission m of the same or a newer generation replaced it; m carries the authoritative state (every write is built from the logical state, §5.2), so its obligation passes to m. It is **never written again** — replaying it would restore stale refresh state |
+| **dropped** | a retired generation's late submission, refused on arrival (above): it was never the destination's state and **imposes no obligation** |
+
+**Discharged:** a revision is discharged when it landed, when it is dropped,
+or when it was superseded by a revision that is discharged — a landed
+successor discharges everything it supersedes. The writer keeps, per
+destination, only the pending revision `p` and `carries(p)`: the lowest
+revision whose obligation `p` carries (itself, or the lowest revision of the
+chain it superseded). Bookkeeping:
+
+- a submission n replacing pending `p`: `carries(n) = carries(p)`; `p` becomes
+  superseded by n;
+- an older-generation submission: dropped, nothing changes;
+- an attempt that lands writing revision k: every revision ≤ k is discharged;
+  if a newer `p` is still pending (it arrived during that attempt),
+  `carries(p) = k + 1`;
+- an attempt that fails: `p` stays pending with its `carries`.
+
+So the destination's undischarged revisions are exactly `carries(p) … p`, and
+none when nothing is pending. Each revision also has a **settle signal**: the
+next attempt that settles while the revision is undischarged (it lands, or it
+fails) — what a caller waiting on its own submission is told (§5.5).
+
 ### 5.4 What a failed write means: `onWriteFailure` (Open 2; D3)
 
 ```ts
@@ -410,17 +441,20 @@ and every token API call throw `DestinationConfigError(['onWriteFailure'])`;
    handed out may commit a detached report (a discard at an abort, a late
    refresh result) whose write fails. So every broker call that is about to
    succeed — `getProvider`, `getToken`, `refreshToken` — makes one more gate
-   check at its completion point, against the writer's **submission
-   revision**: the writer counts, per destination, every submission (a
-   revision number) and records for each attempt the revision it wrote. At the
-   completion point the call reads the destination's current revision R. If
-   every write up to R has landed, the call succeeds. If a write up to R is
-   failed or still in flight, the call gives it one immediate attempt (or
-   waits for the one in flight) through the same gate slot, raced only against
-   the call's signal (§7.5), and succeeds only if every write up to R landed;
-   otherwise it rejects with §3.3's failure for that write. A write submitted
-   after R belongs to whatever comes later, not to this call. No timer: the wait
-   ends when the attempt settles or the caller aborts.
+   check at its completion point, against the writer's revisions (§5.3). At
+   the completion point the call reads the destination's latest revision R.
+   **The gate is satisfied for R when every revision ≤ R is discharged** —
+   landed, dropped, or superseded by a successor that landed (possibly a
+   revision after R: the successor carries their state, so its landing is
+   what discharges them; they are never replayed). With the writer's
+   bookkeeping: satisfied when nothing is pending, or `carries(p) > R`.
+   Otherwise the call gives the pending write `p` one immediate attempt (or
+   waits for the one in flight) through the gate slot (§7.5), raced only
+   against the call's signal: if it lands, the gate is satisfied; if it fails,
+   the call rejects with §3.3's failure for it. A revision submitted after R and
+   superseding nothing ≤ R belongs to whatever comes later, not to this call.
+   No timer: the wait ends when the attempt settles or the caller aborts. The
+   entry check (point 2) is the same test with R read on entry.
 4. **Limit, stated (D4):** a provider already handed to a connector answers its
    moments from its own state; a moment that commits nothing (a valid cached
    token presented) is not gated on an earlier outstanding write. Every moment
@@ -445,14 +479,20 @@ every answer itself, cache hits included, through the same `SessionWriter`, as
   `writer.submit` directly (`obtainFromConsumer`), so after `getTokens()`
   returned no signal could release a caller stuck in a `saveSession` or queued
   behind another write. 5.0.0 waits for the submission's attempt through a
-  per-destination slot (§7.5), raced against the call's signal: an abort
+  slot of its own (§7.5), raced against the call's signal: an abort
   releases the caller at once with auth-errors' `aborted` failure — never with
   success — under either policy, and the write runs on to completion,
   landing or failing on its own (a failure then stays pending, retried, and is
-  reported by the next gate check and `flush()`). Without an abort, under
-  `'fail'` a write that did not land rejects the call (§5.4), and under
-  `'continue'` the call returns the token once the attempt settled, whatever it
-  came to.
+  reported by the next gate check and `flush()`). **Each call waits for its
+  own submission, revision n** (§5.3), never for another call's: it waits for
+  n's settle signal — the first attempt that settles while n is undischarged,
+  whether that attempt writes n itself or a successor that superseded n.
+  Without an abort, under `'fail'` the call returns once n is discharged by a
+  landing (its own, or its successor's) and rejects with §3.3's failure if that
+  attempt failed; under `'continue'` it returns once that attempt settled,
+  whatever it came to. So a second concurrent call whose write is queued
+  behind a held one returns only after its own write — or the successor that
+  carries it — settled, and an abort releases only its own caller.
 
 - **The result's refresh token is authoritative (D5).** auth-providers 6.0.0
   returns from `getTokens()` / `refreshTokens()` the refresh token the provider
@@ -880,11 +920,15 @@ parties, or its waiters) — the broker keeps nothing alive.
   `SlotOutcome` (§7.1); a write that did not land is `{ ok: true, value:
   { landed: false, error } }` and the waiter throws §3.3's failure for it
   outside `join`. The caller's signal releases the caller, the write runs on.
-- The final check of §5.4 (point 3) uses the same gate slot, keyed by the
-  destination and the revision it waits for.
-- The consumer path's wait for its own submission (§5.5) joins a
-  per-destination slot whose `start` is that submission's attempt, resolving a
-  `SlotOutcome`; an abort releases the caller (`aborted`), the write runs on.
+- The gate slots of §5.4 (points 2 and 3) are keyed by the destination and
+  the pending revision `p` they wait on: concurrent callers gated on the same
+  pending write share its one attempt; `start` resolves a `SlotOutcome`
+  (`{ landed: true }` or `{ landed: false, error }`).
+- The consumer path's wait for its own submission (§5.5) is a slot of its own,
+  keyed by the destination **and its revision n** — one waiter per
+  submission, never shared with another call's: `start` awaits n's settle
+  signal (§5.3) and resolves a `SlotOutcome`; an abort releases that caller
+  only (`aborted`), and the write runs on.
 - `flush({ signal })` joins one broker-wide slot whose `start` resolves a
   `SlotOutcome<void>`; the `AggregateError` of §3.4 is its `thrown`, rethrown
   outside `join` as the same object (D9). An abort releases the caller, the
@@ -1468,6 +1512,18 @@ endpoint**
   without checking the outstanding write]**
 - `'continue'`: the same store → every call succeeds, one `warn` line per
   failed attempt carrying `logFields` only, `flush()` rejects.
+- **Revision outcomes.** (1) Revision R1 fails; R2 (same generation) is
+  submitted, supersedes it and lands: the next `'fail'` call succeeds, and the
+  store never receives R1's write again (the test's store records every
+  `saveSession`: R1's content appears only in the failed attempt). **[break:
+  require every revision ≤ R to have landed → the destination is refused
+  forever → red]** **[break: replay a superseded revision → red]** (2) A
+  retired generation's late submission is dropped: the gate is satisfied as
+  before it arrived, and the store never receives it. (3) R1 fails and nothing
+  newer comes: every `'fail'` call rejects until a retry of R1 lands, then the
+  next succeeds. (4) R1's attempt is in flight when R2 arrives; R1 lands, R2
+  is pending: a call whose R was read before R2 arrived succeeds
+  (`carries(p) = R1 + 1 > R`); one whose R is R2 waits for R2.
 - **The final check.** A provider handed out earlier commits a detached
   discard whose write fails while (1) a `getProvider` resolution is suspended
   on a held store read, and (2) separately, a `getToken` answered from the
@@ -1483,6 +1539,15 @@ endpoint**
   the write lands (`loadSession` shows it); with a store that then fails, the
   failure is pending and the next `'fail'` call rejects. **[break: await the
   submission without racing the signal → red]**
+- **Each consumer call waits for its own write.** Two concurrent consumer
+  calls for one destination; the first call's `saveSession` is held, the
+  second's write queued behind it (and superseding it). Under both policies:
+  neither returns before an attempt that carries its own revision settled —
+  the first not before the held attempt settles, the second not before the
+  attempt writing its revision settles; under `'fail'` the first, superseded,
+  returns once the second's write lands (its successor discharged it). An
+  abort of either releases only that caller. **[break: share one slot per
+  destination → the second call returns on the first's attempt → red]**
 - No `onWriteFailure`: a token row and the token API refused naming it;
   `basic` built.
 - Consumer factory path: a result without a refresh token writes `''`; a
@@ -1669,7 +1734,9 @@ Recorded with date and result before the release; none runs in CI.
   it, so a replacement provider never inherits a refresh token from the store
   (§5.2, §6.2). Under `'fail'`, no broker call succeeds while a
   write submitted before its completion point — a detached discard included —
-  has not landed (§5.4).
+  is undischarged (§5.4); a superseded write is discharged only by its landed
+  successor and never replayed, so no stale refresh state is ever restored
+  (§5.3).
 - **H4 No built-in timeouts.** §7.6, §10.4; the writer's retry delay bounds no
   wait. The final write check and the consumer path's
   write wait end on the attempt's settling or the caller's abort, never a
@@ -1678,7 +1745,9 @@ Recorded with date and result before the release; none runs in CI.
   waiter and cancellation rules only; its results carried as plain outcomes so
   the broker's own errors pass unchanged — `readFailure` /
   `classify` (§3), `refreshStatePersistence` (§5.1), the broker's UAA row for
-  `mcp-auth` (§10.2).
+  `mcp-auth` (§10.2). Each wait on a session write is one waiter of its own
+  slot (keyed by destination and revision), so one caller's abort releases only
+  that caller.
 - **H6 Whoever holds an instance holds its rights.** Retired providers are
   not taken from their holders (§6.3); store errors are returned to the store's
   owner as the same objects, through the shared slots too (§3.4, §7.1);
