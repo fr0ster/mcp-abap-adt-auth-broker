@@ -36,6 +36,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthBroker } from '../../index';
 import { describeWhere } from '../helpers/describeWhere';
+import { STATED } from '../helpers/stated';
 import { approveDevice, authorizeByForm } from './formLogin';
 
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL?.replace(/\/+$/, '');
@@ -186,6 +187,7 @@ describeWhere(
       const sessions = new AbapSessionStore(sessionsDir);
       const broker = () =>
         new AuthBroker({
+          ...STATED,
           serviceKeyStore: keys,
           sessionStore: sessions,
           ...collaborators,

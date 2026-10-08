@@ -47,6 +47,7 @@ import {
   DestinationConfigError,
   type StrategyGrant,
 } from '../../index';
+import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
   startTokenEndpoint,
@@ -280,7 +281,7 @@ function oidcBroker(
     config.oidcAuthorization = oidcAuthorization;
     config.deviceCodePresenter = deviceCodePresenter;
   }
-  const broker = new AuthBroker(config, options.logger);
+  const broker = new AuthBroker({ ...STATED, ...config }, options.logger);
   return {
     broker,
     keys,
@@ -377,6 +378,8 @@ describe('getProvider — the OIDC grants', () => {
       );
       expect(Object.fromEntries(url.searchParams)).toEqual({
         response_type: 'code',
+        // 6.0.0: every OIDC authorization URL carries this attempt's state.
+        state: expect.any(String),
         client_id: 'oidc-client',
         redirect_uri: REDIRECT,
         scope: 'openid profile',
@@ -750,6 +753,7 @@ describe('getProvider — the OIDC grants', () => {
     const logger = silentLogger();
     const broker = new AuthBroker(
       {
+        ...STATED,
         sessionStore: sessions.store,
         serviceKeyStore: keyStore(
           oidcMeans('oidc_authorization_code'),
@@ -770,7 +774,10 @@ describe('getProvider — the OIDC grants', () => {
     // that is not its own: "unknown error" — never the thrown message.
     expect(outcome).toEqual({
       ok: false,
-      refusal: { reason: expect.stringContaining('(unknown error)') },
+      refusal: expect.objectContaining({
+        kind: 'unknown',
+        reason: expect.stringContaining('(unknown error)'),
+      }),
     });
     const said = JSON.stringify([
       outcome,
@@ -934,7 +941,7 @@ function samlBroker(
     assertionReplayStore,
   };
   for (const option of options.without ?? []) delete config[option];
-  const broker = new AuthBroker(config, options.logger);
+  const broker = new AuthBroker({ ...STATED, ...config }, options.logger);
   return {
     broker,
     keys,
@@ -1418,7 +1425,10 @@ describe('getProvider — the SAML grants', () => {
     // that is not its own: "unknown error" — never the thrown message.
     expect(outcome).toEqual({
       ok: false,
-      refusal: { reason: expect.stringContaining('(unknown error)') },
+      refusal: expect.objectContaining({
+        kind: 'unknown',
+        reason: expect.stringContaining('(unknown error)'),
+      }),
     });
     const said = JSON.stringify([
       outcome,

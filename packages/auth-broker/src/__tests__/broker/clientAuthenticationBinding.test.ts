@@ -29,6 +29,7 @@ import {
   type ClientAuthenticationContext,
   type ClientAuthenticationStrategy,
 } from '../../index';
+import { STATED } from '../helpers/stated';
 import {
   startTokenEndpoint,
   type TokenEndpoint,
@@ -158,6 +159,7 @@ function broker(
   clientAuthentication?: ClientAuthenticationStrategy,
 ): AuthBroker {
   return new AuthBroker({
+    ...STATED,
     sessionStore: store,
     serviceKeyStore: keys,
     authorization: () => login.strategy,

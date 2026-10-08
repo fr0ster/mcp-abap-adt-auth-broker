@@ -33,6 +33,7 @@ import {
   DestinationConfigError,
   type TokenProviderFactory,
 } from '../../index';
+import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
   startTokenEndpoint,
@@ -202,6 +203,7 @@ describe('the token API factory without a strategy', () => {
       Parameters<TokenProviderFactory>
     >(() => tokenProvider(jwtExpiringIn(3600)));
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keys,
       provider: factory,
@@ -218,6 +220,7 @@ describe('the token API factory without a strategy', () => {
   it('a throwing factory throws as 4.0.0: its own error, not the guarded one', async () => {
     const { store } = sessions();
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keyStore(SECRET_CLIENT, null),
       provider: () => {
@@ -239,6 +242,7 @@ describe('the token API factory beside a strategy', () => {
       Parameters<TokenProviderFactory>
     >(() => tokenProvider(jwtExpiringIn(3600)));
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keys,
       provider: factory,
@@ -276,6 +280,7 @@ describe('the token API factory beside a strategy', () => {
       Parameters<TokenProviderFactory>
     >(() => tokenProvider(jwtExpiringIn(3600)));
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keyStore(SECRET_CLIENT, certificate()),
       provider: factory,
@@ -297,6 +302,7 @@ describe('the token API factory beside a strategy', () => {
     const { store, held } = sessions();
     const token = jwtExpiringIn(3600, { jti: 'token-api' });
     const tokenApi = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keyStore(null, certificate()),
       provider: () => tokenProvider(token),
@@ -319,6 +325,7 @@ describe('the token API factory beside a strategy', () => {
     // no request.
     const login = user();
     const again = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keyStore(null, certificate()),
       authorization: () => login.strategy,
@@ -335,6 +342,7 @@ describe('the token API factory beside a strategy', () => {
     const { store } = sessions();
     const token = jwtExpiringIn(3600, { jti: 'token-api' });
     const tokenApi = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keyStore(null, certificate()),
       provider: () => tokenProvider(token),
@@ -345,6 +353,7 @@ describe('the token API factory beside a strategy', () => {
 
     const login = user();
     const again = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keyStore(
         null,
@@ -382,6 +391,7 @@ describe('the token API factory beside a strategy', () => {
       Parameters<TokenProviderFactory>
     >(() => refreshingProvider(jwtExpiringIn(3600), 'refresh-cert-1'));
     const tokenApi = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keyStore(null, certificate()),
       provider: first,
@@ -398,6 +408,7 @@ describe('the token API factory beside a strategy', () => {
       Parameters<TokenProviderFactory>
     >(() => tokenProvider(jwtExpiringIn(3600)));
     const recreated = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keyStore(null, certificate()),
       provider: again,
@@ -420,6 +431,7 @@ describe('the token API factory beside a strategy', () => {
     for (const clientAuthentication of [undefined, certificateStrategy]) {
       const { store } = sessions();
       const first = new AuthBroker({
+        ...STATED,
         sessionStore: store,
         serviceKeyStore: keyStore(SECRET_CLIENT, null),
         provider: () =>
@@ -434,6 +446,7 @@ describe('the token API factory beside a strategy', () => {
         Parameters<TokenProviderFactory>
       >(() => tokenProvider(jwtExpiringIn(3600)));
       const recreated = new AuthBroker({
+        ...STATED,
         sessionStore: store,
         serviceKeyStore: keyStore(SECRET_CLIENT, null),
         provider: factory,
@@ -459,6 +472,7 @@ describe('the token API factory beside a strategy', () => {
   ) {
     const { store, held } = sessions();
     const first = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keys,
       provider: () => refreshingProvider(jwtExpiringIn(3600), refreshToken),
@@ -481,6 +495,7 @@ describe('the token API factory beside a strategy', () => {
       Parameters<TokenProviderFactory>
     >(() => tokenProvider(jwtExpiringIn(3600)));
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keys,
       provider: factory,
@@ -581,6 +596,7 @@ describe('the token API factory beside a strategy', () => {
         serviceUrl: 'https://abap.example.com',
       });
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: store,
         serviceKeyStore: keys,
         provider: factory,
@@ -614,6 +630,7 @@ describe('the token API factory beside a strategy', () => {
       return tokenProvider(token);
     };
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keyStore(null, certificate()),
       provider: threeParameters,
@@ -628,6 +645,7 @@ describe('the token API factory beside a strategy', () => {
     const { store } = sessions();
     let calls = 0;
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keyStore(null, certificate()),
       provider: () => {
@@ -658,6 +676,7 @@ describe('the token API factory beside a strategy', () => {
       Parameters<TokenProviderFactory>
     >(() => tokenProvider(jwtExpiringIn(3600)));
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keyStore(null, certificate()),
       provider: factory,
@@ -683,6 +702,7 @@ describe('the token API factory beside a strategy', () => {
       Parameters<TokenProviderFactory>
     >(() => tokenProvider(jwtExpiringIn(3600)));
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keyStore(null, certificate(), {
         serviceUrl: 'https://abap.example.com',
@@ -714,6 +734,7 @@ describe('the token API factory beside a strategy', () => {
       Parameters<TokenProviderFactory>
     >(() => tokenProvider(jwtExpiringIn(3600)));
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keys,
       provider: factory,
@@ -762,6 +783,7 @@ describe('the token API factory beside a strategy', () => {
         certificateStrategy,
       );
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: store,
         serviceKeyStore: keyStore(null, certificate(), unstated()),
         provider: () => tokenProvider(jwtExpiringIn(3600)),
@@ -791,6 +813,7 @@ describe('the token API factory beside a strategy', () => {
     it('the same client: the stored access token seeds the factory', async () => {
       const { store } = secretSessions();
       const first = new AuthBroker({
+        ...STATED,
         sessionStore: store,
         serviceKeyStore: keyStore(null, certificate(), unstated()),
         provider: () => refreshingProvider(jwtExpiringIn(3600), 'refresh-of-A'),
@@ -889,6 +912,7 @@ describe('a session obtained for another client, on the strategy path', () => {
       Parameters<TokenProviderFactory>
     >(answerWith);
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: store,
       serviceKeyStore: keys,
       provider: factory,

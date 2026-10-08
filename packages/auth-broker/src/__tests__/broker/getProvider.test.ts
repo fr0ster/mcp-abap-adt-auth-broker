@@ -11,6 +11,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
   IAuthProvider,
@@ -25,6 +26,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { AuthBroker, DestinationConfigError } from '../../index';
+import { STATED } from '../helpers/stated';
 
 /** Planted in every stored value that is a secret; must never surface in an error. */
 const SENTINEL = 'S3NTINEL-must-not-leak';
@@ -110,7 +112,10 @@ async function offered(provider: IAuthProvider): Promise<{
   const logon: ILogonTarget = {
     tlsMaterial: () => ({
       ok: false,
-      refusal: { reason: 'no TLS material on this wire' },
+      refusal: authError['logon-target']({
+        wire: 'rfc',
+        refused: 'tls-material',
+      }),
     }),
     logonParameters: (p) => {
       parameters.push({ ...p });
@@ -175,6 +180,7 @@ describe('getProvider', () => {
     it('writes the Basic header and offers user and password', async () => {
       const store = sessionStore();
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: store,
         serviceKeyStore: keyStore({
           authType: 'basic',
@@ -207,6 +213,7 @@ describe('getProvider', () => {
         sessionCookies: 'stray=cookie',
       });
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: store,
         serviceKeyStore: keyStore({
           authType: 'basic',
@@ -233,6 +240,7 @@ describe('getProvider', () => {
     ])('without %j names %j', async (fields, missing) => {
       const error = await refusal(
         new AuthBroker({
+          ...STATED,
           sessionStore: sessionStore(),
           serviceKeyStore: keyStore({ authType: 'basic', ...fields }),
         }).getProvider('D'),
@@ -258,6 +266,7 @@ describe('getProvider', () => {
       const sncLib = hostArchLibrary(dir);
       const store = sessionStore();
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: store,
         serviceKeyStore: keyStore({
           authType: 'snc',
@@ -294,6 +303,7 @@ describe('getProvider', () => {
     it('refuses a missing sncLib file at prepare(), naming sncLib', async () => {
       const missing = path.join(dir, 'no-such-library.so');
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: sessionStore(),
         serviceKeyStore: keyStore({
           authType: 'snc',
@@ -305,9 +315,16 @@ describe('getProvider', () => {
       const outcome = await (await broker.getProvider('D')).prepare();
 
       expect(outcome.ok).toBe(false);
-      expect(outcome.ok === false && outcome.refusal.reason).toContain(
-        `sncLib ${missing} (missing)`,
+      // 6.0.0: the facts name the candidate; its path is a diagnostic.
+      const refused = outcome.ok === false ? outcome.refusal : undefined;
+      expect(refused?.kind).toBe('snc');
+      expect(refused?.facts).toEqual(
+        expect.objectContaining({
+          problem: 'library-not-found',
+          candidates: [{ source: 'sncLib', reason: 'missing' }],
+        }),
       );
+      expect(refused?.reason).toContain('sncLib (missing)');
     });
 
     it.each([[{}], [{ sncPartnerName: '' }]])(
@@ -315,6 +332,7 @@ describe('getProvider', () => {
       async (fields) => {
         const error = await refusal(
           new AuthBroker({
+            ...STATED,
             sessionStore: sessionStore(),
             serviceKeyStore: keyStore({
               authType: 'snc',
@@ -334,6 +352,7 @@ describe('getProvider', () => {
       const QOP_SENTINEL = 'S3NTINEL-qop-must-not-leak';
       const error = await refusal(
         new AuthBroker({
+          ...STATED,
           sessionStore: sessionStore(),
           serviceKeyStore: keyStore({
             authType: 'snc',
@@ -361,6 +380,7 @@ describe('getProvider', () => {
         issuedFor: BOUND_TO,
       });
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: store,
         serviceKeyStore: keyStore({
           authType: 'jwt',
@@ -384,6 +404,7 @@ describe('getProvider', () => {
         issuedFor: BOUND_TO,
       });
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: store,
         serviceKeyStore: keyStore({
           authType: 'saml',
@@ -413,6 +434,7 @@ describe('getProvider', () => {
       async (authType, field, session) => {
         const error = await refusal(
           new AuthBroker({
+            ...STATED,
             sessionStore: sessionStore(session),
             serviceKeyStore: keyStore({ authType, grantType: 'none' }),
           }).getProvider('D'),
@@ -429,6 +451,7 @@ describe('getProvider', () => {
       );
       const error = await refusal(
         new AuthBroker({
+          ...STATED,
           sessionStore: store,
           serviceKeyStore: keyStore({ authType: 'jwt', grantType: 'none' }),
         }).getProvider('D'),
@@ -442,6 +465,7 @@ describe('getProvider', () => {
       store.loadSession.mockRejectedValue(denied);
       await expect(
         new AuthBroker({
+          ...STATED,
           sessionStore: store,
           serviceKeyStore: keyStore({ authType: 'jwt', grantType: 'none' }),
         }).getProvider('D'),
@@ -464,6 +488,7 @@ describe('getProvider', () => {
       });
       const error = await refusal(
         new AuthBroker({
+          ...STATED,
           sessionStore: store,
           serviceKeyStore: keyStore(null),
         }).getProvider('D'),
@@ -481,6 +506,7 @@ describe('getProvider', () => {
       );
       const error = await refusal(
         new AuthBroker({
+          ...STATED,
           sessionStore: sessionStore({ authorizationToken: 't' }),
           serviceKeyStore: keys,
         }).getProvider('D'),
@@ -494,6 +520,7 @@ describe('getProvider', () => {
       keys.getConnectionConfig.mockRejectedValue(broken);
       await expect(
         new AuthBroker({
+          ...STATED,
           sessionStore: sessionStore(),
           serviceKeyStore: keys,
         }).getProvider('D'),
@@ -503,6 +530,7 @@ describe('getProvider', () => {
     it('does not take a token the key store answers as a seed', async () => {
       const error = await refusal(
         new AuthBroker({
+          ...STATED,
           sessionStore: sessionStore(null),
           serviceKeyStore: keyStore({
             authType: 'jwt',
@@ -518,6 +546,7 @@ describe('getProvider', () => {
     it('does not take cookies the key store answers as a seed', async () => {
       const error = await refusal(
         new AuthBroker({
+          ...STATED,
           sessionStore: sessionStore(null),
           serviceKeyStore: keyStore({
             authType: 'saml',
@@ -531,6 +560,7 @@ describe('getProvider', () => {
 
     it('presents the session secret, never the key store one, when both answer', async () => {
       const provider = await new AuthBroker({
+        ...STATED,
         sessionStore: sessionStore({
           authorizationToken: 'from-session',
           issuedFor: BOUND_TO,
@@ -556,6 +586,7 @@ describe('getProvider', () => {
       });
       const store = sessionStore();
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: store,
         serviceKeyStore: keys,
       });
@@ -583,7 +614,7 @@ describe('getProvider', () => {
         password: SENTINEL,
       });
       const error = await refusal(
-        new AuthBroker({ sessionStore: store }).getProvider('D'),
+        new AuthBroker({ ...STATED, sessionStore: store }).getProvider('D'),
       );
       expect(error.missingFields).toEqual(['serviceKeyStore']);
       expect(store.loadSession).not.toHaveBeenCalled();
@@ -592,7 +623,9 @@ describe('getProvider', () => {
 
     it('is the error class it says it is', async () => {
       const error = await refusal(
-        new AuthBroker({ sessionStore: sessionStore() }).getProvider('DEST-1'),
+        new AuthBroker({ ...STATED, sessionStore: sessionStore() }).getProvider(
+          'DEST-1',
+        ),
       );
       expect(error).toBeInstanceOf(Error);
       expect(error.name).toBe('DestinationConfigError');
@@ -619,6 +652,7 @@ describe('getProvider', () => {
     ])('names authType for %s', async (_case, conn) => {
       const error = await refusal(
         new AuthBroker({
+          ...STATED,
           sessionStore: sessionStore({ authorizationToken: SENTINEL }),
           serviceKeyStore: keyStore(conn as IConnectionConfig | null),
         }).getProvider('D'),
@@ -637,6 +671,7 @@ describe('getProvider', () => {
       async (authType, grantType) => {
         const error = await refusal(
           new AuthBroker({
+            ...STATED,
             sessionStore: sessionStore({
               authorizationToken: SENTINEL,
               sessionCookies: SENTINEL,
@@ -669,6 +704,7 @@ describe('getProvider', () => {
       async (authType, grantType) => {
         const error = await refusal(
           new AuthBroker({
+            ...STATED,
             sessionStore: sessionStore({
               authorizationToken: 'token',
               sessionCookies: 'cookie',
@@ -686,6 +722,7 @@ describe('getProvider', () => {
 
     it('does not read grantType for basic', async () => {
       const provider = await new AuthBroker({
+        ...STATED,
         sessionStore: sessionStore(),
         serviceKeyStore: keyStore({
           authType: 'basic',
@@ -708,6 +745,7 @@ describe('getProvider', () => {
         password: 'P',
       });
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: sessionStore(),
         serviceKeyStore: keys,
       });
@@ -726,6 +764,7 @@ describe('getProvider', () => {
 
     it('keeps one provider per destination', async () => {
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: sessionStore(),
         serviceKeyStore: keyStore({
           authType: 'basic',
@@ -746,6 +785,7 @@ describe('getProvider', () => {
       });
       keys.getConnectionConfig.mockRejectedValueOnce(new Error('disk hiccup'));
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: sessionStore(),
         serviceKeyStore: keys,
       });

@@ -2,24 +2,25 @@
  * The broker's writes of a destination's session secret, retried until the
  * store takes them.
  *
- * A store failure is the storage's or a broker bug, never the token's, so it
- * does not fail the authentication: the result stays pending for its
- * destination and the writer tries again on its own — it does not wait for the
- * provider to be called again, since a request may be the process's last.
- *
  * - **One pending result per destination, the latest.** A newer result
  *   replaces the one waiting; an older one is never written after it.
  * - **Attempts for one destination never overlap.** Each runs after the
  *   previous one has settled.
+ * - **Each submission learns its own outcome** — the write it caused landed,
+ *   or failed with the store's error — so the caller decides what a failed
+ *   write means (`onWriteFailure`); a failed result stays pending either way.
  * - **A growing delay:** one second after the first failure, doubling, capped
  *   at one minute; reset once a write lands. The timer is `unref()`ed, so a
  *   pending write never keeps a process alive.
- * - **Failures are logged by class name** — never a message: the store holds
- *   tokens, and its errors are foreign text.
+ * - **Failures are logged with `logFields`** of auth-errors' classification
+ *   (`persisting-tokens`) — never a message: the store holds tokens, and its
+ *   errors are foreign text.
  * - **`flush()`** gives every pending result one more attempt and rejects,
  *   naming the destinations, if any is still not written.
  */
 
+import { classify, logFields } from '@mcp-abap-adt/auth-errors';
+import type { IAuthProviderError } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 
 const FIRST_DELAY_MS = 1_000;
@@ -29,19 +30,38 @@ interface Queue<T> {
   /** The result waiting to be written; undefined once written. */
   pending?: T | undefined;
   /** The last attempt, settled or not: the next one runs after it. */
-  tail: Promise<void>;
+  tail: Promise<WriteOutcome>;
   /** Consecutive failures since the last write that landed. */
   failures: number;
   lastError?: unknown;
   timer?: NodeJS.Timeout | undefined;
 }
 
-/** A thrown value's class, for a log line: never its message. */
-export function classLabel(error: unknown): string {
-  if (error instanceof Error) {
-    return error.constructor?.name || 'Error';
+/** What one submission's attempt came to: the write landed, or the store's error. */
+export type WriteOutcome =
+  | { readonly landed: true }
+  | { readonly landed: false; readonly error: unknown };
+
+const LANDED: WriteOutcome = { landed: true };
+
+/**
+ * One destination whose session write still fails, in `flush()`'s
+ * `AggregateError`: the destination and the store's error as auth-errors
+ * classifies it (`persisting-tokens`) — never the store's message.
+ */
+export class SessionWriteFailure extends Error {
+  readonly destination: string;
+  /** `classify(storeError, 'persisting-tokens')`. */
+  readonly error: IAuthProviderError;
+
+  constructor(destination: string, storeError: unknown) {
+    const error = classify(storeError, 'persisting-tokens');
+    super(`"${destination}": ${error.reason}`);
+    this.name = 'SessionWriteFailure';
+    this.destination = destination;
+    this.error = error;
+    Object.setPrototypeOf(this, SessionWriteFailure.prototype);
   }
-  return typeof error;
 }
 
 /** `T`: what one write takes — the result, with what the broker writes beside it. */
@@ -59,20 +79,21 @@ export class SessionWriter<T> {
 
   /**
    * Take a new result for the destination and try to write it now. Never
-   * throws: resolves once this attempt has settled, written or left pending.
+   * throws: resolves once this attempt has settled, with what it came to —
+   * landed, or the store's error, the result left pending.
    */
-  async submit(destination: string, result: T): Promise<void> {
+  submit(destination: string, result: T): Promise<WriteOutcome> {
     const queue = this.queueOf(destination);
     queue.pending = result;
     this.cancelTimer(queue);
-    await this.attempt(destination, queue);
+    return this.attempt(destination, queue);
   }
 
   /**
    * One more attempt for every pending result; resolves when all are written,
-   * rejects naming the destinations still pending — each failure as its
-   * destination and its error's class only, never the store's message. The
-   * retries go on after a rejection.
+   * rejects naming the destinations still pending — one `SessionWriteFailure`
+   * per destination, never the store's message. The retries go on after a
+   * rejection.
    */
   async flush(): Promise<void> {
     const queues = [...this.queues];
@@ -90,7 +111,7 @@ export class SessionWriter<T> {
       throw new AggregateError(
         failed.map(
           ([destination, queue]) =>
-            new Error(`"${destination}": ${classLabel(queue.lastError)}`),
+            new SessionWriteFailure(destination, queue.lastError),
         ),
         `Session writes still failing for ${failed
           .map(([destination]) => `"${destination}"`)
@@ -102,14 +123,14 @@ export class SessionWriter<T> {
   private queueOf(destination: string): Queue<T> {
     let queue = this.queues.get(destination);
     if (!queue) {
-      queue = { tail: Promise.resolve(), failures: 0 };
+      queue = { tail: Promise.resolve(LANDED), failures: 0 };
       this.queues.set(destination, queue);
     }
     return queue;
   }
 
   /** Runs after the destination's previous attempt; never rejects. */
-  private attempt(destination: string, queue: Queue<T>): Promise<void> {
+  private attempt(destination: string, queue: Queue<T>): Promise<WriteOutcome> {
     const run = queue.tail.then(() => this.writePending(destination, queue));
     queue.tail = run;
     return run;
@@ -118,9 +139,9 @@ export class SessionWriter<T> {
   private async writePending(
     destination: string,
     queue: Queue<T>,
-  ): Promise<void> {
+  ): Promise<WriteOutcome> {
     const result = queue.pending;
-    if (result === undefined) return;
+    if (result === undefined) return LANDED;
     try {
       await this.write(destination, result);
     } catch (error) {
@@ -132,10 +153,13 @@ export class SessionWriter<T> {
       );
       this.logger.warn(
         `[AuthBroker] Session write for ${destination} failed; the token stands, the write is retried in ${delay} ms`,
-        { error: classLabel(error), attempt: queue.failures },
+        {
+          ...logFields(classify(error, 'persisting-tokens')),
+          attempt: queue.failures,
+        },
       );
       this.schedule(destination, queue, delay);
-      return;
+      return { landed: false, error };
     }
     queue.failures = 0;
     queue.lastError = undefined;
@@ -145,6 +169,7 @@ export class SessionWriter<T> {
       queue.pending = undefined;
       this.cancelTimer(queue);
     }
+    return LANDED;
   }
 
   private schedule(destination: string, queue: Queue<T>, delay: number): void {

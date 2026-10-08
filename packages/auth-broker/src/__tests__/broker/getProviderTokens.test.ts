@@ -28,8 +28,10 @@ import {
   AuthBroker,
   type AuthBrokerConfig,
   DestinationConfigError,
+  SessionWriteFailure,
   type StrategyGrant,
 } from '../../index';
+import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
   startTokenEndpoint,
@@ -201,6 +203,13 @@ function everythingIn(error: unknown): string {
   return parts.join('\n');
 }
 
+/**
+ * What a failed write means for the brokers `brokerFor` builds: `'fail'`, as
+ * `STATED`, except where a suite is about a write that fails and the call
+ * that goes on (`'continue'`, 4.x's behaviour for the providers it built).
+ */
+let writePolicy: 'fail' | 'continue' = 'fail';
+
 /** A broker over the fakes, with an `authorization` option recording its calls. */
 function brokerFor(
   grant: UaaGrant,
@@ -228,7 +237,10 @@ function brokerFor(
   if (options.withAuthorization !== false) {
     config.authorization = authorization;
   }
-  const broker = new AuthBroker(config, options.logger);
+  const broker = new AuthBroker(
+    { ...STATED, onWriteFailure: writePolicy, ...config },
+    options.logger,
+  );
   return { broker, keys, authorization, urls: recorded.urls, ...sessions };
 }
 
@@ -255,6 +267,8 @@ describe('getProvider — the UAA grants', () => {
           params: {
             grant_type: 'authorization_code',
             code: 'the-code',
+            // 6.0.0: every UAA authorization URL carries a PKCE challenge.
+            code_verifier: expect.any(String),
             redirect_uri: REDIRECT,
           },
           authorization: basicAuth('broker-client', CLIENT_SECRET),
@@ -384,7 +398,7 @@ describe('getProvider — the UAA grants', () => {
       const redacted = `<redacted, ${token.length} chars>`;
       expect(logger.info.mock.calls).toEqual(
         expect.arrayContaining([
-          ['[BaseTokenProvider] No usable refresh token, performing login'],
+          ['[BaseTokenProvider] Performing login'],
           [
             '[BaseTokenProvider] Login completed',
             { newToken: redacted, newRefreshToken: undefined },
@@ -543,6 +557,7 @@ describe('getProvider — the UAA grants', () => {
       const sessions = sessionStore({ authorizationToken: 't' });
       sessions.store.getAuthorizationConfig.mockResolvedValue(client());
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: sessions.store,
         serviceKeyStore: keyStore(means('client_credentials'), null),
       });
@@ -652,7 +667,7 @@ describe('persistence through onTokens', () => {
     });
   });
 
-  it('takes an empty refresh token in a result as none, and keeps the stored one', async () => {
+  it('a refused refresh token is cleared; a login answering an empty one writes none', async () => {
     const { broker, held } = brokerFor('authorization_code', {
       session: bound({ refreshToken: 'kept-rt' }),
     });
@@ -672,7 +687,9 @@ describe('persistence through onTokens', () => {
       'refresh_token',
       'authorization_code',
     ]);
-    expect(held()?.refreshToken).toBe('kept-rt');
+    // 6.0.0, refreshThenLogin(): the refresh token sent and refused is
+    // discarded, and its discard written — it never comes back.
+    expect(held()?.refreshToken).toBe('');
   });
 
   it.each(['basic', 'snc'] as const)(
@@ -696,8 +713,16 @@ describe('persistence through onTokens', () => {
     },
   );
 
-  describe('a write that fails', () => {
+  describe('a write that fails (onWriteFailure: continue)', () => {
     class StoreDiskError extends Error {}
+
+    beforeEach(() => {
+      writePolicy = 'continue';
+    });
+
+    afterEach(() => {
+      writePolicy = 'fail';
+    });
 
     beforeEach(() => {
       jest.useFakeTimers({
@@ -745,7 +770,7 @@ describe('persistence through onTokens', () => {
       ]);
     });
 
-    it('logs the failure by its class name, never its message', async () => {
+    it('logs the failure with logFields, never its message', async () => {
       const logger = silentLogger();
       const { broker, store } = seeded('authorization_code', logger);
       store.saveSession.mockRejectedValueOnce(
@@ -760,7 +785,7 @@ describe('persistence through onTokens', () => {
         logger.info.mock.calls,
         logger.debug.mock.calls,
       ]);
-      expect(logged).toContain('StoreDiskError');
+      expect(logged).toContain('persisting the tokens failed (unknown error)');
       expect(logged).not.toContain('disk full');
       expect(logged).not.toContain(CLIENT_SECRET);
     });
@@ -830,6 +855,14 @@ describe('persistence through onTokens', () => {
   describe('flush()', () => {
     class StoreDiskError extends Error {}
 
+    beforeEach(() => {
+      writePolicy = 'continue';
+    });
+
+    afterEach(() => {
+      writePolicy = 'fail';
+    });
+
     it('resolves at once with nothing pending', async () => {
       const { broker } = seeded();
       await expect(broker.flush()).resolves.toBeUndefined();
@@ -861,7 +894,7 @@ describe('persistence through onTokens', () => {
       await expect(broker.flush()).resolves.toBeUndefined();
     });
 
-    it("carries no store message: each failure is the destination and the error's class", async () => {
+    it('carries no store message: each failure is a SessionWriteFailure naming the destination', async () => {
       const { broker, store } = seeded();
       store.saveSession.mockRejectedValue(
         new StoreDiskError('cannot save TOKEN_SENTINEL'),
@@ -875,8 +908,12 @@ describe('persistence through onTokens', () => {
       expect(flushed).toBeInstanceOf(AggregateError);
       expect(inspect(flushed, { depth: 10 })).not.toContain('TOKEN_SENTINEL');
       expect(flushed?.errors.map((e: Error) => e.message)).toEqual([
-        `"${D}": StoreDiskError`,
+        `"${D}": persisting the tokens failed (unknown error)`,
       ]);
+      expect(flushed?.errors[0]).toBeInstanceOf(SessionWriteFailure);
+      expect(
+        (flushed?.errors[0] as SessionWriteFailure | undefined)?.destination,
+      ).toBe(D);
     });
 
     it('the retry timer does not keep the process alive', async () => {

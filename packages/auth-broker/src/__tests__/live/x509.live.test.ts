@@ -46,6 +46,7 @@ import {
 } from '@mcp-abap-adt/auth-stores';
 import { AuthBroker, fromServiceKeyCertificate } from '../../index';
 import { describeWhere, runLog as log } from '../helpers/describeWhere';
+import { STATED } from '../helpers/stated';
 
 const LOCAL = process.env.AUTH_BROKER_LIVE_X509_LOCAL;
 const DESTINATION = 'x509';
@@ -290,6 +291,7 @@ describeWhere(
     /** A broker over a written destination, from where it now lives. */
     const freshBroker = (dir: string): AuthBroker =>
       new AuthBroker({
+        ...STATED,
         serviceKeyStore: new EnvDestinationStore(dir, {
           variables: XSUAA_DESTINATION_VARS,
         }),
@@ -352,6 +354,7 @@ describeWhere(
 
     it('(a) AuthBroker + XsuaaServiceKeyStore + fromServiceKeyCertificate(): prepare() is Ok, and the token API returns a token of the key’s client', async () => {
       const broker = new AuthBroker({
+        ...STATED,
         serviceKeyStore: new XsuaaServiceKeyStore(keysDir, {
           grantType: 'client_credentials',
         }),

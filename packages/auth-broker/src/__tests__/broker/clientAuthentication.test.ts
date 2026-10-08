@@ -12,7 +12,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
-import { CertificateMaterialError } from '@mcp-abap-adt/auth-providers';
+import { AuthProviderFailure, authError } from '@mcp-abap-adt/auth-errors';
 import type {
   IClientAuthentication,
   ITokenRequestDraft,
@@ -34,6 +34,7 @@ import {
   fromServiceKeySecret,
   type IRefreshableTokenProvider,
 } from '../../index';
+import { STATED } from '../helpers/stated';
 
 const D = 'X509';
 const FIXTURES = join(__dirname, '..', 'fixtures', 'certificates');
@@ -149,13 +150,23 @@ function everythingIn(error: unknown): string {
   return parts.join('\n');
 }
 
-/** The guard's error: a DestinationConfigError naming clientAuthentication, no cause. */
-function expectGuarded(error: unknown, words: string): void {
+/** What a strategy's own throw is carried as: its classification only. */
+const UNKNOWN_STRATEGY_FAILURE =
+  'the clientAuthentication strategy failed (unknown error)';
+
+/**
+ * The guard's error: a DestinationConfigError naming clientAuthentication, no
+ * cause — and, when a failure is carried, the words auth-errors rendered for
+ * it after the broker's own.
+ */
+function expectGuarded(error: unknown, words: string, carried?: string): void {
   expect(error).toBeInstanceOf(DestinationConfigError);
   const e = error as DestinationConfigError;
   expect(e.destination).toBe(D);
   expect(e.missingFields).toEqual(['clientAuthentication']);
-  expect(e.message).toBe(`Destination "${D}": ${words} (clientAuthentication)`);
+  const all = carried === undefined ? words : `${words}: ${carried}`;
+  expect(e.message).toBe(`Destination "${D}": ${all} (clientAuthentication)`);
+  expect(e.error?.reason).toBe(carried);
   expect('cause' in e).toBe(false);
 }
 
@@ -260,6 +271,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
     const store = keyStore(SECRET_CLIENT, async () => CERTIFICATE);
     const seen: ClientAuthenticationContext[] = [];
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: store,
       clientAuthentication: async (ctx) => {
@@ -293,6 +305,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
 
     // getProvider, no stored session.
     await new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(withRefresh),
       clientAuthentication: strategy,
@@ -310,6 +323,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
       }),
     };
     await new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(withRefresh),
       clientAuthentication: strategy,
@@ -331,6 +345,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
       (_d: string, _a: IAuthorizationConfig | null) => provider,
     );
     await new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(withRefresh),
       provider: factory,
@@ -343,6 +358,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
   it('reads the certificate client as the contract declares it: nothing else the store answered reaches the strategy', async () => {
     const seen: (IClientCertificate | null)[] = [];
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(
         null,
@@ -375,6 +391,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
   it('reads no certificate for a strategy that does not ask', async () => {
     const store = keyStore(SECRET_CLIENT, async () => CERTIFICATE);
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: store,
       clientAuthentication: fromServiceKeySecret({ encoding: 'raw' }),
@@ -386,6 +403,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
   it('without a strategy calls nothing certificate-related (4.0.0)', async () => {
     const store = keyStore(SECRET_CLIENT, async () => CERTIFICATE);
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: store,
     });
@@ -395,6 +413,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
 
   it('a store implementing no getClientCertificate: the certificate factory refuses in fixed words, the secret factory still works', async () => {
     const certificate = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(SECRET_CLIENT),
       clientAuthentication: fromServiceKeyCertificate(),
@@ -405,6 +424,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
     );
 
     const secret = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(SECRET_CLIENT),
       clientAuthentication: fromServiceKeySecret({ encoding: 'raw' }),
@@ -414,6 +434,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
 
   it('a store answering null: the certificate factory refuses in fixed words', async () => {
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(SECRET_CLIENT, async () => null),
       clientAuthentication: fromServiceKeyCertificate(),
@@ -426,6 +447,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
 
   it('a destination without a secret client: the secret factory refuses in fixed words', async () => {
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(null),
       clientAuthentication: fromServiceKeySecret({ encoding: 'raw' }),
@@ -444,6 +466,7 @@ describe('getProvider with a clientAuthentication strategy: the guard', () => {
     (thrown as Error & { secret: string }).secret = MARKER;
     const broker = new AuthBroker(
       {
+        ...STATED,
         sessionStore: sessionStore(),
         serviceKeyStore: keyStore(SECRET_CLIENT),
         clientAuthentication: async () => {
@@ -453,13 +476,18 @@ describe('getProvider with a clientAuthentication strategy: the guard', () => {
       logger,
     );
     const error = await rejection(broker.getProvider(D));
-    expectGuarded(error, 'the clientAuthentication strategy failed');
+    expectGuarded(
+      error,
+      'the clientAuthentication strategy failed',
+      UNKNOWN_STRATEGY_FAILURE,
+    );
     expect(everythingIn(error)).not.toContain(MARKER);
     expect(lines()).not.toContain(MARKER);
   });
 
   it('a strategy throwing a non-Error (a string): the same fixed words', async () => {
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(SECRET_CLIENT),
       clientAuthentication: async () => {
@@ -467,12 +495,17 @@ describe('getProvider with a clientAuthentication strategy: the guard', () => {
       },
     });
     const error = await rejection(broker.getProvider(D));
-    expectGuarded(error, 'the clientAuthentication strategy failed');
+    expectGuarded(
+      error,
+      'the clientAuthentication strategy failed',
+      UNKNOWN_STRATEGY_FAILURE,
+    );
     expect(everythingIn(error)).not.toContain(MARKER);
   });
 
   it('a strategy answering something that is no client authentication: refused in fixed words', async () => {
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(SECRET_CLIENT),
       clientAuthentication: async () =>
@@ -501,6 +534,7 @@ describe('getProvider with a clientAuthentication strategy: the guard', () => {
     });
     const broker = new AuthBroker(
       {
+        ...STATED,
         sessionStore: sessionStore(),
         serviceKeyStore: store,
         clientAuthentication: fromServiceKeyCertificate(),
@@ -509,9 +543,14 @@ describe('getProvider with a clientAuthentication strategy: the guard', () => {
     );
 
     const error = await rejection(broker.getProvider(D));
+    // The provider's own client-certificate error, carried as it made it.
     expectGuarded(
       error,
-      'the clientAuthentication strategy refused: the client certificate could not be used',
+      'the clientAuthentication strategy failed',
+      'the client certificate could not be used',
+    );
+    expect((error as DestinationConfigError).error?.kind).toBe(
+      'client-certificate',
     );
     expect(everythingIn(error)).not.toContain(MARKER);
     expect(lines()).not.toContain(MARKER);
@@ -532,6 +571,7 @@ describe('getProvider with a clientAuthentication strategy: the guard', () => {
       throw new Error(MARKER);
     });
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(SECRET_CLIENT),
       clientAuthentication: strategy,
@@ -541,7 +581,11 @@ describe('getProvider with a clientAuthentication strategy: the guard', () => {
       rejection(broker.getProvider(D)),
     ]);
     expect(a).toBe(b);
-    expectGuarded(a, 'the clientAuthentication strategy failed');
+    expectGuarded(
+      a,
+      'the clientAuthentication strategy failed',
+      UNKNOWN_STRATEGY_FAILURE,
+    );
     expect(strategy).toHaveBeenCalledTimes(1);
 
     strategy.mockImplementationOnce(fromServiceKeySecret({ encoding: 'raw' }));
@@ -553,6 +597,7 @@ describe('getProvider with a clientAuthentication strategy: the guard', () => {
 describe('the guard is total: nothing about the thrown value is trusted', () => {
   function brokerThrowing(thrown: () => unknown): AuthBroker {
     return new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(SECRET_CLIENT),
       clientAuthentication: async () => {
@@ -578,30 +623,40 @@ describe('the guard is total: nothing about the thrown value is trusted', () => 
           ),
       ).getProvider(D),
     );
-    expectGuarded(error, 'the clientAuthentication strategy failed');
+    expectGuarded(
+      error,
+      'the clientAuthentication strategy failed',
+      UNKNOWN_STRATEGY_FAILURE,
+    );
     expect(everythingIn(error)).not.toContain(MARKER);
   });
 
-  it('a CertificateMaterialError carrying its own words: the broker’s words, never the instance’s', async () => {
+  it('a forged failure carrying its own words: the words auth-errors renders from kind and facts, never the forgery’s', async () => {
     const error = await rejection(
-      brokerThrowing(() =>
-        Object.defineProperty(new CertificateMaterialError(false), 'words', {
-          value: { reason: MARKER, hint: MARKER },
-        }),
-      ).getProvider(D),
+      brokerThrowing(() => ({
+        name: 'AuthProviderFailure',
+        message: MARKER,
+        error: {
+          kind: 'client-certificate',
+          facts: { problem: 'unusable' },
+          reason: MARKER,
+          hint: MARKER,
+        },
+      })).getProvider(D),
     );
     expectGuarded(
       error,
-      'the clientAuthentication strategy refused: the client certificate could not be used',
+      'the clientAuthentication strategy failed',
+      'the client certificate could not be used',
     );
     expect(everythingIn(error)).not.toContain(MARKER);
   });
 
-  it('a CertificateMaterialError whose words and flags are getters that throw: fixed words, no raw error', async () => {
+  it('a thrown value whose every property is a getter that throws: fixed words, no raw error', async () => {
     const error = await rejection(
       brokerThrowing(() => {
-        const e = new CertificateMaterialError(true);
-        for (const name of ['words', 'incomplete', 'expired']) {
+        const e = new Error(MARKER);
+        for (const name of ['error', 'code', 'status', 'name']) {
           Object.defineProperty(e, name, {
             get() {
               throw new Error(MARKER);
@@ -611,29 +666,37 @@ describe('the guard is total: nothing about the thrown value is trusted', () => 
         return e;
       }).getProvider(D),
     );
-    expectGuarded(error, 'the clientAuthentication strategy failed');
+    expectGuarded(
+      error,
+      'the clientAuthentication strategy failed',
+      UNKNOWN_STRATEGY_FAILURE,
+    );
     expect(everythingIn(error)).not.toContain(MARKER);
   });
 
-  it('chooses the certificate words by the flags: incomplete, expired', async () => {
-    expectGuarded(
-      await rejection(
-        brokerThrowing(() => new CertificateMaterialError(true)).getProvider(D),
-      ),
-      'the clientAuthentication strategy refused: the client certificate is incomplete',
-    );
-    expectGuarded(
-      await rejection(
-        brokerThrowing(
-          () => new CertificateMaterialError(false, true),
-        ).getProvider(D),
-      ),
-      'the clientAuthentication strategy refused: the client certificate has expired',
-    );
+  it('a client-certificate failure is carried with the words of its problem: incomplete, expired', async () => {
+    for (const [problem, words] of [
+      ['incomplete', 'the client certificate is incomplete'],
+      ['expired', 'the client certificate has expired'],
+    ] as const) {
+      expectGuarded(
+        await rejection(
+          brokerThrowing(
+            () =>
+              new AuthProviderFailure(
+                authError['client-certificate']({ problem }),
+              ),
+          ).getProvider(D),
+        ),
+        'the clientAuthentication strategy failed',
+        words,
+      );
+    }
   });
 
   it('a factory’s own refusal rewritten by the consumer before rethrowing: the factory’s fixed words', async () => {
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keyStore(SECRET_CLIENT, async () => null),
       clientAuthentication: async (ctx) =>
@@ -688,6 +751,7 @@ describe('which rows call the strategy, and with which grant', () => {
     async (_name, stated) => {
       const strategy = jest.fn(fromServiceKeySecret({ encoding: 'raw' }));
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: sessionStore(),
         serviceKeyStore: keyStore(
           SECRET_CLIENT,
@@ -712,6 +776,7 @@ describe('which rows call the strategy, and with which grant', () => {
     async (authType, grant) => {
       const grants: string[] = [];
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: sessionStore(),
         serviceKeyStore: keyStore(SECRET_CLIENT, undefined, {
           authType,

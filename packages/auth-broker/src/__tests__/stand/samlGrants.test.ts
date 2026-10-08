@@ -42,6 +42,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthBroker, type StrategyGrant } from '../../index';
 import { describeWhere } from '../helpers/describeWhere';
+import { STATED } from '../helpers/stated';
 import { FormBrowser } from './formLogin';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
@@ -342,6 +343,7 @@ describeWhere(
       const replayStore = createInMemoryReplayStore();
       const broker = () =>
         new AuthBroker({
+          ...STATED,
           serviceKeyStore: keys,
           sessionStore: sessions,
           assertionReplayStore: () => replayStore,

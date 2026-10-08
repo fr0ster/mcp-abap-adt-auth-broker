@@ -38,6 +38,7 @@ import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { asContract, type WithUndefined } from '../../contractShape';
 import { AuthBroker, bindingOf, DestinationConfigError } from '../../index';
+import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
   startTokenEndpoint,
@@ -187,6 +188,7 @@ function broker(
   const login = strategy();
   const b = new AuthBroker(
     {
+      ...STATED,
       sessionStore: options.sessions ?? sessions.store,
       serviceKeyStore: keyStore(
         options.conn === undefined ? means(grant) : options.conn,
@@ -710,6 +712,7 @@ describe('the none rows: a handed-over credential is refused, never discarded', 
       if (conn[key] === undefined) delete m[key];
     }
     return new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(session).store,
       serviceKeyStore: keyStore(m, auth),
     });

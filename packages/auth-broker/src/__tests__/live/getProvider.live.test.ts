@@ -25,7 +25,7 @@
  * `SAP_AUTH_TYPE`, `SAP_CLIENT`, `SAP_USERNAME` / `SAP_PASSWORD`, the
  * `SAP_SNC_*` keys). The address the connector dials is read from the same
  * means (`serviceUrl`, `sapClient`); the RFC system number is derived from the
- * URL's port by connection 10 unless `SAP_SYSNR` is set.
+ * URL's port by connection 14 unless `SAP_SYSNR` is set.
  *
  * The `jwt` case's means come from the destination's SAP service key,
  * `<destination>.json` in AUTH_BROKER_LIVE_SERVICE_KEYS_DIR, read by auth-stores
@@ -63,7 +63,7 @@ import {
   EnvDestinationStore,
   SafeAbapSessionStore,
 } from '@mcp-abap-adt/auth-stores';
-// connection 10 loads without the RFC addon: rfcConversationFrom requires it
+// connection 14 loads without the RFC addon: rfcConversationFrom requires it
 // only when a conversation is opened, so the HTTP case runs where it is absent.
 import {
   AdtCloudConnector,
@@ -82,6 +82,7 @@ import type { IConnectionConfig } from '@mcp-abap-adt/interfaces-auth-broker';
 import { asContract } from '../../contractShape';
 import { AuthBroker } from '../../index';
 import { describeWhere, runLog as log } from '../helpers/describeWhere';
+import { STATED } from '../helpers/stated';
 
 const env = process.env;
 
@@ -93,7 +94,7 @@ const quiet = {
   debug: () => {},
 };
 
-/** The lightest ADT read connection 10's own live suite measures. */
+/** The lightest ADT read connection 14's own live suite measures. */
 const PROBE = '/sap/bc/adt/compatibility/graph';
 
 type ConnectorConfig = ConstructorParameters<typeof AdtOnPremConnector>[0];
@@ -105,7 +106,7 @@ function unset(names: string[]): string[] {
 
 /**
  * Why the RFC wire cannot be taken here, or null when it can. The probe asks
- * from where connection 10 itself will `require` it (`rfcConversationFrom`):
+ * from where connection 14 itself will `require` it (`rfcConversationFrom`):
  * the addon is connection's optional dependency, built at install time only
  * when the NW RFC SDK is found (`SAPNWRFC_HOME`), and must also load — which
  * needs the SDK's libraries on the loader path.
@@ -185,6 +186,7 @@ function brokerAndMeans(): {
   const keys = new EnvDestinationStore(env.AUTH_BROKER_LIVE_KEYS_DIR as string);
   return {
     broker: new AuthBroker({
+      ...STATED,
       serviceKeyStore: keys,
       sessionStore: new SafeAbapSessionStore(),
     }),
@@ -218,7 +220,7 @@ function byteSize(data: unknown): number {
 }
 
 describeWhere(
-  'basic over HTTP — an on-premise system (getProvider → connection 10 OnPremHttpTransport)',
+  'basic over HTTP — an on-premise system (getProvider → connection 14 OnPremHttpTransport)',
   basicHttpUnavailable(),
   () => {
     it('logs on with the provider getProvider built and is answered 200', async () => {
@@ -363,7 +365,7 @@ const refuseLogin: IAuthorizationStrategy<string> = {
 };
 
 describeWhere(
-  'jwt / authorization_code over HTTP — a BTP ABAP environment (getProvider → connection 10 CloudHttpTransport)',
+  'jwt / authorization_code over HTTP — a BTP ABAP environment (getProvider → connection 14 CloudHttpTransport)',
   jwtUnavailable(),
   () => {
     let copy: string;
@@ -415,6 +417,7 @@ describeWhere(
         { grantType: 'authorization_code' },
       );
       const broker = new AuthBroker({
+        ...STATED,
         serviceKeyStore: keys,
         sessionStore: sessions,
         authorization: () => refuseLogin,

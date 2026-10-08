@@ -25,6 +25,7 @@ import {
   type ClientAuthenticationContext,
   type TokenProviderFactory,
 } from '../../index';
+import { STATED } from '../helpers/stated';
 
 const D = 'KEYS';
 
@@ -99,6 +100,7 @@ async function run(withStrategy: boolean) {
     Parameters<TokenProviderFactory>
   >(() => provider());
   const broker = new AuthBroker({
+    ...STATED,
     sessionStore: store,
     serviceKeyStore: keyStore(),
     provider: factory,

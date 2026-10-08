@@ -1,5 +1,5 @@
 /**
- * End to end through `@mcp-abap-adt/connection` 10, no SAP system — a
+ * End to end through `@mcp-abap-adt/connection` 14, no SAP system — a
  * process's connector renews and the renewal is stored: a connector built from what `getProvider`
  * returns, over its real HTTP wire, against a local server that refuses the
  * stored token with a 401 and takes the renewed one; a local token endpoint.
@@ -33,6 +33,7 @@ import type {
   IAuthRejection,
 } from '@mcp-abap-adt/interfaces-auth';
 import { AuthBroker } from '../../index';
+import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
   startTokenEndpoint,
@@ -169,7 +170,7 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe('through connection 10: getProvider → AdtCloudConnector → 401 → rejected() → the session store → the token API', () => {
+describe('through connection 14: getProvider → AdtCloudConnector → 401 → rejected() → the session store → the token API', () => {
   it('renews once, resends once, stores the new token, and the token API answers that same token', async () => {
     const sessions = new AbapSessionStore(path.join(dir, 'sessions'));
     // A token the server refuses: well-formed, a future exp, issued by no one.
@@ -181,6 +182,7 @@ describe('through connection 10: getProvider → AdtCloudConnector → 401 → r
       issuedBy: `${endpoint.url}?client_id=broker-client`,
     });
     const broker = new AuthBroker({
+      ...STATED,
       serviceKeyStore: new EnvDestinationStore(path.join(dir, 'keys')),
       sessionStore: sessions,
       authorization: () => refuseLogin,
@@ -215,7 +217,7 @@ describe('through connection 10: getProvider → AdtCloudConnector → 401 → r
     ]);
     expect(endpoint.requests[0]!.params.refresh_token).toBe('stored-refresh');
     const renewed = endpoint.issued[0];
-    // What the server saw: connection 10's logon (its session preflight, then
+    // What the server saw: connection 14's logon (its session preflight, then
     // the CSRF fetch) with the refused token — the 401 on the CSRF fetch is
     // what it handed to rejected() — then the logon once more with the
     // renewed token, and the request itself. One renewal, one resend.

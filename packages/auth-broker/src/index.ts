@@ -12,6 +12,7 @@
 // `interfaces-auth-broker`, `ILogger` from `interfaces-utils`.
 export type {
   IClientAuthentication,
+  IRenewalStrategy,
   ITokenRefresher,
 } from '@mcp-abap-adt/interfaces-auth';
 export type { IClientCertificate } from '@mcp-abap-adt/interfaces-auth-broker';
@@ -33,7 +34,12 @@ export {
   fromServiceKeyCertificate,
   fromServiceKeySecret,
 } from './clientAuthentication';
-export { DestinationConfigError } from './DestinationConfigError';
+export {
+  DestinationConfigError,
+  type DestinationConfigErrorLike,
+  isDestinationConfigError,
+} from './DestinationConfigError';
+export type { TokenGrant } from './destinations';
 // Token provider interface
 export type {
   IRefreshableTokenProvider,
@@ -41,6 +47,7 @@ export type {
   ITokenResult,
   TokenProviderOptions,
 } from './providers';
+export { SessionWriteFailure } from './SessionWriter';
 // Main interfaces for consumers - stores return values through these
 // These are the ONLY types consumers should use
 export type {

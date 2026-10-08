@@ -3,9 +3,11 @@
  *
  * `getProvider` builds the `IAuthProvider` a destination states, from the
  * means its service key store holds and the secret its session store holds.
- * Every token provider it builds writes what it obtains back to the session
- * store through `onTokens` — the secret alone, retried by the broker when the
- * store fails (`SessionWriter`); `flush()` reports what is still pending.
+ * Every token provider it builds renews through the consumer's `renewal` and
+ * writes what it obtains back to the session store through auth-providers'
+ * `refreshStatePersistence` — the secret alone, retried by the broker when the
+ * store fails (`SessionWriter`), a failed write meaning what the consumer's
+ * `onWriteFailure` says; `flush()` reports what is still pending.
  * The token API (`getToken`, `refreshToken`, `createTokenRefresher`) asks that
  * same provider — one per destination, shared — or, when the consumer gives
  * one, the consumer's provider, whose every answer it writes through the same
@@ -19,9 +21,15 @@
  * broker does not repeat or override any of them.
  */
 
+import {
+  AuthProviderFailure,
+  authError,
+  classify,
+} from '@mcp-abap-adt/auth-errors';
 import type {
   IDeviceCodePresenter,
   OidcCallbackResult,
+  PersistedTokens,
 } from '@mcp-abap-adt/auth-providers';
 import type {
   IAssertionReplayStore,
@@ -58,13 +66,20 @@ import {
   isOidcGrant,
   isSamlGrant,
   isUaaGrant,
+  isWriteFailurePolicy,
   oidcProvider,
+  oidcRefusal,
+  optionsLacking,
+  type RenewalOption,
   type RowClient,
   samlProvider,
+  samlRefusal,
   sncProvider,
   statedAuthType,
   statedGrant,
+  type TokenGrant,
   uaaProvider,
+  uaaRefusal,
 } from './destinations';
 import { SessionWriter } from './SessionWriter';
 import type {
@@ -209,6 +224,25 @@ export interface AuthBrokerConfig {
    * the token API uses it as given and calls no strategy for it.
    */
   clientAuthentication?: ClientAuthenticationStrategy | undefined;
+  /**
+   * How the provider the broker builds for a destination renews: called once
+   * per build of every token row (the UAA, OIDC and SAML grants), with the
+   * destination and the grant it states; the answer is the provider's
+   * `renewal`, unchanged. Required for those rows — there is no default: a
+   * token row built without it is refused naming `renewal`. `() =>
+   * refreshThenLogin()` is what 4.x did; `refreshOnly()` never logs in. Not
+   * called for `basic`, `snc` or `none`, nor for the token API's `provider`,
+   * which brings its own.
+   */
+  renewal?: RenewalOption | undefined;
+  /**
+   * What a session write that did not land means — `'fail'`: the call that
+   * caused it fails (`unknown`, `persisting-tokens`); `'continue'`: it is
+   * logged and retried, and the call goes on. Required for every destination
+   * that writes a secret — a token row built by `getProvider`, and every call
+   * of the token API; no default.
+   */
+  onWriteFailure?: 'fail' | 'continue' | undefined;
 }
 
 /** The session secret's fields on a connection config — never means. */
@@ -269,16 +303,22 @@ function expiryOf(result: ITokenResult): number | undefined {
   return undefined;
 }
 
-/** A token result to write, with the binding it is written with. */
-interface BoundResult {
-  /** What is written: the result with its expiry fixed when it arrived. */
-  result: ITokenResult;
+/** One session write, with the binding it is written with. */
+interface SecretWrite {
   /**
-   * The result as the provider handed it over — the object the provider also
-   * returns from `getTokens()` / `refreshTokens()`, so the token API can find
-   * the outcome of its write. Never the copy above.
+   * The credential — a token, or `saml2_pure`'s cookies — or `''` when none
+   * is held (a refresh token discarded before any credential).
    */
-  original: ITokenResult;
+  credential: string;
+  /** Whether `credential` is session cookies (`tokenType: 'saml'`). */
+  cookies: boolean;
+  /** Fixed when the credential arrived, never when a retry writes it. */
+  expiresAt: number | undefined;
+  /**
+   * A string: write it. `null`: clear the stored one. `undefined`: the
+   * result carried none — see `carry`.
+   */
+  refreshToken: string | null | undefined;
   binding: Binding;
   /**
    * Which stored refresh token a result without one carries forward: only one
@@ -386,17 +426,35 @@ function errorCode(error: unknown): string | undefined {
   return undefined;
 }
 
-/** A result carrying a token, or the 3.x error for one that carries none. */
+/**
+ * A result carrying a token, or the failure for one that carries none:
+ * `request-failed`, `token-source`, `no-access-token` — "the token source
+ * returned no access_token", minted by auth-errors.
+ */
 function checked(
-  destination: string,
   result: ITokenResult | undefined,
 ): ITokenResult & { authorizationToken: string } {
   if (!result?.authorizationToken) {
-    throw new Error(
-      `Token provider did not return authorization token for destination "${destination}"`,
+    throw new AuthProviderFailure(
+      authError['request-failed']({
+        operation: 'token-source',
+        problem: 'no-access-token',
+      }),
     );
   }
   return result as ITokenResult & { authorizationToken: string };
+}
+
+/** A token write of the provider's persistence: the report's own facts. */
+function persisted(
+  tokens: PersistedTokens,
+): Pick<SecretWrite, 'credential' | 'cookies' | 'expiresAt' | 'refreshToken'> {
+  return {
+    credential: tokens.authorizationToken,
+    cookies: tokens.tokenType === 'saml',
+    expiresAt: tokens.expiresAt,
+    refreshToken: tokens.refreshToken,
+  };
 }
 
 /**
@@ -418,25 +476,16 @@ export class AuthBroker {
    * build, set before its first read.
    */
   private readonly built = new Map<string, Promise<IAuthProvider>>();
-  /**
-   * The write that failed for a result, keyed on the result the provider
-   * handed over and returns, then on the destination it was written
-   * for: the token API throws it to its caller, as 3.x did, while the broker
-   * keeps retrying. Dropped once a write of that result for that destination
-   * lands.
-   */
-  private readonly failedWrites = new WeakMap<
-    ITokenResult,
-    Map<string, { error: unknown }>
-  >();
   private readonly authorization: AuthBrokerConfig['authorization'];
   private readonly oidcAuthorization: AuthBrokerConfig['oidcAuthorization'];
   private readonly deviceCodePresenter: AuthBrokerConfig['deviceCodePresenter'];
   private readonly samlCookies: AuthBrokerConfig['samlCookies'];
   private readonly assertionReplayStore: AuthBrokerConfig['assertionReplayStore'];
   private readonly clientAuthentication: AuthBrokerConfig['clientAuthentication'];
-  /** getProvider's writes of the session secret, retried on their own. */
-  private readonly writer: SessionWriter<BoundResult>;
+  private readonly renewal: AuthBrokerConfig['renewal'];
+  private readonly onWriteFailure: AuthBrokerConfig['onWriteFailure'];
+  /** Every write of the session secret, retried on its own. */
+  private readonly writer: SessionWriter<SecretWrite>;
 
   /**
    * @param config Stores and the provider (instance or factory)
@@ -497,24 +546,13 @@ export class AuthBroker {
     this.samlCookies = config.samlCookies;
     this.assertionReplayStore = config.assertionReplayStore;
     this.clientAuthentication = config.clientAuthentication;
+    this.renewal = config.renewal;
+    this.onWriteFailure = config.onWriteFailure;
     this.logger = logger ?? noOpLogger;
-    this.writer = new SessionWriter<BoundResult>(async (destination, bound) => {
-      try {
-        await this.writeSecret(destination, bound);
-      } catch (error) {
-        // Per destination: one result object may be answered for several
-        // (an instance serves every destination), and a write that lands for
-        // one says nothing about another's.
-        let failures = this.failedWrites.get(bound.original);
-        if (!failures) {
-          failures = new Map();
-          this.failedWrites.set(bound.original, failures);
-        }
-        failures.set(destination, { error });
-        throw error;
-      }
-      this.failedWrites.get(bound.original)?.delete(destination);
-    }, this.logger);
+    this.writer = new SessionWriter<SecretWrite>(
+      (destination, write) => this.writeSecret(destination, write),
+      this.logger,
+    );
     this.logger.debug('[AuthBroker] Broker initialized', {
       hasServiceKeyStore: !!serviceKeyStore,
       providerForm:
@@ -532,17 +570,20 @@ export class AuthBroker {
    *
    * Without a consumer `provider`, the provider is the one `getProvider` hands
    * out for the destination — the same instance, so one token and one renewal
-   * serve both — and what it obtains is written by its `onTokens`. With one,
+   * serve both — and what it obtains is written by its persistence. With one,
    * the consumer's provider is asked and its answer written, as in 3.x — the
    * secret alone.
    *
-   * Errors from the provider (its typed errors included) propagate unchanged;
-   * so does a store failure, a failed write of the token included — the token
-   * stands and the broker keeps retrying the write.
+   * A provider's failure is relayed as the same object; a store's read
+   * failure reaches the caller as the store raised it. A write that did not
+   * land fails the call under `onWriteFailure: 'fail'` (`unknown`,
+   * `persisting-tokens`) — the token stands and the broker keeps retrying the
+   * write — and is only logged under `'continue'`.
    *
    * @throws DestinationConfigError for a destination the key store states as
-   *   `basic` or `snc`, before any provider is asked; without a consumer
-   *   `provider`, also for one whose provider obtains no token.
+   *   `basic` or `snc`, before any provider is asked; without the
+   *   `onWriteFailure` option; without a consumer `provider`, also for one
+   *   whose provider obtains no token.
    */
   async getToken(destination: string): Promise<string> {
     return this.obtain(destination, 'getTokens');
@@ -561,6 +602,16 @@ export class AuthBroker {
     destination: string,
     method: 'getTokens' | 'refreshTokens',
   ): Promise<string> {
+    if (this.provider && !isWriteFailurePolicy(this.onWriteFailure)) {
+      // Every answer of the consumer's provider is written: what a failed
+      // write means is the consumer's to say. (Without one, getProvider's
+      // token row refuses the same.)
+      throw new DestinationConfigError(
+        destination,
+        ['onWriteFailure'],
+        'the token API writes the session secret: say what a failed write means',
+      );
+    }
     const means = await this.statedForTokens(destination);
     const result = this.provider
       ? await this.obtainFromConsumer(destination, method, means)
@@ -627,10 +678,9 @@ export class AuthBroker {
       );
     }
     this.logger.debug(`[AuthBroker] ${method} for ${destination}`);
-    const result = checked(destination, await provider[method]());
-    // onTokens wrote it, or failed to: the failure is this caller's too.
-    this.throwFailedWrite(destination, result);
-    return result;
+    // The provider's failure — a write its persistence awaited included — is
+    // relayed as the same object.
+    return checked(await provider[method]());
   }
 
   /**
@@ -658,26 +708,23 @@ export class AuthBroker {
     );
 
     this.logger.debug(`[AuthBroker] ${method} for ${destination}`);
-    const result = checked(destination, await provider[method]());
-    await this.writer.submit(destination, {
-      result: asContract<ITokenResult>({
-        ...result,
-        expiresAt: expiryOf(result),
-      }),
-      original: result,
+    const result = checked(await provider[method]());
+    const outcome = await this.writer.submit(destination, {
+      credential: result.authorizationToken,
+      cookies: result.tokenType === 'saml',
+      expiresAt: expiryOf(result),
+      refreshToken: present(result.refreshToken)
+        ? result.refreshToken
+        : undefined,
       binding,
       carry,
     });
-    this.throwFailedWrite(destination, result);
-    return result;
-  }
-
-  /** The failure recorded for this result's write here, thrown as the store raised it. */
-  private throwFailedWrite(destination: string, result: ITokenResult): void {
-    const failed = this.failedWrites.get(result)?.get(destination);
-    if (failed) {
-      throw failed.error;
+    if (!outcome.landed && this.onWriteFailure === 'fail') {
+      throw new AuthProviderFailure(
+        classify(outcome.error, 'persisting-tokens'),
+      );
     }
+    return result;
   }
 
   /**
@@ -1078,6 +1125,18 @@ export class AuthBroker {
             : await this.read(destination, 'client', () =>
                 serviceKeyStore.getAuthorizationConfig(destination),
               );
+        // The consumer's renewal and write policy have no default: a row
+        // without either is refused — with everything else it lacks, in one
+        // error — before any collaborator, the clientAuthentication strategy
+        // included, is called.
+        if (
+          optionsLacking({
+            renewal: this.renewal,
+            onWriteFailure: this.onWriteFailure,
+          }).length > 0
+        ) {
+          throw this.rowRefusal(destination, grant, stated, secretClient);
+        }
         // The consumer's client authentication, resolved inside the guard
         // before any provider exists: a strategy that throws leaves nothing
         // built and nothing cached. Then the client identity the row and the
@@ -1116,27 +1175,26 @@ export class AuthBroker {
                 this.sessionStore.loadSession(destination),
               );
         const secret = this.boundOrDiscarded(destination, stored, binding);
-        // The expiry is fixed when the result arrives, not when a retry
-        // finally writes it — on a copy; the outcome of the write is recorded
-        // against the result itself, which the provider also returns to the
-        // token API.
-        const onTokens = (result: ITokenResult) =>
-          this.writer.submit(destination, {
-            result: asContract<ITokenResult>({
-              ...result,
-              expiresAt: expiryOf(result),
-            }),
-            original: result,
+        // The provider's persistence writes through here: resolved when the
+        // write landed, rejected with the store's error when it did not —
+        // refreshStatePersistence then does what onWriteFailure says.
+        const write = async (tokens: PersistedTokens): Promise<void> => {
+          const outcome = await this.writer.submit(destination, {
+            ...persisted(tokens),
             binding,
             carry: 'bound',
           });
+          if (!outcome.landed) throw outcome.error;
+        };
         const common = {
           destination,
           client,
           secret,
           ...(clientAuthentication ? { clientAuthentication } : {}),
+          renewal: this.renewal,
+          onWriteFailure: this.onWriteFailure,
+          write,
           logger: this.logger,
-          onTokens,
         };
         if (isUaaGrant(grant)) {
           provider = uaaProvider({
@@ -1195,6 +1253,58 @@ export class AuthBroker {
   }
 
   /**
+   * A token row's refusal when the consumer's `renewal` or `onWriteFailure`
+   * is missing — named beside every other field and option the row lacks, in
+   * one error — decided before any collaborator is called. With a
+   * clientAuthentication strategy and no secret client, the client's fields
+   * are not judged: the strategy would tell the certificate client's.
+   */
+  private rowRefusal(
+    destination: string,
+    grant: TokenGrant,
+    means: IConnectionConfig,
+    secretClient: IAuthorizationConfig | null,
+  ): DestinationConfigError {
+    const clientAuthenticated =
+      !!this.clientAuthentication && grant !== 'saml2_pure';
+    const client =
+      clientAuthenticated && !secretClient ? undefined : secretClient;
+    const check = {
+      destination,
+      client,
+      clientAuthenticated,
+      renewal: this.renewal,
+      onWriteFailure: this.onWriteFailure,
+    };
+    const refusal = isUaaGrant(grant)
+      ? uaaRefusal({ ...check, grant, authorization: this.authorization })
+      : isOidcGrant(grant)
+        ? oidcRefusal({
+            ...check,
+            grant,
+            means,
+            oidcAuthorization: this.oidcAuthorization,
+            deviceCodePresenter: this.deviceCodePresenter,
+          })
+        : samlRefusal({
+            ...check,
+            grant,
+            means,
+            authorization: this.authorization,
+            samlCookies: this.samlCookies,
+            assertionReplayStore: this.assertionReplayStore,
+          });
+    return (
+      refusal ??
+      new DestinationConfigError(
+        destination,
+        optionsLacking(check),
+        `a destination with grantType ${grant} lacks what its grant needs`,
+      )
+    );
+  }
+
+  /**
    * The stored secret when it is bound to this destination's resource and
    * issuer, else `null`: the provider is then built as with no session
    * and logs in afresh — the refresh token is not spent either. The log line
@@ -1231,33 +1341,31 @@ export class AuthBroker {
   /**
    * One write of the destination's session secret — and nothing else:
    * `{ authorizationToken, expiresAt, refreshToken, issuedFor, issuedBy }` in
-   * one `saveSession` — or, for a `saml2_pure` result (`tokenType: 'saml'`),
-   * `{ sessionCookies, expiresAt, issuedFor, issuedBy }`: cookies are written
-   * as cookies, every other result as a token (`saml2_bearer` included). No means is ever written: not `serviceUrl`, not
-   * `authType`, not the client — they live in the key store, which the broker
-   * never writes.
+   * one `saveSession` — or, for `saml2_pure`'s cookies (`tokenType: 'saml'`),
+   * `{ sessionCookies, expiresAt, issuedFor, issuedBy }`. No means is ever
+   * written: not `serviceUrl`, not `authType`, not the client — they live in
+   * the key store, which the broker never writes.
    *
-   * - `expiresAt`: fixed by `onTokens` when the result arrived — the result's
-   *   own, else the `expiresIn` it reports counted from then (the rule the
-   *   provider applies to its own cache).
-   * - `refreshToken`: the result's, else the one the session holds, read at
-   *   write time, so a result without one does not erase the stored one — for
-   *   a provider the broker built, only a stored one bound where this one is:
-   *   a refresh token obtained for another resource or from another client is
-   *   not carried into this secret. So too for a consumer's factory beside a
-   *   `clientAuthentication` strategy, seeded only with a bound session. A
-   *   consumer's provider without one was seeded with whatever the session
-   *   held, so whatever it holds is carried (4.0.0).
+   * - A write that holds no credential (a refresh token discarded before any
+   *   was held) writes only `refreshToken: ''`: the stored credential keeps
+   *   its own binding and loses its refresh token.
+   * - `expiresAt`: fixed when the credential arrived.
+   * - `refreshToken`: a string is written; `null` (discarded) is written as
+   *   `''`, the store's clearing operation; `undefined` carries the one the
+   *   session holds, read at write time — for a provider the broker built,
+   *   only a stored one bound where this one is. A consumer's provider
+   *   without a strategy was seeded with whatever the session held, so
+   *   whatever it holds is carried (4.0.0).
    * - `issuedFor` / `issuedBy`: the binding computed when the provider was
-   *   built, each left out when the means lack its source — so the
-   *   store clears it.
+   *   built, each left out when the means lack its source.
    * - A destination the key store now states as `basic` or `snc` is not
    *   written: those obtain no session secret.
    */
   private async writeSecret(
     destination: string,
-    { result, binding, carry }: BoundResult,
+    write: SecretWrite,
   ): Promise<void> {
+    const { binding, carry } = write;
     const serviceKeyStore = this.serviceKeyStore;
     const means = serviceKeyStore
       ? await this.read(destination, 'means', () =>
@@ -1270,38 +1378,51 @@ export class AuthBroker {
       );
       return;
     }
+    if (write.credential === '') {
+      await this.sessionStore.saveSession(
+        destination,
+        asContract<IConfig>({ refreshToken: '' }),
+      );
+      this.logger.info(`[AuthBroker] Refresh token cleared for ${destination}`);
+      return;
+    }
     let secret: IConfig;
-    if (result.tokenType === 'saml') {
+    if (write.cookies) {
       // saml2_pure: the cookies are the credential, and SAML has no refresh
       // token to carry.
       secret = asContract<IConfig>({
-        sessionCookies: result.authorizationToken,
-        expiresAt: result.expiresAt,
+        sessionCookies: write.credential,
+        expiresAt: write.expiresAt,
       });
     } else {
-      const stored = result.refreshToken
-        ? null
-        : await this.read(destination, 'session', () =>
-            this.sessionStore.loadSession(destination),
-          );
-      const storedRefreshToken =
-        present(stored?.refreshToken) &&
-        (carry === 'any' || boundHere(stored, binding))
-          ? stored.refreshToken
-          : undefined;
+      let refreshToken: string | undefined;
+      if (typeof write.refreshToken === 'string') {
+        refreshToken = write.refreshToken;
+      } else if (write.refreshToken === null) {
+        refreshToken = '';
+      } else {
+        const stored = await this.read(destination, 'session', () =>
+          this.sessionStore.loadSession(destination),
+        );
+        refreshToken =
+          present(stored?.refreshToken) &&
+          (carry === 'any' || boundHere(stored, binding))
+            ? stored.refreshToken
+            : undefined;
+      }
       secret = asContract<IConfig>({
-        authorizationToken: result.authorizationToken,
-        expiresAt: result.expiresAt,
-        refreshToken: result.refreshToken || storedRefreshToken,
+        authorizationToken: write.credential,
+        expiresAt: write.expiresAt,
+        refreshToken,
       });
     }
     if (binding.issuedFor !== undefined) secret.issuedFor = binding.issuedFor;
     if (binding.issuedBy !== undefined) secret.issuedBy = binding.issuedBy;
     await this.sessionStore.saveSession(destination, secret);
     this.logger.info(`[AuthBroker] Session secret saved for ${destination}`, {
-      credential: secret.sessionCookies !== undefined ? 'cookies' : 'token',
-      hasRefreshToken: !!secret.refreshToken,
-      expiresAt: result.expiresAt,
+      credential: write.cookies ? 'cookies' : 'token',
+      hasRefreshToken: present(secret.refreshToken),
+      expiresAt: write.expiresAt,
     });
   }
 
