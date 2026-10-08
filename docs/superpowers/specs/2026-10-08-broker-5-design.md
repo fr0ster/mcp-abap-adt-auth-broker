@@ -351,10 +351,13 @@ against a store that breaks it.
 - **One at a time, in order.** The writes of one destination run one after
   another, in the order they were queued; an older write never runs after, and
   so never overwrites, a newer one.
-- **A retired build's late write is dropped** (H3). Every build of a
-  destination (§6) takes a generation from a per-destination counter; a write
-  queued by a build older than the newest one that has queued a write for the
-  destination is dropped on arrival — never written.
+- **A retired build's late write is dropped** (H3). Every build takes a
+  generation from a counter per (destination, path) (§7.1); a write queued by
+  a build older than the newest build **of the same path** that has queued a
+  write for the destination is dropped on arrival — never written. A build of
+  the other path never retires this one: the row path's provider and the
+  consumer path's provider both write while they live (the two-sources caveat,
+  §5.5).
 - **A failed write stays pending.** The destination then has a pending write:
   the latest state its build reported (every write is built from the logical
   state, §5.2, so the latest one is the one that must land). It is retried by
@@ -456,6 +459,15 @@ every answer itself, cache hits included, through the same `SessionWriter`, as
 - **Seeds are bound-only** (§6.2): `carry: 'bound'` and `strategySeed`'s rule
   apply to every factory build, with or without a `clientAuthentication`
   strategy.
+
+**Its own path.** The consumer's provider is resolved, cached and identified on
+the consumer path (§7.1): its own slot, its own cache entry, its own
+identity (the means it was handed, the client of the `provider/…` record) and
+binding. `getProvider` never uses it and never shares its resolution — a
+destination with a `provider` option and a `getProvider` caller has two
+providers, each writing the same session with its own record (4.x's "two
+token sources" caveat, kept in the README: use one path per destination); each
+path seeds only from a session whose record is its own (§6.2).
 
 `onWriteFailure` governs this path as §5.4 says.
 
@@ -720,11 +732,13 @@ store's record says.
 ### 6.3 Who the rule applies to
 
 - **`getProvider`'s providers and the token API without a `provider`
-  option:** as §6.2, through one per-destination resolution (§7.1), so a
-  change is seen at the next call — 4.x cached a destination's provider for the
+  option** (the row path): as §6.2, through the row path's resolution (§7.1),
+  so a change is seen at the next call — 4.x cached a destination's provider for the
   broker's life and "picked up" a change only in a new broker.
-- **The consumer's factory:** the same — a change of identity makes the
-  broker call the factory again, seeding it only as §6.2 allows.
+- **The consumer's factory** (the consumer path, its own resolution and cache
+  entry): the same — a change of its identity makes the broker call the
+  factory again, seeding it only as §6.2 allows. A change seen on one path
+  rebuilds that path's provider only.
 - **The consumer's instance** cannot be rebuilt, and the identity of the
   credential it holds is unknown to the broker: after the identity it was first
   used for changes, the token API refuses the destination
@@ -780,10 +794,25 @@ none of them.
 
 ### 7.1 The destination's resolution is a shared attempt
 
-One `sharedAttempt<SlotOutcome<Resolved>>(...)` slot per destination. Every
-`getProvider` and every token API call is a waiter: `join(start, signal)`.
-`start` reads the means, compares the identity (§6.3) and answers the cached
-build or builds; concurrent callers share one resolution.
+One `sharedAttempt<SlotOutcome<Resolved>>(...)` slot **and one cache entry per
+(destination, path)**, two paths, as 4.x's separate `built` and
+`consumerBuilt` caches:
+
+- **the row path** — `getProvider`, and the token API when no `provider`
+  option is given: the provider the destination's row states, its binding
+  record with the row `authType/grantType`;
+- **the consumer path** — the token API when a `provider` option (a factory
+  or an instance) is given: the consumer's provider, its binding record with
+  the row `provider/…` (§5.5, §6.1).
+
+Every call is a waiter of its own path's slot: `join(start, signal)`. `start`
+reads the means, compares that path's identity (§6.3) and answers that path's
+cached build or builds; concurrent callers **of the same path** share one
+resolution. The two paths never share a resolution, a provider, an identity or
+a binding: with a `provider` option configured, a concurrent `getProvider` and
+`getToken` for one destination resolve independently and get different
+providers. Only the destination's session write queue (§5.3) is shared by
+both paths.
 
 **Only cancellation goes through `sharedAttempt`'s failure path.** auth-errors
 2.1.1 rejects every waiter of a start that throws with a new
@@ -1486,6 +1515,20 @@ endpoint**
 - No line and no error holds a token, a refresh token or a store message
   marker.
 
+**Two paths, two providers (§7.1, §5.5)**
+- With a consumer `provider` factory configured, a concurrent `getProvider`
+  and `getToken` for one destination, in both arrival orders: the factory is
+  called once and `getProvider`'s row builder once; `getProvider` returns the
+  row's provider and the token API uses the factory's — two distinct
+  instances; a write from each carries its own record (`jwt/authorization_code`
+  vs `provider/jwt/authorization_code`), recorded by the test's store, through
+  its own persistence path (the row provider's awaited report; the token
+  API's own write). The same with an instance. A means change rebuilds each
+  path's provider at its own next call. **[break: one slot per destination →
+  one caller gets the other path's provider → red]**
+- A build of one path never drops the other path's writes (both land, in
+  queue order).
+
 **Binding across cached providers (§6)**
 - `serviceUrl`, `sapClient`, `uaaUrl`, client id, `grantType` each changed
   between two `getProvider` calls → a new instance, not seeded from the session
@@ -1667,7 +1710,9 @@ Recorded with date and result before the release; none runs in CI.
   late write is dropped (§5.3). Under `'fail'`, the call whose write did not
   land fails, and the destination's calls — checked on entry and again right
   before they return success — are refused while its last write is pending
-  (§5.4), so no call succeeds over a discard the store rejected.
+  (§5.4), so no call succeeds over a discard the store rejected. The row path and the consumer path are resolved,
+  cached and identified separately (§7.1), so no caller is handed the other
+  path's provider or binding.
 - **H4 No built-in timeouts.** §7.6, §10.4; the writer has no timer — a
   failed write is retried by the next write or `flush()` — and every wait on
   the queue ends when the write settles or its owner aborts; the CLI's
