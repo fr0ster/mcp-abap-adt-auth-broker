@@ -956,7 +956,7 @@ describe('a 4.x-format binding reads as unbound', () => {
       expect(await bearer(provider)).toBe(endpoint.issued[0]);
       expect(log.warn.mock.calls).toEqual([
         [
-          `[AuthBroker] ${D}: the stored session secret was not issued under the destination's current means; not used, the provider obtains a new one`,
+          `[AuthBroker] ${D}: the stored session secret is not recorded as issued under the destination's current means; not used, the provider obtains a new one`,
         ],
       ]);
     },

@@ -844,7 +844,7 @@ describe('a failed session write is logged once', () => {
 // ---------------------------------------------------------------------------
 
 describe('a stored secret the destination does not take', () => {
-  const DISCARDED = `[AuthBroker] ${D}: the stored session secret was not issued under the destination's current means; not used, the provider obtains a new one`;
+  const DISCARDED = `[AuthBroker] ${D}: the stored session secret is not recorded as issued under the destination's current means; not used, the provider obtains a new one`;
   const NEVER_SEEDED = `[AuthBroker] ${D}: the destination's means do not state everything a session secret is bound to; a stored one is never used`;
 
   it('a fully stated row, a secret recorded under another client: one warn line saying what happened', async () => {
@@ -890,6 +890,60 @@ describe('a stored secret the destination does not take', () => {
       expect(rendered(lines)).not.toContain('bound to another resource');
       expect(rendered(lines)).not.toContain('stored-elsewhere');
       expect(rendered(lines)).not.toContain(NEVER_SEEDED);
+    } finally {
+      await endpoint.close();
+    }
+  });
+
+  it('a fully stated row without serviceUrl: three restarts over one store, no warn on any — the debug line once a secret is stored', async () => {
+    const endpoint = await startTokenEndpoint();
+    try {
+      const sessions = fakeSessionStore();
+      const login: IAuthorizationStrategy<string> = {
+        authorize: async (request: AuthorizationRequest) => {
+          await request.buildAuthorizationUrl('http://localhost/callback');
+          return {
+            payload: 'the-code',
+            redirectUri: 'http://localhost/callback',
+          };
+        },
+      };
+      const debugLines: number[] = [];
+      for (let restart = 0; restart < 3; restart += 1) {
+        const { logger, lines } = recordingLogger();
+        const broker = new AuthBroker(
+          {
+            ...STATED,
+            sessionStore: sessions,
+            serviceKeyStore: fakeKeyStore(
+              { authType: 'jwt', grantType: 'authorization_code' },
+              {
+                uaaUrl: endpoint.url,
+                uaaClientId: CLIENT_ID,
+                uaaClientSecret: CLIENT_SECRET,
+              },
+            ),
+            authorization: () => login,
+          },
+          logger,
+        );
+        const provider = await broker.getProvider(D);
+        expect(await provider.prepare()).toEqual({ ok: true });
+        await broker.flush();
+        expect(lines.filter((l) => l.level === 'warn')).toEqual([]);
+        debugLines.push(
+          lines.filter((l) => l.message === NEVER_SEEDED && l.level === 'debug')
+            .length,
+        );
+      }
+      // Every restart logged in afresh, and wrote its secret.
+      expect(endpoint.requests.map((r) => r.grantType)).toEqual([
+        'authorization_code',
+        'authorization_code',
+        'authorization_code',
+      ]);
+      expect(sessions.writes.length).toBeGreaterThanOrEqual(3);
+      expect(debugLines).toEqual([0, 1, 1]);
     } finally {
       await endpoint.close();
     }

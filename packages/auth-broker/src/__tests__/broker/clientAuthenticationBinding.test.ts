@@ -417,6 +417,78 @@ describe('a certificate destination stating no resource (Ruling 14)', () => {
     expect(login.asked).toBe(1);
   });
 
+  describe('what the broker logs of a stored secret it does not take', () => {
+    const DISCARDED = `[AuthBroker] ${D}: the stored session secret is not recorded as issued under the destination's current means; not used, the provider obtains a new one`;
+    const NEVER_SEEDED = `[AuthBroker] ${D}: the destination's means do not state everything a session secret is bound to; a stored one is never used`;
+
+    function logged() {
+      const lines: [string, string][] = [];
+      const at = (level: string) => (message: string) => {
+        lines.push([level, message]);
+      };
+      return {
+        lines,
+        logger: {
+          debug: at('debug'),
+          info: at('info'),
+          warn: at('warn'),
+          error: at('error'),
+        },
+      };
+    }
+    const about = (lines: [string, string][]) =>
+      lines.filter(([, m]) => m === DISCARDED || m === NEVER_SEEDED);
+
+    it('with a strategy, another client: the binding can be seeded — one warn', async () => {
+      const { store } = sessions();
+      await storedFor(store, unstated);
+      const { lines, logger } = logged();
+      const again = new AuthBroker(
+        {
+          ...STATED,
+          sessionStore: store,
+          serviceKeyStore: keyStore(
+            null,
+            certificate({ clientId: 'another-cert-client' }),
+            unstated,
+          ),
+          authorization: () => user().strategy,
+          clientAuthentication: certificateStrategy,
+        },
+        logger,
+      );
+      expect(await (await again.getProvider(D)).prepare()).toEqual({
+        ok: true,
+      });
+      expect(about(lines)).toEqual([['warn', DISCARDED]]);
+    });
+
+    it('without a strategy, no resource: never seeded — the debug line, no warn', async () => {
+      const { store } = sessions();
+      const keys = () => keyStore(secretClient(), null, unstated);
+      const first = broker(store, keys(), user());
+      expect(await (await first.getProvider(D)).prepare()).toEqual({
+        ok: true,
+      });
+      await first.flush();
+      const { lines, logger } = logged();
+      const again = new AuthBroker(
+        {
+          ...STATED,
+          sessionStore: store,
+          serviceKeyStore: keys(),
+          authorization: () => user().strategy,
+        },
+        logger,
+      );
+      expect(await (await again.getProvider(D)).prepare()).toEqual({
+        ok: true,
+      });
+      expect(about(lines)).toEqual([['debug', NEVER_SEEDED]]);
+      expect(lines.filter(([level]) => level === 'warn')).toEqual([]);
+    });
+  });
+
   it('a none row stays 4.0.0: a handed-over token stored without a resource is refused', async () => {
     const { store } = sessions();
     await store.saveSession(D, {

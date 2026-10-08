@@ -502,6 +502,20 @@ export function sameRecord(stored: IConfig | null, binding: Binding): boolean {
 }
 
 /**
+ * Whether any stored secret could ever seed this binding's provider: the
+ * binding is fully stated and its resource can match — stated, or matching
+ * when neither side states one (`unstatedResourceMatches`). The condition
+ * `boundHere` needs beside the stored values.
+ */
+export function couldBeSeeded(binding: Binding): boolean {
+  return (
+    binding.fullyStated &&
+    (binding.issuedFor !== undefined ||
+      binding.unstatedResourceMatches === true)
+  );
+}
+
+/**
  * A stored secret may seed this binding's provider — or have its refresh
  * token carried — only when the binding is fully stated, the resource
  * matches, and the stored `issuedBy` is exactly the record. A session with no

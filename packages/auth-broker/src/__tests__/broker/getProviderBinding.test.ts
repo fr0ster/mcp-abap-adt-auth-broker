@@ -57,7 +57,9 @@ const FOR = 'https://abap.example.com:443/sap/bc/adt?sap-client=100';
 const CLIENT_ID = 'sb-broker!t42';
 const CLIENT_SECRET = 'S3CRET-client-must-not-leak';
 const REDIRECT = 'http://localhost/callback';
-const DISCARDED = `[AuthBroker] ${D}: the stored session secret was not issued under the destination's current means; not used, the provider obtains a new one`;
+const DISCARDED = `[AuthBroker] ${D}: the stored session secret is not recorded as issued under the destination's current means; not used, the provider obtains a new one`;
+/** A destination whose binding can never be seeded: a debug line, never a warn. */
+const NEVER_SEEDED = `[AuthBroker] ${D}: the destination's means do not state everything a session secret is bound to; a stored one is never used`;
 
 type SeededGrant = 'authorization_code' | 'passcode';
 
@@ -249,9 +251,7 @@ describe.each(['authorization_code', 'passcode'] as const)(
       expect(await bearer(provider)).toBe(STORED_TOKEN);
       expect(endpoint.requests).toEqual([]);
       expect(login.authorize).not.toHaveBeenCalled();
-      expect(allLogged(logger)).not.toContain(
-        'not issued under the destination',
-      );
+      expect(allLogged(logger)).not.toContain('not recorded as issued under');
     });
 
     describe('not seeded — a fresh login, nothing of the old secret used or logged', () => {
@@ -412,11 +412,20 @@ describe.each(['authorization_code', 'passcode'] as const)(
         // beside it, and nothing of the secret or the binding anywhere in the
         // log. (The provider logs its own uaaUrl and client id, which are
         // means; a stored issuedBy equal to the bare uaaUrl is that value.)
-        expect(logger.warn.mock.calls).toEqual([[DISCARDED]]);
+        // Without serviceUrl the binding can never be seeded: no warn, the
+        // debug line — it holds on every start, and nothing was discarded by
+        // a change.
         const logged = allLogged(logger);
-        expect(logged.split('not issued under the destination')).toHaveLength(
-          2,
-        );
+        if (noResource) {
+          expect(logger.warn.mock.calls).toEqual([]);
+          expect(
+            logger.debug.mock.calls.filter(([m]) => m === NEVER_SEEDED),
+          ).toEqual([[NEVER_SEEDED]]);
+          expect(logged).not.toContain('not recorded as issued under');
+        } else {
+          expect(logger.warn.mock.calls).toEqual([[DISCARDED]]);
+          expect(logged.split('not recorded as issued under')).toHaveLength(2);
+        }
         for (const value of [
           STORED_TOKEN,
           STORED_TOKEN.split('.')[1],
@@ -541,9 +550,7 @@ describe.each(['authorization_code', 'passcode'] as const)(
         expect(await bearer(provider)).toBe(STORED_TOKEN);
         expect(endpoint.requests).toEqual([]);
         expect(login.authorize).not.toHaveBeenCalled();
-        expect(allLogged(logger)).not.toContain(
-          'not issued under the destination',
-        );
+        expect(allLogged(logger)).not.toContain('not recorded as issued under');
       });
     });
 

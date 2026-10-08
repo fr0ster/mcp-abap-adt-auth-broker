@@ -58,6 +58,7 @@ import {
   type Binding,
   boundHere,
   consumerBinding,
+  couldBeSeeded,
   strategyBinding,
 } from './binding';
 import { consumerRow, destinationBinding } from './bindingOf';
@@ -1810,11 +1811,12 @@ export class AuthBroker {
    *
    * A stored credential not taken is logged in fixed words naming the
    * destination only — never a URI, a record or a token: a `warn` when the
-   * binding is fully stated (the secret was issued under other means — another
-   * resource, row, client, endpoint or trust, or a 4.x record), a `debug`
-   * line when it is not — a row that is never seeded by design
-   * (`token_exchange`) or whose means lack what the record needs — since that
-   * holds on every start and nothing was "discarded" by a change.
+   * binding could ever be seeded (`couldBeSeeded`) — the stored secret is not
+   * recorded under the current means: another resource, row, client,
+   * endpoint or trust, a 4.x record, or none — and a `debug` line when it
+   * never could — a row never seeded by design (`token_exchange`), means
+   * lacking what the record needs, or no `serviceUrl` — since that holds on
+   * every start and nothing was discarded by a change.
    */
   private boundOrDiscarded(
     destination: string,
@@ -1827,9 +1829,9 @@ export class AuthBroker {
       present(stored.sessionCookies) ||
       present(stored.refreshToken)
     ) {
-      if (binding.fullyStated) {
+      if (couldBeSeeded(binding)) {
         this.logger.warn(
-          `[AuthBroker] ${destination}: the stored session secret was not issued under the destination's current means; not used, the provider obtains a new one`,
+          `[AuthBroker] ${destination}: the stored session secret is not recorded as issued under the destination's current means; not used, the provider obtains a new one`,
         );
       } else {
         this.logger.debug(
