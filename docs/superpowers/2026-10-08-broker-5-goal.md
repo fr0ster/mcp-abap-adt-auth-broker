@@ -27,7 +27,14 @@ open, or hands up to its own consumer. It never hides it and never guesses it.
   - Tokens reach the session store through a persistence strategy.
   - A refresh token that renewal discarded never comes back from the store:
     not on the next read, not after a restart.
-  - A write that failed is not lost, and does not overwrite a newer one.
+  - A write that failed is not lost while the process lives, and does not
+    overwrite a newer one.
+- **The consumer decides what a failed write means.**
+  - It can choose that a call fails when a write it needs has not landed. Then
+    no call reports success while that write is outstanding, and a discarded
+    refresh token cannot outlive a restart unnoticed.
+  - It can choose best effort. Then the restart guarantees above hold for every
+    write that landed, and the documentation says so.
 - **Every wait can be cancelled by whoever waits.**
   - **Calls:** `getProvider`, `getToken` and `refreshToken` each take a
     cancellation signal.
@@ -46,7 +53,12 @@ open, or hands up to its own consumer. It never hides it and never guesses it.
   - a manual SAML login that always declares its ACS.
 - **Debug output is opt-in and safe.** The provider's debug line comes on only
   through an explicit option or flag, and never from the environment. Without
-  it, no server text and no secret appears anywhere.
+  it, no line carries a secret or server text. With it, only that debug line
+  carries the secrets it names, in the provider's prepared form, and it never
+  carries server text.
+- **The CLI still writes the credentials it exists to write.** The `.env` or
+  JSON file a user asks the CLI for still holds the tokens and keys that file
+  is for, written only where the user named it.
 - **Both packages install from the registry alone.** Each is released and
   installs with every dependency resolved from npm; the broker is published
   first, then the CLI.
@@ -74,27 +86,39 @@ name. Both contradict the chain's decisions.
    configuration or code, never as a hidden default or a heuristic. Each
    choice that belongs to the broker's own consumer is that consumer's.
 2. **Nothing goes out that should not.**
-   - **Never written anywhere:** no secret, server text, authorization URL or
-     `state` appears in any log line, error or output of the broker or the
-     CLI.
+   - **Not in logs, errors or terminal output.** No secret, server text,
+     authorization URL or `state` appears in a log line, an error, a
+     diagnostic, or what the CLI prints to the terminal.
    - **Only through the provider's own debug channel:** a secret appears there
      only when the debug option is on, never otherwise.
+   - **Only where the user asked for it:** credentials leave the CLI only in the
+     output file the user asked for.
    - **Never re-exposed by the broker:** what the providers already keep out
      stays out.
-3. **No built-in timeouts.** A wait ends with a result, an explicit error or
+   - **Stdout:** neither package writes anything to stdout that a stdio
+     transport would read as protocol.
+3. **A credential stays bound to the identity it was obtained for.** A token,
+   refresh token or session is used only for the destination means it was
+   obtained under: resource, SAP client, issuer and client. This holds across
+   cached providers, separate store reads and delayed or retried writes. A
+   credential is never reused after the means change, and a late write never
+   files a credential under an identity other than the one it was obtained
+   with.
+4. **No built-in timeouts.** A wait ends with a result, an explicit error or
    its owner's cancellation signal.
-4. **One implementation of each rule.** What auth-errors or auth-providers
+5. **One implementation of each rule.** What auth-errors or auth-providers
    already ship — sharing a build between waiters, reading a failure, the
    refresh state — the broker uses rather than re-implements.
-5. **Whoever holds an instance holds its rights.** The broker protects what it
+6. **Whoever holds an instance holds its rights.** The broker protects what it
    emits itself. It does not police what its own consumer does with a
    provider or secret that consumer holds.
-6. **Registry only.** Released packages declare only semver ranges that
+7. **Registry only.** Released packages declare only semver ranges that
    resolve on npm. The workspace link between the CLI and the broker exists
    only for development.
-7. **What works today keeps working, or the migration note says what to do.**
+8. **What works today keeps working, or the migration note says what to do.**
    Every behaviour a 4.x consumer or a CLI user relies on either still works or
-   is named in a migration note together with the replacement.
+   is named in a migration note together with the replacement. This never
+   loosens invariants 2 and 3.
 
 ## Out of scope
 
@@ -112,7 +136,8 @@ name. Both contradict the chain's decisions.
    neither gets, and whether that is a refusal.
 2. The refresh state of a destination across session writes, failed writes,
    retries and restarts on auth-stores 4.0.0, where `refreshToken: ''` clears.
-   How this relates to `refreshStatePersistence`.
+   How this relates to `refreshStatePersistence`, and how the consumer states
+   its choice about failed writes.
 3. The cancellation model:
    - what a signal on `getProvider` attaches to the provider it returns;
    - how the token API reaches a provider without keeping a session alive;
