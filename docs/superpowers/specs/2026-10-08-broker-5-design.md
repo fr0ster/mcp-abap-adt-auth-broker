@@ -320,7 +320,7 @@ binding field and clears the refresh token:
 | any other, `authorizationToken !== ''` | `authorizationToken`, `expiresAt`, and the refresh token by the rows below |
 | `refreshToken: <string>` | that refresh token |
 | `refreshToken: null` | `refreshToken: ''` — auth-stores 4.0.0's clearing operation; the stored one is never read |
-| `refreshToken: undefined` | the stored refresh token **written explicitly as its value** when the session read at write time is bound to this build's identity (§6) — its `issuedFor` and its `issuedBy` record equal, the row included, and the binding's authorization server fully stated (§6.1), so a refresh token obtained for another grant, client or server is never carried; **otherwise `refreshToken: ''`** (always so for a binding whose authorization server is not fully stated) — never omitted, so a refresh token obtained under other means can never end up beside this credential and its binding |
+| `refreshToken: undefined` | the stored refresh token **written explicitly as its value** when the session read at write time is bound to this build's identity (§6) — its `issuedFor` and its complete `issuedBy` record equal — row, issuer with its client, and every endpoint field — and the binding's authorization server fully stated (§6.1), so a refresh token obtained for another grant, client, server or endpoint is never carried; **otherwise `refreshToken: ''`** (always so for a binding whose authorization server is not fully stated) — never omitted, so a refresh token obtained under other means can never end up beside this credential and its binding |
 | beside every credential | `issuedFor` of the build's binding, `''` when the means lack its source, and `issuedBy` — the build's version-2 record (§6.1), always present — never left out, so no earlier binding survives the merge beside a new credential |
 | `authorizationToken === ''` (a discard before any credential is held — a credential-free write) | **only `refreshToken: ''`**: no credential field, no `expiresAt`, no binding field. The stored credential, whatever identity it was obtained for, keeps its own binding — the write never re-labels it — and loses its refresh token, which the provider discarded |
 
@@ -474,7 +474,10 @@ with `sap-client`), absent when the means state no `serviceUrl`.
 broker produces:
 
 ```
-issuedBy = "mcp-abap-adt-binding/2;" row ";" issuer
+issuedBy  = "mcp-abap-adt-binding/2;" row ";" enc(issuer) ";" endpoints
+endpoints = enc(token) ";" enc(authorization) ";" enc(deviceAuthorization) ";"
+            enc(samlToken) ";" enc(certificate)        always five fields, in this order
+enc(x)    = encodeURIComponent(x), or "" when x is absent
 row      = authType "/" grantType                 a row getProvider builds:
                                                   jwt/authorization_code, jwt/client_credentials,
                                                   jwt/passcode, jwt/oidc_authorization_code,
@@ -488,7 +491,27 @@ issuer   = the 4.x canonical issuedBy URI          canonical(uaaUrl | oidcIssuer
                                                   (uaaBinding, oidcBinding, samlPureBinding,
                                                   handedOverBinding: binding.ts)
          | ""                                      when the means state no issuer source
+token, authorization, deviceAuthorization          the endpoint the means state for the row —
+                                                  oidcTokenEndpoint, oidcAuthorizationEndpoint,
+                                                  oidcDeviceAuthorizationEndpoint (OIDC rows,
+                                                  destinations.ts:476-483, 556-616) — each
+                                                  canonical(value) with no parameter kept
+samlToken                                         samlTokenUrl (saml2_bearer, destinations.ts:772),
+                                                  canonical(value)
+certificate                                       the certificate client's certUrl, canonical, when
+                                                  the build read it for the clientAuthentication
+                                                  strategy (its token endpoint is <certUrl>/oauth/token)
 ```
+
+`canonical` is the one canonicaliser of `binding.ts` (scheme and host
+lower-cased, port explicit, no trailing `/`), here with no query parameter
+kept. **The record names every authorization server the row may reach**: the
+issuer (with its client), every endpoint the means state for the row, and the
+certificate client's endpoint. A row that reads none of a field writes it
+empty. Every field after the row is percent-encoded with `encodeURIComponent`,
+so no field holds `;`, and the five endpoint fields are always present — the
+record is unambiguous without being parsed. The version stays `2`: no
+version-2 record has ever been written by a released broker.
 
 **The client is already in the record.** For every row that binds to an
 authorization server, 4.x's issuer URI is the server's base URL with
@@ -503,7 +526,10 @@ authorization server and its client — 4.x's `issuerStated: false`: a UAA row o
 `saml2_bearer` without `uaaUrl` or `uaaClientId`; an OIDC row with neither
 `oidcIssuerUrl` nor `uaaUrl` (explicit endpoints alone, `destinations.ts:479-527`)
 or without `uaaClientId`; `saml2_pure` without `samlAcsUrl`; the consumer
-instance (handed no client). Such a binding is **never seeded and never
+instance (handed no client). **So is one with a stated endpoint (an issuer
+included) that has no canonical form** — it does not parse, has no host, or
+carries a query, user info or a fragment, which the canonical form would drop:
+a value that cannot be recorded exactly is not trusted. Such a binding is **never seeded and never
 carried**, as in 4.x (`sameIssuer` answered false for an absent `issuedBy`):
 the broker decides this from its own computed binding — the stored string is
 not inspected — so a session can never match it, whatever was stored, not
@@ -517,11 +543,10 @@ credential the consumer handed over, it seeds no renewal.
 
 - **Deterministic.** `authType` and `grantType` are values of their closed
   lists (checked by `statedAuthType` / `statedGrant` before any binding is
-  computed), so neither holds `;` or `/`; the issuer is the last field, so its
-  characters need no escaping; the canonical URI holds no `#` and no line
-  break (fragments dropped, `client_id` re-encoded by `URLSearchParams`), so
-  the string round-trips through every auth-stores session store, the `.env`
-  files included.
+  computed), so neither holds `;` or `/`; every URI field is canonical and then
+  `encodeURIComponent`-encoded, so it holds no `;`, `#`, space or line break,
+  and the string round-trips through every auth-stores session store, the
+  `.env` files included.
 - **Never parsed.** The broker computes the expected `issuedBy` for a build
   with the same one function (`destinationBinding`, behind `bindingOf`) and
   compares it with the stored string by exact equality. The stored string is
@@ -547,50 +572,52 @@ credential the consumer handed over, it seeds no renewal.
   exact equality with the expected record; a session with no `issuedBy` is
   never bound.
 
-The persisted pair decides the seed. The cache (§6.3) compares more: the pair,
-plus every authorization-server value the means state, held in memory only.
+### 6.2 One rule: a provider is never changed — changed means get a new one
 
-### 6.2 Separate store reads
+**A provider is never changed or re-seeded in place.** The broker builds a
+destination's provider once for its identity and hands that one out while the
+identity stays the same. The identity is complete: the persisted pair
+(`issuedFor`, the complete `issuedBy` record of §6.1) and, in memory only,
+never logged or persisted, the stated client id (`uaaClientId`) and `uaaUrl`
+(which the record holds only inside a fully stated issuer). Every call of
+`getProvider` and of the token API reads the means (§7.1) and computes it.
 
-Every seed passes only a secret whose own read is bound to the identity — and
-no secret at all when the binding's authorization server is not fully stated
-(§6.1): such a build is seeded with nothing, whatever the session holds. Otherwise the
-session read whose binding was checked is the one the refresh token comes from
-(`strategyAuthorization`'s rule, today on the strategy path only, `AuthBroker.ts:358-374`),
-and the connection seed carries the token, cookies and expiry only when that
-read itself is bound (`strategySeed`). 5.0.0 applies both to every factory
-build and every row; 4.x's unbound carry on the factory path without a
-strategy (`composeAuthorization`, `AuthBroker.ts:341-356`) goes.
+- **Unchanged identity:** the cached provider is answered, as it is.
+- **Anything really changed** — the record (resource, SAP client, row,
+  issuer with its client, any endpoint) or a stated string the identity
+  compares: the broker builds a **new provider**. The old one is dropped from
+  the cache and never handed out again for that destination; whoever already
+  holds it keeps it (H6), and its late writes are dropped once the new build
+  has written (§5.3).
+- **A new provider for changed means starts with nothing** — nothing from the
+  old provider (no token, refresh token, pinned material or state is carried
+  across) and nothing from a session written under other means: it logs in.
+- **A provider may start from a stored session only when its complete
+  identity equals the session's stored binding** — `issuedFor` and the exact
+  `issuedBy` record — and its authorization server is fully stated (§6.1): the
+  case of a restart, or a first build, with unchanged means. Then the token,
+  cookies and expiry come from that same read (`strategySeed`), and the refresh
+  token from that same read whose binding was checked
+  (`strategyAuthorization`), never from another read; 4.x's unbound carry on
+  the factory path (`composeAuthorization`, `AuthBroker.ts:341-356`) goes.
 
-### 6.3 Cached providers
+The same rule decides the refresh-token carry of a write (§5.2): only a stored
+refresh token whose session binding equals the writing build's complete
+identity is carried; anything else is cleared.
 
-4.x cached a destination's provider for the broker's life, so means changed
-under a running broker were "picked up by a new broker" — and a provider
-holding a credential for the old resource could be handed out for the new one.
-5.0.0 checks on every call:
+### 6.3 Who the rule applies to
 
-- `getProvider` and the token API resolve a destination through one
-  per-destination attempt (§7.1) that reads the means (and, for client rows,
-  the client) and computes the identity. **The cache identity** is the
-  persisted pair (`issuedFor`, the `issuedBy` record) **plus**, compared as
-  stated strings, in memory only, never logged or persisted: the client id
-  (`uaaClientId`), `uaaUrl`, `oidcIssuerUrl`, `oidcTokenEndpoint`,
-  `oidcAuthorizationEndpoint`, `oidcDeviceAuthorizationEndpoint` and
-  `samlTokenUrl` — each absent or present as the means state it. So a switch
-  of client or of an explicit endpoint rebuilds the provider in one process
-  even where the persisted record cannot tell them apart (an issuer-less OIDC
-  row); and after a restart such a row is not seeded at all (§6.1, §6.2).
-  **The same identity:** the cached
-  build is answered. **Another:** the cached build is retired — dropped from
-  the cache, never handed out again; whoever already holds it keeps it (H6) —
-  and a new build follows, with a new generation (§5.3), seeded only from a
-  session bound to the new identity.
-- **The consumer's factory** is rebuilt the same way.
-- **The consumer's instance** cannot be rebuilt and its credential's identity is
-  unknown to the broker: after the identity it was first used for changes, the
-  token API refuses the destination (`DestinationConfigError(['provider'])`,
-  "the destination's means changed since the provider instance was first used
-  for it") until a new broker.
+- **`getProvider`'s providers and the token API without a `provider`
+  option:** as §6.2, through one per-destination resolution (§7.1), so a
+  change is seen at the next call — 4.x cached a destination's provider for the
+  broker's life and "picked up" a change only in a new broker.
+- **The consumer's factory:** the same — a change of identity makes the
+  broker call the factory again, seeding it only as §6.2 allows.
+- **The consumer's instance** cannot be rebuilt, and the identity of the
+  credential it holds is unknown to the broker: after the identity it was first
+  used for changes, the token API refuses the destination
+  (`DestinationConfigError(['provider'])`, "the destination's means changed
+  since the provider instance was first used for it") until a new broker.
 
 ### 6.4 Delayed and retried writes
 
@@ -1029,6 +1056,7 @@ aborted login prints "the authorization was aborted".
 | providers' 30 s / 300 s login timeouts | none: a login waits until it ends or a signal aborts; bound it with your own signal or strategy option |
 | collaborator strategies of 5.x (`browserCallbackStrategy({ browser: 'system', timeoutMs })`, `openUrl`) | 6.0.0's: `browser` an `IBrowser`, `signal` instead of `timeoutMs`, `redirectUri` required for the manual ones; a strategy of yours must honour `AuthorizationRequest.signal` |
 | a stored session bound by `issuedFor` / `issuedBy` (issuer and client) | the binding also names the row: `issuedBy` is a versioned record (§6.1). **Every session written before 5.0.0 reads as unbound once**: for each token destination the stored token and refresh token are discarded (one `warn` line) and the provider's first renewal is a **login, not a refresh** — interactive for `authorization_code`, `passcode`, `oidc_authorization_code`, `device_code` and the SAML grants; a token request for `client_credentials`, `password`, `token_exchange`. A headless consumer must run that login once per destination after upgrading. A handed-over credential (`none`) is refused naming `issuedBy` until written again with 5.0.0's `bindingOf`. A switch of grant with unchanged resource and client no longer reuses the other grant's credential |
+| a stated authorization-server endpoint (`oidcTokenEndpoint`, `oidcAuthorizationEndpoint`, `oidcDeviceAuthorizationEndpoint`, `samlTokenUrl`, a certificate client's `certUrl`) changed | the destination's stored token and refresh token are not reused: it **logs in once** after the change (4.x refreshed with the old refresh token at the new endpoint). An endpoint stated with a query or user info is never recorded exactly, so such a destination is never seeded and logs in after every restart |
 | an OIDC destination with explicit endpoints only (no `oidcIssuerUrl`, no `uaaUrl`) | unchanged from 4.x: its session is never seeded, so it logs in after every restart (state `oidcIssuerUrl`, or `uaaUrl` with the client, for its session to be reused); a switch of its client or of an endpoint now also rebuilds its provider within one process |
 | means changed under a running broker were picked up by a new broker | picked up at the next call: a changed identity (resource, SAP client, issuer, client, row) rebuilds the destination's provider, unseeded from a session bound elsewhere; an instance `provider` is refused for that destination until a new broker |
 | the token API's factory seeded with whatever the session held | seeded only with secrets bound to the destination; an unbound session seeds nothing and the provider logs in |
@@ -1184,6 +1212,25 @@ endpoint**
   in, and R_A is not sent (as 4.x). **[break: seed a binding whose
   authorization server is not fully stated]** **[break: leave the endpoints
   out of the cache identity]**
+- **An issuer-bearing OIDC row: token-endpoint switch.** `jwt` /
+  `oidc_authorization_code` (and `password`) stating `oidcIssuerUrl`, the client
+  and an explicit `oidcTokenEndpoint` E1 logs in (T1, R1); `oidcTokenEndpoint`
+  is switched to E2, everything else unchanged. **Within one broker's life**
+  and **after a restart** (fresh broker, same files): T1 is presented nowhere,
+  R1 never reaches E2 and is not sent to E1 again (asserted at both local
+  endpoints); the resulting store state holds the new record with E2 and no R1.
+  The same for the authorization and device-authorization endpoints, one case
+  each. **[break: drop an endpoint field from the record → red]**
+- **A SAML bearer row: `samlTokenUrl` switch.** `saml` / `saml2_bearer`
+  obtains T1, R1 at `samlTokenUrl` S1; switched to S2: within one process and
+  after a restart, T1 is not presented and R1 never reaches S2 (asserted at both
+  endpoints).
+- **A certificate client's `certUrl` switch** on the `clientAuthentication`
+  strategy path: the same assertions.
+- **An endpoint with no canonical form** (a query, user info): the destination
+  is never seeded; its refresh token is never sent after a restart.
+- **The record round-trips** byte-for-byte through every session store file,
+  with every field populated, and no field holds `;`.
 - **An issuer-bearing row keeps its 4.x strength:** a UAA row switched to
   another client id with the same `uaaUrl` (and an OIDC row with the same
   `oidcIssuerUrl`) after a restart is not seeded — the client is in the
@@ -1374,9 +1421,13 @@ Recorded with date and result before the release; none runs in CI.
   is never used for another, in one process or after a restart, and a 4.x
   binding is never trusted (§6.1, §6.5); a binding whose authorization server
   and client the means do not fully state is never seeded or carried, and the
-  cache identity also compares the client and every stated endpoint, so a
-  client or endpoint switch never reuses a credential (§6.1–§6.3); it is
-  checked on every call;
+  persisted record names every authorization server and endpoint the row may
+  reach, so a client, issuer or endpoint switch never reuses a credential —
+  the cache and the seed check compare the same endpoint values (§6.1–§6.3).
+  One rule (§6.2): a provider is never changed or re-seeded in place; when the
+  means really change, a new provider is built that starts with nothing and
+  logs in, and only a provider whose complete identity equals the stored
+  binding starts from that session. It is checked on every call;
   seeds are bound-only; writes carry their build's binding and generation; and
   since auth-stores merges, every write states the refresh token (a value bound
   to the same identity, or `''`) and every credential write both binding
@@ -1446,8 +1497,9 @@ contract; (c) adds an API for little gain.
 The re-check on every call is dictated by H3; its granularity is not:
 (a) the binding plus the row (`authType`, `grantType`) — the row persisted
 in the `issuedBy` record (§6.1, D21) — plus, in memory, the client id and every
-authorization-server value the means state (`uaaUrl`, `oidcIssuerUrl`, the
-three OIDC endpoints, `samlTokenUrl`; ruled by the controller, so not open);
+authorization-server value the means state — the endpoints persisted in the
+`issuedBy` record (D21), the client id and `uaaUrl` in memory (ruled, not
+open);
 (b) every means field
 the row reads (scopes, endpoints, trust, user and password); (c) the binding
 only. For a consumer instance after a change: (i) refuse the destination until
@@ -1560,15 +1612,14 @@ sessions: (i) read as unbound — one login per destination after upgrading
 (§11); (ii) accept a 4.x binding once, assuming the row the means state now —
 a guess the standing rules forbid, and exactly the grant switch H3 must catch.
 *Recommended: (a) and (i).* Ruled, not open: a binding whose authorization
-server and client are not fully stated is never seeded or carried (§6.1). One
-residual is left open, equal to 4.x: an OIDC row stating `oidcIssuerUrl`
-*and* an explicit `oidcTokenEndpoint` is persisted by issuer and client only,
-so after a restart a change of the explicit endpoint alone (same issuer and
-client) is not seen by the seed check — the in-memory cache identity sees it
-within one process. Options: (iii) leave it (4.x's strength); (iv) add the
-stated endpoints to the record as further fields, each the canonical URI
-percent-encoded with `encodeURIComponent` so no `;` can occur in one, the
-issuer moved before them. *Recommended: (iii)* — the spec is written with
-it, nothing is weaker than 4.x, and the record keeps the format already
-reviewed; (iv) closes the restart case at the cost of a longer record.
+server and client are not fully stated is never seeded or carried (§6.1).
+**Decided by the user (2026-10-08): the record carries every stated
+authorization-server endpoint** (option iv): after the issuer, the token,
+authorization and device-authorization endpoints, `samlTokenUrl` and the
+certificate client's `certUrl`, each canonical and `encodeURIComponent`-encoded,
+absent ones empty, in a fixed order (§6.1). Leaving endpoints out of the record
+(4.x's strength) was rejected: within one process a rebuild for an endpoint
+change would still be seeded from the session matching the shorter record, and
+refresh-first renewal would send R, obtained at the old endpoint, to the new
+one.
 
