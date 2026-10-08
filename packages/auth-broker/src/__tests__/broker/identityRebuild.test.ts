@@ -285,6 +285,20 @@ function tokenOnly(jti: string): TokenAnswer & { token: string } {
 }
 
 /** Nothing any token request either endpoint received holds `value`. */
+/** Every primitive value in a JSON text, at any depth. */
+function leaves(json: string): unknown[] {
+  const found: unknown[] = [];
+  const walk = (value: unknown): void => {
+    if (value !== null && typeof value === 'object') {
+      for (const inner of Object.values(value)) walk(inner);
+    } else {
+      found.push(value);
+    }
+  };
+  walk(JSON.parse(json));
+  return found;
+}
+
 function sentNowhere(value: string): void {
   expect(JSON.stringify(endpoint.requests)).not.toContain(value);
   expect(JSON.stringify(other.requests)).not.toContain(value);
@@ -971,9 +985,13 @@ describe('another user, a changed secret, another client', () => {
           expect(written).not.toContain(trace);
           expect(logged).not.toContain(trace);
         }
-        // Nor its length, as a value of any field.
-        expect(logged).not.toContain(`:${secret.length}`);
-        expect(written).not.toContain(`:${secret.length}`);
+        // Nor its length, as the value of any field — compared value by
+        // value, never searched for in the text, where a logged time
+        // ("…:28:58 UTC") holds any two-digit number.
+        for (const value of [...leaves(logged), ...leaves(written)]) {
+          expect(value).not.toBe(secret.length);
+          expect(value).not.toBe(`${secret.length}`);
+        }
       }
     },
   );
