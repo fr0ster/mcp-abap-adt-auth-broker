@@ -405,14 +405,31 @@ and every token API call throw `DestinationConfigError(['onWriteFailure'])`;
    token cannot outlive a restart unnoticed: until its `''` lands, every call
    for the destination fails, `flush()` rejects, and each failed attempt is a
    `warn` line (§8.1).
-3. **Limit, stated (D4):** a provider already handed to a connector answers its
+3. **A final check before success.** The entry check alone is not enough:
+   while a call waits on its resolution or its token, a provider already
+   handed out may commit a detached report (a discard at an abort, a late
+   refresh result) whose write fails. So every broker call that is about to
+   succeed — `getProvider`, `getToken`, `refreshToken` — makes one more gate
+   check at its completion point, against the writer's **submission
+   revision**: the writer counts, per destination, every submission (a
+   revision number) and records for each attempt the revision it wrote. At the
+   completion point the call reads the destination's current revision R. If
+   every write up to R has landed, the call succeeds. If a write up to R is
+   failed or still in flight, the call gives it one immediate attempt (or
+   waits for the one in flight) through the same gate slot, raced only against
+   the call's signal (§7.5), and succeeds only if every write up to R landed;
+   otherwise it rejects with §3.3's failure for that write. A write submitted
+   after R belongs to whatever comes later, not to this call. No timer: the wait
+   ends when the attempt settles or the caller aborts.
+4. **Limit, stated (D4):** a provider already handed to a connector answers its
    moments from its own state; a moment that commits nothing (a valid cached
    token presented) is not gated on an earlier outstanding write. Every moment
    that renews is (point 1). The broker does not wrap providers to gate this.
 
 **`'continue'` — best effort:** no call fails because of a write. The provider's
-report never throws (`refreshStatePersistence`'s `'continue'`), the token API
-returns the token, the writer retries on its own, `flush()` reports what is
+report never throws (`refreshStatePersistence`'s `'continue'`), neither gate
+check runs (a failed write is logged, not answered), the token API returns the
+token, the writer retries on its own, `flush()` reports what is
 still pending, and every failure is a `warn` line. The restart guarantees of
 §5.6 hold for every write that landed, and the README says exactly that: a
 refresh token discarded while its `''` write is pending at the moment the
@@ -422,7 +439,20 @@ process ends comes back from the store after a restart.
 
 The consumer's provider has no broker-built persistence: the token API writes
 every answer itself, cache hits included, through the same `SessionWriter`, as
-4.x. Two changes, each forced by the goal:
+4.x. Three changes, each forced by the goal:
+
+- **The wait for that write is the caller's to abandon.** 4.x awaited
+  `writer.submit` directly (`obtainFromConsumer`), so after `getTokens()`
+  returned no signal could release a caller stuck in a `saveSession` or queued
+  behind another write. 5.0.0 waits for the submission's attempt through a
+  per-destination slot (§7.5), raced against the call's signal: an abort
+  releases the caller at once with auth-errors' `aborted` failure — never with
+  success — under either policy, and the write runs on to completion,
+  landing or failing on its own (a failure then stays pending, retried, and is
+  reported by the next gate check and `flush()`). Without an abort, under
+  `'fail'` a write that did not land rejects the call (§5.4), and under
+  `'continue'` the call returns the token once the attempt settled, whatever it
+  came to.
 
 - **The result's refresh token is authoritative (D5).** auth-providers 6.0.0
   returns from `getTokens()` / `refreshTokens()` the refresh token the provider
@@ -850,6 +880,11 @@ parties, or its waiters) — the broker keeps nothing alive.
   `SlotOutcome` (§7.1); a write that did not land is `{ ok: true, value:
   { landed: false, error } }` and the waiter throws §3.3's failure for it
   outside `join`. The caller's signal releases the caller, the write runs on.
+- The final check of §5.4 (point 3) uses the same gate slot, keyed by the
+  destination and the revision it waits for.
+- The consumer path's wait for its own submission (§5.5) joins a
+  per-destination slot whose `start` is that submission's attempt, resolving a
+  `SlotOutcome`; an abort releases the caller (`aborted`), the write runs on.
 - `flush({ signal })` joins one broker-wide slot whose `start` resolves a
   `SlotOutcome<void>`; the `AggregateError` of §3.4 is its `thrown`, rethrown
   outside `join` as the same object (D9). An abort releases the caller, the
@@ -1034,10 +1069,17 @@ platform)`), shown in `--help`:
   once, removing the work directory (D18). `SIGHUP` keeps 2.x's immediate exit
   (129). After the run, every listener it added is removed:
   `process.listenerCount('SIGINT' | 'SIGTERM')` returns to its value before.
-- **`mcp-auth`'s subcommands** (`oidc`, `saml2-pure`, `saml2-bearer`) spawn
-  `mcp-sso` with inherited stdio, as 2.x; the child owns the interrupt (the
-  terminal delivers the signal to both), and the parent exits with the child's
-  status.
+- **`mcp-auth`'s subcommands** (`oidc`, `saml2-pure`, `saml2-bearer`) **run
+  `mcp-sso`'s code in-process** instead of spawning `mcp-sso` (2.x's
+  `spawnSync` with inherited stdio). Chosen over supervising a child because it
+  is simpler and leaves nothing to forward: one process, one interrupt, one
+  work directory. A child relied on the terminal delivering the signal to both
+  processes; a `SIGTERM` sent to the parent's PID alone left the child's
+  unbounded login running with its port and its work directory. In 3.0.0
+  `mcp-sso.ts`'s argument parsing takes an argument array (`parseMcpSsoArgs(args)`,
+  no `process.argv` read inside), and `mcp-auth` calls it and `runMcpSso` with
+  its own run controller and work directory; exit codes, output and every flag
+  are as the `mcp-sso` command gives them.
 
 ### 10.5 The compositions, `state` and PKCE, and the manual SAML ACS
 
@@ -1147,6 +1189,7 @@ aborted login prints "the authorization was aborted".
 | `error instanceof DestinationConfigError` | `isDestinationConfigError(error)`; `error.error` is the provider's error when one caused it; its message adds `: <the provider's reason>` there |
 | a provider's `ValidationError` thrown raw by `getProvider` (rows other than SNC) | `DestinationConfigError` naming the store fields, the provider's error in `error` |
 | the certificate words of `clientAuthentication` (`incomplete` / `expired` / `could not be used`) | `error.reason` of the carried `client-certificate` error; the `DestinationConfigError` reason reads `the clientAuthentication strategy failed: <reason>` |
+| the token API with a consumer `provider`: a call waited for its session write however long the store took | the wait races the call's `signal`: an abort releases the caller (`aborted`) while the write runs on |
 | `flush()`'s `AggregateError.errors`: `Error("<dest>": <class>)` | `SessionWriteFailure` (`destination`, `error`) |
 | `getProvider(d)`, `getToken(d)`, `refreshToken(d)` | unchanged calls; each also takes `{ signal }` — the server ties a session's close to `getProvider`'s and each request's cancellation to the token API's |
 | providers' 30 s / 300 s login timeouts | none: a login waits until it ends or a signal aborts; bound it with your own signal or strategy option |
@@ -1176,6 +1219,7 @@ aborted login prints "the authorization was aborted".
 | error output: a message and a stack trace | `reason — hint`, then the diagnostics line; no stack trace |
 | an `--env` session refreshed with its refresh token | a session written by CLI 2.x (or earlier) is not bound under 3.0.0's binding record: the first run after upgrading discards it with a warning and **logs in** (no refresh); later runs refresh as before |
 | `mcp-sso … --cookie` sessions written by 2.x | refused naming `issuedBy` by 3.0.0: run `--cookie` again |
+| `mcp-auth oidc` / `saml2-pure` / `saml2-bearer` started a second process (`mcp-sso`) | they run in one process; a signal to that process ends the login, frees the port and removes the work directory |
 | a callback reachable from another machine | loopback only (auth-providers 6.0.0): tunnel the port (`ssh -L`) |
 
 ## 12. Release order
@@ -1424,6 +1468,21 @@ endpoint**
   without checking the outstanding write]**
 - `'continue'`: the same store → every call succeeds, one `warn` line per
   failed attempt carrying `logFields` only, `flush()` rejects.
+- **The final check.** A provider handed out earlier commits a detached
+  discard whose write fails while (1) a `getProvider` resolution is suspended
+  on a held store read, and (2) separately, a `getToken` answered from the
+  provider's cache is suspended before its completion point: under `'fail'`
+  each call rejects `unknown` `persisting-tokens` (the write's failure); under
+  `'continue'` each succeeds and the failure is one `warn` line. A write
+  submitted after the call's completion point does not affect it.
+  **[break: check only on entry → the `'fail'` cases red]**
+- **The consumer path's write is abandonable.** A consumer provider returns a
+  token; `saveSession` is held open (and separately: queued behind another
+  held write); the caller's signal aborts: the call rejects `aborted` at once
+  under both policies — never with success — and when the store is released
+  the write lands (`loadSession` shows it); with a store that then fails, the
+  failure is pending and the next `'fail'` call rejects. **[break: await the
+  submission without racing the signal → red]**
 - No `onWriteFailure`: a token row and the token API refused naming it;
   `basic` built.
 - Consumer factory path: a result without a refresh token writes `''`; a
@@ -1506,8 +1565,14 @@ providers, each suite constructing `renewal` and `onWriteFailure` explicitly.
   `INTERACTIVE_LOGIN_TIMEOUT_MS`, `AbortSignal.timeout`, `timeoutMs` or
   `setTimeout` on a login path in the CLI.
 - A second signal exits at once and removes the work directory.
-- `mcp-auth oidc …` (delegation) interrupted: the child aborts, the port is
-  free, the parent exits with the child's status.
+- `mcp-auth oidc …` and `mcp-auth saml2-pure …` run in one process (no child
+  process is started — asserted by spawning the built bin and listing its
+  children): `SIGTERM` sent to that PID alone ends the login `aborted`, exit
+  143, the callback port bound by the test afterwards, the work directory
+  removed, the output file untouched; the same with `SIGINT` (130).
+  **[break: spawn `mcp-sso` again → red]**
+- `parseMcpSsoArgs` reads no `process.argv`: the same arguments through
+  `mcp-sso` and through `mcp-auth <subcommand>` give the same options.
 - Manual SAML with no ACS from any source: refused naming `--acs-url`, nothing
   read or written; with each source the strategy's `redirectUri` is that ACS;
   the IdP-initiated paste returns it. **[break: restore the localhost
@@ -1602,9 +1667,13 @@ Recorded with date and result before the release; none runs in CI.
   A provider persists only refresh state it owns: a write carries a refresh
   token only when that build was seeded with it or obtained it and still holds
   it, so a replacement provider never inherits a refresh token from the store
-  (§5.2, §6.2).
+  (§5.2, §6.2). Under `'fail'`, no broker call succeeds while a
+  write submitted before its completion point — a detached discard included —
+  has not landed (§5.4).
 - **H4 No built-in timeouts.** §7.6, §10.4; the writer's retry delay bounds no
-  wait.
+  wait. The final write check and the consumer path's
+  write wait end on the attempt's settling or the caller's abort, never a
+  timer; the CLI's subcommands run in-process, so one interrupt ends them.
 - **H5 One implementation of each rule.** `sharedAttempt` (§7) — for the
   waiter and cancellation rules only; its results carried as plain outcomes so
   the broker's own errors pass unchanged — `readFailure` /
