@@ -25,6 +25,7 @@ import {
   type AuthorizationCodeProviderConfig,
   ClientCredentialsProvider,
   DEFAULT_CALLBACK_PORT,
+  refreshThenLogin,
   type staticCodeStrategy,
 } from '@mcp-abap-adt/auth-providers';
 import {
@@ -59,6 +60,8 @@ export interface McpAuthOptions {
   outputFile: string;
   authType: 'abap' | 'xsuaa';
   browser: string; // Browser for authorization_code flow (default: 'auto')
+  /** `--browser-program`: the program to run as given; excludes `--browser`. */
+  browserProgram?: string | undefined;
   credential: boolean; // Use client_credentials instead of authorization_code
   format: 'json' | 'env';
   serviceUrl?: string | undefined;
@@ -398,8 +401,12 @@ export async function runMcpAuth(
   // This command's own provider, built by the broker's factory form from the
   // client the destination states and the refresh token its session holds —
   // with `--client-auth`, from the strategy's answer and the client identity
-  // the factory's fourth argument carries, and no client secret.
+  // the factory's fourth argument carries, and no client secret. It renews as
+  // this CLI states (a refresh, then a login: a user at a terminal can log
+  // in), and a secret the store did not take fails the run.
   const broker = new AuthBroker({
+    renewal: () => refreshThenLogin(),
+    onWriteFailure: 'fail',
     sessionStore: files.sessionStore,
     serviceKeyStore:
       options.authType === 'xsuaa'
@@ -420,6 +427,7 @@ export async function runMcpAuth(
           uaaUrl: stated.uaaUrl,
           clientId: stated.clientId,
           clientAuthentication: stated.clientAuthentication,
+          renewal: refreshThenLogin(),
         };
         return options.credential
           ? new ClientCredentialsProvider(authenticated)
@@ -439,6 +447,7 @@ export async function runMcpAuth(
             uaaUrl: auth.uaaUrl,
             clientId: auth.uaaClientId,
             clientSecret: auth.uaaClientSecret,
+            renewal: refreshThenLogin(),
           })
         : new AuthorizationCodeProvider(
             asContract<AuthorizationCodeProviderConfig>({
@@ -447,6 +456,7 @@ export async function runMcpAuth(
               clientSecret: auth.uaaClientSecret,
               refreshToken: auth.refreshToken,
               authorization: authorization(options),
+              renewal: refreshThenLogin(),
             }),
           );
     },

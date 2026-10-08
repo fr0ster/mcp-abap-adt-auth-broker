@@ -11,7 +11,11 @@
  *     [--client-auth certificate --cert-path <path> --key-path <path>
  *      | --client-auth secret --basic-encoding raw|form]
  *
- * <grant>: authorization_code (opens the system browser) or client_credentials.
+ * <grant>: authorization_code (opens a browser, as --browser states — default
+ *   auto, the platform's default browser) or client_credentials.
+ *
+ * --browser auto|system|chrome|edge|firefox|none|headless, or
+ * --browser-program <program>: as mcp-auth takes them.
  *
  * --client-auth: how the client authenticates, never inferred from the key.
  *   Absent: the client secret in the token request (2.0.0); a key with a
@@ -34,25 +38,20 @@
  */
 
 import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
+import { asContract } from './contractShape';
 import { runGenerateEnv } from './generateEnv';
 import { createWorkDir } from './workDir';
-
-/**
- * A person completes this login at a browser; the provider's own default
- * (30s) is sized for an unattended caller instead.
- */
-const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 runGenerateEnv(process.argv.slice(2), {
   // Removed on any exit, error and signal included: it holds the secret.
   workDir: createWorkDir('generate-env'),
   // No port override: this script has no `--redirect-port` flag, so the
-  // callback port is the strategy's own choice.
-  authorization: () =>
-    browserCallbackStrategy({
-      browser: 'system',
-      timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
-    }),
+  // callback port is the strategy's own choice. The login waits until the
+  // user ends it: no bound of this script's own.
+  authorization: (browser) =>
+    browserCallbackStrategy(
+      asContract<Parameters<typeof browserCallbackStrategy>[0]>({ browser }),
+    ),
 })
   .then((code) => process.exit(code))
   .catch((error) => {

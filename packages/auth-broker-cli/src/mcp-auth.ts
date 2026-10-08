@@ -29,15 +29,30 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
+import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
+import {
+  BROWSER_NAMES,
+  browserFor,
+  browserProgramFor,
+  isBrowserName,
+} from './browser';
 import { asContract } from './contractShape';
 import { type McpAuthOptions, runMcpAuth } from './runMcpAuth';
 import { createWorkDir } from './workDir';
 
 /**
- * A person completes this login at a browser; the provider's own default
- * (30s) is sized for an unattended caller instead.
+ * The browser a run states, for this platform: `--browser-program` as given,
+ * else `--browser` through the CLI's table (`browserFor`); `undefined` for
+ * `none` / `headless`. Throws a usage error on a platform with no launcher.
  */
-const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+function runBrowser(options: McpAuthOptions): IBrowser | undefined {
+  if (options.browserProgram !== undefined) {
+    return browserProgramFor(options.browserProgram, process.platform);
+  }
+  return isBrowserName(options.browser)
+    ? browserFor(options.browser, process.platform)
+    : undefined;
+}
 
 function getVersion(): string {
   // This package's own manifest: dist/<bin>.js and src/<bin>.ts both sit one
@@ -85,13 +100,29 @@ function showHelp(): void {
     '  --browser <browser>     Browser for authorization_code flow (default: auto):',
   );
   console.log(
-    '                            - auto: Try to open browser, fallback to showing URL (like cf login)',
+    "                            - auto/system: the platform's default browser; the URL is also shown if it fails",
   );
   console.log(
     '                            - none/headless: Show URL in console and wait for callback',
   );
   console.log(
-    '                            - system/chrome/edge/firefox: Open specific browser',
+    '                            - chrome/edge/firefox, per platform:',
+  );
+  console.log(
+    '                                linux: google-chrome, microsoft-edge, firefox',
+  );
+  console.log(
+    "                                darwin: 'Google Chrome', 'Microsoft Edge', Firefox",
+  );
+  console.log('                                win32: chrome, msedge, firefox');
+  console.log(
+    '                            - other platforms: none/headless only',
+  );
+  console.log(
+    '  --browser-program <p>   The browser program to run, as given (linux: on PATH or a path;',
+  );
+  console.log(
+    '                          darwin: an application name; win32: a program name or path); excludes --browser',
   );
   console.log(
     '  --format <format>       Output format: json or env (default: env)',
@@ -327,6 +358,8 @@ function parseArgs(
   let outputFile: string | undefined;
   let authType: 'abap' | 'xsuaa' = 'abap';
   let browser: string = 'auto'; // Default to auto for authorization_code flow
+  let browserGiven = false;
+  let browserProgram: string | undefined;
   let credential: boolean = false; // Use client_credentials instead of authorization_code
   let format: 'json' | 'env' = 'env';
   let serviceUrl: string | undefined;
@@ -359,22 +392,16 @@ function parseArgs(
       i++;
     } else if (args[i] === '--browser' && next !== undefined) {
       browser = next;
-      if (
-        ![
-          'none',
-          'chrome',
-          'edge',
-          'firefox',
-          'system',
-          'headless',
-          'auto',
-        ].includes(browser)
-      ) {
+      browserGiven = true;
+      if (!isBrowserName(browser)) {
         console.error(
-          `Invalid browser: ${browser}. Must be one of: none, chrome, edge, firefox, system, headless, auto`,
+          `Invalid browser: ${browser}. Must be one of: ${BROWSER_NAMES.join(', ')}`,
         );
         process.exit(1);
       }
+      i++;
+    } else if (args[i] === '--browser-program' && next !== undefined) {
+      browserProgram = next;
       i++;
     } else if (args[i] === '--format' && i + 1 < args.length) {
       const fmt = args[i + 1];
@@ -457,12 +484,18 @@ function parseArgs(
     process.exit(1);
   }
 
-  return {
+  if (browserProgram !== undefined && browserGiven) {
+    console.error('Error: --browser-program excludes --browser');
+    process.exit(1);
+  }
+
+  const options: McpAuthOptions = {
     serviceKeyPath,
     envFilePath,
     outputFile,
     authType,
-    browser,
+    browser: browserProgram ?? browser,
+    browserProgram,
     credential,
     format,
     serviceUrl,
@@ -472,6 +505,15 @@ function parseArgs(
     certPath,
     keyPath,
   };
+  // The browser for this platform, before anything is read or written: a
+  // name this platform has no launcher for is a usage error, never a guess.
+  try {
+    runBrowser(options);
+  } catch (error) {
+    console.error(`Error: ${(error as Error).message}`);
+    process.exit(1);
+  }
+  return options;
 }
 
 function runMcpSso(args: string[]): void {
@@ -575,9 +617,8 @@ async function main() {
       authorization: (run) =>
         browserCallbackStrategy(
           asContract<Parameters<typeof browserCallbackStrategy>[0]>({
-            browser: run.browser,
+            browser: runBrowser(run),
             port: run.redirectPort,
-            timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
           }),
         ),
     });

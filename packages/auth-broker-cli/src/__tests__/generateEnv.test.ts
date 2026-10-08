@@ -12,7 +12,10 @@ import {
   AuthBroker,
   fromServiceKeyCertificate,
 } from '@mcp-abap-adt/auth-broker';
-import { staticCodeStrategy } from '@mcp-abap-adt/auth-providers';
+import {
+  refreshThenLogin,
+  staticCodeStrategy,
+} from '@mcp-abap-adt/auth-providers';
 import {
   AbapSessionStore,
   EnvDestinationStore,
@@ -172,7 +175,7 @@ describe('generate-env', () => {
     );
   });
 
-  it('a secret the store does not take fails the run (flush)', async () => {
+  it('a secret the store does not take fails the run (onWriteFailure: fail)', async () => {
     server.answer('/oauth/token', tokenAnswer('cc', false));
     const spy = jest
       .spyOn(AbapSessionStore.prototype, 'saveSession')
@@ -194,8 +197,13 @@ describe('generate-env', () => {
       spy.mockRestore();
     }
     expect(server.requests).toHaveLength(1);
+    // The login's own call fails with persisting-tokens: the store's words
+    // are nowhere.
     expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('The session was not stored'),
+      expect.stringContaining('persisting the tokens failed'),
+    );
+    expect(JSON.stringify(jest.mocked(console.error).mock.calls)).not.toContain(
+      'disk full',
     );
   });
 
@@ -596,6 +604,8 @@ describe('generate-env --client-auth', () => {
       // The run's work directory is gone; the .env alone, where it was written.
       fs.rmSync(workDir, { recursive: true, force: true });
       const broker = new AuthBroker({
+        renewal: () => refreshThenLogin(),
+        onWriteFailure: 'fail',
         sessionStore: new AbapSessionStore(sessionDir),
         serviceKeyStore: new EnvDestinationStore(sessionDir),
         clientAuthentication: fromServiceKeyCertificate(),
@@ -897,6 +907,8 @@ describe('generate-env --client-auth', () => {
     // The run's work directory is gone; the .env alone, where it was written.
     fs.rmSync(workDir, { recursive: true, force: true });
     const broker = new AuthBroker({
+      renewal: () => refreshThenLogin(),
+      onWriteFailure: 'fail',
       sessionStore: new XsuaaSessionStore(sessionDir),
       serviceKeyStore: new EnvDestinationStore(sessionDir, {
         variables: XSUAA_DESTINATION_VARS,

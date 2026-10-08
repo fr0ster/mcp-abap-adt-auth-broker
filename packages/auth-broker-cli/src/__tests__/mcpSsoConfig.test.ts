@@ -58,8 +58,13 @@ jest.mock('@mcp-abap-adt/auth-providers', () => ({
   consoleDeviceCodePresenter: (...args: unknown[]) =>
     (consoleDeviceCodePresenter as any)(...args),
   defaultReplayStore,
-  ValidationError: jest.requireActual('@mcp-abap-adt/auth-providers')
-    .ValidationError,
+  // The six browser factories: descriptions only, nothing is launched.
+  linuxDefaultBrowser: () => ({ __kind: 'linuxDefaultBrowser' }),
+  linuxBrowser: (program: string) => ({ __kind: 'linuxBrowser', program }),
+  macDefaultBrowser: () => ({ __kind: 'macDefaultBrowser' }),
+  macBrowser: (program: string) => ({ __kind: 'macBrowser', program }),
+  windowsDefaultBrowser: () => ({ __kind: 'windowsDefaultBrowser' }),
+  windowsBrowser: (program: string) => ({ __kind: 'windowsBrowser', program }),
 }));
 
 // The IdP-initiated strategy reads the pasted SAMLResponse through
@@ -102,7 +107,6 @@ jest.mock('node:readline', () => ({
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { ValidationError } from '@mcp-abap-adt/auth-providers';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   applyFileConfig,
@@ -113,6 +117,8 @@ import {
   parseSamlTrustArg,
   readIdpCertificateFile,
   readManualInput,
+  SamlTrustMissingError,
+  ssoBrowser,
 } from '../mcpSsoConfig';
 
 // Trust for a SAML config whose test is about something else: since
@@ -206,7 +212,11 @@ describe('mcp-sso CLI/config merge', () => {
 
       expect(oidcCallbackStrategy).toHaveBeenCalledTimes(1);
       expect(oidcCallbackStrategy).toHaveBeenCalledWith(
-        expect.objectContaining({ port: 4001, browser: 'chrome' }),
+        // The file's name, mapped by the CLI's table for this platform.
+        expect.objectContaining({
+          port: 4001,
+          browser: ssoBrowser({ browser: 'chrome' }),
+        }),
       );
     });
   });
@@ -306,7 +316,9 @@ describe('mcp-sso CLI/config merge', () => {
       strategyOf(options);
 
       expect(samlCallbackStrategy).toHaveBeenCalledWith(
-        expect.objectContaining({ browser: 'firefox' }),
+        expect.objectContaining({
+          browser: ssoBrowser({ browser: 'firefox' }),
+        }),
       );
     });
 
@@ -361,6 +373,8 @@ describe('mcp-sso CLI/config merge', () => {
         flow: 'pure',
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
+        // auth-providers 6.0.0: a manual SAML login needs the ACS stated.
+        acsUrl: 'https://abap.example/sap/saml2/sp/acs',
         assertionFlow: 'manual',
         ...FILE_TRUST,
       });
@@ -496,6 +510,7 @@ describe('mcp-sso CLI/config merge', () => {
           authType: 'abap',
           idpSsoUrl: 'https://idp.example/sso',
           spEntityId: 'sp-entity',
+          acsUrl: 'https://abap.example/sap/saml2/sp/acs',
           assertionFlow: 'manual',
           ...FILE_TRUST,
         }),
@@ -764,8 +779,10 @@ describe('mcp-sso CLI/config merge', () => {
             } catch (error) {
               caught = error;
             }
-            expect(caught).toBeInstanceOf(ValidationError);
-            expect((caught as ValidationError).missingFields).toEqual(missing);
+            expect(caught).toBeInstanceOf(SamlTrustMissingError);
+            expect((caught as SamlTrustMissingError).missingFields).toEqual(
+              missing,
+            );
           },
         );
 

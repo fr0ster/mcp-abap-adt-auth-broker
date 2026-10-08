@@ -12,6 +12,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AuthBroker, bindingOf } from '@mcp-abap-adt/auth-broker';
+import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 import { XsuaaServiceKeyStore } from '@mcp-abap-adt/auth-stores';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
@@ -29,6 +30,7 @@ import {
   buildDestinationMeans,
   type McpSsoOptions,
   normalizeProviderConfig,
+  ssoBrowser,
   ssoRow,
 } from './mcpSsoConfig';
 import { applySamlMetadata } from './samlMetadata';
@@ -148,6 +150,16 @@ export async function runMcpSso(
   // when --config wasn't given.
   applyFileConfig(options, providerConfigFromFile);
 
+  // The browser the run states — from a flag or the --config file — mapped
+  // for this platform before anything else is read or written: a name this
+  // platform has no launcher for is a usage error, never a guess.
+  try {
+    ssoBrowser(options);
+  } catch (error) {
+    console.error(`❌ ${(error as Error).message}`);
+    process.exit(1);
+  }
+
   // The user's own --token-endpoint, before a service key sets the plain
   // /oauth/token, which a saml2-bearer grant must not use.
   const explicitTokenEndpoint = options.tokenEndpoint;
@@ -253,11 +265,16 @@ export async function runMcpSso(
     `📝 Destination "${destination}": ${row.authType} / ${row.grantType}`,
   );
 
+  // This CLI's choices, stated: a user at a terminal can log in, so a
+  // renewal refreshes and then logs in; a secret the store did not take
+  // fails the run, which then writes no output.
   const broker = new AuthBroker(
     {
       sessionStore: files.sessionStore,
       serviceKeyStore: files.keyStore,
       ...buildCollaborators(options, logger),
+      renewal: () => refreshThenLogin(),
+      onWriteFailure: 'fail',
     },
     logger,
   );
@@ -275,7 +292,9 @@ export async function runMcpSso(
     // The destination as the broker will read it: refused here, not later.
     await broker.getProvider(destination);
     console.log(`✅ Session cookies stored`);
-  } else {
+  }
+  let obtainError: unknown;
+  if (row.grantType !== 'none') {
     const provider = await broker.getProvider(destination);
     const tokens = provider as Partial<{
       getTokens: () => Promise<unknown>;
@@ -287,13 +306,22 @@ export async function runMcpSso(
     }
     console.log(`🔐 Getting token for destination "${destination}"...`);
     // What the provider obtains reaches the session store through the
-    // broker's onTokens; a failed write does not fail the login — flush()
-    // below reports it.
-    await tokens.getTokens();
-    console.log(`✅ Token obtained successfully`);
+    // broker's persistence; a write that did not land fails this call
+    // (onWriteFailure: 'fail'). Either way the run fails, after one more
+    // attempt at any write still pending.
+    try {
+      await tokens.getTokens();
+      console.log(`✅ Token obtained successfully`);
+    } catch (error) {
+      obtainError = error;
+    }
   }
 
-  if (!(await flushed(broker, (line) => console.error(line)))) {
+  const stored = await flushed(broker, (line) => console.error(line));
+  if (obtainError) {
+    throw obtainError;
+  }
+  if (!stored) {
     return 1;
   }
 

@@ -16,7 +16,11 @@ import {
   AuthBroker,
   fromServiceKeyCertificate,
 } from '@mcp-abap-adt/auth-broker';
-import { staticCodeStrategy } from '@mcp-abap-adt/auth-providers';
+import { readFailure } from '@mcp-abap-adt/auth-errors';
+import {
+  refreshThenLogin,
+  staticCodeStrategy,
+} from '@mcp-abap-adt/auth-providers';
 import {
   AbapSessionStore,
   EnvDestinationStore,
@@ -224,6 +228,8 @@ describe('mcp-auth (authorization_code)', () => {
     // The server's view: getProvider over the output reuses the token.
     const before = server.requests.length;
     const broker = new AuthBroker({
+      renewal: () => refreshThenLogin(),
+      onWriteFailure: 'fail',
       ...storesOf('abap'),
       serviceKeyStore: storesOf('abap').keyStore,
       authorization: () => ({
@@ -315,9 +321,15 @@ describe('a secret the store does not take', () => {
     jest
       .spyOn(AbapSessionStore.prototype, 'saveSession')
       .mockRejectedValue(new Error('disk full'));
-    await expect(run(options({ serviceKeyPath: abapKey() }))).rejects.toThrow(
-      'disk full',
+    // onWriteFailure: 'fail' — the run fails with persisting-tokens, never
+    // with the store's own words.
+    const thrown = await run(options({ serviceKeyPath: abapKey() })).catch(
+      (error: unknown) => error,
     );
+    expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual({
+      operation: 'persisting-tokens',
+    });
+    expect(String(thrown)).not.toContain('disk full');
     expect(server.requests).toHaveLength(1);
     expect(fs.existsSync(path.join(outDir, `${DEST}.env`))).toBe(false);
     expect(console.error).toHaveBeenCalledWith(
@@ -605,6 +617,8 @@ describe('mcp-auth --client-auth', () => {
       const before = certServer.requests.length;
       const { keyStore, sessionStore } = storesOf('abap');
       const broker = new AuthBroker({
+        renewal: () => refreshThenLogin(),
+        onWriteFailure: 'fail',
         sessionStore,
         serviceKeyStore: keyStore,
         clientAuthentication: fromServiceKeyCertificate(),

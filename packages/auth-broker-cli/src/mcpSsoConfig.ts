@@ -25,19 +25,38 @@ import {
   type SsoProviderConfig,
   samlCallbackStrategy,
   staticCodeStrategy,
-  ValidationError,
 } from '@mcp-abap-adt/auth-providers';
 import type { DestinationMeans } from '@mcp-abap-adt/auth-stores';
-import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
+import type {
+  IAuthorizationStrategy,
+  IBrowser,
+} from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import {
+  BROWSER_NAMES,
+  type BrowserFactories,
+  BrowserUsageError,
+  browserFor,
+  browserProgramFor,
+  isBrowserName,
+  SHIPPED_BROWSERS,
+} from './browser';
 import { asContract } from './contractShape';
 import type { StatedMeans } from './destination';
 
 /**
- * A person completes these logins at a browser; the library's own default
- * (30s) is sized for an unattended caller instead.
+ * The identity provider to trust is missing: the fields, by name — refused
+ * before anything is written.
  */
-export const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+export class SamlTrustMissingError extends Error {
+  readonly missingFields: string[];
+
+  constructor(message: string, missingFields: string[]) {
+    super(message);
+    this.name = 'SamlTrustMissingError';
+    this.missingFields = [...missingFields];
+  }
+}
 
 export interface McpSsoOptions {
   outputFile?: string | undefined;
@@ -57,7 +76,10 @@ export interface McpSsoOptions {
     | undefined;
   configPath?: string | undefined;
   serviceUrl?: string | undefined;
+  /** `--browser`, or a `--config` file's `browser`: one of `BROWSER_NAMES`. */
   browser?: string | undefined;
+  /** `--browser-program`: the platform's named-browser factory, the program as given. */
+  browserProgram?: string | undefined;
   // Overrides the strategy's own callback port (auth-providers'
   // DEFAULT_CALLBACK_PORT) when set; otherwise the strategy decides.
   redirectPort?: number | undefined;
@@ -547,7 +569,7 @@ function buildSamlTrust(options: McpSsoOptions): StatedMeans {
   if (!idpCertificates) missing.push('idpCertificates');
   if (!options.idpEntityId) missing.push('idpEntityId');
   if (missing.length > 0) {
-    throw new ValidationError(
+    throw new SamlTrustMissingError(
       `The assertion validator needs the identity provider to trust: missing ${missing.join(', ')}. ` +
         'Supply --idp-cert and --idp-entity-id, or --idp-metadata.',
       missing,
@@ -672,6 +694,34 @@ export function buildDestinationMeans(options: McpSsoOptions): StatedMeans {
 }
 
 /**
+ * The browser a run states — `--browser` or a `--config` file's `browser`,
+ * mapped by the same table (`browserFor`), or `--browser-program` — on this
+ * platform; `undefined` when none is stated (2.x: mcp-sso opens a browser
+ * only when asked) or for `none` / `headless`. Throws `BrowserUsageError` for
+ * an unknown name (naming `browser`), for both flags together, and for a
+ * launcher this platform has none of. Reads and launches nothing.
+ */
+export function ssoBrowser(
+  options: Pick<McpSsoOptions, 'browser' | 'browserProgram'>,
+  platform: string = process.platform,
+  factories: BrowserFactories = SHIPPED_BROWSERS,
+): IBrowser | undefined {
+  if (options.browserProgram !== undefined) {
+    if (options.browser !== undefined) {
+      throw new BrowserUsageError('--browser-program excludes --browser');
+    }
+    return browserProgramFor(options.browserProgram, platform, factories);
+  }
+  if (options.browser === undefined) return undefined;
+  if (!isBrowserName(options.browser)) {
+    throw new BrowserUsageError(
+      `browser must be one of: ${BROWSER_NAMES.join(', ')}`,
+    );
+  }
+  return browserFor(options.browser, platform, factories);
+}
+
+/**
  * Only the OIDC 'browser' flow opens a browser; routes `--browser`,
  * `--redirect-port` and manual/OOB code paste into the strategy that
  * replaces them.
@@ -696,8 +746,7 @@ export function buildOidcBrowserAuthorization(
   return oidcCallbackStrategy(
     asContract<Parameters<typeof oidcCallbackStrategy>[0]>({
       port: options.redirectPort,
-      browser: options.browser,
-      timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+      browser: ssoBrowser(options),
     }),
   );
 }
@@ -714,7 +763,6 @@ export function buildPasscodeAuthorization(
   }
   return manualPasscodeStrategy({
     read: (prompt, signal) => readManualInput(prompt, signal),
-    timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
   });
 }
 
@@ -742,20 +790,19 @@ export function buildSamlAuthorization(
   if (assertionFlow !== 'browser') {
     // 'manual', and an 'assertion' flow given no value, both need a human to
     // lift the SAMLResponse out of the POST body by hand.
-    return manualSamlResponseStrategy(
-      asContract<Parameters<typeof manualSamlResponseStrategy>[0]>({
-        redirectUri: options.acsUrl,
-        read: (prompt, signal) => readManualInput(prompt, signal),
-      }),
-    );
+    // auth-providers 6.0.0 requires the ACS here: the redirect the identity
+    // provider posts to, never a localhost guess.
+    return manualSamlResponseStrategy({
+      redirectUri: requireOption(options.acsUrl, '--acs-url'),
+      read: (prompt, signal) => readManualInput(prompt, signal),
+    });
   }
   // No fallback: an omitted --redirect-port lets the strategy bind its own
   // default port rather than this CLI pinning a number it doesn't own.
   return samlCallbackStrategy(
     asContract<Parameters<typeof samlCallbackStrategy>[0]>({
       port: options.redirectPort,
-      browser: options.browser,
-      timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+      browser: ssoBrowser(options),
     }),
   );
 }

@@ -83,7 +83,25 @@ function showHelp(): void {
     '  --config <path>           JSON config file (SSO provider config)',
   );
   console.log(
-    '  --browser <browser>       Browser: auto|none|system|chrome|edge|firefox',
+    '  --browser <browser>       Browser: auto|system|chrome|edge|firefox|none|headless (default: none)',
+  );
+  console.log(
+    '                            linux: auto/system the default; chrome google-chrome; edge microsoft-edge; firefox firefox',
+  );
+  console.log(
+    "                            darwin: auto/system the default; chrome 'Google Chrome'; edge 'Microsoft Edge'; firefox Firefox",
+  );
+  console.log(
+    '                            win32: auto/system the default; chrome chrome; edge msedge; firefox firefox',
+  );
+  console.log(
+    '                            other platforms: none/headless only (the URL is shown on stderr)',
+  );
+  console.log(
+    '  --browser-program <p>     The browser program to run, as given (linux: on PATH or a path;',
+  );
+  console.log(
+    '                            darwin: an application name; win32: a program name or path); excludes --browser',
   );
   console.log(
     '  --redirect-port <port>    Redirect port for browser flows (default: from auth-providers, currently 61001)',
@@ -289,6 +307,7 @@ function parseArgs(): McpSsoOptions | null {
   let configPath: string | undefined;
   let serviceUrl: string | undefined;
   let browser: string | undefined;
+  let browserProgram: string | undefined;
   let redirectPort: number | undefined;
   let redirectUri: string | undefined;
   let issuerUrl: string | undefined;
@@ -399,6 +418,10 @@ function parseArgs(): McpSsoOptions | null {
         break;
       case '--browser':
         browser = next;
+        i++;
+        break;
+      case '--browser-program':
+        browserProgram = next;
         i++;
         break;
       case '--redirect-port':
@@ -547,6 +570,7 @@ function parseArgs(): McpSsoOptions | null {
     configPath,
     serviceUrl,
     browser,
+    browserProgram,
     redirectPort,
     redirectUri,
     issuerUrl,

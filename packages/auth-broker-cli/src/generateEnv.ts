@@ -25,7 +25,18 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
+import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 import { XsuaaServiceKeyStore } from '@mcp-abap-adt/auth-stores';
+import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
+import {
+  BROWSER_NAMES,
+  type BrowserFactories,
+  browserFor,
+  browserProgramFor,
+  isBrowserName,
+  SHIPPED_BROWSERS,
+} from './browser';
 import {
   type ClientAuthFlags,
   carriesCertificate,
@@ -49,7 +60,7 @@ const GRANTS = ['authorization_code', 'client_credentials'] as const;
 export type GenerateEnvGrant = (typeof GRANTS)[number];
 
 export const GENERATE_ENV_USAGE =
-  'Usage: generate-env-from-service-key <destination> [service-key-path] [session-path] --grant <authorization_code|client_credentials> [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]';
+  'Usage: generate-env-from-service-key <destination> [service-key-path] [session-path] --grant <authorization_code|client_credentials> [--browser auto|system|chrome|edge|firefox|none|headless | --browser-program <program>] [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]';
 
 /** The client authentication flags and the field each one fills. */
 const CLIENT_AUTH_FLAGS: Record<string, keyof ClientAuthFlags> = {
@@ -60,19 +71,34 @@ const CLIENT_AUTH_FLAGS: Record<string, keyof ClientAuthFlags> = {
 };
 
 export interface GenerateEnvContext {
-  /** The interactive strategy of the authorization code grant, stated by the caller. */
-  authorization: () => AuthorizationStrategy;
+  /**
+   * The interactive strategy of the authorization code grant, stated by the
+   * caller, given the browser the run states for this platform (`undefined`:
+   * none — the URL is shown on stderr).
+   */
+  authorization: (browser: IBrowser | undefined) => AuthorizationStrategy;
   /** The run's private directory (`createWorkDir`), removed by its creator. */
   workDir: string;
+  /** The platform the browser is mapped for; `process.platform` when absent. */
+  platform?: string | undefined;
+  /** The browser factories; auth-providers' own when absent. */
+  browsers?: BrowserFactories | undefined;
 }
 
 /** Runs the script; resolves the exit code. */
 export async function runGenerateEnv(
   args: string[],
-  { authorization, workDir }: GenerateEnvContext,
+  {
+    authorization,
+    workDir,
+    platform = process.platform,
+    browsers = SHIPPED_BROWSERS,
+  }: GenerateEnvContext,
 ): Promise<number> {
   const positional: string[] = [];
   let grant: string | undefined;
+  let browserName: string | undefined;
+  let browserProgram: string | undefined;
   const flags: ClientAuthFlags = {};
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -82,6 +108,12 @@ export async function runGenerateEnv(
       : undefined;
     if (arg === '--grant') {
       grant = args[i + 1];
+      i++;
+    } else if (arg === '--browser') {
+      browserName = args[i + 1];
+      i++;
+    } else if (arg === '--browser-program') {
+      browserProgram = args[i + 1];
       i++;
     } else if (flag !== undefined) {
       const value = args[i + 1];
@@ -108,6 +140,30 @@ export async function runGenerateEnv(
     console.error(
       `❌ --grant is required: ${GRANTS.join(' or ')}. A service key does not say which grant its destination uses.`,
     );
+    console.error(GENERATE_ENV_USAGE);
+    return 1;
+  }
+
+  // The browser for this platform (2.x: always the system browser; now
+  // --browser, default auto), checked before anything is read or written.
+  let browser: IBrowser | undefined;
+  try {
+    if (browserProgram !== undefined) {
+      if (browserName !== undefined) {
+        throw new Error('--browser-program excludes --browser');
+      }
+      browser = browserProgramFor(browserProgram, platform, browsers);
+    } else {
+      const name = browserName ?? 'auto';
+      if (!isBrowserName(name)) {
+        throw new Error(
+          `--browser must be one of: ${BROWSER_NAMES.join(', ')}`,
+        );
+      }
+      browser = browserFor(name, platform, browsers);
+    }
+  } catch (error) {
+    console.error(`❌ ${(error as Error).message}`);
     console.error(GENERATE_ENV_USAGE);
     return 1;
   }
@@ -241,11 +297,15 @@ export async function runGenerateEnv(
   );
 
   // The user's choice as the broker's strategy; none without `--client-auth`.
+  // This script's own choices, stated: a renewal refreshes, then logs in; a
+  // secret the store did not take fails the run.
   const broker = new AuthBroker({
     sessionStore: files.sessionStore,
     serviceKeyStore: files.keyStore,
     clientAuthentication: clientAuthenticationStrategy(flags),
-    authorization: () => authorization(),
+    authorization: () => authorization(browser),
+    renewal: () => refreshThenLogin(),
+    onWriteFailure: 'fail',
   });
 
   console.log(`🔐 Getting token for destination "${destination}" (${grant})`);
@@ -259,9 +319,15 @@ export async function runGenerateEnv(
     };
     await provider.getTokens();
   } catch (error) {
-    console.error(
-      `❌ Login failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    // A provider's failure — of any installed copy of auth-errors — in the
+    // words auth-errors renders from its kind and facts, never a message it
+    // carries; anything else as before (Task 10 rewrites every catch site).
+    const words = isAuthProviderFailure(error)
+      ? readFailure(error, 'token-request').reason
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    console.error(`❌ Login failed: ${words}`);
     console.error(`   ${resolvedSessionPath} is unchanged.`);
     return 1;
   }

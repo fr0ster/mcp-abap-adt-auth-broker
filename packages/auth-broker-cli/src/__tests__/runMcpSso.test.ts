@@ -17,6 +17,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { readFailure } from '@mcp-abap-adt/auth-errors';
+import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 import {
   AbapSessionStore,
   EnvDestinationStore,
@@ -165,6 +167,8 @@ async function expectServedFromOutput(
     },
   };
   const broker = new AuthBroker({
+    renewal: () => refreshThenLogin(),
+    onWriteFailure: 'fail',
     sessionStore: sessionStoreOf(type),
     serviceKeyStore: keyStoreOf(type),
     authorization: () => noLogin,
@@ -447,6 +451,8 @@ describe('mcp-sso saml2 --flow pure --cookie', () => {
     ]);
     await expectSplit('abap');
     const broker = new AuthBroker({
+      renewal: () => refreshThenLogin(),
+      onWriteFailure: 'fail',
       sessionStore: sessionStoreOf('abap'),
       serviceKeyStore: keyStoreOf('abap'),
     });
@@ -486,6 +492,8 @@ describe('mcp-sso saml2 --flow pure --cookie, the SAP client stated in --env', (
       },
     ]);
     const broker = new AuthBroker({
+      renewal: () => refreshThenLogin(),
+      onWriteFailure: 'fail',
       sessionStore: sessionStoreOf('abap'),
       serviceKeyStore: keyStoreOf('abap'),
     });
@@ -494,12 +502,12 @@ describe('mcp-sso saml2 --flow pure --cookie, the SAP client stated in --env', (
 });
 
 describe('a secret the store does not take', () => {
-  it('flush() fails the run: exit 1, no output written', async () => {
+  it('fails the run with persisting-tokens, after flush(): no output written', async () => {
     server.answer('/token', tokenAnswer('lost'));
     jest
       .spyOn(AbapSessionStore.prototype, 'saveSession')
       .mockRejectedValue(new Error('disk full'));
-    const code = await run(
+    const thrown = await run(
       options({
         protocol: 'oidc',
         flow: 'password',
@@ -508,8 +516,11 @@ describe('a secret the store does not take', () => {
         username: 'alice',
         password: 'alice-password',
       }),
+    ).catch((error: unknown) => error);
+    expect(readFailure(thrown, 'unfamiliar-error').facts).toEqual(
+      expect.objectContaining({ operation: 'persisting-tokens' }),
     );
-    expect(code).toBe(1);
+    expect(String(thrown)).not.toContain('disk full');
     expect(server.requests).toHaveLength(1);
     expect(fs.existsSync(path.join(outDir, `${DEST}.env`))).toBe(false);
     expect(console.error).toHaveBeenCalledWith(

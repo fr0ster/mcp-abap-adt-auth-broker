@@ -4,7 +4,7 @@
  * without an identity provider:
  *
  * - missing trust material fails before anything is written, with a
- *   ValidationError naming what is missing;
+ *   SamlTrustMissingError naming what is missing;
  * - with --idp-initiated the CLI's strategy never calls
  *   buildAuthorizationUrl, which auth-providers refuses for an IdP-initiated
  *   login: the login gets as far as validating the pasted assertion;
@@ -40,15 +40,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { readFailure } from '@mcp-abap-adt/auth-errors';
 import {
   generateKeyMaterial,
   type KeyMaterial,
   signXml,
 } from '@mcp-abap-adt/auth-mocks';
-import {
-  AssertionValidationError,
-  ValidationError,
-} from '@mcp-abap-adt/auth-providers';
+import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 import {
   AbapSessionStore,
   EnvDestinationStore,
@@ -59,6 +57,7 @@ import {
   buildCollaborators,
   buildDestinationMeans,
   type McpSsoOptions,
+  SamlTrustMissingError,
 } from '../mcpSsoConfig';
 
 // A self-signed certificate made for this test only; its key was discarded.
@@ -126,23 +125,32 @@ async function providerFor(
     sessionStore: new AbapSessionStore(dir),
     serviceKeyStore: keyStore,
     ...buildCollaborators(run, silentLogger),
+    renewal: () => refreshThenLogin(),
+    onWriteFailure: 'fail',
   });
   return (await broker.getProvider('dest')) as never;
 }
 
 const dirs: string[] = [];
 
+/** What a saml-assertion refusal says: its rule and the check it belongs to. */
+interface AssertionRefusal {
+  readonly check: string;
+  readonly rule: string;
+}
+
 /**
- * An `AssertionValidationError` from the provider the broker built. The
- * workspace installs auth-providers once per package, so the class the broker
- * throws is not the one this file imports: the name and `check` identify it.
+ * The saml-assertion failure of the provider the broker built, read through
+ * auth-errors — never by class: the workspace installs auth-providers once
+ * per package, so no class of this file's copy would match.
  */
-function expectAssertionRefusal(refusal: unknown): AssertionValidationError {
-  expect((refusal as Error)?.constructor?.name).toBe(
-    AssertionValidationError.name,
-  );
-  expect(typeof (refusal as AssertionValidationError).check).toBe('string');
-  return refusal as AssertionValidationError;
+function expectAssertionRefusal(refusal: unknown): AssertionRefusal {
+  const error = readFailure(refusal, 'validating-assertion');
+  expect(error.kind).toBe('saml-assertion');
+  const facts = error.facts as { check?: unknown; rule?: unknown };
+  expect(typeof facts.check).toBe('string');
+  expect(typeof facts.rule).toBe('string');
+  return { check: String(facts.check), rule: String(facts.rule) };
 }
 afterAll(() => {
   for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
@@ -164,15 +172,15 @@ describe.each([['bearer' as const], ['pure' as const]])(
       fs.rmSync(tempDir, { recursive: true, force: true });
     });
 
-    it('without trust material, the run fails with a ValidationError naming each field', async () => {
+    it('without trust material, the run fails with a SamlTrustMissingError naming each field', async () => {
       let caught: unknown;
       try {
         await providerFor(flow, samlOptions());
       } catch (error) {
         caught = error;
       }
-      expect(caught).toBeInstanceOf(ValidationError);
-      expect((caught as ValidationError).missingFields).toEqual([
+      expect(caught).toBeInstanceOf(SamlTrustMissingError);
+      expect((caught as SamlTrustMissingError).missingFields).toEqual([
         'idpCertificates',
         'idpEntityId',
       ]);
@@ -197,7 +205,7 @@ describe.each([['bearer' as const], ['pure' as const]])(
           assertionFlow: 'manual',
         }),
       );
-      // A ValidationError here would mean the strategy asked for an
+      // A configuration failure here would mean the strategy asked for an
       // authorization URL; the pasted document is refused by the validator
       // instead, before anything is sent anywhere.
       const refusal = await provider.getTokens().catch((error) => error);
@@ -292,7 +300,7 @@ describe('the validator the broker builds from the trust mcp-sso writes, against
   async function refusalOf(
     flow: 'bearer' | 'pure',
     signedBy: KeyMaterial,
-  ): Promise<AssertionValidationError> {
+  ): Promise<AssertionRefusal> {
     mockPasted.value = assertionSignedResponse(signedBy);
     const provider = await providerFor(
       flow,
@@ -325,8 +333,6 @@ describe('the validator the broker builds from the trust mcp-sso writes, against
   it('pure requires the Response signed', async () => {
     const refusal = await refusalOf('pure', trusted);
     expect(refusal.check).toBe('signedNode');
-    expect(refusal.message).toContain(
-      'the signature does not cover the samlp:Response',
-    );
+    expect(refusal.rule).toBe('response-not-signed');
   });
 });
