@@ -320,8 +320,8 @@ binding field and clears the refresh token:
 | any other, `authorizationToken !== ''` | `authorizationToken`, `expiresAt`, and the refresh token by the rows below |
 | `refreshToken: <string>` | that refresh token |
 | `refreshToken: null` | `refreshToken: ''` — auth-stores 4.0.0's clearing operation; the stored one is never read |
-| `refreshToken: undefined` | the stored refresh token **written explicitly as its value** when the session read at write time is bound to this build's identity (§6); **otherwise `refreshToken: ''`** — never omitted, so a refresh token obtained under other means can never end up beside this credential and its binding |
-| beside every credential | `issuedFor` / `issuedBy` of the build's binding (§6), each written as `''` when the means lack its source — never left out, so no earlier binding survives the merge beside a new credential |
+| `refreshToken: undefined` | the stored refresh token **written explicitly as its value** when the session read at write time is bound to this build's identity (§6) — its `issuedFor` and its `issuedBy` record equal, the row included, so a refresh token obtained for another grant is never carried; **otherwise `refreshToken: ''`** — never omitted, so a refresh token obtained under other means can never end up beside this credential and its binding |
+| beside every credential | `issuedFor` of the build's binding, `''` when the means lack its source, and `issuedBy` — the build's version-2 record (§6.1), always present — never left out, so no earlier binding survives the merge beside a new credential |
 | `authorizationToken === ''` (a discard before any credential is held — a credential-free write) | **only `refreshToken: ''`**: no credential field, no `expiresAt`, no binding field. The stored credential, whatever identity it was obtained for, keeps its own binding — the write never re-labels it — and loses its refresh token, which the provider discarded |
 
 Carrying a stored refresh token therefore never changes its binding: it is
@@ -422,8 +422,11 @@ every answer itself, cache hits included, through the same `SessionWriter`, as
   provider's write (4.x's `carry: 'any'` goes): a refresh token the consumer's
   provider discarded never comes back from the store, and one stored under
   other means never ends up beside the consumer provider's credential. The
-  binding fields are written as §5.2 says (`''` for a source the means lack —
-  an instance's `issuedBy`).
+  binding fields are written as §5.2 says: `issuedFor`, and the `issuedBy`
+  record with the row `provider/…` (§6.1) — so a session the consumer's
+  provider wrote is never seeded into a provider `getProvider` builds, nor the
+  reverse (4.x achieved one direction by writing no `issuedBy` for an
+  instance).
 - **Seeds are bound-only** (§6.2): `carry: 'bound'` and `strategySeed`'s rule
   apply to every factory build, with or without a `clientAuthentication`
   strategy.
@@ -449,13 +452,75 @@ stored R once after a restart.
 
 ## 6. A credential stays bound to its identity (H3)
 
-### 6.1 The identity
+### 6.1 The identity, and how it is persisted (D21)
 
-A build's identity is the binding the broker already computes
-(`destinationBinding`, `bindingOf.ts`) — `issuedFor` (resource and SAP client)
-and `issuedBy` (issuer and client) — together with the row (`authType`,
-`grantType`) **(D6)**. Unchanged: one canonicalising function, both sides
-canonicalised, a stored secret seeds only when both match.
+A build's identity is the resource (`serviceUrl` and SAP client), the issuer
+and client, **and the row** (`authType`, `grantType`) **(D6)**. 4.x persisted
+only the first two: `destinationBinding` / `boundHere` encode and compare
+resource, issuer and client, and auth-stores 4.0.0's `SessionSecret` holds no
+other binding field than `issuedFor` and `issuedBy` (both kept "as given";
+written and cleared with the credential; not kept when no credential is
+held). So a destination switched from `authorization_code` to
+`client_credentials` with the same resource and UAA client would accept the
+user's token and refresh token as the application's — in one broker's life
+and after a restart alike, since nothing stored names the grant. 5.0.0
+persists the row inside the two strings the store already holds; no store
+field is added.
+
+**`issuedFor`** is unchanged: the 4.x canonical resource URI (`serviceUrl`
+with `sap-client`), absent when the means state no `serviceUrl`.
+
+**`issuedBy`** becomes a versioned record the broker writes and only the
+broker produces:
+
+```
+issuedBy = "mcp-abap-adt-binding/2;" row ";" issuer
+row      = authType "/" grantType                 a row getProvider builds:
+                                                  jwt/authorization_code, jwt/client_credentials,
+                                                  jwt/passcode, jwt/oidc_authorization_code,
+                                                  jwt/device_code, jwt/password, jwt/token_exchange,
+                                                  saml/saml2_pure, saml/saml2_bearer,
+                                                  jwt/none, saml/none
+         | "provider/" authType "/" grantType     the token API's consumer provider, the means'
+         | "provider/-"                            row when stated, "-" when they state none
+issuer   = the 4.x canonical issuedBy URI          canonical(uaaUrl | oidcIssuerUrl | samlAcsUrl,
+                                                  client_id) exactly as 4.x computes it per row
+         | ""                                      when the means state no issuer source
+```
+
+- **Deterministic.** `authType` and `grantType` are values of their closed
+  lists (checked by `statedAuthType` / `statedGrant` before any binding is
+  computed), so neither holds `;` or `/`; the issuer is the last field, so its
+  characters need no escaping; the canonical URI holds no `#` and no line
+  break (fragments dropped, `client_id` re-encoded by `URLSearchParams`), so
+  the string round-trips through every auth-stores session store, the `.env`
+  files included.
+- **Never parsed.** The broker computes the expected `issuedBy` for a build
+  with the same one function (`destinationBinding`, behind `bindingOf`) and
+  compares it with the stored string by exact equality. The stored string is
+  not split, matched or canonicalised; `issuedFor` keeps its 4.x
+  canonicalisation on both sides. No regular expression is involved.
+- **Every row now always has `issuedBy`** — at least its row — so a
+  credential is always bound to its row, even where 4.x wrote no `issuedBy`
+  (`saml2_pure`, the consumer instance, means without an issuer).
+- **A stored binding without the record is unbound.** Every 4.x session (its
+  `issuedBy` a bare URI, or absent), every pre-3.1 file whose binding
+  auth-stores composes from `SAP_URL` / `SAP_UAA_URL`, and any string not
+  produced by the version-2 function: never equal, so never seeded, never
+  carried (§5.2), and refused for a `none` row (§6.5). A later format is
+  `mcp-abap-adt-binding/3;…`, unequal to this one by construction.
+- **`bindingOf(means, client)`** (public, signature unchanged) returns this
+  `issuedBy` for the row the means state — `authType` and `grantType` read from
+  `means` — so a consumer handing over a credential writes exactly what
+  `getProvider` compares; for means stating no `jwt` / `saml` type or no grant
+  it still returns `{}`.
+- **`boundHere`** compares `issuedFor` as 4.x (canonical, the strategy path's
+  `unstatedResourceMatches`) and `issuedBy` by exact equality with the
+  expected record; a session with no `issuedBy` is never bound.
+
+The identity a build compares on every call (§6.3) is exactly the pair it
+persists: the canonical `issuedFor` and the `issuedBy` record. One value
+decides both the cache and the seed.
 
 ### 6.2 Separate store reads
 
@@ -505,8 +570,18 @@ with its own build's binding — the same build that obtained it), the
 credential-free discard (§5.2), `saml2_pure`'s cookies (§5.2), the token API
 with the consumer's provider (§5.5), every retry (it replays the latest
 submission whole, §5.3), and the CLI's `--cookie` hand-over (§10.8:
-`sessionCookies`, the binding from `bindingOf`, each binding field `''` when
+`sessionCookies`, the binding from 5.0.0's `bindingOf` (the version-2 record, row `saml/none`), `issuedFor` `''` when
 absent, and `refreshToken: ''`).
+
+### 6.5 Handed-over credentials (`none` rows)
+
+`handedOverProvider` refuses a session whose `issuedFor` is not the
+destination's resource (4.x) **and, now always, one whose `issuedBy` is not
+the expected record** (4.x compared `issuedBy` only when the means stated an
+issuer; the record now always carries the row). A token or cookies handed over
+with 4.x's `bindingOf` — or by the CLI 2.x `--cookie` — is refused
+(`DestinationConfigError`, `issuedBy`) until it is written again with 5.0.0's
+`bindingOf`.
 
 ## 7. Cancellation (Open 3)
 
@@ -713,7 +788,7 @@ export type { BrokerCallOptions, TokenGrant };
 // re-exported types updated to interfaces-auth 7: IRenewalStrategy added beside ITokenRefresher, IClientAuthentication
 ```
 
-Unchanged: `bindingOf`, `fromServiceKeyCertificate()`, `fromServiceKeySecret({
+`bindingOf(means, client)` keeps its signature and now returns the version-2 `issuedBy` record (§6.1). Unchanged: `fromServiceKeyCertificate()`, `fromServiceKeySecret({
 encoding })` (their words stay; `fromServiceKeyCertificate` relies on
 `tlsMaterial()` throwing an `AuthProviderFailure` of kind `client-certificate`,
 carried by the guard, §3.2), the store contracts, `StrategyGrant`,
@@ -914,6 +989,7 @@ aborted login prints "the authorization was aborted".
 | `getProvider(d)`, `getToken(d)`, `refreshToken(d)` | unchanged calls; each also takes `{ signal }` — the server ties a session's close to `getProvider`'s and each request's cancellation to the token API's |
 | providers' 30 s / 300 s login timeouts | none: a login waits until it ends or a signal aborts; bound it with your own signal or strategy option |
 | collaborator strategies of 5.x (`browserCallbackStrategy({ browser: 'system', timeoutMs })`, `openUrl`) | 6.0.0's: `browser` an `IBrowser`, `signal` instead of `timeoutMs`, `redirectUri` required for the manual ones; a strategy of yours must honour `AuthorizationRequest.signal` |
+| a stored session bound by `issuedFor` / `issuedBy` (issuer and client) | the binding also names the row: `issuedBy` is a versioned record (§6.1). **Every session written before 5.0.0 reads as unbound once**: for each token destination the stored token and refresh token are discarded (one `warn` line) and the provider's first renewal is a **login, not a refresh** — interactive for `authorization_code`, `passcode`, `oidc_authorization_code`, `device_code` and the SAML grants; a token request for `client_credentials`, `password`, `token_exchange`. A headless consumer must run that login once per destination after upgrading. A handed-over credential (`none`) is refused naming `issuedBy` until written again with 5.0.0's `bindingOf`. A switch of grant with unchanged resource and client no longer reuses the other grant's credential |
 | means changed under a running broker were picked up by a new broker | picked up at the next call: a changed identity (resource, SAP client, issuer, client, row) rebuilds the destination's provider, unseeded from a session bound elsewhere; an instance `provider` is refused for that destination until a new broker |
 | the token API's factory seeded with whatever the session held | seeded only with secrets bound to the destination; an unbound session seeds nothing and the provider logs in |
 | a consumer provider's result without a refresh token kept the stored one | it clears it (`refreshToken: ''`): 6.0.0 providers return the refresh token they hold |
@@ -931,7 +1007,8 @@ aborted login prints "the authorization was aborted".
 | "🔗 Authorization URL: …" preview of `mcp-auth` | gone; the URL is shown by the login's own prompt (stderr) |
 | `DEBUG_SSO=true` etc. for `mcp-sso`'s log | `--verbose`; `--auth-debug` for the providers' debug line, with prepared secrets |
 | error output: a message and a stack trace | `reason — hint`, then the diagnostics line; no stack trace |
-| an `--env` session without `SAP_ISSUED_FOR` / `SAP_ISSUED_BY` (written before 2.0) refreshed with its refresh token | it is not bound to the destination: discarded with a warning, and a login follows |
+| an `--env` session refreshed with its refresh token | a session written by CLI 2.x (or earlier) is not bound under 3.0.0's binding record: the first run after upgrading discards it with a warning and **logs in** (no refresh); later runs refresh as before |
+| `mcp-sso … --cookie` sessions written by 2.x | refused naming `issuedBy` by 3.0.0: run `--cookie` again |
 | a callback reachable from another machine | loopback only (auth-providers 6.0.0): tunnel the port (`ssh -L`) |
 
 ## 12. Release order
@@ -1039,6 +1116,30 @@ endpoint**
   the token endpoint). **[break: omit `refreshToken` instead of writing `''`
   on the `undefined` branch]** **[break: leave a binding field out instead of
   `''`]**
+- **A changed grant with the same resource, issuer and client.** A
+  destination stating `jwt` / `authorization_code` logs in (user token T_u,
+  refresh token R_u, both in the store with the `jwt/authorization_code`
+  record); the means are switched to `jwt` / `client_credentials` with
+  identical `serviceUrl`, `sapClient`, `uaaUrl` and client id. (1) **Within one
+  broker's life:** the next `getProvider` / `getToken` builds a new provider;
+  the token endpoint receives a `client_credentials` request and never T_u or
+  R_u; the resulting store state holds the application token, the
+  `jwt/client_credentials` record and no refresh token. (2) **After a
+  restart** (a fresh broker on the same files, the switch made between the two
+  runs): the same assertions. (3) The reverse switch (`client_credentials` →
+  `authorization_code`): the stored application token is not seeded — the
+  first renewal goes to the authorization strategy, and no stored token is
+  presented. **[break: drop the row from the `issuedBy` comparison]**
+  **[break: compare `issuedFor` only]**
+- **A 4.x-format binding reads as unbound.** A session file written by
+  auth-broker 4.1.0's binding (`issuedBy` a bare canonical URI, and one with
+  no `issuedBy`) with matching resource, issuer and client: a token row is not
+  seeded and logs in (asserted at the token endpoint: no refresh token sent),
+  one `warn` line names the destination; a `none` row is refused naming
+  `issuedBy`; `bindingOf` of 5.0.0 for the same means produces a record that
+  the round-trip through `AbapSessionStore` / `XsuaaSessionStore` /
+  `EnvFileSessionStore` files returns byte-for-byte equal, and that
+  `getProvider` accepts.
 - **A credential-free discard over another identity's session.** The store
   holds T0 / R_old bound to A; a provider of identity B discards before any
   credential: the resulting state keeps T0 with binding A (unchanged), no
@@ -1210,7 +1311,11 @@ Recorded with date and result before the release; none runs in CI.
   credentials only to the output file and its private work directory (§10.8),
   prints no URL, `state` or token of its own, and nothing but help and version
   to stdout (§10.8).
-- **H3 A credential stays bound.** §6: the identity is checked on every call;
+- **H3 A credential stays bound.** §6: the identity — resource, SAP client,
+  issuer, client and row — is persisted in `issuedFor` and a versioned
+  `issuedBy` record, compared exactly, so a credential obtained for one grant
+  is never used for another, in one process or after a restart, and a 4.x
+  binding is never trusted (§6.1, §6.5); it is checked on every call;
   seeds are bound-only; writes carry their build's binding and generation; and
   since auth-stores merges, every write states the refresh token (a value bound
   to the same identity, or `''`) and every credential write both binding
@@ -1278,7 +1383,8 @@ contract; (c) adds an API for little gain.
 
 **D6 — What "the means changed" compares, and the instance case.**
 The re-check on every call is dictated by H3; its granularity is not:
-(a) the binding plus the row (`authType`, `grantType`); (b) every means field
+(a) the binding plus the row (`authType`, `grantType`) — the row persisted
+in the `issuedBy` record (§6.1, D21); (b) every means field
 the row reads (scopes, endpoints, trust, user and password); (c) the binding
 only. For a consumer instance after a change: (i) refuse the destination until
 a new broker; (ii) keep 4.x (binding fixed at first use). *Recommended: (a) and
@@ -1376,3 +1482,18 @@ none` removed.
 command; (b) `refreshOnly()` for `--env` runs (never a login when a refresh
 token exists). *Recommended: (a)* — 2.x's steps, and a command must know its
 secret landed before it writes the output.
+
+**D21 — Where the row is persisted in the session's binding.**
+The store holds two binding strings and nothing else; the row must go into
+one of them (H3). (a) A versioned record in `issuedBy`:
+`mcp-abap-adt-binding/2;<authType>/<grantType>;<canonical issuer URI or "">`,
+compared by exact equality (§6.1); (b) extra query parameters on the issuer URI
+(`…?client_id=x&grant_type=…`), canonicalised by `URL` — no `issuedBy` exists
+for rows without an issuer (`saml2_pure`, means without one), so the row would
+be lost exactly there; (c) the record in `issuedFor` — absent whenever the
+means state no `serviceUrl` (an XSUAA destination), the same gap. And for 4.x
+sessions: (i) read as unbound — one login per destination after upgrading
+(§11); (ii) accept a 4.x binding once, assuming the row the means state now —
+a guess the standing rules forbid, and exactly the grant switch H3 must catch.
+*Recommended: (a) and (i).*
+
