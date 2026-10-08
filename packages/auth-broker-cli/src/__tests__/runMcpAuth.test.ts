@@ -236,6 +236,7 @@ describe('mcp-auth (authorization_code)', () => {
       ),
     ).toBe(true);
     const before = server.requests.length;
+    let loginsRefused = 0;
     const broker = new AuthBroker({
       renewal: () => refreshThenLogin(),
       onWriteFailure: 'fail',
@@ -243,6 +244,7 @@ describe('mcp-auth (authorization_code)', () => {
       serviceKeyStore: storesOf('abap').keyStore,
       authorization: () => ({
         authorize: async () => {
+          loginsRefused += 1;
           throw new Error('no login expected');
         },
       }),
@@ -250,7 +252,17 @@ describe('mcp-auth (authorization_code)', () => {
     const provider = (await broker.getProvider(DEST)) as unknown as {
       getTokens: () => Promise<{ authorizationToken: string }>;
     };
-    await expect(provider.getTokens()).rejects.toBeDefined();
+    const refused = await provider.getTokens().then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(readFailure(refused, 'unfamiliar-error')).toEqual({
+      kind: 'unknown',
+      facts: { operation: 'token-request', grant: 'authorization_code' },
+      reason: 'authorization_code token request failed (unknown error)',
+    });
+    // The failure is the login the refusing strategy was asked for, once.
+    expect(loginsRefused).toBe(1);
     expect(server.requests.length).toBe(before);
   });
 
@@ -651,6 +663,7 @@ describe('mcp-auth --client-auth', () => {
       // stored token does not seed it — it logs in, and the strategy refuses.
       const before = certServer.requests.length;
       const { keyStore, sessionStore } = storesOf('abap');
+      let loginsRefused = 0;
       const broker = new AuthBroker({
         renewal: () => refreshThenLogin(),
         onWriteFailure: 'fail',
@@ -659,6 +672,7 @@ describe('mcp-auth --client-auth', () => {
         clientAuthentication: fromServiceKeyCertificate(),
         authorization: () => ({
           authorize: async () => {
+            loginsRefused += 1;
             throw new Error('no login expected');
           },
         }),
@@ -666,7 +680,17 @@ describe('mcp-auth --client-auth', () => {
       const provider = (await broker.getProvider(DEST)) as unknown as {
         getTokens: () => Promise<{ authorizationToken: string }>;
       };
-      await expect(provider.getTokens()).rejects.toBeDefined();
+      const refused = await provider.getTokens().then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(readFailure(refused, 'unfamiliar-error')).toEqual({
+        kind: 'unknown',
+        facts: { operation: 'token-request', grant: 'authorization_code' },
+        reason: 'authorization_code token request failed (unknown error)',
+      });
+      // The failure is the login the refusing strategy was asked for, once.
+      expect(loginsRefused).toBe(1);
       expect(certServer.requests).toHaveLength(before);
     });
 
