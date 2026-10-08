@@ -1168,7 +1168,7 @@ describe('a session obtained for another client, on the strategy path', () => {
     expect(elsewhere[3]).not.toHaveProperty('refreshToken');
   });
 
-  it('an authorization-config read carrying more than a client: on the strategy path only uaaUrl, uaaClientId, uaaClientSecret and the bound refresh token reach the factory', async () => {
+  it('an authorization-config read carrying more than a client: on the strategy path only uaaUrl, uaaClientId and uaaClientSecret reach the factory, refreshToken a key without a value', async () => {
     // Outside the type: a custom store answering a session's secret with its
     // client. None of it is checked by a binding.
     const overfull = {
@@ -1377,5 +1377,110 @@ describe('a session obtained for another client, on the strategy path', () => {
     expect(JSON.stringify(staleRefresh[2])).not.toContain('token-of-B');
     expect(staleRefresh[3]).not.toHaveProperty('refreshToken');
     expect(JSON.stringify(staleRefresh)).not.toContain('refresh-of-A');
+  });
+});
+
+describe('what the factory is handed: exactly the allowlist (§9, §5.5)', () => {
+  /** Every store answer full of fields — secrets, a binding, a token, extras. */
+  const FULL = {
+    authorizationToken: 'stored-token',
+    sessionCookies: 'stored-cookies',
+    expiresAt: 4_102_444_800_000,
+    refreshToken: 'stored-refresh',
+    issuedFor: 'https://abap.example.com:443?sap-client=100',
+    issuedBy: 'stored-record',
+    password: 'stored-password',
+    somethingUnknown: 'unknown',
+  };
+
+  async function handed(
+    clientAuthentication: ClientAuthenticationStrategy | undefined,
+  ) {
+    const factory = jest.fn<
+      IRefreshableTokenProvider,
+      Parameters<TokenProviderFactory>
+    >(() => tokenProvider(jwtExpiringIn(3600)));
+    const store: ISessionStore = {
+      ...sessions().store,
+      loadSession: async () => ({ ...FULL }) as unknown as IConfig,
+      getConnectionConfig: async () =>
+        ({
+          ...FULL,
+          serviceUrl: 'https://abap.example.com',
+          sapClient: '100',
+          language: 'EN',
+          authType: 'jwt',
+          grantType: 'authorization_code',
+        }) as unknown as IConnectionConfig,
+      getAuthorizationConfig: async () =>
+        ({
+          ...FULL,
+          uaaUrl: 'https://uaa.example.com',
+          uaaClientId: 'session-client',
+          uaaClientSecret: 'session-secret',
+        }) as unknown as IAuthorizationConfig,
+    };
+    const broker = new AuthBroker({
+      ...STATED,
+      sessionStore: store,
+      serviceKeyStore: keyStore(SECRET_CLIENT, certificate()),
+      provider: factory,
+      ...(clientAuthentication ? { clientAuthentication } : {}),
+    });
+    await broker.getToken(D);
+    return factory.mock.calls[0]!;
+  }
+
+  it.each([
+    ['without a clientAuthentication strategy', undefined],
+    ['beside one', certificateStrategy],
+  ] as const)('%s', async (label, strategy) => {
+    const call = await handed(strategy);
+
+    // authConfig: the client's three fields, refreshToken a key without a value.
+    expect(call[1]).toEqual({
+      uaaUrl: 'https://uaa.example.com',
+      uaaClientId: 'session-client',
+      uaaClientSecret: 'session-secret',
+      refreshToken: undefined,
+    });
+    expect(Object.keys(call[1] ?? {}).sort()).toEqual([
+      'refreshToken',
+      'uaaClientId',
+      'uaaClientSecret',
+      'uaaUrl',
+    ]);
+    // connConfig: serviceUrl, sapClient, language, authType, grantType.
+    expect(call[2]).toEqual({
+      serviceUrl: 'https://abap.example.com',
+      sapClient: '100',
+      language: 'EN',
+      authType: 'jwt',
+      grantType: 'authorization_code',
+    });
+    // The fourth argument: the strategy's answer and the client identity —
+    // never a refreshToken, not even as a key.
+    if (label === 'beside one') {
+      expect(call).toHaveLength(4);
+      expect(call[3]).toEqual({
+        clientAuthentication: answer,
+        uaaUrl: 'https://uaa.example.com',
+        clientId: 'session-client',
+      });
+      expect(Object.keys(call[3] ?? {})).not.toContain('refreshToken');
+    } else {
+      expect(call).toHaveLength(3);
+    }
+    for (const value of [
+      'stored-token',
+      'stored-cookies',
+      'stored-refresh',
+      'stored-record',
+      'stored-password',
+      'unknown',
+      '4102444800000',
+    ]) {
+      expect(JSON.stringify(call)).not.toContain(value);
+    }
   });
 });
