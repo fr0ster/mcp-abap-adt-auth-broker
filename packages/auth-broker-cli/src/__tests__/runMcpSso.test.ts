@@ -252,7 +252,11 @@ describe('mcp-auth oidc --flow browser (--code)', () => {
 });
 
 describe('mcp-auth oidc --flow device', () => {
-  it('writes jwt / device_code; the presenter it states shows the code on its logger', async () => {
+  it('writes jwt / device_code; the presenter shows the code on stderr', async () => {
+    const stderrWrite = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
+    spies.push(stderrWrite);
     server.answer('/device', {
       body: {
         device_code: 'dev-code',
@@ -274,8 +278,13 @@ describe('mcp-auth oidc --flow device', () => {
       }),
     );
     expect(code).toBe(0);
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.stringContaining('USER-CODE-42'),
+    // Given no logger, the presenter shows the code on stderr, whatever the
+    // log level; never through the CLI's logger.
+    expect(
+      stderrWrite.mock.calls.map(([chunk]) => String(chunk)).join(''),
+    ).toContain('USER-CODE-42');
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+      'USER-CODE-42',
     );
     const means = await keyStoreOf('xsuaa').getConnectionConfig(DEST);
     expect(means).toEqual(

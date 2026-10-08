@@ -14,6 +14,10 @@
  * <grant>: authorization_code (opens a browser, as --browser states — default
  *   auto, the platform's default browser) or client_credentials.
  *
+ * --verbose: log lines from debug on (default: warn and error), on stderr.
+ * --auth-debug: the broker's authDebug — the providers' debug line names the
+ *   request's secrets; implies --verbose. No environment variable does either.
+ *
  * --browser auto|system|chrome|edge|firefox|none|headless, or
  * --browser-program <program>: as mcp-auth takes them.
  *
@@ -40,6 +44,7 @@
 import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
 import { asContract } from './contractShape';
 import { runGenerateEnv } from './generateEnv';
+import { printFailure } from './output';
 import { createWorkDir } from './workDir';
 
 runGenerateEnv(process.argv.slice(2), {
@@ -54,10 +59,9 @@ runGenerateEnv(process.argv.slice(2), {
     ),
 })
   .then((code) => process.exit(code))
-  .catch((error) => {
-    console.error(`❌ Error: ${error.message}`);
-    if (error.stack) {
-      console.error(error.stack);
-    }
+  .catch((error: unknown) => {
+    // auth-errors', the broker's or this CLI's words: never a foreign
+    // value's message, never a stack (§10.9).
+    printFailure(error);
     process.exit(1);
   });

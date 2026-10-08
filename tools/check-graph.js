@@ -42,7 +42,6 @@ const ALLOWED = {
     '@mcp-abap-adt/interfaces-auth-sap',
     '@mcp-abap-adt/interfaces-auth-broker',
     '@mcp-abap-adt/interfaces-utils',
-    '@mcp-abap-adt/logger',
   ],
 };
 

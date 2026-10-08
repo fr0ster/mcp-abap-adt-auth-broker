@@ -17,6 +17,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
+import { UsageError } from './subcommandArgs';
 
 export interface IdpMetadata {
   entityId?: string | undefined;
@@ -39,13 +40,15 @@ export async function loadMetadata(source: string): Promise<string> {
   if (/^https?:\/\//i.test(source)) {
     const url = new URL(source);
     if (url.protocol !== 'https:' && !LOOPBACK.has(url.hostname)) {
-      throw new Error(
+      throw new UsageError(
         `refusing SAML metadata over ${url.protocol} from ${url.hostname}: it carries the certificates assertions are verified against, so it must come over https`,
       );
     }
     const response = await fetch(url);
     if (!response.ok) {
-      throw new Error(`SAML metadata ${source} answered ${response.status}`);
+      throw new UsageError(
+        `SAML metadata ${source} answered ${response.status}`,
+      );
     }
     return response.text();
   }
@@ -105,25 +108,21 @@ function chooseEntity(
   if (wanted !== undefined) {
     const match = candidates.find((entity) => entity.entityId === wanted);
     if (!match) {
-      throw new Error(
-        `the metadata has no ${role} with entityID ${JSON.stringify(wanted)}; it has: ${
-          candidates
-            .map((entity) => JSON.stringify(entity.entityId))
-            .join(', ') || 'none'
-        }`,
+      // The entityID the user stated is quoted; the document's are the
+      // server's text: counted, never quoted.
+      throw new UsageError(
+        `the metadata has no ${role} with entityID ${JSON.stringify(wanted)}; it describes ${candidates.length}`,
       );
     }
     return match;
   }
   const [only, ...others] = candidates;
   if (only === undefined) {
-    throw new Error(`the metadata describes no ${role}`);
+    throw new UsageError(`the metadata describes no ${role}`);
   }
   if (others.length > 0) {
-    throw new Error(
-      `the metadata describes ${candidates.length} ${role}s; name the one to use with ${flag}: ${candidates
-        .map((entity) => JSON.stringify(entity.entityId))
-        .join(', ')}`,
+    throw new UsageError(
+      `the metadata describes ${candidates.length} ${role}s; name the one to use with ${flag}`,
     );
   }
   return only;
@@ -138,7 +137,7 @@ export function readIdpMetadata(xml: string, entityId?: string): IdpMetadata {
     (entity) => section(entity.body, 'IDPSSODescriptor') !== undefined,
   );
   if (candidates.length === 0) {
-    throw new Error(
+    throw new UsageError(
       'the metadata has no IDPSSODescriptor: not an identity provider',
     );
   }
@@ -263,7 +262,7 @@ export async function applySamlMetadata(
 
   const sp = readSpMetadata(await load(spSource), options.spEntityId);
   if (!sp.bearerAcsUrl) {
-    throw new Error(
+    throw new UsageError(
       `${spSource} names no /oauth/token/alias/ endpoint: not an XSUAA service provider's metadata`,
     );
   }

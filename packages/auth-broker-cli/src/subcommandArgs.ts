@@ -154,6 +154,7 @@ function parseAuthCodeArgs(args: readonly string[]): McpAuthOptions {
   let basicEncoding: McpAuthOptions['basicEncoding'];
   let certPath: string | undefined;
   let keyPath: string | undefined;
+  const debugFlags: DebugFlags = {};
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i] as string;
@@ -162,6 +163,7 @@ function parseAuthCodeArgs(args: readonly string[]): McpAuthOptions {
       credential = true;
       continue;
     }
+    if (readDebugFlag(arg, debugFlags)) continue;
     if (next === undefined) {
       throw AUTH_CODE_VALUE_FLAGS.includes(arg)
         ? new UsageError(`${arg} needs a value`)
@@ -252,7 +254,34 @@ function parseAuthCodeArgs(args: readonly string[]): McpAuthOptions {
     basicEncoding,
     certPath,
     keyPath,
+    ...debugFlags,
   };
+}
+
+/** `--verbose` and `--auth-debug`: present only when given (§10.7, D17). */
+export interface DebugFlags {
+  /** `--verbose`: the CLI's logger from `debug`; the broker's logger is it. */
+  verbose?: true | undefined;
+  /** `--auth-debug`: the broker's `authDebug: true`; implies `--verbose`. */
+  authDebug?: true | undefined;
+}
+
+/** Reads `arg` into `flags` when it is one of the two; whether it was. */
+function readDebugFlag(arg: string, flags: DebugFlags): boolean {
+  if (arg === '--verbose') {
+    flags.verbose = true;
+    return true;
+  }
+  if (arg === '--auth-debug') {
+    flags.authDebug = true;
+    return true;
+  }
+  return false;
+}
+
+/** Whether the CLI's logger starts at `debug`: `--verbose`, or `--auth-debug`. */
+export function isVerbose(flags: DebugFlags): boolean {
+  return flags.verbose === true || flags.authDebug === true;
 }
 
 /** A port from 1 to 65535, read as 2.x read it (`parseInt`). */
@@ -354,6 +383,7 @@ function parseSsoArgs(
   for (let i = 0; i < args.length; i++) {
     const arg = args[i] as string;
     const next = args[i + 1];
+    if (readDebugFlag(arg, options)) continue;
     if (Object.hasOwn(SSO_VALUE_FLAGS, arg)) {
       fields[SSO_VALUE_FLAGS[arg] as string] = next;
       i++;

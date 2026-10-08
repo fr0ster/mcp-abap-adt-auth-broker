@@ -23,15 +23,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
-  DEFAULT_CALLBACK_PORT,
   refreshThenLogin,
   type staticCodeStrategy,
 } from '@mcp-abap-adt/auth-providers';
-import {
-  JsonFileHandler,
-  XsuaaServiceKeyStore,
-} from '@mcp-abap-adt/auth-stores';
+import { JsonFileHandler } from '@mcp-abap-adt/auth-stores';
 import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   BROWSER_NAMES,
   type BrowserFactories,
@@ -48,6 +45,7 @@ import {
   clientAuthFlags,
   noCertificateClient,
   present,
+  readCertificateClient,
   serviceKeyStoreFor,
 } from './clientAuthentication';
 import {
@@ -58,6 +56,8 @@ import {
   writeJsonFile,
   writeOutputFile,
 } from './destination';
+import { progress } from './output';
+import { UsageError } from './subcommandArgs';
 
 /** An interactive strategy, as auth-providers' strategy factories return one. */
 export type AuthorizationStrategy = ReturnType<typeof staticCodeStrategy>;
@@ -87,6 +87,10 @@ export interface McpAuthOptions {
   /** `--cert-path` / `--key-path`: required with `clientAuth: 'certificate'`. */
   certPath?: string | undefined;
   keyPath?: string | undefined;
+  /** `--verbose`: the CLI's logger from `debug`. */
+  verbose?: true | undefined;
+  /** `--auth-debug`: the broker's `authDebug: true`; implies `--verbose`. */
+  authDebug?: true | undefined;
 }
 
 /**
@@ -112,6 +116,11 @@ export function mcpAuthBrowser(
 }
 
 export interface McpAuthContext {
+  /**
+   * The CLI's logger (stderr): the broker's, and so the providers' it
+   * builds. Absent: the broker logs nothing.
+   */
+  logger?: ILogger | undefined;
   /** The run's private directory (`createWorkDir`), removed by its creator. */
   workDir: string;
   /**
@@ -127,7 +136,7 @@ export interface McpAuthContext {
 /** Runs `mcp-auth`; resolves the exit code. Usage errors exit the process. */
 export async function runMcpAuth(
   options: McpAuthOptions,
-  { workDir, authorization, platform }: McpAuthContext,
+  { logger, workDir, authorization, platform }: McpAuthContext,
 ): Promise<number> {
   // The browser is mapped only for the login that opens one — the
   // authorization code login — and then before anything is read or written:
@@ -197,7 +206,7 @@ export async function runMcpAuth(
     } catch {
       // Fixed words, before anything is written: the reader's message quotes
       // the file, which holds a client secret or a private key.
-      throw new Error(
+      throw new UsageError(
         `The service key ${resolvedServiceKeyPath} cannot be read as JSON`,
       );
     }
@@ -210,11 +219,11 @@ export async function runMcpAuth(
         // `credentials` itself — so no copy of it exists, even on a failed run.
         certificateKey = carriesCertificate(effectiveJson);
         if (certificateKey) {
-          console.log(
+          progress(
             '🔍 Detected "credentials" wrapper with a client certificate -> read in place, never copied',
           );
         } else {
-          console.log(
+          progress(
             '🔍 Detected "credentials" wrapper -> unwrapping to temp file',
           );
           const keysDir = path.join(workDir, 'service-keys');
@@ -245,7 +254,8 @@ export async function runMcpAuth(
       rawServiceKeyJson,
     );
     try {
-      const auth = await serviceKeyStore.getAuthorizationConfig(destination);
+      const auth =
+        await serviceKeyStore.store.getAuthorizationConfig(destination);
       if (auth) {
         keyClient = {
           uaaUrl: auth.uaaUrl,
@@ -254,9 +264,7 @@ export async function runMcpAuth(
         };
       }
     } catch {
-      console.log(
-        `ℹ️  Store could not parse service key, using fallback parsing`,
-      );
+      progress(`ℹ️  Store could not parse service key, using fallback parsing`);
     }
     if (!keyClient && rawServiceKeyJson) {
       const uaa = (rawServiceKeyJson.uaa ?? rawServiceKeyJson) as Record<
@@ -273,22 +281,26 @@ export async function runMcpAuth(
           uaaClientId: uaa.clientid,
           uaaClientSecret: uaa.clientsecret,
         };
-        console.log(`✅ Constructed auth config from raw service key`);
+        progress(`✅ Constructed auth config from raw service key`);
       }
     }
     try {
-      keyServiceUrl = (await serviceKeyStore.getConnectionConfig(destination))
-        ?.serviceUrl;
+      keyServiceUrl = (
+        await serviceKeyStore.store.getConnectionConfig(destination)
+      )?.serviceUrl;
     } catch {
       // For XSUAA, serviceUrl is optional and may not exist in the key.
     }
     if (!options.clientAuth && !keyClient && certificateKey) {
-      throw new Error(certificateNeedsFlag(destination));
+      throw new UsageError(certificateNeedsFlag(destination));
     }
-    if (certificateFiles && serviceKeyStore instanceof XsuaaServiceKeyStore) {
+    if (certificateFiles && serviceKeyStore.kind === 'xsuaa') {
       // The store's refusal of an incomplete certificate client names the
       // key's fields, never a value.
-      const client = await serviceKeyStore.getClientCertificate(destination);
+      const client = await readCertificateClient(
+        serviceKeyStore.store,
+        destination,
+      );
       if (client) {
         keyCertificate = {
           uaaUrl: client.uaaUrl,
@@ -298,7 +310,7 @@ export async function runMcpAuth(
       }
     }
     if (certificateFiles && !keyCertificate) {
-      throw new Error(noCertificateClient(destination));
+      throw new UsageError(noCertificateClient(destination));
     }
   }
 
@@ -311,38 +323,38 @@ export async function runMcpAuth(
     ? 'client_credentials'
     : 'authorization_code';
 
-  console.log(`📁 Output file: ${resolvedOutputPath}`);
+  progress(`📁 Output file: ${resolvedOutputPath}`);
   if (resolvedEnvPath) {
-    console.log(
+    progress(
       `📁 Env file: ${resolvedEnvPath} (${envExists ? 'found' : 'not found'})`,
     );
   }
   if (options.serviceKeyPath) {
-    console.log(`📁 Service key: ${path.resolve(options.serviceKeyPath)}`);
+    progress(`📁 Service key: ${path.resolve(options.serviceKeyPath)}`);
   }
-  console.log(`🔐 Auth type: ${options.authType}`);
-  console.log(`🔑 Flow: ${grantType}`);
+  progress(`🔐 Auth type: ${options.authType}`);
+  progress(`🔑 Flow: ${grantType}`);
   if (options.clientAuth === 'secret') {
-    console.log(
+    progress(
       `🔏 Client authentication: secret (Basic, ${options.basicEncoding})`,
     );
   } else if (certificateFiles) {
-    console.log(
+    progress(
       `🔏 Client authentication: certificate (${certificateFiles.certPath}, ${certificateFiles.keyPath})`,
     );
   }
   if (!options.credential) {
-    console.log(
+    progress(
       `🌐 Browser: ${options.browserProgram === undefined ? options.browser : `program ${options.browserProgram}`}`,
     );
   }
-  console.log(`📄 Format: ${options.format}`);
+  progress(`📄 Format: ${options.format}`);
   if (options.serviceUrl) {
-    console.log(`🔗 Service URL: ${options.serviceUrl}`);
+    progress(`🔗 Service URL: ${options.serviceUrl}`);
   }
 
   if (!envExists && !options.serviceKeyPath) {
-    throw new Error('Env file not found and no service key provided.');
+    throw new UsageError('Env file not found and no service key provided.');
   }
 
   const files = openDestination(
@@ -383,7 +395,7 @@ export async function runMcpAuth(
   if (certificateFiles) {
     const stated = await files.keyStore.getClientCertificate(destination);
     if (!stated) {
-      throw new Error(`Client certificate not found for ${destination}.`);
+      throw new UsageError(`Client certificate not found for ${destination}.`);
     }
     client = {
       uaaUrl: stated.uaaUrl,
@@ -397,20 +409,11 @@ export async function runMcpAuth(
       !present(authConfig.uaaUrl) ||
       !present(authConfig.uaaClientSecret)
     ) {
-      throw new Error(
+      throw new UsageError(
         `Authorization config not found for ${destination}. Service key must contain clientid, clientsecret, and url fields; a client certificate needs --client-auth certificate.`,
       );
     }
     client = authConfig;
-  }
-
-  if (!options.credential) {
-    // A preview only: the strategy binds the port and assembles the URL.
-    const redirectUri = `http://localhost:${options.redirectPort ?? DEFAULT_CALLBACK_PORT}/callback`;
-    console.log(
-      `🔗 Authorization URL: ${client.uaaUrl}/oauth/authorize?client_id=${encodeURIComponent(client.uaaClientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`,
-    );
-    console.log(`📍 Redirect URI: ${redirectUri}`);
   }
 
   // The user's choice as the broker's strategy; none without `--client-auth`.
@@ -422,32 +425,37 @@ export async function runMcpAuth(
   // — seeded from an `--env` session only when it is bound to these means. It
   // renews as this CLI states (a refresh, then a login: a user at a terminal
   // can log in), and a secret the store did not take fails the run.
-  const broker = new AuthBroker({
-    renewal: () => refreshThenLogin(),
-    onWriteFailure: 'fail',
-    sessionStore: files.sessionStore,
-    serviceKeyStore: files.keyStore,
-    clientAuthentication,
-    // Asked only for the authorization_code row; `--credential` logs in
-    // with the client alone.
-    authorization: () => authorization(options),
-  });
+  const broker = new AuthBroker(
+    {
+      renewal: () => refreshThenLogin(),
+      onWriteFailure: 'fail',
+      // On only with --auth-debug (§10.7): never from the environment.
+      authDebug: options.authDebug === true,
+      sessionStore: files.sessionStore,
+      serviceKeyStore: files.keyStore,
+      clientAuthentication,
+      // Asked only for the authorization_code row; `--credential` logs in
+      // with the client alone.
+      authorization: () => authorization(options),
+    },
+    logger,
+  );
 
-  console.log(`🔐 Getting token for destination "${destination}"...`);
+  progress(`🔐 Getting token for destination "${destination}"...`);
   // Whether the login threw, beside what it threw: a falsy value thrown
   // (undefined, 0, '') is a failure too.
   let failed = false;
   let obtainError: unknown;
   try {
     await broker.getToken(destination);
-    console.log(`✅ Token obtained successfully`);
+    progress(`✅ Token obtained successfully`);
   } catch (error) {
     // A failed login, or a token obtained whose write failed: either way the
     // run fails, after one more attempt at any write still pending.
     failed = true;
     obtainError = error;
   }
-  const stored = await flushed(broker, (line) => console.error(line));
+  const stored = await flushed(broker);
   if (failed) {
     throw obtainError;
   }
@@ -457,7 +465,7 @@ export async function runMcpAuth(
 
   if (options.format === 'env') {
     writeOutputFile(files, resolvedOutputPath);
-    console.log(`✅ .env file created: ${resolvedOutputPath}`);
+    progress(`✅ .env file created: ${resolvedOutputPath}`);
   } else {
     // A certificate client is no secret client, so the stores' JSON view
     // leaves it out: its identity, paths and `certurl` are added — never PEM.
@@ -473,7 +481,7 @@ export async function runMcpAuth(
           }
         : {}),
     });
-    console.log(`✅ JSON file created: ${resolvedOutputPath}`);
+    progress(`✅ JSON file created: ${resolvedOutputPath}`);
   }
   return 0;
 }

@@ -21,14 +21,14 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
-import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
 import { asContract } from './contractShape';
 import type { McpSsoOptions } from './mcpSsoConfig';
+import { createCliLogger, printFailure, toStderr } from './output';
 import { type McpAuthOptions, mcpAuthBrowser, runMcpAuth } from './runMcpAuth';
 import { runMcpSso } from './runMcpSso';
 import {
   isUsageError,
+  isVerbose,
   parseCommandLine,
   type SsoSubcommand,
   type Subcommand,
@@ -134,6 +134,12 @@ function showMainHelp(): void {
   );
   console.log(
     '  --key-path <path>       With --client-auth certificate (required): its private key PEM file',
+  );
+  console.log(
+    '  --verbose               Log lines from debug on (default: warn and error only), on stderr',
+  );
+  console.log(
+    "  --auth-debug            The providers' debug line names the request's secrets (implies --verbose)",
   );
   console.log('');
   console.log(
@@ -378,6 +384,12 @@ function showSsoHelp(subcommand: SsoSubcommand): void {
   console.log(
     '  --redirect-uri <uri>      Custom redirect URI (OOB/manual code flows)',
   );
+  console.log(
+    '  --verbose                 Log lines from debug on (default: warn and error only), on stderr',
+  );
+  console.log(
+    "  --auth-debug              The providers' debug line names the request's secrets (implies --verbose)",
+  );
   console.log('');
   console.log('OIDC Options:');
   console.log('  --issuer <url>            OIDC issuer/discovery URL');
@@ -489,51 +501,6 @@ function showSsoHelp(subcommand: SsoSubcommand): void {
   console.log('  help, --help, -h           Show this help message');
 }
 
-function createCliLogger(prefix: string = 'SSO'): ILogger {
-  const isEnabled = (): boolean => {
-    if (
-      process.env.DEBUG_SSO === 'false' ||
-      process.env.DEBUG_AUTH_SSO === 'false'
-    ) {
-      return false;
-    }
-    if (
-      process.env.DEBUG_SSO === 'true' ||
-      process.env.DEBUG_AUTH_SSO === 'true' ||
-      process.env.DEBUG === 'true' ||
-      process.env.DEBUG?.includes('sso') === true ||
-      process.env.DEBUG?.includes('auth-sso') === true
-    ) {
-      return true;
-    }
-    return false;
-  };
-
-  const baseLogger = new DefaultLogger(getLogLevel());
-  return {
-    debug: (message: string, meta?: unknown) => {
-      if (isEnabled()) {
-        baseLogger.debug(`[${prefix}] ${message}`, meta);
-      }
-    },
-    info: (message: string, meta?: unknown) => {
-      if (isEnabled()) {
-        baseLogger.info(`[${prefix}] ${message}`, meta);
-      }
-    },
-    warn: (message: string, meta?: unknown) => {
-      if (isEnabled()) {
-        baseLogger.warn(`[${prefix}] ${message}`, meta);
-      }
-    },
-    error: (message: string, meta?: unknown) => {
-      if (isEnabled()) {
-        baseLogger.error(`[${prefix}] ${message}`, meta);
-      }
-    },
-  };
-}
-
 function showHelp(subcommand: Subcommand | undefined): void {
   if (subcommand === undefined || subcommand === 'auth-code') {
     showMainHelp();
@@ -547,6 +514,7 @@ async function runAuthCode(options: McpAuthOptions): Promise<number> {
   // Removed on any exit, error and signal included: it holds the secret.
   const workDir = createWorkDir('mcp-auth');
   return runMcpAuth(options, {
+    logger: createCliLogger({ verbose: isVerbose(options) }),
     workDir,
     // Passing `options.redirectPort` as given, so an omitted
     // --redirect-port lets the strategy bind its own default rather than
@@ -565,7 +533,10 @@ async function runAuthCode(options: McpAuthOptions): Promise<number> {
 async function runSso(options: McpSsoOptions): Promise<number> {
   // Removed on any exit, error and signal included: it holds the secret.
   const workDir = createWorkDir('mcp-auth');
-  return runMcpSso(options, { logger: createCliLogger(), workDir });
+  return runMcpSso(options, {
+    logger: createCliLogger({ verbose: isVerbose(options) }),
+    workDir,
+  });
 }
 
 async function main(): Promise<number> {
@@ -574,8 +545,8 @@ async function main(): Promise<number> {
     parsed = parseCommandLine(process.argv.slice(2));
   } catch (error) {
     if (!isUsageError(error)) throw error;
-    console.error(`❌ ${error.message}`);
-    console.error('Run "mcp-auth --help" for usage information');
+    printFailure(error);
+    toStderr('Run "mcp-auth --help" for usage information');
     return 1;
   }
   switch (parsed.kind) {
@@ -596,16 +567,9 @@ main().then(
   // Exit explicitly to close any open handles (e.g., OAuth callback server)
   (code) => process.exit(code),
   (error: unknown) => {
-    if (isUsageError(error)) {
-      // Fixed words naming the flag: no stack.
-      console.error(`❌ ${error.message}`);
-      process.exit(1);
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`❌ Error: ${message}`);
-    if (error instanceof Error && error.stack) {
-      console.error(error.stack);
-    }
+    // In words auth-errors, the broker or this CLI rendered: never a
+    // foreign value's message, never a stack (§10.9).
+    printFailure(error);
     process.exit(1);
   },
 );

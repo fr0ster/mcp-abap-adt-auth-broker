@@ -150,9 +150,9 @@ const silentLogger: ILogger = {
  * called for the grant the destination states — the destination's means are
  * built first, as `runMcpSso` does, so a required field still refuses.
  */
-function collaboratorsOf(options: McpSsoOptions, logger = silentLogger) {
+function collaboratorsOf(options: McpSsoOptions) {
   buildDestinationMeans(options);
-  return buildCollaborators(options, logger);
+  return buildCollaborators(options);
 }
 
 /** The interactive strategy the broker gets for this run's grant. */
@@ -421,7 +421,7 @@ describe('mcp-sso CLI/config merge', () => {
       pastedInput.value = 'PASTED-SAML-RESPONSE';
     });
 
-    it('the device flow gets the console presenter, writing to the CLI logger', () => {
+    it('the device flow gets the console presenter with no logger: the code always on stderr', () => {
       const collaborators = collaboratorsOf(
         baseOptions({
           protocol: 'oidc',
@@ -429,13 +429,12 @@ describe('mcp-sso CLI/config merge', () => {
           clientId: 'cli-client',
           issuerUrl: 'https://issuer.example',
         }),
-        logger,
       );
       expect(collaborators.deviceCodePresenter('dest')).toEqual({
         __kind: 'consoleDeviceCodePresenter',
-        logger,
+        logger: undefined,
       });
-      expect(consoleDeviceCodePresenter).toHaveBeenCalledWith(logger);
+      expect(consoleDeviceCodePresenter).toHaveBeenCalledWith();
     });
 
     it('states every collaborator the broker may ask for; the broker supplies none', () => {
@@ -446,7 +445,6 @@ describe('mcp-sso CLI/config merge', () => {
           clientId: 'cli-client',
           issuerUrl: 'https://issuer.example',
         }),
-        logger,
       );
       expect(Object.keys(collaborators).sort()).toEqual([
         'assertionReplayStore',

@@ -35,10 +35,12 @@ import {
   ssoBrowser,
   ssoRow,
 } from './mcpSsoConfig';
+import { printFailure, progress } from './output';
 import { applySamlMetadata } from './samlMetadata';
+import { UsageError } from './subcommandArgs';
 
 export interface McpSsoContext {
-  /** Where the device-code presenter and the broker write. */
+  /** The CLI's logger (stderr): the broker's, and the providers' it builds. */
   logger: ILogger;
   /** The run's private directory (`createWorkDir`), removed by its creator. */
   workDir: string;
@@ -136,7 +138,7 @@ export async function runMcpSso(
     try {
       raw = readJsonFile(resolvedConfigPath, 'The config file');
     } catch (error) {
-      console.error(`❌ ${(error as Error).message}`);
+      printFailure(error);
       process.exit(1);
     }
     providerConfigFromFile = normalizeProviderConfig(raw);
@@ -165,7 +167,7 @@ export async function runMcpSso(
       ssoBrowser(options, platform ?? process.platform);
     }
   } catch (error) {
-    console.error(`❌ ${(error as Error).message}`);
+    printFailure(error);
     process.exit(1);
   }
 
@@ -212,9 +214,9 @@ export async function runMcpSso(
   try {
     await applySamlMetadata(options, explicitTokenEndpoint);
   } catch (error) {
-    console.error(
-      `❌ SAML metadata: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    // The CLI's own words, else auth-errors': never a fetch's or a file
+    // reader's message, which may quote what a server answered.
+    printFailure(error, { context: 'SAML metadata' });
     process.exit(1);
   }
 
@@ -270,7 +272,7 @@ export async function runMcpSso(
   const row = ssoRow(options);
   const means = buildDestinationMeans(options);
   await files.keyStore.setDestination(destination, completeMeans(means));
-  console.log(
+  progress(
     `📝 Destination "${destination}": ${row.authType} / ${row.grantType}`,
   );
 
@@ -281,9 +283,11 @@ export async function runMcpSso(
     {
       sessionStore: files.sessionStore,
       serviceKeyStore: files.keyStore,
-      ...buildCollaborators(options, logger),
+      ...buildCollaborators(options),
       renewal: () => refreshThenLogin(),
       onWriteFailure: 'fail',
+      // On only with --auth-debug (§10.7): never from the environment.
+      authDebug: options.authDebug === true,
     },
     logger,
   );
@@ -300,7 +304,7 @@ export async function runMcpSso(
     });
     // The destination as the broker will read it: refused here, not later.
     await broker.getProvider(destination);
-    console.log(`✅ Session cookies stored`);
+    progress(`✅ Session cookies stored`);
   }
   // Whether the login threw, beside what it threw: a falsy value thrown
   // (undefined, 0, '') is a failure too.
@@ -312,25 +316,25 @@ export async function runMcpSso(
       getTokens: () => Promise<unknown>;
     }>;
     if (typeof tokens.getTokens !== 'function') {
-      throw new Error(
+      throw new UsageError(
         `The provider for "${destination}" obtains no token (${row.authType} / ${row.grantType})`,
       );
     }
-    console.log(`🔐 Getting token for destination "${destination}"...`);
+    progress(`🔐 Getting token for destination "${destination}"...`);
     // What the provider obtains reaches the session store through the
     // broker's persistence; a write that did not land fails this call
     // (onWriteFailure: 'fail'). Either way the run fails, after one more
     // attempt at any write still pending.
     try {
       await tokens.getTokens();
-      console.log(`✅ Token obtained successfully`);
+      progress(`✅ Token obtained successfully`);
     } catch (error) {
       failed = true;
       obtainError = error;
     }
   }
 
-  const stored = await flushed(broker, (line) => console.error(line));
+  const stored = await flushed(broker);
   if (failed) {
     throw obtainError;
   }
@@ -340,13 +344,13 @@ export async function runMcpSso(
 
   if (options.format === 'env') {
     writeOutputFile(files, resolvedOutputPath);
-    console.log(`✅ .env file created: ${resolvedOutputPath}`);
+    progress(`✅ .env file created: ${resolvedOutputPath}`);
   } else {
     writeJsonFile(
       resolvedOutputPath,
       await jsonOutput(files, destination, { tokenType: true }),
     );
-    console.log(`✅ JSON file created: ${resolvedOutputPath}`);
+    progress(`✅ JSON file created: ${resolvedOutputPath}`);
   }
   return 0;
 }

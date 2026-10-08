@@ -250,11 +250,18 @@ describe('federation metadata (an EntitiesDescriptor of several entities)', () =
   });
 
   it('refuses to choose between identity providers nobody named', () => {
-    expect(() =>
+    let thrown: unknown;
+    try {
       readIdpMetadata(
         aggregate(idp('https://idp-a', 'CERTA'), idp('https://idp-b', 'CERTB')),
-      ),
-    ).toThrow(/2 identity providers.*--idp-entity-id.*idp-a.*idp-b/);
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(String(thrown)).toMatch(/2 identity providers.*--idp-entity-id/);
+    // The document's entityIDs are the server's text: never in the words.
+    expect(String(thrown)).not.toContain('idp-a');
+    expect(String(thrown)).not.toContain('idp-b');
   });
 
   it('reads the identity provider --idp-entity-id names', () => {

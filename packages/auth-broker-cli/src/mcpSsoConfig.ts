@@ -28,7 +28,6 @@ import type {
   IAuthorizationStrategy,
   IBrowser,
 } from '@mcp-abap-adt/interfaces-auth';
-import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   BROWSER_NAMES,
   type BrowserFactories,
@@ -40,12 +39,13 @@ import {
 } from './browser';
 import { asContract } from './contractShape';
 import type { StatedMeans } from './destination';
+import { UsageError } from './subcommandArgs';
 
 /**
  * The identity provider to trust is missing: the fields, by name — refused
  * before anything is written.
  */
-export class SamlTrustMissingError extends Error {
+export class SamlTrustMissingError extends UsageError {
   readonly missingFields: string[];
 
   constructor(message: string, missingFields: string[]) {
@@ -56,6 +56,10 @@ export class SamlTrustMissingError extends Error {
 }
 
 export interface McpSsoOptions {
+  /** `--verbose`: the CLI's logger from `debug`. */
+  verbose?: true | undefined;
+  /** `--auth-debug`: the broker's `authDebug: true`; implies `--verbose`. */
+  authDebug?: true | undefined;
   outputFile?: string | undefined;
   envFilePath?: string | undefined;
   destination?: string | undefined;
@@ -143,13 +147,16 @@ export function readManualInput(
   signal?: AbortSignal,
 ): Promise<string> {
   const abandoned = () =>
-    new Error(`input abandoned at "${prompt.trim()}": the read was aborted`);
+    new UsageError(
+      `input abandoned at "${prompt.trim()}": the read was aborted`,
+    );
   if (signal?.aborted) {
     return Promise.reject(abandoned());
   }
   const rl = createInterface({
     input: process.stdin,
-    output: process.stdout,
+    // The prompt on stderr: stdout carries only help and --version (D16).
+    output: process.stderr,
   });
   // A closed stdin never answers the question, and a promise that never
   // settles lets the event loop drain: the process exited 0 with nothing
@@ -167,7 +174,7 @@ export function readManualInput(
       signal?.removeEventListener('abort', onAbort);
       if (settled) return;
       settled = true;
-      reject(new Error(`no input: stdin closed at "${prompt.trim()}"`));
+      reject(new UsageError(`no input: stdin closed at "${prompt.trim()}"`));
     });
     rl.question(prompt, (answer) => {
       if (settled) return;
@@ -543,7 +550,7 @@ export function ssoRow(options: McpSsoOptions): SsoRow {
       case 'token_exchange':
         return { authType: 'jwt', grantType: 'token_exchange' };
       default:
-        throw new Error(`Unsupported OIDC flow: ${options.flow}`);
+        throw new UsageError(`Unsupported OIDC flow: ${options.flow}`);
     }
   }
   if (options.protocol === 'saml2') {
@@ -558,10 +565,10 @@ export function ssoRow(options: McpSsoOptions): SsoRow {
           grantType: options.cookie ? 'none' : 'saml2_pure',
         };
       default:
-        throw new Error(`Unsupported SAML flow: ${options.flow}`);
+        throw new UsageError(`Unsupported SAML flow: ${options.flow}`);
     }
   }
-  throw new Error(
+  throw new UsageError(
     options.protocol
       ? `Unsupported protocol: ${options.protocol}`
       : 'Provider config is missing: run mcp-auth oidc, saml2-pure or saml2-bearer.',
@@ -723,7 +730,7 @@ export function buildDestinationMeans(options: McpSsoOptions): StatedMeans {
       // states only where they are presented.
       return base;
     default:
-      throw new Error(`unreachable grant ${row.grantType}`);
+      throw new UsageError(`unreachable grant ${row.grantType}`);
   }
 }
 
@@ -897,7 +904,7 @@ function buildIdpInitiatedAuthorization(options: McpSsoOptions) {
         'Start the login at your identity provider, then paste the SAMLResponse (from the POST body): ',
       );
       if (!payload) {
-        throw new Error('No SAMLResponse was provided');
+        throw new UsageError('No SAMLResponse was provided');
       }
       return { payload, redirectUri };
     },
@@ -935,15 +942,13 @@ export type SsoCollaborators = {
 /**
  * Every collaborator a provider the broker builds may need, stated by this CLI
  * — the broker supplies none: the interactive strategy of the passcode and
- * SAML grants, the OIDC browser strategy, the device-code presenter writing to
- * this CLI's logger, the SAML cookie function and the process-wide replay
+ * SAML grants, the OIDC browser strategy, the device-code presenter — given no
+ * logger, so the code is always shown on stderr, whatever the log level — the
+ * SAML cookie function and the process-wide replay
  * store the assertion validators share. The broker calls only the ones the
  * destination's grant uses, once, when it builds the provider.
  */
-export function buildCollaborators(
-  options: McpSsoOptions,
-  logger: ILogger,
-): SsoCollaborators {
+export function buildCollaborators(options: McpSsoOptions): SsoCollaborators {
   return {
     authorization: (_destination, grant) => {
       switch (grant) {
@@ -954,13 +959,13 @@ export function buildCollaborators(
           return buildSamlAuthorization(options);
         default:
           // These subcommands state no authorization_code destination: that is auth-code's.
-          throw new Error(
+          throw new UsageError(
             `mcp-auth ${subcommandOf(options)} has no interactive strategy for ${grant}`,
           );
       }
     },
     oidcAuthorization: () => buildOidcBrowserAuthorization(options),
-    deviceCodePresenter: () => consoleDeviceCodePresenter(logger),
+    deviceCodePresenter: () => consoleDeviceCodePresenter(),
     samlCookies: () => buildSamlCookieProvider(options),
     assertionReplayStore: () => defaultReplayStore,
   };

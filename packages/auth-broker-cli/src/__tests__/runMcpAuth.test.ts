@@ -27,6 +27,7 @@ import {
   XSUAA_DESTINATION_VARS,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
+import { createCliLogger } from '../output';
 import { type McpAuthOptions, runMcpAuth } from '../runMcpAuth';
 import {
   CLIENT_CRT,
@@ -148,6 +149,8 @@ function options(overrides: Partial<McpAuthOptions>): McpAuthOptions {
 /** The caller's interactive strategy: a code, counted when the provider asks. */
 function run(o: McpAuthOptions) {
   return runMcpAuth(o, {
+    // The logger the bin passes: stderr, from warn without --verbose.
+    logger: createCliLogger({ verbose: o.verbose === true }),
     workDir,
     authorization: () => {
       const inner = staticCodeStrategy({ payload: 'the-code' });
@@ -337,6 +340,11 @@ describe('mcp-auth (authorization_code)', () => {
     expect(JSON.stringify(sent)).not.toContain('uaa-refresh-1');
     const renewed = await storesOf('abap').sessionStore.loadSession(DEST);
     expect(jwtName(renewed?.authorizationToken)).toBe('uaa-access-2');
+    // The broker's warn line, on stderr through the CLI's logger at its
+    // default level: the stored session was not used.
+    expect(console.error).toHaveBeenCalledWith(
+      `[warn] [AuthBroker] ${DEST}: the stored session secret is not recorded as issued under the destination's current means; not used, the provider obtains a new one`,
+    );
   });
 
   it('--format json writes the 1.x fields from the stores', async () => {

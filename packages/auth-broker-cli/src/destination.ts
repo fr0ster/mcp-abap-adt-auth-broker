@@ -31,6 +31,7 @@ import {
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
 import type { WithUndefined } from './contractShape';
+import { type LineWriter, toStderr, writeFailureLines } from './output';
 
 /** Which key names the destination file uses: `SAP_*` or `XSUAA_*`. */
 export type DestinationType = 'abap' | 'xsuaa';
@@ -137,17 +138,16 @@ export function completeMeans(stated: StatedMeans): DestinationMeans {
  */
 export async function flushed(
   broker: AuthBroker,
-  report: (line: string) => void,
+  write: LineWriter = toStderr,
 ): Promise<boolean> {
   try {
     await broker.flush();
     return true;
   } catch (error) {
-    // The broker's own message names the destination and the store error's
-    // class, never what was being written.
-    report(
-      `❌ The session was not stored: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    // Each destination still pending, in its SessionWriteFailure's words —
+    // the store's error as auth-errors classified it — never the store's
+    // message (§10.9).
+    for (const line of writeFailureLines(error)) write(line);
     return false;
   }
 }

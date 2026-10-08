@@ -124,7 +124,7 @@ async function providerFor(
   const broker = new AuthBroker({
     sessionStore: new AbapSessionStore(dir),
     serviceKeyStore: keyStore,
-    ...buildCollaborators(run, silentLogger),
+    ...buildCollaborators(run),
     renewal: () => refreshThenLogin(),
     onWriteFailure: 'fail',
   });

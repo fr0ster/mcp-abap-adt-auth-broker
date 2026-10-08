@@ -25,9 +25,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
-import { XsuaaServiceKeyStore } from '@mcp-abap-adt/auth-stores';
+import type { XsuaaServiceKeyStore } from '@mcp-abap-adt/auth-stores';
 import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
 import {
   BROWSER_NAMES,
@@ -44,6 +43,7 @@ import {
   clientAuthenticationStrategy,
   clientAuthFlags,
   noCertificateClient,
+  readCertificateClient,
   serviceKeyStoreFor,
 } from './clientAuthentication';
 import {
@@ -53,14 +53,16 @@ import {
   writeOutputFile,
 } from './destination';
 import { readJsonFile } from './jsonFile';
+import { createCliLogger, printFailure, progress, toStderr } from './output';
 import type { AuthorizationStrategy } from './runMcpAuth';
+import { UsageError } from './subcommandArgs';
 
 /** The grants a SAP service key's client alone serves. */
 const GRANTS = ['authorization_code', 'client_credentials'] as const;
 export type GenerateEnvGrant = (typeof GRANTS)[number];
 
 export const GENERATE_ENV_USAGE =
-  'Usage: generate-env-from-service-key <destination> [service-key-path] [session-path] --grant <authorization_code|client_credentials> [--browser auto|system|chrome|edge|firefox|none|headless | --browser-program <program>] [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]';
+  'Usage: generate-env-from-service-key <destination> [service-key-path] [session-path] --grant <authorization_code|client_credentials> [--verbose] [--auth-debug] [--browser auto|system|chrome|edge|firefox|none|headless | --browser-program <program>] [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]';
 
 /** The client authentication flags and the field each one fills. */
 const CLIENT_AUTH_FLAGS: Record<string, keyof ClientAuthFlags> = {
@@ -99,6 +101,8 @@ export async function runGenerateEnv(
   let grant: string | undefined;
   let browserName: string | undefined;
   let browserProgram: string | undefined;
+  let verbose = false;
+  let authDebug = false;
   const flags: ClientAuthFlags = {};
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -106,7 +110,11 @@ export async function runGenerateEnv(
     const flag = Object.hasOwn(CLIENT_AUTH_FLAGS, arg)
       ? CLIENT_AUTH_FLAGS[arg]
       : undefined;
-    if (arg === '--grant') {
+    if (arg === '--verbose') {
+      verbose = true;
+    } else if (arg === '--auth-debug') {
+      authDebug = true;
+    } else if (arg === '--grant') {
       grant = args[i + 1];
       i++;
     } else if (arg === '--browser') {
@@ -150,21 +158,21 @@ export async function runGenerateEnv(
   try {
     if (browserProgram !== undefined) {
       if (browserName !== undefined) {
-        throw new Error('--browser-program excludes --browser');
+        throw new UsageError('--browser-program excludes --browser');
       }
       browser = browserProgramFor(browserProgram, platform, browsers);
     } else {
       const name = browserName ?? 'auto';
       if (!isBrowserName(name)) {
-        throw new Error(
+        throw new UsageError(
           `--browser must be one of: ${BROWSER_NAMES.join(', ')}`,
         );
       }
       browser = browserFor(name, platform, browsers);
     }
   } catch (error) {
-    console.error(`❌ ${(error as Error).message}`);
-    console.error(GENERATE_ENV_USAGE);
+    printFailure(error);
+    toStderr(GENERATE_ENV_USAGE);
     return 1;
   }
 
@@ -174,8 +182,8 @@ export async function runGenerateEnv(
   try {
     certificateFiles = clientAuthFlags(flags);
   } catch (error) {
-    console.error(`❌ ${(error as Error).message}`);
-    console.error(GENERATE_ENV_USAGE);
+    printFailure(error);
+    toStderr(GENERATE_ENV_USAGE);
     return 1;
   }
 
@@ -192,8 +200,8 @@ export async function runGenerateEnv(
     return 1;
   }
 
-  console.log(`📁 Service key: ${resolvedServiceKeyPath}`);
-  console.log(`📁 Session file: ${resolvedSessionPath}`);
+  progress(`📁 Service key: ${resolvedServiceKeyPath}`);
+  progress(`📁 Session file: ${resolvedSessionPath}`);
 
   // The key's format decides its parser and the file's key names: an ABAP
   // key nests the client under `uaa`, an XSUAA key holds it flat.
@@ -203,7 +211,7 @@ export async function runGenerateEnv(
     rawServiceKey = (readJsonFile(resolvedServiceKeyPath, 'The service key') ??
       {}) as Record<string, unknown>;
   } catch (error) {
-    console.error(`❌ ${(error as Error).message}`);
+    printFailure(error);
     return 1;
   }
   const isXsuaa = !rawServiceKey.uaa;
@@ -228,14 +236,17 @@ export async function runGenerateEnv(
       ReturnType<XsuaaServiceKeyStore['getClientCertificate']>
     > = null;
     try {
-      // A key the ABAP store reads carries no certificate client.
-      if (serviceKeyStore instanceof XsuaaServiceKeyStore) {
-        certificateClient =
-          await serviceKeyStore.getClientCertificate(destination);
+      // A key the ABAP store reads carries no certificate client: which
+      // store was built is recorded, never asked of the object.
+      if (serviceKeyStore.kind === 'xsuaa') {
+        certificateClient = await readCertificateClient(
+          serviceKeyStore.store,
+          destination,
+        );
       }
     } catch (error) {
-      // The store's refusal names the key's fields, never a value.
-      console.error(`❌ ${(error as Error).message}`);
+      // The fields the store's refusal names, in this CLI's words.
+      printFailure(error);
       return 1;
     }
     if (!certificateClient) {
@@ -249,7 +260,7 @@ export async function runGenerateEnv(
     };
   } else {
     const secretClient =
-      await serviceKeyStore.getAuthorizationConfig(destination);
+      await serviceKeyStore.store.getAuthorizationConfig(destination);
     if (!secretClient) {
       const certificateKey = carriesCertificate(unwrappedKey);
       console.error(
@@ -263,7 +274,7 @@ export async function runGenerateEnv(
   }
   let serviceUrl: string | undefined;
   try {
-    serviceUrl = (await serviceKeyStore.getConnectionConfig(destination))
+    serviceUrl = (await serviceKeyStore.store.getConnectionConfig(destination))
       ?.serviceUrl;
   } catch {
     // An XSUAA key may carry no URL.
@@ -299,16 +310,23 @@ export async function runGenerateEnv(
   // The user's choice as the broker's strategy; none without `--client-auth`.
   // This script's own choices, stated: a renewal refreshes, then logs in; a
   // secret the store did not take fails the run.
-  const broker = new AuthBroker({
-    sessionStore: files.sessionStore,
-    serviceKeyStore: files.keyStore,
-    clientAuthentication: clientAuthenticationStrategy(flags),
-    authorization: () => authorization(browser),
-    renewal: () => refreshThenLogin(),
-    onWriteFailure: 'fail',
-  });
+  const broker = new AuthBroker(
+    {
+      sessionStore: files.sessionStore,
+      serviceKeyStore: files.keyStore,
+      clientAuthentication: clientAuthenticationStrategy(flags),
+      authorization: () => authorization(browser),
+      renewal: () => refreshThenLogin(),
+      onWriteFailure: 'fail',
+      // On only with --auth-debug (§10.7): never from the environment.
+      authDebug,
+    },
+    // The script's logger: stderr, from debug with --verbose (or
+    // --auth-debug, which implies it), else from warn.
+    createCliLogger({ verbose: verbose || authDebug }),
+  );
 
-  console.log(`🔐 Getting token for destination "${destination}" (${grant})`);
+  progress(`🔐 Getting token for destination "${destination}" (${grant})`);
   try {
     // Kept: getProvider is typed IAuthProvider, and both grants this script
     // states (authorization_code, client_credentials) build a token provider,
@@ -320,24 +338,22 @@ export async function runGenerateEnv(
     await provider.getTokens();
   } catch (error) {
     // A provider's failure — of any installed copy of auth-errors — in the
-    // words auth-errors renders from its kind and facts, never a message it
-    // carries; anything else as before (Task 10 rewrites every catch site).
-    const words = isAuthProviderFailure(error)
-      ? readFailure(error, 'token-request').reason
-      : error instanceof Error
-        ? error.message
-        : String(error);
-    console.error(`❌ Login failed: ${words}`);
-    console.error(`   ${resolvedSessionPath} is unchanged.`);
+    // words auth-errors renders from its kind and facts; anything else in
+    // auth-errors' unfamiliar words, never its message (§10.9).
+    printFailure(error, {
+      context: 'Login failed',
+      operation: 'token-request',
+    });
+    toStderr(`   ${resolvedSessionPath} is unchanged.`);
     return 1;
   }
-  console.log(`✅ Token obtained successfully`);
+  progress(`✅ Token obtained successfully`);
 
-  if (!(await flushed(broker, (line) => console.error(line)))) {
-    console.error(`   ${resolvedSessionPath} is unchanged.`);
+  if (!(await flushed(broker))) {
+    toStderr(`   ${resolvedSessionPath} is unchanged.`);
     return 1;
   }
   writeOutputFile(files, resolvedSessionPath);
-  console.log(`✅ Session file written: ${resolvedSessionPath}`);
+  progress(`✅ Session file written: ${resolvedSessionPath}`);
   return 0;
 }
