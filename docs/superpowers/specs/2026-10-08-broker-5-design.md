@@ -211,8 +211,7 @@ words:
   required`, …) stay plain `Error`s / `TypeError`s: a programming error of the
   consumer, naming option names only.
 - **`flush()`** rejects with an `AggregateError` whose message keeps 4.x's
-  words ("Session writes still failing for "<destination>", …; the broker keeps
-  retrying them") and whose `errors` are one `SessionWriteFailure` per
+  words ("Session writes still failing for "<destination>", …") and whose `errors` are one `SessionWriteFailure` per
   destination **(D9)**:
 
 ```ts
@@ -291,12 +290,12 @@ persistence: refreshStatePersistence(write, { onWriteFailure, logger })
 
 - `onWriteFailure` is the consumer's `AuthBrokerConfig.onWriteFailure`,
   passed as given (§5.4).
-- `write(tokens: PersistedTokens)` submits one session write for the
-  destination to the broker's `SessionWriter` (§5.3) and resolves when that
-  attempt landed, or rejects with the store's error when it did not — so
+- `write(tokens: PersistedTokens)` queues one session write for the
+  destination in the broker's `SessionWriter` (§5.3) and resolves when it
+  landed, or rejects with the store's error when it did not — so
   `refreshStatePersistence` keeps its logical state (`held` / `cleared`) and its
-  pending delivery, and the `SessionWriter` keeps the destination's latest
-  pending write and retries it.
+  pending delivery, and the `SessionWriter` keeps the destination's failed
+  write pending until a later write of the destination lands.
 - `onTokens` is gone from every row (auth-providers 6.0.0 removed it). The
   broker's `failedWrites` `WeakMap` keyed by result object goes with it on this
   path: the awaited report is what makes the obtaining call fail.
@@ -343,87 +342,42 @@ broker no longer derives one from `expiresIn` on this path. A destination the
 key store states as `basic` or `snc` at write time is still not written (4.x,
 `AuthBroker.ts:1261-1272`).
 
-### 5.3 Failed writes, retries and order
+### 5.3 Session writes: one queue per destination (ruled 2026-10-08, D23)
 
-`SessionWriter` keeps its 4.x rules — one pending write per destination, the
-latest replacing an older one; attempts for one destination never overlapping;
-a retry after 1 s doubling to 60 s on an `unref()`ed timer (a retry delay, not a
-bound on anyone's wait: nobody waits on the timer, H4) — and gains two:
+The writer is a plain queue per destination. The consumer's store is a
+collaborator with a contract (§11.1, README); the broker builds no machinery
+against a store that breaks it.
 
-- **Generation.** Every build of a destination (§6) takes a generation from a
-  per-destination counter; every submission carries its build's generation. A
-  submission whose generation is older than the newest one already submitted
-  for that destination is dropped, and a pending one is replaced only by a
-  submission of the same or a newer generation. So a late write of a provider
-  retired by a means change never overwrites what the provider built for the
-  new means wrote (H3; goal "does not overwrite a newer one").
-- **Within one generation, report order.** `refreshStatePersistence`
-  serialises its reports per provider; the writer applies them in submission
-  order and keeps only the latest pending. Since every write is built from the
-  logical state, the latest pending write is always the one that must land: a
-  failed `''` followed by a `credential` / `none` report is written again as
-  `''` (state `cleared`); a failed new refresh token is written again with that
-  token by the next report; a newer refresh token or a discard supersedes it.
-
-**Not lost while the process lives:** a write that failed stays pending in the
-writer until it lands or a newer one of the same or a newer generation replaces
-it, whether or not another report comes; `flush()` gives each pending write one
-more attempt and names the destinations still failing (§3.4).
-
-**Revisions and their outcomes** (in memory only, per destination). Every
-submission gets the next **revision** number of its destination. Each revision
-ends in exactly one outcome:
-
-| Outcome | When |
-|---|---|
-| **landed** | an attempt that wrote it succeeded |
-| **pending** | it is the writer's pending write — failed and waiting for a retry, or its attempt in flight |
-| **superseded by m** | while it was pending, a later submission m of the same or a newer generation replaced it; m carries the authoritative state (every write is built from the logical state, §5.2), so its obligation passes to m. It is **never written again** — replaying it would restore stale refresh state |
-| **dropped** | a retired generation's late submission, refused on arrival (above): it was never the destination's state and **imposes no obligation** |
-
-**Discharged:** a revision is discharged when it landed, when it is dropped,
-or when it was superseded by a revision that is discharged — a landed
-successor discharges everything it supersedes. The writer keeps, per
-destination, only the pending revision `p` and `carries(p)`: the lowest
-revision whose obligation `p` carries (itself, or the lowest revision of the
-chain it superseded). Bookkeeping:
-
-- a submission n replacing pending `p`: `carries(n) = carries(p)`; `p` becomes
-  superseded by n;
-- an older-generation submission: dropped, nothing changes;
-- an attempt that lands writing revision k: every revision ≤ k is discharged;
-  if a newer `p` is still pending (it arrived during that attempt),
-  `carries(p) = k + 1`;
-- an attempt that fails: `p` stays pending with its `carries`.
-
-So the destination's undischarged revisions are exactly `carries(p) … p`, and
-none when nothing is pending.
-
-**What an attempt covers.** An attempt writes one revision k — the pending one
-when it starts — and **covers exactly `[carries(k) … k]`, captured when the
-attempt starts**; never a revision submitted after it started. Its settling
-concerns only those revisions:
-
-- **it lands:** every revision ≤ k is discharged (including those it covers);
-- **it fails:** the revisions it covers stay undischarged, now carried by the
-  pending revision, and that failure is the answer to each of their waiters.
-
-**An in-flight revision superseded during its attempt** (k in flight, m
-submitted meanwhile): if the attempt lands, k is discharged — it landed, and
-its write was the destination's state up to k; m stays pending with
-`carries(m) = k + 1` and needs an attempt of its own. If it fails, k is
-superseded by m and is never written again; `carries(m) = carries(k)`.
-
-**Waiting is by predicate, re-evaluated.** A waiter — a gate check (§5.4) or a
-consumer call (§5.5) — states its own predicate. **After any attempt of its
-destination settles, the waiter re-evaluates it**: met → done; unmet → it
-waits for the attempt in flight or, if none, starts the next one (one
-immediate attempt of the pending revision), and re-evaluates again when that
-settles. An attempt is **relevant** to a waiter only if its covered range
-includes a revision the waiter waits on; a failure reaches the waiter only
-from a relevant attempt. A revision already discharged or dropped resolves the
-waiter at once, with no attempt. No timer: each wait ends when a relevant
-attempt settles or the waiter's caller aborts.
+- **One at a time, in order.** The writes of one destination run one after
+  another, in the order they were queued; an older write never runs after, and
+  so never overwrites, a newer one.
+- **A retired build's late write is dropped** (H3). Every build of a
+  destination (§6) takes a generation from a per-destination counter; a write
+  queued by a build older than the newest one that has queued a write for the
+  destination is dropped on arrival — never written.
+- **A failed write stays pending.** The destination then has a pending write:
+  the latest state its build reported (every write is built from the logical
+  state, §5.2, so the latest one is the one that must land). It is retried by
+  the destination's next write — which, being built from the same logical
+  state, carries it — or by `flush()`. There is no retry timer.
+- **No detached writes from a call's point of view.** Every write a call
+  causes is awaited by that call: `getToken` / `refreshToken` / `getProvider`
+  through the provider's awaited report or their own write (§5.5), and a
+  connection request whose renewal produced a credential through the
+  provider's awaited report — the moment (`authorize()`, `rejected()`,
+  `prepare()`) does not answer before the write settled. A report the provider
+  makes after every caller has left (a discard at an abort, a late refresh
+  result — auth-providers' detached report) has nobody left to await it: it is
+  queued like any other, and its failure leaves the destination's write
+  pending (§5.4).
+- **Every wait races its owner's signal** (H4). A caller waiting for its write,
+  or for the queue ahead of it, is released at once by its own signal with
+  auth-errors' `aborted` failure — never with success — and the write runs on,
+  landing or failing on its own (§7.5).
+- **The store's contract** (README, §11.1): `saveSession` settles — resolves or
+  rejects. A store that never settles holds its destination's queue; avoiding
+  that is the consumer's. Each waiting caller is still released by its own
+  signal.
 
 ### 5.4 What a failed write means: `onWriteFailure` (Open 2; D3)
 
@@ -442,60 +396,31 @@ One choice for the broker, both paths (D3). Without it, a build of a token row
 and every token API call throw `DestinationConfigError(['onWriteFailure'])`;
 `basic` / `snc` / `none` destinations do not need it.
 
-**`'fail'` — a call fails when a write it needs has not landed:**
+**`'fail'`:**
 
-1. **The call that obtained the credential.** For a provider the broker built,
-   the report is awaited and `refreshStatePersistence` rethrows the write's
-   failure, so `getTokens()` / `refreshTokens()` — and a moment — fail
-   `unknown` `persisting-tokens` (the provider's classification); the token
-   API relays that failure (§3.1). On the consumer path, the token API awaits
-   its own submission and rejects with §3.3's failure.
-2. **Every later broker call while a write is outstanding.** `getProvider`,
-   `getToken` and `refreshToken` for a destination with a pending write first
-   give that write one immediate attempt (cancelling its backoff timer) and
-   wait for it, raced against the call's signal (§7.5); if it lands, the call
-   proceeds; if not, the call rejects with §3.3's failure for that write. So no
-   broker call reports success while a write is outstanding — the discard
-   written by a detached report (an abort) included — and a discarded refresh
-   token cannot outlive a restart unnoticed: until its `''` lands, every call
-   for the destination fails, `flush()` rejects, and each failed attempt is a
-   `warn` line (§8.1).
-3. **A final check before success.** The entry check alone is not enough:
-   while a call waits on its resolution or its token, a provider already
-   handed out may commit a detached report (a discard at an abort, a late
-   refresh result) whose write fails. So every broker call that is about to
-   succeed — `getProvider`, `getToken`, `refreshToken` — makes one more gate
-   check at its completion point, against the writer's revisions (§5.3). At
-   the completion point the call reads the destination's latest revision R.
-   **The gate is satisfied for R when every revision ≤ R is discharged** —
-   landed, dropped, or superseded by a successor that landed (possibly a
-   revision after R: the successor carries their state, so its landing is
-   what discharges them; they are never replayed). With the writer's
-   bookkeeping: satisfied when nothing is pending, or `carries(p) > R`.
-   Otherwise the call waits by predicate (§5.3) through the gate slot (§7.5),
-   raced only against the call's signal: after each attempt settles it
-   re-evaluates "every revision ≤ R discharged"; unmet, it waits for or starts
-   the next attempt. A relevant attempt (one whose covered range includes a
-   revision ≤ R) that fails rejects the call with §3.3's failure for it; an
-   attempt that lands but leaves a revision ≤ R undischarged (an older
-   in-flight attempt landing while R itself is still pending) satisfies
-   nothing — the call goes on to the attempt that covers R. A revision
-   submitted after R and superseding nothing ≤ R belongs to whatever comes
-   later, not to this call. The entry check (point 2) is the same test with R
-   read on entry.
-4. **Limit, stated (D4):** a provider already handed to a connector answers its
+1. **The call whose write did not land fails** — `unknown`,
+   `persisting-tokens`: for a provider the broker built, the provider's
+   awaited report fails its `getTokens()` / `refreshTokens()` or its moment,
+   and the token API relays that failure (§3.1); on the consumer path the
+   token API rejects with §3.3's failure.
+2. **While the destination's last write is pending, its `'fail'` calls are
+   refused until a write lands.** `getProvider`, `getToken` and
+   `refreshToken` for such a destination first retry the pending write (it is
+   the destination's next write, queued like any other, awaited and raced
+   against the call's signal): it lands → the call proceeds; it fails → the
+   call rejects with §3.3's failure. That is the whole check: "is the
+   destination's last write pending".
+3. **Limit, stated (D4):** a provider already handed to a connector answers its
    moments from its own state; a moment that commits nothing (a valid cached
-   token presented) is not gated on an earlier outstanding write. Every moment
-   that renews is (point 1). The broker does not wrap providers to gate this.
+   token presented) is not refused because of a pending write. Every moment
+   that renews writes, and awaits its write (point 1).
 
-**`'continue'` — best effort:** no call fails because of a write. The provider's
-report never throws (`refreshStatePersistence`'s `'continue'`), neither gate
-check runs (a failed write is logged, not answered), the token API returns the
-token, the writer retries on its own, `flush()` reports what is
-still pending, and every failure is a `warn` line. The restart guarantees of
-§5.6 hold for every write that landed, and the README says exactly that: a
-refresh token discarded while its `''` write is pending at the moment the
-process ends comes back from the store after a restart.
+**`'continue'`:** no call fails because of a write. A failed write is logged
+(`warn`, `logFields` only), stays pending and is retried by the next write or
+`flush()`; the call goes on. The restart guarantees of §5.6 hold for every
+write that landed, and the README says exactly that: a refresh token discarded
+while its `''` write is pending at the moment the process ends comes back from
+the store after a restart.
 
 ### 5.5 The token API with the consumer's provider
 
@@ -503,26 +428,14 @@ The consumer's provider has no broker-built persistence: the token API writes
 every answer itself, cache hits included, through the same `SessionWriter`, as
 4.x. Three changes, each forced by the goal:
 
-- **The wait for that write is the caller's to abandon.** 4.x awaited
-  `writer.submit` directly (`obtainFromConsumer`), so after `getTokens()`
-  returned no signal could release a caller stuck in a `saveSession` or queued
-  behind another write. 5.0.0 waits for the submission's attempt through a
-  slot of its own (§7.5), raced against the call's signal: an abort
-  releases the caller at once with auth-errors' `aborted` failure — never with
-  success — under either policy, and the write runs on to completion,
-  landing or failing on its own (a failure then stays pending, retried, and is
-  reported by the next gate check and `flush()`). **Each call waits for its
-  own submission, revision n** (§5.3), never for another call's, by predicate:
-  under `'fail'`, "n is discharged" — it returns once n is discharged (landed,
-  or superseded and its successor landed), and rejects with §3.3's failure
-  when an attempt **covering n** fails; under `'continue'`, "n is discharged,
-  or an attempt covering n has settled" — it returns once its own revision was
-  attempted (or discharged), whatever that attempt came to. An attempt that
-  does not cover n — an older one still in flight when n was submitted —
-  neither answers nor releases it: the call re-evaluates and waits for the
-  attempt that does. So a second concurrent call whose write is queued
-  behind a held one returns only after its own write — or the successor that
-  carries it — settled, and an abort releases only its own caller.
+- **The call awaits its own write, and may abandon the wait.** 4.x awaited
+  `writer.submit` directly, so no signal could release a caller stuck in a
+  `saveSession` or queued behind another write. 5.0.0 queues the call's write
+  (§5.3) and awaits it raced against the call's signal: an abort releases the
+  caller at once with `aborted` — never with success — under either policy,
+  and the write runs on. Without an abort: under `'fail'` a write that did not
+  land rejects the call (§5.4); under `'continue'` the call returns the token
+  once its write settled, whatever it came to.
 
 - **The result's refresh token is authoritative (D5).** auth-providers 6.0.0
   returns from `getTokens()` / `refreshTokens()` the refresh token the provider
@@ -945,27 +858,14 @@ parties, or its waiters) — the broker keeps nothing alive.
 
 ### 7.5 Every other wait
 
-- The `'fail'` gate of §5.4 (point 2) joins a per-destination `sharedAttempt`
-  slot whose `start` is the writer's immediate attempt, resolving a
-  `SlotOutcome` (§7.1); a write that did not land is `{ ok: true, value:
-  { landed: false, error } }` and the waiter throws §3.3's failure for it
-  outside `join`. The caller's signal releases the caller, the write runs on.
-- The gate slots of §5.4 (points 2 and 3) are keyed by the destination and
-  the pending revision `p` they wait on: concurrent callers gated on the same
-  pending write share its one attempt; `start` resolves a `SlotOutcome`
-  (`{ landed: true }` or `{ landed: false, error }`).
-- The consumer path's wait for its own submission (§5.5) is a slot of its own,
-  keyed by the destination **and its revision n** — one waiter per
-  submission, never shared with another call's: `start` runs §5.3's
-  predicate wait for n and resolves a `SlotOutcome`; an abort releases that
-  caller only (`aborted`), and the write runs on.
-- Both kinds of `start` re-evaluate their predicate after every settled
-  attempt of the destination, and only a relevant attempt's failure answers
-  them (§5.3).
+- Every wait on the write queue — a call awaiting its own write (§5.5), the
+  retry of a pending write before a `'fail'` call (§5.4, point 2) — is one
+  waiter of its own `sharedAttempt` slot, using §7.1's outcome pattern: the
+  caller's signal releases that caller only (`aborted`); the write runs on.
 - `flush({ signal })` joins one broker-wide slot whose `start` resolves a
   `SlotOutcome<void>`; the `AggregateError` of §3.4 is its `thrown`, rethrown
-  outside `join` as the same object (D9). An abort releases the caller, the
-  attempts run on and the writer keeps retrying.
+  outside `join` as the same object (D9). An abort releases the caller; the
+  attempts run on, and a write still failing stays pending.
 - Every slot of the broker uses this one pattern; no slot's `start` throws.
 - The consumer path's factory build is §7.1's resolution; the consumer's
   provider gets the call's signal through `getTokens({ signal })`.
@@ -975,7 +875,7 @@ parties, or its waiters) — the broker keeps nothing alive.
 ### 7.6 No bound of the broker's own (H4)
 
 The broker sets no timeout, passes no `AbortSignal.timeout`, adds no signal of
-its own to any call, and the `SessionWriter`'s retry timer bounds nobody's
+its own to any call, and the `SessionWriter` has no timer at all; nothing bounds anybody's
 wait. A consumer that wants a bound passes one.
 
 ## 8. Logging and debug output (library)
@@ -988,9 +888,9 @@ Only through the `ILogger` it is given (none: nothing), never stdout:
   (`{ authType, grant, seeded }`), the token API's method. The destination name
   (the consumer's own string) is the only free value, as in 4.x.
 - `warn`: a stored secret bound elsewhere and discarded (4.x's line); a session
-  write that failed — `[AuthBroker] Session write for <destination> failed; the
-  write is retried in <ms> ms` with `logFields(classify(error,
-  'persisting-tokens'))` and the attempt number; a retired build's write
+  write that failed — `[AuthBroker] Session write for <destination> failed; it
+  stays pending until the destination's next write or flush()` with
+  `logFields(classify(error, 'persisting-tokens'))`; a retired build's write
   dropped (`debug`).
 - `info`: a session secret saved, `{ credential: 'token' | 'cookies',
   hasRefreshToken, expiresAt }`, as 4.x.
@@ -1267,6 +1167,8 @@ aborted login prints "the authorization was aborted".
 | a provider's `ValidationError` thrown raw by `getProvider` (rows other than SNC) | `DestinationConfigError` naming the store fields, the provider's error in `error` |
 | the certificate words of `clientAuthentication` (`incomplete` / `expired` / `could not be used`) | `error.reason` of the carried `client-certificate` error; the `DestinationConfigError` reason reads `the clientAuthentication strategy failed: <reason>` |
 | the token API with a consumer `provider`: a call waited for its session write however long the store took | the wait races the call's `signal`: an abort releases the caller (`aborted`) while the write runs on |
+| a failed session write was retried on a timer (1 s doubling to 60 s) | no timer: it stays pending and is retried by the destination's next write or `flush()` — call `flush()` on shutdown. Under `'fail'` the destination's calls are refused while it is pending |
+| a store whose `saveSession` never settled kept being retried | **the store's contract:** `saveSession` must settle (resolve or reject). One that never settles holds that destination's write queue; each waiting caller is released by its own signal |
 | `flush()`'s `AggregateError.errors`: `Error("<dest>": <class>)` | `SessionWriteFailure` (`destination`, `error`) |
 | `getProvider(d)`, `getToken(d)`, `refreshToken(d)` | unchanged calls; each also takes `{ signal }` — the server ties a session's close to `getProvider`'s and each request's cancellation to the token API's |
 | providers' 30 s / 300 s login timeouts | none: a login waits until it ends or a signal aborts; bound it with your own signal or strategy option |
@@ -1381,8 +1283,9 @@ expectation is attached before it is triggered.
 endpoint**
 - Refused refresh → token-only login → a fresh broker on the same files finds
   no refresh token and logs in. **[break: write `undefined` for `null`]**
-- The same with the `''` write failing once, then landing by the writer's retry
-  (fake timers); and with the fallback login itself failing — R still cleared.
+- The same with the `''` write failing once, then landing as the
+  destination's next write; and with the fallback login itself failing — R
+  still cleared.
 - Refresh cut after dispatch (real socket, withheld response, `ifCut:
   'discard'`): `''` lands; restart → no R; the late R2 released afterwards with
   nothing newer committed → R2 written.
@@ -1533,70 +1436,36 @@ endpoint**
   session keeps its access token and binding, has no refresh token.
 - `saml2_pure`: cookies written as `sessionCookies`, `refreshToken: ''` — a
   refresh token stored before is gone from the resulting state.
-- Write order: a deferred older write completing after a newer one never
-  overwrites it; a retired build's write is dropped once the newer generation
-  wrote. **[break: drop the generation tag]**
-- `'fail'`: a failing store makes the obtaining `getToken()` fail `unknown`
-  `persisting-tokens` with `code` (EACCES); the retry continues; a later
-  `getToken()` / `getProvider()` while the write is outstanding gives it one
-  attempt and fails while it fails, succeeds once it lands; a detached discard
-  whose write fails makes the next `getToken()` fail. `flush()` rejects with a
-  `SessionWriteFailure` naming the destination. **[break: answer a call
-  without checking the outstanding write]**
-- `'continue'`: the same store → every call succeeds, one `warn` line per
-  failed attempt carrying `logFields` only, `flush()` rejects.
-- **Revision outcomes.** (1) Revision R1 fails; R2 (same generation) is
-  submitted, supersedes it and lands: the next `'fail'` call succeeds, and the
-  store never receives R1's write again (the test's store records every
-  `saveSession`: R1's content appears only in the failed attempt). **[break:
-  require every revision ≤ R to have landed → the destination is refused
-  forever → red]** **[break: replay a superseded revision → red]** (2) A
-  retired generation's late submission is dropped: the gate is satisfied as
-  before it arrived, and the store never receives it. (3) R1 fails and nothing
-  newer comes: every `'fail'` call rejects until a retry of R1 lands, then the
-  next succeeds. (4) R1's attempt is in flight when R2 arrives; R1 lands, R2
-  is pending: a call whose R was read before R2 arrived succeeds
-  (`carries(p) = R1 + 1 > R`); one whose R is R2 keeps waiting after R1's
-  attempt lands and is answered only by the attempt covering R2. (5) The same
-  with R1's attempt failing: R1 is superseded by R2 (never written again), the
-  gate with R = R2 is not answered by R1's failure alone but waits for the
-  attempt covering `[R1 … R2]`. (6) A gate or consumer wait on a revision
-  already discharged or dropped resolves at once, with no attempt (the test's
-  store records no `saveSession`). **[break: answer a waiter on "any attempt
-  settled" → red]** **[break: skip the re-evaluation after an older attempt
-  settles → red]**
-- **The final check.** A provider handed out earlier commits a detached
-  discard whose write fails while (1) a `getProvider` resolution is suspended
-  on a held store read, and (2) separately, a `getToken` answered from the
-  provider's cache is suspended before its completion point: under `'fail'`
-  each call rejects `unknown` `persisting-tokens` (the write's failure); under
-  `'continue'` each succeeds and the failure is one `warn` line. A write
-  submitted after the call's completion point does not affect it.
-  **[break: check only on entry → the `'fail'` cases red]**
-- **The consumer path's write is abandonable.** A consumer provider returns a
-  token; `saveSession` is held open (and separately: queued behind another
-  held write); the caller's signal aborts: the call rejects `aborted` at once
-  under both policies — never with success — and when the store is released
-  the write lands (`loadSession` shows it); with a store that then fails, the
-  failure is pending and the next `'fail'` call rejects. **[break: await the
-  submission without racing the signal → red]**
-- **Each consumer call waits for its own write.** Two concurrent consumer
-  calls for one destination; the first call's `saveSession` is held, the
-  second's write queued behind it (and superseding it). Under both policies:
-  neither returns before an attempt that carries its own revision settled —
-  the first not before the held attempt settles, the second not before the
-  attempt covering its revision settles — **not** when the first, older
-  attempt settles (it covers only the first revision), whether that older
-  attempt lands or fails. Under `'fail'`: the held attempt lands → the first
-  returns (its revision landed, though the second arrived meanwhile) and the
-  second waits for its own attempt; the held attempt fails → the first rejects
-  with that failure (an attempt covering it failed), and the second, now
-  carrying the first's revision too, is answered by the attempt covering both.
-  A variant where the first's revision failed earlier and is pending (not in
-  flight) when the second supersedes it: the first is answered by the attempt
-  covering both — it returns when that lands, never by a replay of its own. An
-  abort of either releases only that caller. **[break: share one slot per
-  destination → the second call returns on the first's attempt → red]**
+- **In-order writes:** three writes of one destination queued while the first
+  is held run one at a time, in order (the test's store records the
+  sequence); writes of two destinations do not wait on each other.
+  **[break: start a write before the previous one settled → red]**
+- **A retired build's write is dropped:** after a means change, the old
+  provider's late report is never written (the store records no such
+  `saveSession`), and the new build's session stays. **[break: drop the
+  generation check → red]**
+- **A failed write is retried by the next one:** a failing `''` write, then a
+  token-only report of the same build → the next write carries `''` and lands;
+  restart finds no R. And `flush()` alone retries a pending write.
+- **`'fail'`:** a failing store makes the obtaining `getToken()` fail
+  `unknown` `persisting-tokens` with `code` (EACCES); while the write is
+  pending, every `getProvider` / `getToken` / `refreshToken` of that
+  destination retries it first and is refused while it fails, and proceeds
+  once it lands; a pending write left by a detached report (a discard at an
+  abort) refuses the next call the same way; another destination is
+  unaffected. **[break: let a call proceed while the destination's write is
+  pending → red]**
+- **`'continue'`:** the same store → every call succeeds, one `warn` line per
+  failed write carrying `logFields` only; the write is retried by the next one.
+- **An abort releases the caller, the write runs on:** a call's
+  `saveSession` is held (and separately: queued behind another held write);
+  the caller's signal aborts → the call rejects `aborted` at once under both
+  policies, never with success; when the store is released the write lands
+  (`loadSession` shows it). **[break: await the write without racing the
+  signal → red]**
+- **`flush()`** retries every pending write once, resolves when all landed,
+  rejects with the `AggregateError` of `SessionWriteFailure`s naming each
+  destination still failing; `flush({ signal })` releases its caller on abort.
 - No `onWriteFailure`: a token row and the token API refused naming it;
   `basic` built.
 - Consumer factory path: a result without a refresh token writes `''`; a
@@ -1636,8 +1505,8 @@ endpoint**
   `getToken` gets the token.
 - The `clientAuthentication` context's signal aborts when every build waiter
   aborted.
-- `flush({ signal })` and the `'fail'` gate release their caller on abort; the
-  write goes on.
+- `flush({ signal })` and a `'fail'` call retrying a pending write release
+  their caller on abort; the write goes on.
 - Every `sharedAttempt` waiter's listener is removed: each signal's listener
   count returns to its baseline.
 - Source tests: nothing in the token API calls `getProvider`; no
@@ -1781,26 +1650,21 @@ Recorded with date and result before the release; none runs in CI.
   A provider persists only refresh state it owns: a write carries a refresh
   token only when that build was seeded with it or obtained it and still holds
   it, so a replacement provider never inherits a refresh token from the store
-  (§5.2, §6.2). Under `'fail'`, no broker call succeeds while a
-  write submitted before its completion point — a detached discard included —
-  is undischarged (§5.4); a superseded write is discharged only by its landed
-  successor and never replayed, so no stale refresh state is ever restored
-  (§5.3). A wait on a write is answered only by an attempt
-  covering its revision (the range captured when that attempt started) and
-  re-evaluated after every attempt, so no call is answered by an attempt that
-  did not write its state (§5.3).
-- **H4 No built-in timeouts.** §7.6, §10.4; the writer's retry delay bounds no
-  wait. The final write check and the consumer path's
-  write wait end on the attempt's settling or the caller's abort, never a
-  timer; the CLI's subcommands run in-process, so one interrupt ends them. Re-evaluation after an attempt waits for or starts
-  the next attempt; it never sets a timer.
+  (§5.2, §6.2). Writes of a destination run one at a time, in
+  order, so an older write never overwrites a newer one, and a retired build's
+  late write is dropped (§5.3). Under `'fail'`, the call whose write did not
+  land fails, and the destination's calls are refused while its last write is
+  pending (§5.4).
+- **H4 No built-in timeouts.** §7.6, §10.4; the writer has no timer — a
+  failed write is retried by the next write or `flush()` — and every wait on
+  the queue ends when the write settles or its owner aborts; the CLI's
+  subcommands run in-process, so one interrupt ends them.
 - **H5 One implementation of each rule.** `sharedAttempt` (§7) — for the
   waiter and cancellation rules only; its results carried as plain outcomes so
   the broker's own errors pass unchanged — `readFailure` /
   `classify` (§3), `refreshStatePersistence` (§5.1), the broker's UAA row for
   `mcp-auth` (§10.2). Each wait on a session write is one waiter of its own
-  slot (keyed by destination and revision), so one caller's abort releases only
-  that caller.
+  slot, so one caller's abort releases only that caller.
 - **H6 Whoever holds an instance holds its rights.** Retired providers are
   not taken from their holders (§6.3); store errors are returned to the store's
   owner as the same objects, through the shared slots too (§3.4, §7.1);
@@ -2007,3 +1871,15 @@ change would still be seeded from the session matching the shorter record, and
 refresh-first renewal would send R, obtained at the old endpoint, to the new
 one.
 
+**D23 — The session-write model. Ruled by the user, 2026-10-08.**
+"If the consumer messes something up, nobody does anything — read the
+instructions": the package does not build machinery against its consumer's
+own collaborators misbehaving; it states the contract they must meet. So the
+writer is a plain per-destination queue (§5.3): writes in order, a retired
+build's late write dropped, a failed write pending until the next write or
+`flush()`, `'fail'` refusing a destination's calls while its last write is
+pending, every wait raced against its owner's signal, and the store's contract
+— `saveSession` settles — in the docs. The revision, supersession, coverage
+and re-evaluation model of earlier drafts, built for a second renewal of the
+same destination while the first write hangs in the consumer's own store, is
+removed.
