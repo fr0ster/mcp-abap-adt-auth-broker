@@ -405,11 +405,14 @@ and every token API call throw `DestinationConfigError(['onWriteFailure'])`;
    token API rejects with §3.3's failure.
 2. **While the destination's last write is pending, its `'fail'` calls are
    refused until a write lands.** `getProvider`, `getToken` and
-   `refreshToken` for such a destination first retry the pending write (it is
-   the destination's next write, queued like any other, awaited and raced
-   against the call's signal): it lands → the call proceeds; it fails → the
-   call rejects with §3.3's failure. That is the whole check: "is the
-   destination's last write pending".
+   `refreshToken` ask "is the destination's last write pending" **twice: on
+   entry, and once more right before they return success** — a write an
+   already-held provider queued meanwhile (a discard its store rejected, say)
+   is caught by the second check. Each time the answer is yes, the call
+   retries that write (it is the destination's next write, queued like any
+   other, awaited and raced against the call's signal): it lands → the call
+   goes on (on entry) or returns (at the end); it fails → the call rejects
+   with §3.3's failure. That is the whole rule.
 3. **Limit, stated (D4):** a provider already handed to a connector answers its
    moments from its own state; a moment that commits nothing (a valid cached
    token presented) is not refused because of a pending write. Every moment
@@ -1457,6 +1460,15 @@ endpoint**
   pending → red]**
 - **`'continue'`:** the same store → every call succeeds, one `warn` line per
   failed write carrying `logFields` only; the write is retried by the next one.
+- **The check before success.** An already-held provider's discard write is
+  rejected by the store while (1) a `getProvider` call awaits its resolution
+  (a held store read), and (2) separately, a `getToken` answered from the
+  provider's cache is suspended before it returns: under `'fail'` each call
+  retries the pending write and, the store still rejecting, is refused
+  (`unknown`, `persisting-tokens`); with the store accepting the retry, each
+  succeeds and the store holds no refresh token. Under `'continue'` each
+  succeeds and the failure is one `warn` line. **[break: check only on entry
+  → the `'fail'` cases red]**
 - **An abort releases the caller, the write runs on:** a call's
   `saveSession` is held (and separately: queued behind another held write);
   the caller's signal aborts → the call rejects `aborted` at once under both
@@ -1653,8 +1665,9 @@ Recorded with date and result before the release; none runs in CI.
   (§5.2, §6.2). Writes of a destination run one at a time, in
   order, so an older write never overwrites a newer one, and a retired build's
   late write is dropped (§5.3). Under `'fail'`, the call whose write did not
-  land fails, and the destination's calls are refused while its last write is
-  pending (§5.4).
+  land fails, and the destination's calls — checked on entry and again right
+  before they return success — are refused while its last write is pending
+  (§5.4), so no call succeeds over a discard the store rejected.
 - **H4 No built-in timeouts.** §7.6, §10.4; the writer has no timer — a
   failed write is retried by the next write or `flush()` — and every wait on
   the queue ends when the write settles or its owner aborts; the CLI's
