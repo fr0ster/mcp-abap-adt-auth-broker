@@ -1053,12 +1053,23 @@ Every command builds its broker with explicit choices, in its own code (H1):
 
 - `renewal: () => refreshThenLogin()` for every grant — a user at a terminal
   can log in. **(D20)**
-- **The CLI is a generator (D25, ruled by the user, 2026-10-09).** Every run
-  obtains fresh tokens through a login and writes them to `--output`. The
-  CLI never reads a previous session: stored files can be anywhere, and it
-  knows nothing about earlier runs. Its private work-directory store starts
-  empty every run, so the broker seeds nothing. There is no `--env` option;
-  it is refused as an unknown option.
+- **Two modes (D25, ruled by the user, 2026-10-09).**
+  - **Generator** (`--service-key … --output …`, no `--destination`): every
+    run obtains fresh tokens through a login and writes them to `--output`.
+    The CLI never reads a previous session — stored files can be anywhere and
+    it knows nothing about earlier runs; its work-directory store starts
+    empty, so the broker seeds nothing.
+  - **Destination** (`--destination <name>`): the destination of that name in
+    the standard folder — `<dir>/service-keys/<name>.json` for the means,
+    `<dir>/sessions/<name>.env` for the session — where `<dir>` is
+    `~/.config/mcp-abap-adt` on Unix and `Documents/mcp-abap-adt` on Windows,
+    stated by the CLI in its own code and help (never guessed), overridden by
+    `--destination-dir <dir>`. The broker's `getToken` with
+    `refreshThenLogin()` decides: a valid token bound to the destination's
+    means is used with no request; an expired one is refreshed; a refused
+    refresh, or none, logs in — a new token and a new refresh token. The
+    result is written back to `<dir>/sessions/<name>.env`.
+  - `--env <path>` is removed (an unknown option): `--destination` replaces it.
 - `onWriteFailure: 'fail'` — a command exits 1 and writes no output unless the
   secret landed; it calls `flush()` before copying the output, as 2.x. **(D20)**
 - `authDebug: true` only with `--auth-debug` (§10.7).
@@ -1073,9 +1084,10 @@ written the destination's means (`jwt` / `authorization_code` or
 `broker.getToken(destination, { signal })` without a `provider` option, so the
 provider is the broker's UAA row — the same composition the other subcommands and
 `generate-env` use (H5: one implementation of the row). `--client-auth` maps to
-the broker's `clientAuthentication` strategy as in 2.1.0. Every run logs in
-(D25); the output carries the binding record, so a broker consumer that reads
-the file (the server) can use the session.
+the broker's `clientAuthentication` strategy as in 2.1.0. A generator run logs
+in; a destination run lets the broker reuse, refresh or log in (D25). The
+session written carries the binding record, so a broker consumer that reads
+it (the server) can use it.
 
 ### 10.3 `--browser` (Open 4; D13, D14, D15)
 
@@ -1276,7 +1288,7 @@ aborted login prints "the authorization was aborted".
 | "🔗 Authorization URL: …" preview of `mcp-auth` | gone; the URL is shown by the login's own prompt (stderr) |
 | `DEBUG_SSO=true` etc. for the `mcp-sso` log | `--verbose`; `--auth-debug` for the providers' debug line, with prepared secrets |
 | error output: a message and a stack trace | `reason — hint`, then the diagnostics line; no stack trace |
-| `--env <path>` reused or refreshed an earlier session | removed (D25): `mcp-auth` is a generator — every run logs in and writes fresh tokens; it never reads a previous session. Drop `--env` from the command line (it is refused as an unknown option) |
+| `--env <path>`: an existing `.env` whose refresh token was tried first | removed (D25). For a destination in the standard folder use `--destination <name>` (`--destination-dir` to override the folder): a valid token is reused, an expired one refreshed, else a login. Without it `mcp-auth` is a generator: every run logs in and writes fresh tokens to `--output` |
 | `mcp-sso … --cookie` sessions written by 2.x | refused naming `issuedBy` by 3.0.0: run `mcp-auth saml2-pure … --cookie` again |
 | the `mcp-sso` command | **gone in 3.0.0**: every form is an `mcp-auth` subcommand with the same flags (table below) |
 | `mcp-auth oidc` / `saml2-pure` / `saml2-bearer` started a second process (`mcp-sso`) | they run in `mcp-auth`'s process; a signal to it ends the login, frees the port and removes the work directory |
@@ -1965,8 +1977,8 @@ none` removed.
 **D20 — The CLI's own choices for the broker.**
 (a) `renewal: () => refreshThenLogin()` and `onWriteFailure: 'fail'` for every
 command; (b) `refreshOnly()` (never a login when a refresh token exists) —
-moot since D25: the CLI reads no earlier session, so there is never a refresh
-token to start from. *Recommended: (a)* — 2.x's steps, and a command must know its
+not taken: `--destination` runs refresh first and log in only when they must
+(D25). *Recommended: (a)* — 2.x's steps, and a command must know its
 secret landed before it writes the output.
 
 **D21 — Where the row is persisted in the session's binding.**
@@ -2043,10 +2055,12 @@ an option that does nothing is not kept; no code knows its name, and a 2.x
 script passing it is refused as an unknown option and told so in the
 migration note).
 
-**D25 — The CLI is a generator. Ruled by the user, 2026-10-09.** Every run
-of `mcp-auth` obtains fresh tokens through a login (a token and a refresh
-token) and writes them to `--output`. Stored files can be anywhere; the CLI
-knows nothing about earlier runs and never reads a previous session, so the
-`--env` option is removed (an unknown option) and the run's work-directory
-store starts empty. This replaces the earlier ruling that an `--env` rerun
-reuses a valid token.
+**D25 — Two CLI modes: generator, or a named destination. Ruled by the user,
+2026-10-09.** Without `--destination`, `mcp-auth` is a generator: every run
+logs in and writes fresh tokens to `--output`, reading no earlier session.
+With `--destination <name>` it works on that destination in the standard
+folder (`service-keys/<name>.json`, `sessions/<name>.env`; the folder stated
+per platform, `--destination-dir` to override), and the broker reuses a valid
+bound token, refreshes an expired one, or logs in, writing the session back.
+`--env <path>` is removed. This replaces the Task 9 ruling that an `--env`
+rerun reuses a valid token.
