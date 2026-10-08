@@ -440,7 +440,7 @@ describe('the token API factory beside a strategy', () => {
     expect(JSON.stringify(again.mock.calls[0])).not.toContain('-----BEGIN');
   });
 
-  it('a secret client gets the stored refresh token through authConfig without a strategy (4.0.0), never beside one', async () => {
+  it('a secret client never gets the stored refresh token through authConfig, with a strategy or without one (§5.5)', async () => {
     for (const clientAuthentication of [undefined, certificateStrategy]) {
       const { store } = sessions();
       const first = new AuthBroker({
@@ -469,7 +469,7 @@ describe('the token API factory beside a strategy', () => {
 
       expect(factory.mock.calls[0]![1]).toEqual({
         ...SECRET_CLIENT,
-        refreshToken: clientAuthentication ? undefined : 'refresh-secret-1',
+        refreshToken: undefined,
       });
       if (!clientAuthentication) {
         expect(factory.mock.calls[0]).toHaveLength(3);
@@ -562,7 +562,7 @@ describe('the token API factory beside a strategy', () => {
     expect(JSON.stringify(call)).not.toContain('refresh-of-A');
   });
 
-  it("a secret client on the strategy path: a session bound to another client gives no refresh token — without a strategy 4.0.0's carry-over stays", async () => {
+  it('a secret client: a session bound to another client gives no refresh token, with a strategy or without one', async () => {
     const other: IAuthorizationConfig = {
       ...SECRET_CLIENT,
       uaaClientId: 'another-secret-client',
@@ -581,8 +581,7 @@ describe('the token API factory beside a strategy', () => {
     expect(withStrategy[1]?.refreshToken).toBeUndefined();
     expect(JSON.stringify(withStrategy)).not.toContain('refresh-of-A');
 
-    // 4.0.0, documented: the consumer path carries the stored refresh token
-    // over without a binding check.
+    // Without a strategy as well: the consumer path is never seeded (§5.5).
     const without = await factoryCall(
       await storedThrough(
         keyStore(SECRET_CLIENT, null),
@@ -593,7 +592,8 @@ describe('the token API factory beside a strategy', () => {
       undefined,
     );
     expect(without).toHaveLength(3);
-    expect(without[1]?.refreshToken).toBe('refresh-of-A');
+    expect(without[1]?.refreshToken).toBeUndefined();
+    expect(JSON.stringify(without)).not.toContain('refresh-of-A');
   });
 
   it('basic and snc destinations are refused by the token API itself, before the strategy', async () => {
@@ -1017,7 +1017,7 @@ describe('a session obtained for another client, on the strategy path', () => {
     expect(held()?.refreshToken).toBe('');
   });
 
-  it("without a strategy the factory is still seeded as 4.0.0, but A's refresh token is never written into B's secret: B's result has none, so '' is written (D5)", async () => {
+  it("without a strategy: A's access token does not seed B, A's refresh token reaches no argument, and B's result without one writes '' (§5.5, D5)", async () => {
     const { store, held } = secretSessions();
     const tokenA = jwtExpiringIn(3600, { jti: 'A' });
     await tokenApi(
@@ -1034,10 +1034,11 @@ describe('a session obtained for another client, on the strategy path', () => {
       undefined,
     );
     expect(callB).toHaveLength(3);
-    expect(callB[2]).toEqual(
-      expect.objectContaining({ authorizationToken: tokenA }),
-    );
-    expect(callB[1]?.refreshToken).toBe('refresh-of-A');
+    for (const key of SECRET_KEYS) {
+      expect(callB[2]).not.toHaveProperty(key);
+    }
+    expect(JSON.stringify(callB)).not.toContain(tokenA);
+    expect(JSON.stringify(callB)).not.toContain('refresh-of-A');
     expect(held()?.refreshToken).toBe('');
   });
 
@@ -1099,17 +1100,19 @@ describe('a session obtained for another client, on the strategy path', () => {
       expect(bound[2]).not.toHaveProperty(key);
     }
 
-    // 4.0.0: the session's client as it is.
+    // Without a strategy: the session's client, without its refresh token,
+    // and no stored secret in the seed (§5.5).
     const without = await tokenApi(
       make(foreign),
       keyStore(null, null),
       () => tokenProvider(jwtExpiringIn(3600)),
       undefined,
     );
-    expect(without[1]).toEqual(sessionClient);
-    expect(without[2]).toEqual(
-      expect.objectContaining({ authorizationToken: 'token-of-the-session' }),
-    );
+    expect(without[1]).toEqual({ ...sessionClient, refreshToken: undefined });
+    for (const key of SECRET_KEYS) {
+      expect(without[2]).not.toHaveProperty(key);
+    }
+    expect(JSON.stringify(without)).not.toContain('token-of-the-session');
   });
 
   it("a session store holding its own client, rewritten between the reads: resource A's refresh token never reaches resource B's factory", async () => {
@@ -1212,14 +1215,17 @@ describe('a session obtained for another client, on the strategy path', () => {
       }
     }
 
-    // Without a strategy, 4.0.0: the client read as it is.
+    // Without a strategy: the same allowlist (§5.5).
     const without = await tokenApi(
       overSession(),
       keyStore(null, null),
       () => tokenProvider(jwtExpiringIn(3600)),
       undefined,
     );
-    expect(without[1]).toBe(overfull);
+    expect(without[1]?.refreshToken).toBeUndefined();
+    for (const value of leaked) {
+      expect(JSON.stringify(without)).not.toContain(value);
+    }
   });
 
   it('the seed on the strategy path is an allowlist: extra secrets, PEM-shaped and unknown fields of the connection read never reach the factory', async () => {
@@ -1303,14 +1309,17 @@ describe('a session obtained for another client, on the strategy path', () => {
       ).not.toContain(value);
     }
 
-    // Without a strategy, 4.0.0: the connection read as it is.
+    // Without a strategy: the same allowlist (§5.5).
     const without = await tokenApi(
       withConnection({ language: 'EN', ...extras } as IConnectionConfig),
       keyStore(SECRET_CLIENT, null),
       () => tokenProvider(jwtExpiringIn(3600)),
       undefined,
     );
-    expect(without[2]).toEqual(expect.objectContaining(extras));
+    expect(without[2]).toEqual(expect.objectContaining({ language: 'EN' }));
+    for (const value of leaked) {
+      expect(JSON.stringify([without[1], without[2]])).not.toContain(value);
+    }
   });
 
   it('each stored secret is judged by the read it came from: a seed read after another process wrote is checked on its own binding', async () => {

@@ -374,8 +374,8 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
       );
     }
 
-    // Without a strategy, 4.0.0: the token API's factory gets the key
-    // store's client as it is, its refresh token included.
+    // Without a strategy too: the token API's factory gets the key store's
+    // client, never a refresh token it answered (§5.5).
     const factory = jest.fn(
       (_d: string, _a: IAuthorizationConfig | null) => provider,
     );
@@ -385,9 +385,10 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
       serviceKeyStore: keyStore(withRefresh),
       provider: factory,
     }).getToken(D);
-    expect(factory.mock.calls[0]![1]?.refreshToken).toBe(
-      'refresh-the-key-store-answered',
-    );
+    expect(factory.mock.calls[0]![1]).toEqual({
+      ...SECRET_CLIENT,
+      refreshToken: undefined,
+    });
   });
 
   it('reads the certificate client as the contract declares it: nothing else the store answered reaches the strategy', async () => {

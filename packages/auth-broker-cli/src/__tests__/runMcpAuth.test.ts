@@ -266,22 +266,25 @@ describe('mcp-auth (authorization_code)', () => {
     expect(server.requests.length).toBe(before);
   });
 
-  it('with --env, the stored refresh token renews: no login', async () => {
+  it('with --env, the token API is never seeded: the rerun logs in again, the stored refresh token sent nowhere', async () => {
     server.answer('/oauth/token', tokenAnswer('uaa'));
     await run(options({ serviceKeyPath: abapKey() }));
     const previous = path.join(root, `${DEST}.env`);
     fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
     strategyCalls = 0;
+    const before = server.requests.length;
 
+    // mcp-auth writes through the token API with its own factory: the
+    // consumer path, which hands the factory no stored secret (§5.5).
     await expect(
       run(options({ serviceKeyPath: abapKey(), envFilePath: previous })),
     ).resolves.toBe(0);
-    expect(strategyCalls).toBe(0);
+    expect(strategyCalls).toBe(1);
     expect(server.requests.at(-1)?.form).toEqual(
-      expect.objectContaining({
-        grant_type: 'refresh_token',
-        refresh_token: 'uaa-refresh-1',
-      }),
+      expect.objectContaining({ grant_type: 'authorization_code' }),
+    );
+    expect(JSON.stringify(server.requests.slice(before))).not.toContain(
+      'uaa-refresh-1',
     );
     const renewed = await storesOf('abap').sessionStore.loadSession(DEST);
     expect(jwtName(renewed?.authorizationToken)).toBe('uaa-access-2');

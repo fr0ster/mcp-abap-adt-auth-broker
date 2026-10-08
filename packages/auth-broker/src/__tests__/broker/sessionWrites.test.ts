@@ -27,6 +27,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { type MockSamlIdp, startMockSamlIdp } from '@mcp-abap-adt/auth-mocks';
 import {
+  AuthorizationCodeProvider,
   ClientCredentialsProvider,
   createInMemoryReplayStore,
   refreshThenLogin,
@@ -49,7 +50,12 @@ import type {
   ISessionStore,
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
-import { AuthBroker, type AuthBrokerConfig } from '../../index';
+import {
+  AuthBroker,
+  type AuthBrokerConfig,
+  fromServiceKeySecret,
+  type TokenProviderClient,
+} from '../../index';
 import { record, samlPureRecord, uaaRecord } from '../helpers/bindingRecord';
 import { STATED } from '../helpers/stated';
 import {
@@ -749,6 +755,106 @@ describe('a session bound to other means: what the write leaves in the store, an
       expect(handed[1]?.refreshToken ?? '').toBe('');
       neverSent(R_OLD);
     });
+
+    it.each([
+      ['without a clientAuthentication strategy', undefined],
+      [
+        'beside a clientAuthentication strategy',
+        fromServiceKeySecret({ encoding: 'raw' }),
+      ],
+    ] as const)(
+      'a consumer factory that seeds an AuthorizationCodeProvider from what it is handed (%s): handed no stored secret, no R_old in the file, none sent after a restart',
+      async (_label, clientAuthentication) => {
+        await state(uaaMeans('authorization_code'));
+        await storeA();
+        const storedSecrets = Object.values((await stored()) ?? {}).filter(
+          (value): value is string => typeof value === 'string',
+        );
+        const handed: unknown[][] = [];
+        // What a consumer may well compose: its provider resumes from whatever
+        // the broker hands it.
+        const factory = (
+          _d: string,
+          auth: IAuthorizationConfig | null,
+          conn: IConnectionConfig,
+          client?: TokenProviderClient,
+        ): IRefreshableTokenProvider => {
+          handed.push([auth, conn, client]);
+          return new AuthorizationCodeProvider({
+            uaaUrl: endpoint.url,
+            clientId: CLIENT,
+            ...(client?.clientAuthentication
+              ? { clientAuthentication: client.clientAuthentication }
+              : { clientSecret: SECRET }),
+            authorization: login(),
+            renewal: refreshThenLogin(),
+            ...(conn.authorizationToken
+              ? { accessToken: conn.authorizationToken }
+              : {}),
+            ...(typeof conn.expiresAt === 'number'
+              ? { expiresAt: conn.expiresAt }
+              : {}),
+            ...(auth?.refreshToken ? { refreshToken: auth.refreshToken } : {}),
+            ...(client?.refreshToken
+              ? { refreshToken: client.refreshToken }
+              : {}),
+          });
+        };
+        const options = {
+          provider: factory,
+          ...(clientAuthentication ? { clientAuthentication } : {}),
+        };
+        const fresh = tokenOnly('consumer-login');
+        endpoint.answerNext(fresh);
+        const first = broker(options);
+
+        await expect(first.broker.getToken(D)).resolves.toBe(fresh.token);
+
+        // The means and the client only: no stored token, cookies, expiry or
+        // refresh token in any argument.
+        const [auth, conn, client] = handed[0] as [
+          IAuthorizationConfig | null,
+          Record<string, unknown>,
+          TokenProviderClient | undefined,
+        ];
+        expect(auth?.refreshToken).toBeUndefined();
+        expect(client?.refreshToken).toBeUndefined();
+        for (const field of [
+          'authorizationToken',
+          'sessionCookies',
+          'expiresAt',
+          'refreshToken',
+          'issuedFor',
+          'issuedBy',
+        ]) {
+          expect(conn).not.toHaveProperty(field);
+        }
+        for (const secret of storedSecrets) {
+          expect(JSON.stringify(handed[0])).not.toContain(secret);
+        }
+        expect(endpoint.requests.map((r) => r.grantType)).toEqual([
+          'authorization_code',
+        ]);
+        expect(await stored()).toEqual({
+          authorizationToken: fresh.token,
+          expiresAt: expect.any(Number),
+          issuedFor: FOR,
+          issuedBy: record(
+            'provider/jwt/authorization_code',
+            { clientId: CLIENT, uaaUrl: endpoint.url },
+            '',
+          ),
+        });
+
+        const restarted = broker(options);
+        await restarted.broker.refreshToken(D);
+        expect(endpoint.requests.map((r) => r.grantType)).toEqual([
+          'authorization_code',
+          'authorization_code',
+        ]);
+        neverSent(R_OLD);
+      },
+    );
 
     it('a consumer instance, a token-only result: no R_old, its record', async () => {
       await state(uaaMeans('client_credentials'));

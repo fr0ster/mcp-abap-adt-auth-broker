@@ -101,17 +101,19 @@ const noOpLogger: ILogger = {
 };
 
 /**
- * Builds the provider for one destination, from what the stores hold for it.
+ * Builds the provider for one destination, from the means and the client —
+ * never from a stored secret: the consumer path is never seeded (§5.5). A
+ * consumer whose provider must resume after a restart composes that itself.
  *
- * - `authConfig`: the UAA credentials — from the session when it holds them,
- *   else from the service key — with the refresh token the session stored, or
- *   `null` when neither store has credentials (a SAML flow needs none).
- * - `connConfig`: the session's connection config, with `serviceUrl` resolved
- *   and the last token the session stored, so the provider can reuse it while
- *   it is valid.
+ * - `authConfig`: the client — `uaaUrl`, `uaaClientId`, `uaaClientSecret` —
+ *   from the session store when it answers one, else from the service key,
+ *   with `refreshToken` as a key and never a value; `null` when neither store
+ *   has a client (a SAML flow needs none).
+ * - `connConfig`: the connection means (`serviceUrl` resolved, `sapClient`,
+ *   `language`, `authType`, `grantType`) — no token, cookies or expiry.
  * - `client` (optional): passed only beside a `clientAuthentication` strategy,
  *   for a destination whose grant authenticates a client — the strategy's
- *   answer, the client identity and the bound refresh token; never PEM. See
+ *   answer and the client identity; never PEM, never a refresh token. See
  *   `TokenProviderClient`. Without a strategy the factory gets three
  *   arguments, as 4.0.0.
  *
@@ -141,10 +143,8 @@ export interface TokenProviderClient {
   /** The client id beside `uaaUrl`, from the same client. */
   readonly clientId?: string;
   /**
-   * The refresh token the session stored, only when the session is bound to
-   * this resource and this client identity — as `authConfig` carries it on
-   * the strategy path for a secret client, so a certificate client, whose
-   * `authConfig` is `null`, gets it too.
+   * Never set: the consumer path is handed no stored secret (§5.5). Kept in
+   * the type until the contract is restated.
    */
   readonly refreshToken?: string;
 }
@@ -176,8 +176,9 @@ export interface AuthBrokerConfig {
    * destination. Not used by `getProvider`, which builds what the destination
    * states.
    *
-   * An instance is used as given, for every destination. A factory is seeded
-   * with what the stores hold for the destination (see `TokenProviderFactory`).
+   * An instance is used as given, for every destination. A factory is handed
+   * the destination's means and client, never a stored secret (see
+   * `TokenProviderFactory`).
    */
   provider?: IRefreshableTokenProvider | TokenProviderFactory | undefined;
 
@@ -275,24 +276,18 @@ const SEED_MEANS = [
 ] as const;
 
 /**
- * The token API factory's seed on the `clientAuthentication` strategy path,
- * from an allowlist only: `SEED_MEANS`, and the session secret's own fields
- * (`SECRET_FIELDS`: the token or cookies, the expiry, the binding) only when
- * that same read is bound here — each secret judged by the read it came from.
- * `serviceUrl` is the one resolved for the destination.
+ * The token API factory's seed: the connection means from an allowlist
+ * (`SEED_MEANS`) and nothing else — never the session secret's own fields
+ * (`SECRET_FIELDS`), whatever the stored record says: the consumer path is
+ * never seeded (§5.5). `serviceUrl` is the one resolved for the destination.
  */
-function strategySeed(
+function consumerSeed(
   connConfig: IConnectionConfig | null,
-  binding: Binding,
   serviceUrl: string,
 ): IConnectionConfig {
   const source = (connConfig ?? {}) as Record<string, unknown>;
-  const fields: readonly string[] =
-    connConfig && boundHere(connConfig, binding)
-      ? [...SEED_MEANS, ...SECRET_FIELDS]
-      : SEED_MEANS;
   const seed: Record<string, unknown> = {};
-  for (const field of fields) {
+  for (const field of SEED_MEANS) {
     if (source[field] !== undefined) seed[field] = source[field];
   }
   return { ...(seed as IConnectionConfig), serviceUrl };
@@ -370,50 +365,18 @@ function obtainsTokens(
 interface AuthorizationRead {
   readonly sessionAuth: IAuthorizationConfig | null;
   readonly keyAuth: IAuthorizationConfig | null;
-  readonly session: IConfig | null;
-  /** Whether `session` was read: not when the session held its own client. */
-  readonly sessionRead: boolean;
-}
-
-/** The refresh token a stored session holds, unchecked. */
-function storedRefreshTokenOf(session: IConfig | null): string | undefined {
-  return typeof session?.refreshToken === 'string'
-    ? session.refreshToken
-    : undefined;
 }
 
 /**
- * The 3.x composition, the no-strategy path: the session's client as it is,
- * else the key store's with `refreshToken` — the one given, else the key's
- * own. (The strategy path takes `strategyAuthorization`.)
+ * The client the consumer path hands its factory and tells its strategy: the
+ * session's own client, else the key store's, through the same allowlist the
+ * strategy is told (`contextClient`) — with `refreshToken` as a key, never a
+ * value: no refresh token either client read carried reaches the factory.
  */
-function composeAuthorization(
-  read: AuthorizationRead,
-  refreshToken: string | undefined,
-): IAuthorizationConfig | null {
-  if (read.sessionAuth) return read.sessionAuth;
-  if (!read.keyAuth) return null;
-  return asContract<IAuthorizationConfig>({
-    ...read.keyAuth,
-    refreshToken: refreshToken ?? read.keyAuth.refreshToken,
-  });
-}
-
-/**
- * The client on the `clientAuthentication` strategy path: the session's own
- * client, else the key store's, carrying only `refreshToken` — the one the
- * session read whose binding was checked holds, when bound — never a refresh
- * token either client read carried itself.
- */
-function strategyAuthorization(
-  read: AuthorizationRead,
-  refreshToken: string | undefined,
-): IAuthorizationConfig | null {
-  // The same allowlist the strategy is told (`contextClient`): nothing else a
-  // store's authorization-config read carried reaches the factory.
+function consumerClient(read: AuthorizationRead): IAuthorizationConfig | null {
   const client = contextClient(read.sessionAuth ?? read.keyAuth);
   return client
-    ? asContract<IAuthorizationConfig>({ ...client, refreshToken })
+    ? asContract<IAuthorizationConfig>({ ...client, refreshToken: undefined })
     : null;
 }
 
@@ -762,42 +725,26 @@ export class AuthBroker {
         };
       }
       const read = await this.readAuthorization(destination);
+      // Never seeded (§5.5): the factory is handed the means and the client
+      // only — no stored token, cookies, expiry or refresh token, in any
+      // argument, whatever the stored session's record says. The broker
+      // cannot know what the factory composes from what it is handed.
+      const client = consumerClient(read);
+      const seed = consumerSeed(connConfig, serviceUrl);
       const strategic = await this.consumerClientAuthentication(
         destination,
         means,
-        // The strategy is told the client, never a refresh token read with it.
-        strategyAuthorization(read, undefined),
+        client,
       );
       let built: IRefreshableTokenProvider;
-      let client: IAuthorizationConfig | null;
       let binding: Binding;
       if (strategic) {
         // The strategy's answer and the client identity, resolved before the
         // factory; the factory called inside the same guard: a throw is fixed
-        // words, nothing of the thrown value, no cause. The stored refresh
-        // token is carried only when the session is bound to this resource
-        // and this client identity — never to another authorization server.
+        // words, nothing of the thrown value, no cause.
         binding = strategyBinding(
           consumerBinding(row, serviceUrl, sapClient, strategic.identity),
         );
-        const session = read.sessionRead
-          ? read.session
-          : await this.loadStoredSession(destination);
-        const bound = !!session && boundHere(session, binding);
-        const boundRefreshToken = bound
-          ? storedRefreshTokenOf(session)
-          : undefined;
-        // The client without any refresh token of its own read: a session
-        // store's `getAuthorizationConfig` is another read than the session
-        // whose binding was checked, and another process may have written
-        // between them. The refresh token comes only from that checked read.
-        client = strategyAuthorization(read, boundRefreshToken);
-        // Each stored secret is judged by the read it came from: the seed's
-        // token, cookies and expiry by the binding the connection read itself
-        // carries — another process may have written between the two reads —
-        // else only the means seed the provider.
-        const seed = strategySeed(connConfig, binding, serviceUrl);
-        const refreshToken = client ? client.refreshToken : boundRefreshToken;
         const fourth: TokenProviderClient = {
           clientAuthentication: strategic.clientAuthentication,
           ...(strategic.identity
@@ -806,7 +753,6 @@ export class AuthBroker {
                 clientId: strategic.identity.uaaClientId,
               }
             : {}),
-          ...(present(refreshToken) ? { refreshToken } : {}),
         };
         try {
           built = provider(destination, client, seed, fourth);
@@ -818,20 +764,11 @@ export class AuthBroker {
           );
         }
       } else {
-        // 4.0.0: the stored secret and refresh token carried over as read.
-        client = composeAuthorization(read, storedRefreshTokenOf(read.session));
         binding = consumerBinding(row, serviceUrl, sapClient, client);
-        built = provider(destination, client, {
-          ...(connConfig ?? {}),
-          serviceUrl,
-        });
+        built = provider(destination, client, seed);
       }
       this.logger.debug(`[AuthBroker] Provider built for ${destination}`, {
         hasCredentials: !!client,
-        hasRefreshToken: !!client?.refreshToken,
-        hasStoredToken: !!(
-          connConfig?.authorizationToken || connConfig?.sessionCookies
-        ),
       });
       return { provider: built, binding };
     });
@@ -905,7 +842,8 @@ export class AuthBroker {
   /**
    * What a consumer's factory's credentials are composed from, read in the
    * 3.x order: the session's authorization config; only when it has none, the
-   * session and then the key store's client. A session store of auth-stores 3
+   * key store's client. The stored session is not read: nothing of it is
+   * handed to the factory (§5.5). A session store of auth-stores 3
    * answers no client, so the key store's is what is found.
    */
   private async readAuthorization(
@@ -917,23 +855,15 @@ export class AuthBroker {
       () => this.sessionStore.getAuthorizationConfig(destination),
     );
     if (sessionAuth) {
-      return { sessionAuth, keyAuth: null, session: null, sessionRead: false };
+      return { sessionAuth, keyAuth: null };
     }
-    const session = await this.loadStoredSession(destination);
     const serviceKeyStore = this.serviceKeyStore;
     const keyAuth = serviceKeyStore
       ? await this.read(destination, 'service key authorization config', () =>
           serviceKeyStore.getAuthorizationConfig(destination),
         )
       : null;
-    return { sessionAuth: null, keyAuth, session, sessionRead: true };
-  }
-
-  /** The session the store holds for the destination, or null. */
-  private loadStoredSession(destination: string): Promise<IConfig | null> {
-    return this.read(destination, 'session', () =>
-      this.sessionStore.loadSession(destination),
-    );
+    return { sessionAuth: null, keyAuth };
   }
 
   /**

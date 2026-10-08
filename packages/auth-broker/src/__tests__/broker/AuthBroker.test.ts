@@ -747,7 +747,7 @@ describe('AuthBroker', () => {
   });
 
   describe('provider factory', () => {
-    it('is seeded with the service URL, the stored token and the stored refresh token', async () => {
+    it('is handed the service URL and the client — never the stored token or refresh token (§5.5)', async () => {
       const sessionStore = mockSessionStore(
         { serviceUrl: SERVICE_URL, authorizationToken: 'stored-access' },
         null,
@@ -768,12 +768,10 @@ describe('AuthBroker', () => {
 
       expect(factory).toHaveBeenCalledWith(
         'DEST',
-        { ...KEY_AUTH, refreshToken: 'stored-refresh' },
-        expect.objectContaining({
-          serviceUrl: SERVICE_URL,
-          authorizationToken: 'stored-access',
-        }),
+        { ...KEY_AUTH, refreshToken: undefined },
+        { serviceUrl: SERVICE_URL },
       );
+      expect(JSON.stringify(factory.mock.calls)).not.toContain('stored-');
     });
 
     it("prefers the session's own credentials over the service key's — a session store that still answers means is read as 3.x read it", async () => {
@@ -802,7 +800,11 @@ describe('AuthBroker', () => {
 
       await broker.getToken('DEST');
 
-      expect(factory.mock.calls[0]![1]).toEqual(sessionAuth);
+      // The session's client, without the refresh token it carried.
+      expect(factory.mock.calls[0]![1]).toEqual({
+        ...sessionAuth,
+        refreshToken: undefined,
+      });
       expect(factory.mock.calls[0]![2]).toEqual(
         expect.objectContaining({ serviceUrl: SERVICE_URL, sapClient: '200' }),
       );
@@ -1241,7 +1243,7 @@ describe('AuthBroker', () => {
       fs.rmSync(sessionsDir, { recursive: true, force: true });
     });
 
-    it('writes the secret alone into the session file, and the next broker is seeded with the refresh token it wrote', async () => {
+    it('writes the secret alone into the session file, and the next broker hands its factory nothing of it', async () => {
       const serviceKeyStore = new EnvDestinationStore(keysDir);
       const first = new AuthBroker({
         ...STATED,
@@ -1303,14 +1305,11 @@ describe('AuthBroker', () => {
 
       await second.getToken('DEST');
 
+      // The consumer path is never seeded (§5.5): the means and the client.
       expect(factory).toHaveBeenCalledWith(
         'DEST',
-        { ...KEY_AUTH, refreshToken: 'refresh-from-login' },
-        expect.objectContaining({
-          serviceUrl: SERVICE_URL,
-          authorizationToken: 'cached-token',
-          expiresAt: 1_900_000_000_000,
-        }),
+        { ...KEY_AUTH, refreshToken: undefined },
+        { serviceUrl: SERVICE_URL },
       );
     });
   });
