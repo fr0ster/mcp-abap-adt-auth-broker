@@ -41,7 +41,10 @@ import type {
   ITokenResult,
 } from '@mcp-abap-adt/interfaces-auth';
 import { STORE_ERROR_CODES } from '@mcp-abap-adt/interfaces-auth';
-import type { IConfig } from '@mcp-abap-adt/interfaces-auth-broker';
+import type {
+  IClientCertificate,
+  IConfig,
+} from '@mcp-abap-adt/interfaces-auth-broker';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   type Binding,
@@ -49,7 +52,7 @@ import {
   consumerBinding,
   strategyBinding,
 } from './binding';
-import { destinationBinding } from './bindingOf';
+import { consumerRow, destinationBinding } from './bindingOf';
 import {
   type ClientAuthenticationStrategy,
   type ClientIdentity,
@@ -751,11 +754,12 @@ export class AuthBroker {
     const sapClient = present(connConfig?.sapClient)
       ? connConfig.sapClient
       : means?.sapClient;
+    const row = consumerRow(means);
     const build = Promise.resolve().then(async (): Promise<ConsumerBuilt> => {
       if (typeof provider !== 'function') {
         return {
           provider,
-          binding: consumerBinding(serviceUrl, sapClient, null),
+          binding: consumerBinding(row, serviceUrl, sapClient, null),
           carry: 'any',
         };
       }
@@ -777,7 +781,7 @@ export class AuthBroker {
         // token is carried only when the session is bound to this resource
         // and this client identity — never to another authorization server.
         binding = strategyBinding(
-          consumerBinding(serviceUrl, sapClient, strategic.identity),
+          consumerBinding(row, serviceUrl, sapClient, strategic.identity),
         );
         const session = read.sessionRead
           ? read.session
@@ -820,7 +824,7 @@ export class AuthBroker {
       } else {
         // 4.0.0: the stored secret and refresh token carried over as read.
         client = composeAuthorization(read, storedRefreshTokenOf(read.session));
-        binding = consumerBinding(serviceUrl, sapClient, client);
+        binding = consumerBinding(row, serviceUrl, sapClient, client);
         carry = 'any';
         built = provider(destination, client, {
           ...(connConfig ?? {}),
@@ -1145,17 +1149,25 @@ export class AuthBroker {
         // nothing of this runs: 4.0.0's client, nothing certificate-related.
         let client: RowClient | null = secretClient;
         let clientAuthentication: IClientAuthentication | undefined;
+        // The certificate client, when the build read it: its certUrl and
+        // public certificate go into the binding (never its key).
+        let certificateRead: Promise<IClientCertificate | null> | undefined;
         if (this.clientAuthentication && grant !== 'saml2_pure') {
           const context = clientAuthenticationContext(
             destination,
             grant,
             secretClient,
-            () =>
-              this.read(destination, 'client certificate', async () =>
-                serviceKeyStore.getClientCertificate
-                  ? serviceKeyStore.getClientCertificate(destination)
-                  : null,
-              ),
+            () => {
+              certificateRead = this.read(
+                destination,
+                'client certificate',
+                async () =>
+                  serviceKeyStore.getClientCertificate
+                    ? serviceKeyStore.getClientCertificate(destination)
+                    : null,
+              );
+              return certificateRead;
+            },
           );
           clientAuthentication = await resolveClientAuthentication(
             this.clientAuthentication,
@@ -1163,7 +1175,18 @@ export class AuthBroker {
           );
           client = await clientIdentity(context);
         }
-        const computed = destinationBinding(authType, grant, stated, client);
+        // A read that failed — and that a consumer's strategy caught — read
+        // no certificate client.
+        const certificate = certificateRead
+          ? await certificateRead.catch(() => null)
+          : null;
+        const computed = destinationBinding(
+          authType,
+          grant,
+          stated,
+          client,
+          certificate,
+        );
         // The strategy path: a resource neither side states matches.
         const binding = clientAuthentication
           ? strategyBinding(computed)

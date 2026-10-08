@@ -63,7 +63,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { type Binding, sameIssuer, sameResource } from './binding';
+import { type Binding, sameRecord, sameResource } from './binding';
 import type { ClientIdentity } from './clientAuthentication';
 import { asContract } from './contractShape';
 import { DestinationConfigError } from './DestinationConfigError';
@@ -86,6 +86,18 @@ const GRANTS: Readonly<Record<'jwt' | 'saml', readonly DestinationGrant[]>> = {
 };
 
 const AUTH_TYPES: readonly StatedAuthType[] = ['basic', 'jwt', 'saml', 'snc'];
+
+/**
+ * `authType` and `grantType` are a `jwt` / `saml` pair of the closed list —
+ * so neither holds `;` or `/`. Never throws.
+ */
+export function isStatedRow(
+  authType: unknown,
+  grant: unknown,
+): grant is DestinationGrant & string {
+  if (authType !== 'jwt' && authType !== 'saml') return false;
+  return (GRANTS[authType] as readonly unknown[]).includes(grant);
+}
 
 /** A stored string that counts as present: `''` is missing. */
 function present(value: unknown): value is string {
@@ -304,10 +316,11 @@ function mappedFields(
  * required. Read from the secret alone — the means are not a seed.
  *
  * The broker did not obtain it and cannot obtain it again, so a binding that
- * does not match is refused, never discarded: `issuedFor`
- * must always equal the destination's resource — it is what stops the
- * credential going to another one; `issuedBy` is compared only when the means
- * state an issuer.
+ * does not match is refused, never discarded: `issuedFor` must equal the
+ * destination's resource — it is what stops the credential going to another
+ * one — and `issuedBy` must be exactly the row's record (§6.5): a credential
+ * handed over with a 4.x binding, or none, is refused until it is written
+ * again with 5.0.0's `bindingOf`.
  */
 export function handedOverProvider(
   destination: string,
@@ -328,9 +341,7 @@ export function handedOverProvider(
   }
   const unbound: string[] = [];
   if (!sameResource(secret, binding)) unbound.push('issuedFor');
-  if (binding.issuerStated && !sameIssuer(secret, binding)) {
-    unbound.push('issuedBy');
-  }
+  if (!sameRecord(secret, binding)) unbound.push('issuedBy');
   if (unbound.length > 0) {
     throw new DestinationConfigError(
       destination,
