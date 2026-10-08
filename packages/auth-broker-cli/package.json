@@ -1,10 +1,9 @@
 {
   "name": "@mcp-abap-adt/auth-broker-cli",
   "version": "3.0.0",
-  "description": "The mcp-auth and mcp-sso commands: log in to a SAP BTP or ABAP destination and write it — its means and the secret the login obtained — through @mcp-abap-adt/auth-broker",
+  "description": "The mcp-auth command: log in to a SAP BTP or ABAP destination and write it — its means and the secret the login obtained — through @mcp-abap-adt/auth-broker",
   "bin": {
-    "mcp-auth": "./dist/mcp-auth.js",
-    "mcp-sso": "./dist/mcp-sso.js"
+    "mcp-auth": "./dist/mcp-auth.js"
   },
   "files": [
     "dist",
@@ -47,11 +46,6 @@
     "build": "tsc -b tsconfig.build.json",
     "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
     "test:check": "tsc -p tsconfig.json --noEmit",
-    "test:mcp-auth": "sh tests/sso-demo/run-mcp-auth.sh",
-    "test:mcp-sso": "sh tests/sso-demo/run-mcp-sso.sh",
-    "test:device-code": "sh tests/keycloak/run-oidc.sh",
-    "test:saml-pure": "sh tests/keycloak/run-saml.sh",
-    "test:sso": "sh tests/keycloak/run-interactive.sh",
     "generate-env": "tsx src/generate-env-from-service-key.ts",
     "prepublishOnly": "npm run --prefix ../.. check"
   },

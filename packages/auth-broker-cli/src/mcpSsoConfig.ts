@@ -1,12 +1,9 @@
 /**
- * Pure config-building logic for `mcp-sso`, split out from mcp-sso.ts so
- * it can be imported by tests directly.
- *
- * mcp-sso.ts itself cannot be `import`ed safely: it calls `main()` at the
- * bottom of the file, which parses the test runner's argv and exits. So
- * anything that needs unit coverage — the destination a run states (its
- * means, written to the key store), the collaborators it hands the broker,
- * and merging CLI options with an optional `--config` file — lives here.
+ * Pure config-building logic for `mcp-auth oidc | saml2-pure | saml2-bearer`
+ * (2.x's `mcp-sso`; the module keeps its name), importable by tests: the
+ * destination a run states (its means, written to the key store), the
+ * collaborators it hands the broker, and merging the parsed options with an
+ * optional `--config` file. The command line itself is `subcommandArgs.ts`'s.
  */
 
 import { readFileSync } from 'node:fs';
@@ -262,7 +259,7 @@ const CONFIG_BACKFILL_FIELDS: (keyof McpSsoOptions)[] = [
  * CLI flags always win — a field already set on `options` is left alone; the
  * file only fills gaps.
  *
- * This is what makes a config-file-only run (no --protocol/--flow on the
+ * This is what makes a config-file run (no --flow, or no flag at all, on the
  * CLI) reach the same strategy-building code as a CLI-flag run: without it,
  * the file's fields — including a `browser`/`redirectPort` a 2.0.0 provider
  * no longer accepts directly — would reach `SsoProviderFactory.create()`
@@ -274,14 +271,20 @@ const CONFIG_BACKFILL_FIELDS: (keyof McpSsoOptions)[] = [
  * write instead. Nothing may reach the provider without one of those two
  * happening.
  *
- * Also backfills `options.protocol`/`options.flow` from the file when the
- * CLI didn't set them — a `--config`-only run (no `--protocol`/`--flow`
- * flags at all) must still resolve to a real flow, or nothing downstream
- * ever calls a builder at all.
+ * Also backfills `options.flow` from the file when the command line didn't
+ * set it — `mcp-auth oidc --config f` must still resolve to a real flow, or
+ * nothing downstream ever calls a builder at all. A file naming another
+ * subcommand than the run's is refused naming `--config` (D24).
  *
  * A no-op when `fileConfig` is `null` (no `--config` was given), so callers
  * can invoke this unconditionally.
  */
+/** The `mcp-auth` subcommand a run's protocol and flow are. */
+function subcommandOf(options: Pick<McpSsoOptions, 'protocol' | 'flow'>) {
+  if (options.protocol === 'oidc') return 'oidc';
+  return options.flow === 'bearer' ? 'saml2-bearer' : 'saml2-pure';
+}
+
 export function applyFileConfig(
   options: McpSsoOptions,
   fileConfig: SsoProviderConfig | null,
@@ -290,6 +293,22 @@ export function applyFileConfig(
     return;
   }
 
+  // The file belongs to the subcommand its protocol and flow name (D24): a
+  // run's protocol — and a SAML run's flow — is the subcommand's, and a file
+  // naming another one is refused, never merged. An OIDC file's flow fills a
+  // flow the command line left out, as 2.x.
+  if (options.protocol !== undefined) {
+    const another =
+      fileConfig.protocol !== options.protocol ||
+      (options.protocol === 'saml2' && fileConfig.flow !== options.flow);
+    if (another) {
+      console.error(
+        `❌ --config: the file names another subcommand than mcp-auth ${subcommandOf(options)}; ` +
+          'run the subcommand its protocol and flow name (oidc, saml2-pure, saml2-bearer).',
+      );
+      process.exit(1);
+    }
+  }
   options.protocol = options.protocol ?? fileConfig.protocol;
   options.flow = options.flow ?? (fileConfig.flow as McpSsoOptions['flow']);
 
@@ -411,7 +430,7 @@ export function resolveIdpCertificates(
 /**
  * Parses the SAML trust flags into `target`, returning how many values after
  * `arg` were consumed (0 for a flag with no value, or an argument that is not
- * one of these). Kept here rather than in mcp-sso.ts so it can be tested.
+ * one of these).
  */
 export function parseSamlTrustArg(
   target: Partial<McpSsoOptions>,
@@ -533,7 +552,7 @@ export function ssoRow(options: McpSsoOptions): SsoRow {
   throw new Error(
     options.protocol
       ? `Unsupported protocol: ${options.protocol}`
-      : 'Provider config is missing. Use --config or --protocol/--flow options.',
+      : 'Provider config is missing: run mcp-auth oidc, saml2-pure or saml2-bearer.',
   );
 }
 
@@ -583,7 +602,7 @@ function buildSamlTrust(options: McpSsoOptions): StatedMeans {
     // provider from the destination alone.
     console.error(
       '❌ --authn-request-id cannot be stated in a destination: the broker builds the SAML provider ' +
-        'out of the destination alone, which holds no request ID. Use --idp-initiated, or let mcp-sso send the request ' +
+        'out of the destination alone, which holds no request ID. Use --idp-initiated, or let mcp-auth send the request ' +
         '(--assertion-flow browser or manual).',
     );
     process.exit(1);
@@ -699,10 +718,11 @@ export function buildDestinationMeans(options: McpSsoOptions): StatedMeans {
 /**
  * The browser a run states — `--browser` or a `--config` file's `browser`,
  * mapped by the same table (`browserFor`), or `--browser-program` — on this
- * platform; `undefined` when none is stated (2.x: mcp-sso opens a browser
- * only when asked) or for `none` / `headless`. Throws `BrowserUsageError` for
- * an unknown name (naming `browser`), for both flags together, and for a
- * launcher this platform has none of. Reads and launches nothing.
+ * platform; nothing stated is `auto`, the default of every flow that opens a
+ * browser (D15); `undefined` for `none` / `headless`. Throws
+ * `BrowserUsageError` for an unknown name (naming `browser`), for both flags
+ * together, and for a launcher this platform has none of. Reads and launches
+ * nothing.
  */
 export function ssoBrowser(
   options: Pick<
@@ -723,13 +743,33 @@ export function ssoBrowser(
     }
     return browserProgramFor(options.browserProgram, platform, factories);
   }
-  if (options.browser === undefined) return undefined;
-  if (!isBrowserName(options.browser)) {
+  const name = options.browser ?? 'auto';
+  if (!isBrowserName(name)) {
     throw new BrowserUsageError(
       `browser must be one of: ${BROWSER_NAMES.join(', ')}`,
     );
   }
-  return browserFor(options.browser, platform, factories);
+  return browserFor(name, platform, factories);
+}
+
+/**
+ * Whether the run's login opens a browser: the OIDC browser flow without a
+ * `--code`, and a SAML login whose assertion is neither given, nor pasted, nor
+ * started at the identity provider. The handed-over cookies log in nowhere.
+ */
+export function opensBrowser(options: McpSsoOptions): boolean {
+  if (options.protocol === 'oidc') {
+    return options.flow === 'browser' && !options.code;
+  }
+  if (options.protocol === 'saml2') {
+    return (
+      !options.cookie &&
+      !options.assertion &&
+      !options.idpInitiated &&
+      (options.assertionFlow ?? 'browser') === 'browser'
+    );
+  }
+  return false;
 }
 
 /**
@@ -901,8 +941,10 @@ export function buildCollaborators(
         case 'saml2_bearer':
           return buildSamlAuthorization(options);
         default:
-          // mcp-sso states no authorization_code destination: that is mcp-auth's.
-          throw new Error(`mcp-sso has no interactive strategy for ${grant}`);
+          // These subcommands state no authorization_code destination: that is auth-code's.
+          throw new Error(
+            `mcp-auth ${subcommandOf(options)} has no interactive strategy for ${grant}`,
+          );
       }
     },
     oidcAuthorization: () => buildOidcBrowserAuthorization(options),

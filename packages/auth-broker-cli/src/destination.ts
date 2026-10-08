@@ -8,7 +8,7 @@
  * - **The secret** — the token or cookies, their expiry, the refresh token, and
  *   what they are bound to — reaches the session store only through the
  *   broker's persistence (`onTokens`, the token API, `flush()`). The one
- *   exception is `mcp-sso saml2 --flow pure --cookie`, whose cookies no
+ *   exception is `mcp-auth saml2-pure --cookie`, whose cookies no
  *   provider obtains: the user handed them over, and the CLI writes them.
  *
  * Both stores touch only their own keys of the file, so one file holds both

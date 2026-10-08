@@ -1,5 +1,6 @@
 /**
- * What `mcp-sso` does once its arguments are parsed, importable by tests.
+ * What `mcp-auth oidc | saml2-pure | saml2-bearer` do once their arguments
+ * are parsed (`subcommandArgs.ts`) — 2.x's `mcp-sso` — importable by tests.
  *
  * A run writes a complete destination: first its means, through the
  * key store's own write method — `authType`, `grantType`, the grant's data, the
@@ -30,6 +31,7 @@ import {
   buildDestinationMeans,
   type McpSsoOptions,
   normalizeProviderConfig,
+  opensBrowser,
   ssoBrowser,
   ssoRow,
 } from './mcpSsoConfig';
@@ -42,7 +44,7 @@ export interface McpSsoContext {
   workDir: string;
 }
 
-/** Runs `mcp-sso`; resolves the exit code. Usage errors exit the process. */
+/** Runs one of those subcommands; resolves the exit code. Usage errors exit the process. */
 export async function runMcpSso(
   options: McpSsoOptions,
   { logger, workDir }: McpSsoContext,
@@ -144,17 +146,26 @@ export async function runMcpSso(
 
   // Merge the file into `options` *before* anything downstream reads
   // options.protocol/flow or builds a strategy from them — a run driven by
-  // --config alone must reach exactly the same validation and
-  // destination-building code a --protocol/--flow run does. CLI flags already
+  // --config must reach exactly the same validation and destination-building
+  // code a run given every flag does; a file naming another subcommand is
+  // refused there. CLI flags already
   // parsed are left alone; the file only fills what they didn't set. A no-op
   // when --config wasn't given.
   applyFileConfig(options, providerConfigFromFile);
 
-  // The browser the run states — from a flag or the --config file — mapped
-  // for this platform before anything else is read or written: a name this
-  // platform has no launcher for is a usage error, never a guess.
+  // The browser the run states — from a flag or the --config file, else
+  // `auto` for a login that opens one — mapped for this platform before
+  // anything else is read or written: a name this platform has no launcher
+  // for is a usage error, never a guess. A login that opens none is not
+  // refused for a default it never uses.
   try {
-    ssoBrowser(options);
+    if (
+      options.browser !== undefined ||
+      options.browserProgram !== undefined ||
+      opensBrowser(options)
+    ) {
+      ssoBrowser(options);
+    }
   } catch (error) {
     console.error(`❌ ${(error as Error).message}`);
     process.exit(1);

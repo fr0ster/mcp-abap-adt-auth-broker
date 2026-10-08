@@ -1,37 +1,38 @@
 #!/usr/bin/env node
 
 /**
- * MCP Auth - Get tokens and generate .env files from service keys
+ * mcp-auth - log in to a SAP BTP or ABAP destination and write it: its means
+ * and the secret the login obtained.
  *
- * Usage:
- *   mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--credential] [--browser auto|none|chrome|edge|firefox|system] [--format json|env]
- *            [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]
+ * One command (D24): `mcp-auth [auth-code]` (UAA authorization code, or
+ * `--credential` client credentials), `mcp-auth oidc`, `mcp-auth saml2-pure`
+ * and `mcp-auth saml2-bearer` — 2.x's `mcp-sso`, with the same flags — all run
+ * in this process. The command line is read by `subcommandArgs.ts`.
  *
  * Examples:
- *   # Generate .env file with authorization_code (default)
  *   mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa
- *
- *   # With authorization_code, show URL in console (no browser)
- *   mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --browser none
- *
- *   # With client_credentials (special cases)
  *   mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa --credential
- *
- *   # Generate .env file for ABAP
- *   mcp-auth --service-key ./abap-key.json --output ./abap.env --type abap
- *
- *   # An x509 XSUAA key: the client authenticates with its certificate
  *   mcp-auth --service-key ./x509-key.json --output ./mcp.env --type xsuaa --credential \
  *     --client-auth certificate --cert-path ./client.crt --key-path ./client.key
+ *   mcp-auth oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
+ *   mcp-auth saml2-bearer --service-key ./service-key.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa
  */
 
-import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
-import { BROWSER_NAMES, isBrowserName } from './browser';
+import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { DefaultLogger, getLogLevel } from '@mcp-abap-adt/logger';
 import { asContract } from './contractShape';
+import type { McpSsoOptions } from './mcpSsoConfig';
 import { type McpAuthOptions, mcpAuthBrowser, runMcpAuth } from './runMcpAuth';
+import { runMcpSso } from './runMcpSso';
+import {
+  isUsageError,
+  parseCommandLine,
+  type SsoSubcommand,
+  type Subcommand,
+} from './subcommandArgs';
 import { createWorkDir } from './workDir';
 
 function getVersion(): string {
@@ -45,7 +46,7 @@ function getVersion(): string {
   }
 }
 
-function showHelp(): void {
+function showMainHelp(): void {
   console.log(
     'MCP Auth - Get tokens and generate .env files from service keys',
   );
@@ -66,9 +67,6 @@ function showHelp(): void {
   console.log('Optional Options:');
   console.log(
     '  --type <type>           Auth type: abap or xsuaa (default: abap)',
-  );
-  console.log(
-    '  --dev                   Enable in-progress commands (saml2-bearer)',
   );
   console.log(
     '  --credential            Use client_credentials flow (clientId/clientSecret, no browser)',
@@ -139,7 +137,7 @@ function showHelp(): void {
   );
   console.log('');
   console.log(
-    'SAML (saml2-pure, saml2-bearer; passed to mcp-sso, see mcp-sso --help for all):',
+    'SAML (saml2-pure, saml2-bearer; see mcp-auth saml2-pure --help for all):',
   );
   console.log(
     '  --idp-metadata <url|path>  IdP SAML metadata (https or file): certificate, entityID, SSO URL',
@@ -175,7 +173,9 @@ function showHelp(): void {
   console.log('  --assertion-flow <flow>    browser|manual|assertion');
   console.log('');
   console.log('  version, --version, -v Show version number');
-  console.log('  help, --help, -h       Show this help message');
+  console.log(
+    '  help, --help, -h       Show this help message; mcp-auth <subcommand> --help for each',
+  );
   console.log('');
   console.log('Examples:');
   console.log('  # Auth code (default flow via service key)');
@@ -189,15 +189,15 @@ function showHelp(): void {
   );
   console.log('');
   console.log(
-    '  # SAML2 pure (cookies); every assertion is validated: see mcp-sso --help',
+    '  # SAML2 pure (cookies); every assertion is validated: see mcp-auth saml2-pure --help',
   );
   console.log(
     '  mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp.pem --idp-entity-id https://idp/metadata --output ./saml.env --type abap',
   );
   console.log('');
-  console.log('  # SAML2 bearer (in progress, requires --dev)');
+  console.log('  # SAML2 bearer');
   console.log(
-    '  mcp-auth saml2-bearer --dev --service-key ./service-key.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa',
+    '  mcp-auth saml2-bearer --service-key ./service-key.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa',
   );
   console.log('');
   console.log('  # XSUAA with authorization_code (default, opens browser)');
@@ -310,311 +310,305 @@ function showHelp(): void {
   );
 }
 
-function parseArgs(
-  args: string[] = process.argv.slice(2),
-): McpAuthOptions | null {
-  // Handle --version and --help first
-  if (
-    args.length === 0 ||
-    args[0] === 'help' ||
-    args.includes('--help') ||
-    args.includes('-h')
-  ) {
-    showHelp();
-    process.exit(0);
+const SSO_TITLES: Record<SsoSubcommand, string> = {
+  oidc: 'an OIDC grant (or the UAA passcode grant)',
+  'saml2-pure': 'SAML into session cookies',
+  'saml2-bearer': 'a SAML assertion exchanged for an OAuth token',
+};
+
+function showSsoHelp(subcommand: SsoSubcommand): void {
+  console.log(
+    `mcp-auth ${subcommand} - log in through ${SSO_TITLES[subcommand]} and write the destination`,
+  );
+  console.log('');
+  console.log('Usage:');
+  console.log(
+    `  mcp-auth ${subcommand}${subcommand === 'oidc' ? ' --flow <browser|device|password|token_exchange>' : ''} --output <path> [options]`,
+  );
+  console.log('');
+  console.log('Required Options:');
+  console.log('  --output <path>           Output file path');
+  if (subcommand === 'oidc') {
+    console.log(
+      "  --flow <flow>             browser|device|password|token_exchange (or the --config file's flow)",
+    );
   }
+  console.log('');
+  console.log('Common Options:');
+  console.log('  --service-key <path>      Service key JSON (XSUAA/ABAP)');
+  console.log('  --type <abap|xsuaa>       Output type (default: abap)');
+  console.log('  --format <env|json>       Output format (default: env)');
+  console.log(
+    '  --env <path>              Optional existing env file (used for refresh)',
+  );
+  console.log(
+    '  --destination <name>      Destination name (default: output file base)',
+  );
+  console.log(
+    '  --service-url <url>       Service URL (ABAP: SAP URL, XSUAA: MCP URL)',
+  );
+  console.log(
+    `  --config <path>           JSON config file; its protocol and flow must be mcp-auth ${subcommand}'s`,
+  );
+  console.log(
+    '  --browser <browser>       Browser: auto|system|chrome|edge|firefox|none|headless (default: auto)',
+  );
+  console.log(
+    '                            linux: auto/system the default; chrome google-chrome; edge microsoft-edge; firefox firefox',
+  );
+  console.log(
+    "                            darwin: auto/system the default; chrome 'Google Chrome'; edge 'Microsoft Edge'; firefox Firefox",
+  );
+  console.log(
+    '                            win32: auto/system the default; chrome chrome; edge msedge; firefox firefox',
+  );
+  console.log(
+    '                            other platforms: none/headless only (the URL is shown on stderr)',
+  );
+  console.log(
+    '  --browser-program <p>     The browser program to run, as given (linux: on PATH or a path;',
+  );
+  console.log(
+    '                            darwin: an application name; win32: a program name or path); excludes --browser',
+  );
+  console.log(
+    '  --redirect-port <port>    Redirect port for browser flows (default: from auth-providers, currently 61001)',
+  );
+  console.log(
+    '  --redirect-uri <uri>      Custom redirect URI (OOB/manual code flows)',
+  );
+  console.log('');
+  console.log('OIDC Options:');
+  console.log('  --issuer <url>            OIDC issuer/discovery URL');
+  console.log('  --authorization-endpoint <url>  Authorization endpoint');
+  console.log('  --token-endpoint <url>    Token endpoint');
+  console.log('  --device-authorization-endpoint <url>  Device auth endpoint');
+  console.log('  --client-id <id>          OAuth client id');
+  console.log('  --client-secret <secret>  OAuth client secret');
+  console.log(
+    '  --scopes <csv>            Scopes list (comma or space-separated)',
+  );
+  console.log('  --scope <value>           Scope for token exchange');
+  console.log('  --code <value>            Authorization code (manual)');
+  console.log('  --username <value>        Username for password flow');
+  console.log('  --password <value>        Password for password flow');
+  console.log(
+    '  --passcode <value>        UAA one-time passcode: the passcode grant (needs --uaa-url or --service-key).',
+  );
+  console.log(
+    '                            --flow password with neither --password nor --username asks for one',
+  );
+  console.log('  --subject-token <token>   Subject token for token exchange');
+  console.log(
+    '  --subject-token-type <type> Subject token type (default: access_token)',
+  );
+  console.log('  --audience <value>        Audience for token exchange');
+  console.log('  --actor-token <token>     Actor token for token exchange');
+  console.log(
+    '  --actor-token-type <type> Actor token type for token exchange',
+  );
+  console.log(
+    '  --uaa-url <url>           UAA base URL (used to build token endpoint)',
+  );
+  console.log('');
+  console.log('SAML Options:');
+  console.log('  --idp-sso-url <url>        IdP SSO URL');
+  console.log(
+    '  --sp-entity-id <id>        SP Entity ID; also the Audience the assertion must name',
+  );
+  console.log(
+    '  --acs-url <url>            ACS URL; the Recipient the assertion must name',
+  );
+  console.log(
+    '  --idp-cert <path>          IdP signing certificate file (PEM or DER); repeat for key rotation',
+  );
+  console.log(
+    '  --idp-entity-id <id>       IdP entityID; the Issuer the assertion must name',
+  );
+  console.log(
+    '  --idp-metadata <url|path>  IdP SAML metadata (https or file): fills --idp-cert, --idp-entity-id',
+  );
+  console.log(
+    '                             and --idp-sso-url where not given, e.g. https://<ias>/saml2/metadata',
+  );
+  console.log(
+    '  --idp-initiated            The IdP starts the login; no AuthnRequest is sent (required for bearer',
+  );
+  console.log(
+    '                             against UAA/XSUAA). Use with --assertion or --assertion-flow manual',
+  );
+  console.log(
+    '  --authn-request-id <id>    Refused since 2.0.0: a destination cannot state a request ID',
+  );
+  console.log(
+    '  --saml-metadata <path>     XSUAA SP metadata; bearer reads it for the token alias, --acs-url and',
+  );
+  console.log(
+    '                             --sp-entity-id. With --service-key, <uaa.url>/saml/metadata is read instead',
+  );
+  console.log('  --relay-state <value>      RelayState (optional)');
+  console.log(
+    '  --assertion-flow <flow>    browser|manual|assertion (default: browser; manual with --idp-initiated)',
+  );
+  console.log('  --assertion <base64>       SAMLResponse (base64)');
+  console.log(
+    '  --cookie <value>           Session cookies handed over (pure SAML): stored as they are, no login',
+  );
+  console.log(
+    '  --token-endpoint <url>     Token endpoint for SAML bearer exchange',
+  );
+  console.log('');
+  console.log(
+    '  Every SAML assertion is validated before use. Both SAML flows require --idp-cert',
+  );
+  console.log(
+    '  and --idp-entity-id, or --idp-metadata (or idpCertificates/idpEntityId in --config). An --assertion',
+  );
+  console.log(
+    '  also needs --idp-initiated; the browser and manual flows send their own request',
+  );
+  console.log('  unless --idp-initiated is given.');
+  console.log('');
+  console.log('What is written (one .env file, two roles):');
+  console.log(
+    '  the means — SAP_AUTH_TYPE, SAP_GRANT_TYPE, the client (SAP_UAA_*), SAP_OIDC_* / SAP_SAML_*,',
+  );
+  console.log(
+    '  SAP_URL — through the destination store; the secret — the token or cookies, SAP_EXPIRES_AT,',
+  );
+  console.log(
+    '  the refresh token, SAP_ISSUED_FOR / SAP_ISSUED_BY — through the session store, as the broker',
+  );
+  console.log(
+    '  stores what the login obtains (XSUAA_* keys with --type xsuaa). The output is written only once',
+  );
+  console.log('  the secret is stored; otherwise the command exits 1.');
+  console.log('');
+  console.log('  version, --version, -v     Show version number');
+  console.log('  help, --help, -h           Show this help message');
+}
 
-  if (
-    args[0] === 'version' ||
-    args.includes('--version') ||
-    args.includes('-v')
-  ) {
-    console.log(getVersion());
-    process.exit(0);
-  }
-
-  let serviceKeyPath: string | undefined;
-  let envFilePath: string | undefined;
-  let outputFile: string | undefined;
-  let authType: 'abap' | 'xsuaa' = 'abap';
-  let browser: string = 'auto'; // Default to auto for authorization_code flow
-  let browserGiven = false;
-  let browserProgram: string | undefined;
-  let credential: boolean = false; // Use client_credentials instead of authorization_code
-  let format: 'json' | 'env' = 'env';
-  let serviceUrl: string | undefined;
-  let redirectPort: number | undefined;
-  let clientAuth: McpAuthOptions['clientAuth'];
-  let basicEncoding: McpAuthOptions['basicEncoding'];
-  let certPath: string | undefined;
-  let keyPath: string | undefined;
-
-  // Parse arguments
-  for (let i = 0; i < args.length; i++) {
-    const next = args[i + 1];
-    if (args[i] === '--service-key' && i + 1 < args.length) {
-      serviceKeyPath = args[i + 1];
-      i++;
-    } else if (args[i] === '--env' && i + 1 < args.length) {
-      envFilePath = args[i + 1];
-      i++;
-    } else if (args[i] === '--output' && i + 1 < args.length) {
-      outputFile = args[i + 1];
-      i++;
-    } else if (args[i] === '--type' && i + 1 < args.length) {
-      const type = args[i + 1];
-      if (type === 'abap' || type === 'xsuaa') {
-        authType = type;
-      } else {
-        console.error(`Invalid auth type: ${type}. Must be 'abap' or 'xsuaa'`);
-        process.exit(1);
-      }
-      i++;
-    } else if (args[i] === '--browser' && next !== undefined) {
-      browser = next;
-      browserGiven = true;
-      if (!isBrowserName(browser)) {
-        console.error(
-          `Invalid browser: ${browser}. Must be one of: ${BROWSER_NAMES.join(', ')}`,
-        );
-        process.exit(1);
-      }
-      i++;
-    } else if (args[i] === '--browser-program' && next !== undefined) {
-      browserProgram = next;
-      i++;
-    } else if (args[i] === '--format' && i + 1 < args.length) {
-      const fmt = args[i + 1];
-      if (fmt === 'json' || fmt === 'env') {
-        format = fmt;
-      } else {
-        console.error(`Invalid format: ${fmt}. Must be 'json' or 'env'`);
-        process.exit(1);
-      }
-      i++;
-    } else if (args[i] === '--service-url' && i + 1 < args.length) {
-      serviceUrl = args[i + 1];
-      i++;
-    } else if (args[i] === '--redirect-port' && next !== undefined) {
-      const port = parseInt(next, 10);
-      if (Number.isNaN(port) || port < 1 || port > 65535) {
-        console.error(
-          `Invalid redirect port: ${next}. Must be a number between 1 and 65535`,
-        );
-        process.exit(1);
-      }
-      redirectPort = port;
-      i++;
-    } else if (args[i] === '--client-auth' && i + 1 < args.length) {
-      const how = args[i + 1];
-      if (how === 'certificate' || how === 'secret') {
-        clientAuth = how;
-      } else {
-        console.error(
-          `Invalid client authentication: ${how}. Must be 'certificate' or 'secret'`,
-        );
-        process.exit(1);
-      }
-      i++;
-    } else if (args[i] === '--basic-encoding' && i + 1 < args.length) {
-      const encoding = args[i + 1];
-      if (encoding === 'raw' || encoding === 'form') {
-        basicEncoding = encoding;
-      } else {
-        console.error(
-          `Invalid Basic encoding: ${encoding}. Must be 'raw' or 'form'`,
-        );
-        process.exit(1);
-      }
-      i++;
-    } else if (args[i] === '--cert-path' && i + 1 < args.length) {
-      certPath = args[i + 1];
-      i++;
-    } else if (args[i] === '--key-path' && i + 1 < args.length) {
-      keyPath = args[i + 1];
-      i++;
-    } else if (args[i] === '--credential') {
-      credential = true;
-    } else {
-      console.error(`Unknown option: ${args[i]}`);
-      console.error('Run "mcp-auth --help" for usage information');
-      process.exit(1);
+function createCliLogger(prefix: string = 'SSO'): ILogger {
+  const isEnabled = (): boolean => {
+    if (
+      process.env.DEBUG_SSO === 'false' ||
+      process.env.DEBUG_AUTH_SSO === 'false'
+    ) {
+      return false;
     }
-  }
-
-  // Validate required arguments
-  if (!outputFile) {
-    console.error('Error: --output is required');
-    console.error('');
-    console.error(
-      'Usage: mcp-auth --output <path> [--service-key <path> | --env <path>] [options]',
-    );
-    console.error('Run "mcp-auth --help" for more information');
-    process.exit(1);
-  }
-
-  // Either service-key or env must be provided
-  if (!serviceKeyPath && !envFilePath) {
-    console.error('Error: Either --service-key or --env must be provided');
-    console.error('');
-    console.error(
-      'Usage: mcp-auth --output <path> [--service-key <path> | --env <path>] [options]',
-    );
-    console.error('Run "mcp-auth --help" for more information');
-    process.exit(1);
-  }
-
-  if (browserProgram !== undefined && browserGiven) {
-    console.error('Error: --browser-program excludes --browser');
-    process.exit(1);
-  }
-
-  const options: McpAuthOptions = {
-    serviceKeyPath,
-    envFilePath,
-    outputFile,
-    authType,
-    browser,
-    browserProgram,
-    credential,
-    format,
-    serviceUrl,
-    redirectPort,
-    clientAuth,
-    basicEncoding,
-    certPath,
-    keyPath,
+    if (
+      process.env.DEBUG_SSO === 'true' ||
+      process.env.DEBUG_AUTH_SSO === 'true' ||
+      process.env.DEBUG === 'true' ||
+      process.env.DEBUG?.includes('sso') === true ||
+      process.env.DEBUG?.includes('auth-sso') === true
+    ) {
+      return true;
+    }
+    return false;
   };
+
+  const baseLogger = new DefaultLogger(getLogLevel());
+  return {
+    debug: (message: string, meta?: unknown) => {
+      if (isEnabled()) {
+        baseLogger.debug(`[${prefix}] ${message}`, meta);
+      }
+    },
+    info: (message: string, meta?: unknown) => {
+      if (isEnabled()) {
+        baseLogger.info(`[${prefix}] ${message}`, meta);
+      }
+    },
+    warn: (message: string, meta?: unknown) => {
+      if (isEnabled()) {
+        baseLogger.warn(`[${prefix}] ${message}`, meta);
+      }
+    },
+    error: (message: string, meta?: unknown) => {
+      if (isEnabled()) {
+        baseLogger.error(`[${prefix}] ${message}`, meta);
+      }
+    },
+  };
+}
+
+function showHelp(subcommand: Subcommand | undefined): void {
+  if (subcommand === undefined || subcommand === 'auth-code') {
+    showMainHelp();
+  } else {
+    showSsoHelp(subcommand);
+  }
+}
+
+/** `mcp-auth [auth-code]`: the authorization code or client credentials login. */
+async function runAuthCode(options: McpAuthOptions): Promise<number> {
   // The browser for this platform, before anything is read or written: a
   // name this platform has no launcher for is a usage error, never a guess.
   try {
     mcpAuthBrowser(options);
   } catch (error) {
-    console.error(`Error: ${(error as Error).message}`);
-    process.exit(1);
+    // BrowserUsageError: fixed words naming the flag.
+    console.error(`❌ ${(error as Error).message}`);
+    return 1;
   }
-  return options;
-}
-
-function runMcpSso(args: string[]): void {
-  const mcpSsoPath = path.resolve(__dirname, 'mcp-sso.js');
-  const result = spawnSync(process.execPath, [mcpSsoPath, ...args], {
-    stdio: 'inherit',
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  process.exit(result.status ?? 1);
-}
-
-async function main() {
-  const rawArgs = process.argv.slice(2);
-  // `help` and `version` as commands, like every CLI in the family; they answer
-  // before any subcommand is dispatched.
-  if (rawArgs[0] === 'help') {
-    showHelp();
-    process.exit(0);
-  }
-  if (rawArgs[0] === 'version') {
-    console.log(getVersion());
-    process.exit(0);
-  }
-  const subcommand = rawArgs[0];
-  const hasSubcommand =
-    subcommand && !subcommand.startsWith('-') && subcommand.length > 0;
-  if (hasSubcommand) {
-    const remaining = rawArgs.slice(1);
-    const ensureNoProtocol = () => {
-      if (remaining.includes('--protocol')) {
-        console.error('❌ --protocol is not supported with subcommands.');
-        process.exit(1);
-      }
-    };
-    switch (subcommand) {
-      case 'auth-code': {
-        break;
-      }
-      case 'oidc': {
-        ensureNoProtocol();
-        runMcpSso(['oidc', ...remaining]);
-        return;
-      }
-      case 'saml2-pure': {
-        ensureNoProtocol();
-        if (remaining.includes('--flow')) {
-          const idx = remaining.indexOf('--flow');
-          const flow = remaining[idx + 1];
-          if (flow && flow !== 'pure') {
-            console.error('❌ saml2-pure requires --flow pure.');
-            process.exit(1);
-          }
-        } else {
-          remaining.unshift('pure');
-          remaining.unshift('--flow');
-        }
-        runMcpSso(['saml2', ...remaining]);
-        return;
-      }
-      case 'saml2-bearer': {
-        ensureNoProtocol();
-        if (!remaining.includes('--dev')) {
-          console.error(
-            '⚠️  saml2-bearer is in progress. Re-run with --dev to enable.',
-          );
-          process.exit(1);
-        }
-        const filtered = remaining.filter((arg) => arg !== '--dev');
-        if (filtered.includes('--flow')) {
-          console.error('❌ saml2-bearer does not accept --flow.');
-          process.exit(1);
-        }
-        runMcpSso(['bearer', ...filtered]);
-        return;
-      }
-      default: {
-        console.error(`Unknown command: ${subcommand}`);
-        showHelp();
-        process.exit(1);
-      }
-    }
-  }
-
-  const options = parseArgs(hasSubcommand ? rawArgs.slice(1) : rawArgs);
-
-  if (!options) {
-    // Help or version was shown, exit already handled
-    return;
-  }
-
   // Removed on any exit, error and signal included: it holds the secret.
   const workDir = createWorkDir('mcp-auth');
+  return runMcpAuth(options, {
+    workDir,
+    // Passing `options.redirectPort` as given, so an omitted
+    // --redirect-port lets the strategy bind its own default rather than
+    // this CLI pinning a number it doesn't own.
+    authorization: (run) =>
+      browserCallbackStrategy(
+        asContract<Parameters<typeof browserCallbackStrategy>[0]>({
+          browser: mcpAuthBrowser(run),
+          port: run.redirectPort,
+        }),
+      ),
+  });
+}
+
+/** `mcp-auth oidc | saml2-pure | saml2-bearer`, in this process. */
+async function runSso(options: McpSsoOptions): Promise<number> {
+  // Removed on any exit, error and signal included: it holds the secret.
+  const workDir = createWorkDir('mcp-auth');
+  return runMcpSso(options, { logger: createCliLogger(), workDir });
+}
+
+async function main(): Promise<number> {
+  let parsed: ReturnType<typeof parseCommandLine>;
   try {
-    const code = await runMcpAuth(options, {
-      workDir,
-      // Passing `options.redirectPort` as given, so an omitted
-      // --redirect-port lets the strategy bind its own default rather than
-      // this CLI pinning a number it doesn't own.
-      authorization: (run) =>
-        browserCallbackStrategy(
-          asContract<Parameters<typeof browserCallbackStrategy>[0]>({
-            browser: mcpAuthBrowser(run),
-            port: run.redirectPort,
-          }),
-        ),
-    });
-    // Exit explicitly to close any open handles (e.g., OAuth callback server)
-    process.exit(code);
-  } catch (error: unknown) {
+    parsed = parseCommandLine(process.argv.slice(2));
+  } catch (error) {
+    if (!isUsageError(error)) throw error;
+    console.error(`❌ ${error.message}`);
+    console.error('Run "mcp-auth --help" for usage information');
+    return 1;
+  }
+  switch (parsed.kind) {
+    case 'help':
+      showHelp(parsed.subcommand);
+      return 0;
+    case 'version':
+      console.log(getVersion());
+      return 0;
+    case 'auth-code':
+      return runAuthCode(parsed.options);
+    case 'sso':
+      return runSso(parsed.options);
+  }
+}
+
+main().then(
+  // Exit explicitly to close any open handles (e.g., OAuth callback server)
+  (code) => process.exit(code),
+  (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`❌ Error: ${message}`);
     if (error instanceof Error && error.stack) {
       console.error(error.stack);
     }
     process.exit(1);
-  }
-}
-
-main().catch((error) => {
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+  },
+);

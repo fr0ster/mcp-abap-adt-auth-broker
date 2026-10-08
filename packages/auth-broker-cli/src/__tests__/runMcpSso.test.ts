@@ -1,5 +1,6 @@
 /**
- * `mcp-sso` end to end, one case per command row of the README's
+ * `mcp-auth oidc | saml2-pure` (2.x's `mcp-sso`) end to end, each case's
+ * options parsed from its `mcp-auth` form, one case per command row of the README's
  * *What each command writes* table, against a local
  * token endpoint — no browser, no identity provider, no SAP system.
  *
@@ -28,6 +29,7 @@ import {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import type { McpSsoOptions } from '../mcpSsoConfig';
 import { runMcpSso } from '../runMcpSso';
+import { parseSubcommandArgs, type SsoSubcommand } from '../subcommandArgs';
 import {
   meansKeys,
   readEnvKeys,
@@ -104,6 +106,20 @@ function options(overrides: Partial<McpSsoOptions>): McpSsoOptions {
     serviceUrl: SERVICE_URL,
     ...overrides,
   };
+}
+
+/**
+ * What `mcp-auth <subcommand> <args>` parses to — the protocol and flow the
+ * subcommand names — so every case runs an `mcp-auth` form.
+ */
+function form(subcommand: SsoSubcommand, args: string[] = []): McpSsoOptions {
+  const parsed = parseSubcommandArgs(subcommand, [
+    '--output',
+    path.join(outDir, `${DEST}.env`),
+    ...args,
+  ]);
+  if (parsed.kind !== 'sso') throw new Error(`not a run: ${parsed.kind}`);
+  return parsed.options;
 }
 
 const run = (o: McpSsoOptions) => runMcpSso(o, { logger, workDir });
@@ -187,13 +203,12 @@ async function expectServedFromOutput(
   expect(server.requests.length).toBe(before);
 }
 
-describe('mcp-sso oidc --flow browser (--code)', () => {
+describe('mcp-auth oidc --flow browser (--code)', () => {
   it('writes jwt / oidc_authorization_code with the endpoints and a public client as ""', async () => {
     server.answer('/token', tokenAnswer('oidc'));
     const code = await run(
       options({
-        protocol: 'oidc',
-        flow: 'browser',
+        ...form('oidc', ['--flow', 'browser']),
         clientId: 'public-client',
         // An issuer: what a stored token is bound to, beside the client.
         issuerUrl: server.url,
@@ -236,7 +251,7 @@ describe('mcp-sso oidc --flow browser (--code)', () => {
   });
 });
 
-describe('mcp-sso oidc --flow device', () => {
+describe('mcp-auth oidc --flow device', () => {
   it('writes jwt / device_code; the presenter it states shows the code on its logger', async () => {
     server.answer('/device', {
       body: {
@@ -250,10 +265,8 @@ describe('mcp-sso oidc --flow device', () => {
     server.answer('/token', tokenAnswer('device'));
     const code = await run(
       options({
-        authType: 'xsuaa',
         serviceUrl: undefined,
-        protocol: 'oidc',
-        flow: 'device',
+        ...form('oidc', ['--flow', 'device', '--type', 'xsuaa']),
         clientId: 'confidential',
         clientSecret: 'the-client-secret',
         deviceAuthorizationEndpoint: `${server.url}/device`,
@@ -277,13 +290,12 @@ describe('mcp-sso oidc --flow device', () => {
   });
 });
 
-describe('mcp-sso oidc --flow password', () => {
+describe('mcp-auth oidc --flow password', () => {
   it('writes jwt / password with the user and password as means', async () => {
     server.answer('/token', tokenAnswer('pw'));
     const code = await run(
       options({
-        protocol: 'oidc',
-        flow: 'password',
+        ...form('oidc', ['--flow', 'password']),
         clientId: 'cli',
         clientSecret: 'cli-secret',
         issuerUrl: server.url,
@@ -314,13 +326,12 @@ describe('mcp-sso oidc --flow password', () => {
   });
 });
 
-describe('mcp-sso --env with a destination written for another grant', () => {
+describe('mcp-auth oidc --env with a destination written for another grant', () => {
   it("keeps none of the other grant's means: the password goes when the grant changes", async () => {
     server.answer('/token', tokenAnswer('pw'));
     await run(
       options({
-        protocol: 'oidc',
-        flow: 'password',
+        ...form('oidc', ['--flow', 'password']),
         clientId: 'cli',
         issuerUrl: server.url,
         tokenEndpoint: `${server.url}/token`,
@@ -338,8 +349,7 @@ describe('mcp-sso --env with a destination written for another grant', () => {
       run(
         options({
           envFilePath: previous,
-          protocol: 'oidc',
-          flow: 'token_exchange',
+          ...form('oidc', ['--flow', 'token_exchange']),
           clientId: 'cli',
           tokenEndpoint: `${server.url}/tx`,
           subjectToken: 'the-subject-token',
@@ -356,13 +366,12 @@ describe('mcp-sso --env with a destination written for another grant', () => {
   });
 });
 
-describe('mcp-sso oidc --flow password --passcode', () => {
+describe('mcp-auth oidc --flow password --passcode', () => {
   it('writes jwt / passcode: the client only, never the one-time code', async () => {
     server.answer('/oauth/token', tokenAnswer('passcode'));
     const code = await run(
       options({
-        protocol: 'oidc',
-        flow: 'password',
+        ...form('oidc', ['--flow', 'password']),
         uaaUrl: server.url,
         clientId: 'cf',
         passcode: 'ONE-TIME-123',
@@ -396,13 +405,12 @@ describe('mcp-sso oidc --flow password --passcode', () => {
   });
 });
 
-describe('mcp-sso oidc --flow token_exchange', () => {
+describe('mcp-auth oidc --flow token_exchange', () => {
   it('writes jwt / token_exchange with the subject token and its type', async () => {
     server.answer('/token', tokenAnswer('tx'));
     const code = await run(
       options({
-        protocol: 'oidc',
-        flow: 'token_exchange',
+        ...form('oidc', ['--flow', 'token_exchange']),
         clientId: 'cli',
         clientSecret: 'cli-secret',
         tokenEndpoint: `${server.url}/token`,
@@ -427,12 +435,11 @@ describe('mcp-sso oidc --flow token_exchange', () => {
   });
 });
 
-describe('mcp-sso saml2 --flow pure --cookie', () => {
+describe('mcp-auth saml2-pure --cookie', () => {
   it('writes saml / none and the handed-over cookies, bound to the service URL', async () => {
     const code = await run(
       options({
-        protocol: 'saml2',
-        flow: 'pure',
+        ...form('saml2-pure'),
         cookie: 'SAP_SESSIONID=abc; MYSAPSSO2=def',
       }),
     );
@@ -471,7 +478,7 @@ describe('mcp-sso saml2 --flow pure --cookie', () => {
   });
 });
 
-describe('mcp-sso saml2 --flow pure --cookie, the SAP client stated in --env', () => {
+describe('mcp-auth saml2-pure --cookie, the SAP client stated in --env', () => {
   it('binds the cookies to the resource with its client: getProvider presents them', async () => {
     const previous = path.join(root, `${DEST}.env`);
     fs.writeFileSync(previous, `SAP_URL=${SERVICE_URL}\nSAP_CLIENT=100\n`);
@@ -479,8 +486,7 @@ describe('mcp-sso saml2 --flow pure --cookie, the SAP client stated in --env', (
       options({
         envFilePath: previous,
         serviceUrl: undefined,
-        protocol: 'saml2',
-        flow: 'pure',
+        ...form('saml2-pure'),
         cookie: 'SAP_SESSIONID=abc',
       }),
     );
@@ -511,8 +517,7 @@ describe('a secret the store does not take', () => {
       .mockRejectedValue(new Error('disk full'));
     const thrown = await run(
       options({
-        protocol: 'oidc',
-        flow: 'password',
+        ...form('oidc', ['--flow', 'password']),
         clientId: 'cli',
         tokenEndpoint: `${server.url}/token`,
         username: 'alice',
@@ -548,8 +553,7 @@ describe('a login that throws a falsy value', () => {
       try {
         const outcome = await run(
           options({
-            protocol: 'oidc',
-            flow: 'password',
+            ...form('oidc', ['--flow', 'password']),
             clientId: 'cli',
             tokenEndpoint: `${server.url}/token`,
             username: 'alice',
@@ -579,8 +583,7 @@ describe('a refused login', () => {
     await expect(
       run(
         options({
-          protocol: 'oidc',
-          flow: 'password',
+          ...form('oidc', ['--flow', 'password']),
           clientId: 'cli',
           tokenEndpoint: `${server.url}/token`,
           username: 'alice',
@@ -625,9 +628,7 @@ describe('a file that is not JSON', () => {
     fs.writeFileSync(file, `{"clientsecret": "${MARKER}", oops`);
     const { thrown, printed } = await outcome(
       options({
-        authType: 'xsuaa',
-        protocol: 'oidc',
-        flow: 'password',
+        ...form('oidc', ['--flow', 'password', '--type', 'xsuaa']),
         serviceKeyPath: file,
         username: 'alice',
         password: 'pw',

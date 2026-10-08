@@ -10,6 +10,9 @@
 //     registry;
 //   - every bin the CLI declares starts: `--version` exits 0 and prints the
 //     CLI's own version (not the library's), `help` exits 0 and prints usage;
+//   - the CLI is one command (D24): its only bin is `mcp-auth`, no `mcp-sso`
+//     is installed, and `mcp-auth <subcommand> --help` answers with usage for
+//     every subcommand;
 //   - `require('@mcp-abap-adt/auth-broker')` loads and exports `AuthBroker`.
 //
 // It exists because 3.0.3 shipped a bin that died on MODULE_NOT_FOUND: the
@@ -29,6 +32,10 @@ const { execFileSync, spawnSync } = require('node:child_process');
 const ROOT = path.resolve(__dirname, '..');
 const LIBRARY = '@mcp-abap-adt/auth-broker';
 const CLI = '@mcp-abap-adt/auth-broker-cli';
+// The one command, and the subcommands it runs in its own process.
+const COMMAND = 'mcp-auth';
+const SUBCOMMANDS = ['auth-code', 'oidc', 'saml2-pure', 'saml2-bearer'];
+const REMOVED_BINS = ['mcp-sso'];
 
 const run = (cmd, args, cwd) =>
   execFileSync(cmd, args, {
@@ -127,6 +134,11 @@ try {
     if (manifest.name === CLI) {
       bins = Object.entries(manifest.bin ?? {});
       if (bins.length === 0) problems.push(`${label}: declares no bin`);
+      const names = bins.map(([bin]) => bin);
+      if (names.length !== 1 || names[0] !== COMMAND)
+        problems.push(
+          `${label}: declares bin ${JSON.stringify(names)}; the one command is ${COMMAND}`,
+        );
       for (const [bin, target] of bins) {
         const file = `package/${path.posix.normalize(target)}`;
         if (!listing.includes(file))
@@ -236,6 +248,44 @@ try {
       else console.log(`${bin} help: ${help.stdout.split('\n')[0]}`);
     }
 
+    // 4b. One command: no removed bin is installed, and every subcommand of
+    // mcp-auth answers its own --help with usage.
+    for (const removed of REMOVED_BINS) {
+      const installed = ['', '.cmd', '.ps1'].filter((suffix) =>
+        fs.existsSync(
+          path.join(consumer, 'node_modules', '.bin', `${removed}${suffix}`),
+        ),
+      );
+      if (installed.length > 0)
+        problems.push(`${removed}: installed, but ${CLI} 3 removed it`);
+      else console.log(`${removed}: not installed`);
+    }
+    if (bins.some(([bin]) => bin === COMMAND)) {
+      const exe = path.join(consumer, 'node_modules', '.bin', COMMAND);
+      for (const subcommand of SUBCOMMANDS) {
+        const options = {
+          cwd: consumer,
+          encoding: 'utf8',
+          timeout: 30_000,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        };
+        const help = IS_WINDOWS
+          ? spawnSync(`"${exe}.cmd" ${subcommand} --help`, {
+              ...options,
+              shell: true,
+            })
+          : spawnSync(exe, [subcommand, '--help'], options);
+        const label = `${COMMAND} ${subcommand} --help`;
+        if (help.status !== 0)
+          problems.push(
+            `${label}: exit ${help.status ?? help.signal}: ${firstError(help.stderr || help.error?.message)}`,
+          );
+        else if (!/usage/i.test(help.stdout ?? ''))
+          problems.push(`${label}: printed no usage`);
+        else console.log(`${label}: ${help.stdout.split('\n')[0]}`);
+      }
+    }
+
     // 5. The library loads on its own.
     const load = spawnSync(
       process.execPath,
@@ -260,5 +310,5 @@ if (problems.length) {
   process.exit(1);
 }
 console.log(
-  `packed: ${files.length} tarballs install cleanly, ${bins.map(([b]) => b).join(' and ')} start and report ${CLI}'s version, and ${LIBRARY} loads without a bin`,
+  `packed: ${files.length} tarballs install cleanly, ${bins.map(([b]) => b).join(' and ')} starts and reports ${CLI}'s version, every subcommand answers --help, ${REMOVED_BINS.join(' and ')} is not installed, and ${LIBRARY} loads without a bin`,
 );

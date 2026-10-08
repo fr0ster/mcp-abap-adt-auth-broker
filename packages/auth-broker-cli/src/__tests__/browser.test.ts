@@ -223,6 +223,27 @@ describe('mcp-sso: the flag and the --config field map the same', () => {
     },
   );
 
+  it.each([
+    ['linux', 'linuxDefaultBrowser'],
+    ['darwin', 'macDefaultBrowser'],
+    ['win32', 'windowsDefaultBrowser'],
+  ])(
+    'nothing stated: auto, as every flow that opens a browser (%s → %s)',
+    (platform, factory) => {
+      const factories = recording();
+      expect(ssoBrowser({}, platform, factories)).toBe(factories.made[0]);
+      expect(factories.made).toEqual([
+        expect.objectContaining({ factory, argument: undefined }),
+      ]);
+    },
+  );
+
+  it('nothing stated on another platform: refused like --browser auto', () => {
+    expect(() => ssoBrowser({}, 'freebsd', recording())).toThrow(
+      '--browser auto has no launcher on this platform; use --browser none',
+    );
+  });
+
   it('an unknown value is refused naming browser', () => {
     for (const value of ['opera', 'Chrome', 'msedge']) {
       expect(() => ssoBrowser(fromFile(value), 'linux', recording())).toThrow(
