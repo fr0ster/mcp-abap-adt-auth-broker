@@ -300,6 +300,24 @@ describe('mcp-auth (authorization_code)', () => {
     expect(jwtName(renewed?.authorizationToken)).toBe('uaa-access-2');
   });
 
+  it('with --env holding a valid token bound to the means, the rerun reuses it: no request, no login', async () => {
+    server.answer('/oauth/token', tokenAnswer('uaa'));
+    await run(options({ serviceKeyPath: abapKey() }));
+    const previous = path.join(root, `${DEST}.env`);
+    fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
+    strategyCalls = 0;
+    const before = server.requests.length;
+
+    await expect(
+      run(options({ serviceKeyPath: abapKey(), envFilePath: previous })),
+    ).resolves.toBe(0);
+    expect(strategyCalls).toBe(0);
+    expect(server.requests).toHaveLength(before);
+    const kept = await storesOf('abap').sessionStore.loadSession(DEST);
+    expect(jwtName(kept?.authorizationToken)).toBe('uaa-access-1');
+    expect(kept?.refreshToken).toBe('uaa-refresh-1');
+  });
+
   it('with --env holding a session bound elsewhere, the session is not used: a login follows, its refresh token sent nowhere', async () => {
     server.answer('/oauth/token', tokenAnswer('uaa'));
     await run(options({ serviceKeyPath: abapKey() }));

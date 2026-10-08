@@ -61,7 +61,7 @@ function showMainHelp(): void {
   console.log('Service Key or Env (one required):');
   console.log('  --service-key <path>    Path to service key JSON file');
   console.log(
-    '  --env <path>            Path to existing .env file (used for refresh token)',
+    '  --env <path>            Path to an existing .env file: its session is reused while valid',
   );
   console.log('');
   console.log('Optional Options:');
@@ -213,7 +213,7 @@ function showMainHelp(): void {
   );
   console.log('');
   console.log(
-    '  # XSUAA using existing .env refresh token, fallback to service key',
+    '  # XSUAA reusing the session of an existing .env, refreshed or logged in again only when needed',
   );
   console.log(
     '  mcp-auth --env ./mcp.env --service-key ./service-key.json --output ./mcp.env --type xsuaa',
@@ -249,11 +249,12 @@ function showMainHelp(): void {
   console.log('Notes:');
   console.log('  - --type determines the provider (xsuaa or abap)');
   console.log(
-    '  - If --env is provided and file exists, refresh token is attempted first',
+    '  - With --env, a valid stored token bound to these means is reused: no request is sent.',
   );
   console.log(
-    '  - If refresh fails or env file is missing, service key auth is used',
+    '    An expired one is refreshed with the stored refresh token; if that fails, or there is',
   );
+  console.log('    none, the login runs. To log in anew, run without --env.');
   console.log('  - Authentication flow:');
   console.log('    * Default: authorization_code (browser-based OAuth2)');
   console.log(
@@ -339,7 +340,7 @@ function showSsoHelp(subcommand: SsoSubcommand): void {
   console.log('  --type <abap|xsuaa>       Output type (default: abap)');
   console.log('  --format <env|json>       Output format (default: env)');
   console.log(
-    '  --env <path>              Optional existing env file (used for refresh)',
+    '  --env <path>              Optional existing env file: its session is reused while valid, refreshed when expired',
   );
   console.log(
     '  --destination <name>      Destination name (default: output file base)',

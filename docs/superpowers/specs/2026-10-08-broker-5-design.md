@@ -1052,7 +1052,14 @@ flags (§11.2's table):
 Every command builds its broker with explicit choices, in its own code (H1):
 
 - `renewal: () => refreshThenLogin()` for every grant — a user at a terminal
-  can log in; `--env` with a refresh token refreshes first, as 2.x. **(D20)**
+  can log in. An `--env` rerun reuses a valid stored token bound to the
+  destination's means (no request); only when it has to — the token has
+  expired — it refreshes with the stored refresh token, and logs in when
+  that fails or there is none. **(D20)** 2.x refreshed on every `--env` run;
+  3.0.0 does not (ruled by the user, 2026-10-09): a refresh cannot invalidate
+  the old access token, which stays valid to its `exp`, and under
+  refresh-token rotation it would invalidate the refresh token another
+  process (the MCP server) holds from the same session.
 - `onWriteFailure: 'fail'` — a command exits 1 and writes no output unless the
   secret landed; it calls `flush()` before copying the output, as 2.x. **(D20)**
 - `authDebug: true` only with `--auth-debug` (§10.7).
@@ -1271,7 +1278,8 @@ aborted login prints "the authorization was aborted".
 | "🔗 Authorization URL: …" preview of `mcp-auth` | gone; the URL is shown by the login's own prompt (stderr) |
 | `DEBUG_SSO=true` etc. for the `mcp-sso` log | `--verbose`; `--auth-debug` for the providers' debug line, with prepared secrets |
 | error output: a message and a stack trace | `reason — hint`, then the diagnostics line; no stack trace |
-| an `--env` session refreshed with its refresh token | a session written by CLI 2.x (or earlier) is not bound under 3.0.0's binding record: the first run after upgrading discards it with a warning and **logs in** (no refresh); later runs refresh as before |
+| an `--env` session refreshed with its refresh token | a session written by CLI 2.x (or earlier) is not bound under 3.0.0's binding record: the first run after upgrading discards it with a warning and **logs in** (no refresh); later runs reuse it (below) |
+| every `--env` run refreshed the token | 3.0.0 reuses a valid stored token — no request; it refreshes (or logs in) only when the token has expired. Nothing to do; to log in anew, run without `--env` |
 | `mcp-sso … --cookie` sessions written by 2.x | refused naming `issuedBy` by 3.0.0: run `mcp-auth saml2-pure … --cookie` again |
 | the `mcp-sso` command | **gone in 3.0.0**: every form is an `mcp-auth` subcommand with the same flags (table below) |
 | `mcp-auth oidc` / `saml2-pure` / `saml2-bearer` started a second process (`mcp-sso`) | they run in `mcp-auth`'s process; a signal to it ends the login, frees the port and removes the work directory |
