@@ -4,300 +4,222 @@
 A per-destination credential broker for SAP BTP and ABAP systems. For a destination — a name,
 such as `TRIAL` — `getProvider` builds the `IAuthProvider` the destination states (basic, SNC, a
 UAA, OIDC or SAML grant, or a credential handed over) from the *means* in the service key store
-and the *secret* in the session store, ready for a `@mcp-abap-adt/connection` 10 connector, and
+and the *secret* in the session store, ready for a `@mcp-abap-adt/connection` 14 connector, and
 stores back every token or set of SAML session cookies that provider obtains or renews. The
 token API (`getToken`, `refreshToken`, `createTokenRefresher`) serves whoever wants a token and
 nothing else. It decides nothing about tokens itself: whether the cached token is still good,
-when to refresh and when to log in is the provider's call (`@mcp-abap-adt/auth-providers`), and
-where means and secrets live is the stores' (`@mcp-abap-adt/auth-stores`, or your own).
+when to refresh and when to log in is the provider's call (`@mcp-abap-adt/auth-providers`) and
+the renewal strategy's you give it; where means and secrets live is the stores'
+(`@mcp-abap-adt/auth-stores`, or your own).
 
-**Upgrading from 3.x?** See [*Migrating from 3.x*](#migrating-from-3x) — 4.0.0 needs a session
-store that takes the secret alone (auth-stores 3 or later), means stated in a key store, and
-the contracts of `interfaces-auth` 3. **On 4.0.0?** 4.1.0 is additive — a client that
-authenticates with an x509 certificate, through the `clientAuthentication` strategy (see
-[*How the Client Authenticates*](#how-the-client-authenticates-clientauthentication)); what a
-4.0.0 consumer may notice is in [*Migrating from 4.0.0*](#migrating-from-400).
+**Upgrading from 4.x?** 5.0.0 is a major: see [*Migrating to 5.0.0*](#migrating-to-500). In
+short — a token destination needs two options the broker has no default for (`renewal`,
+`onWriteFailure`); every failure is an `AuthProviderFailure` read through
+`@mcp-abap-adt/auth-errors`; every session written before 5.0.0 reads as unbound once, so each
+token destination logs in once after the upgrade.
 
-The `mcp-auth` and `mcp-sso` commands that write destination files are in
-[`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md) (2.1.0, on this
-version), in the same repository. Up to 3.0.4 they shipped in this package; from 3.1.0 this package
-has no `bin`. Install the commands with
-`npm i -g @mcp-abap-adt/auth-broker-cli` — after
-`npm uninstall -g @mcp-abap-adt/auth-broker` if you had installed this one
-globally for them.
+The `mcp-auth` command that writes destination files is
+[`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md) (3.0.0, on this version), in the
+same repository. This package has no `bin`.
 
 ## Features
 
 - 🔌 **A credential for a connector**: `getProvider(destination)` builds the `IAuthProvider` the destination states — basic, SNC, the UAA grants (authorization code, client credentials, passcode), the OIDC grants (authorization code with PKCE, device code, password, token exchange), the SAML grants (session cookies, bearer token), or a credential handed over — from the service key store's means and the session store's secret
-- 💾 **What a provider obtains is stored**: every token or set of SAML session cookies a `getProvider` provider obtains or renews — at `prepare()`, on expiry, or after a 401 in `rejected()` — is written to the session store, the secret alone with what it is bound to; a failed write is retried by the broker, and `flush()` tells you whether everything landed
-- 🔒 **A secret goes only where it was obtained**: a stored token is used only for the resource it was obtained for, from the issuer and client that issued it — otherwise it is discarded and the provider logs in afresh
-- 🎯 **Per destination**: one provider per destination name, shared by `getProvider` and the token API — one token, one refresh token, one renewal in flight
-- 🔄 **Provider-driven token lifecycle**: The provider decides whether its cached token is still good, refreshes it, or logs in; the broker persists what it returns
-- 🪙 **A token API for whoever wants a token and nothing else**: `getToken`, `refreshToken` and `createTokenRefresher` on the destination's own provider, or on one you give the broker, as in 3.x
-- ⚡ **Forced refresh**: `refreshToken()` obtains a new token even when the cached one looks valid — for a caller holding a 401
-- 🧾 **JWT or SAML cookies**: what the provider returns is saved as a token or as session cookies
-- 🔑 **No secrets copied**: The client secret stays in the service key; the session store gets tokens only
-- 📜 **x509 service keys**: a client that authenticates with a certificate instead of a secret (`tls_client_auth`), when you say so — `clientAuthentication: fromServiceKeyCertificate()`; the certificate and key are read from the key store, and never reach the session store, a log line or an error
+- 🧭 **You compose, the broker does not guess**: how a token provider renews (`renewal`) and what a session write that did not land means (`onWriteFailure`) are your statements, with no default
+- 💾 **What a provider obtains is stored**: every token or set of SAML session cookies a provider obtains or renews — at `prepare()`, on expiry, or after a 401 in `rejected()` — is written to the session store before the provider answers, one write at a time per destination; `flush()` tells you whether everything landed
+- 🔒 **A credential stays bound to its identity**: a stored secret is reused only by a provider built from exactly the means it was obtained under — the resource, the row (`authType` / `grantType`), the client, every server address and the trust; anything else changed, a new provider is built, and it starts with nothing
+- 🛑 **Every wait can be cancelled by whoever waits**: `getProvider`, the token API and `flush()` take a `signal`; the broker sets no timeout of its own
+- 🧾 **Failures as the provider made them**: a provider's `AuthProviderFailure` reaches you as the same object; the broker's own refusals carry names, never values
+- 🪙 **A token API for whoever wants a token and nothing else**: `getToken`, `refreshToken` and `createTokenRefresher` on the destination's own provider, or on one you give the broker
+- 📜 **x509 service keys**: a client that authenticates with a certificate instead of a secret, when you say so — `clientAuthentication: fromServiceKeyCertificate()`; the certificate and key never reach the session store, a log line or an error
 
 ## Installation
 
 ```bash
-npm install @mcp-abap-adt/auth-broker
+npm install @mcp-abap-adt/auth-broker @mcp-abap-adt/auth-providers @mcp-abap-adt/auth-errors @mcp-abap-adt/auth-stores
 ```
 
-Requires Node.js 22, 24 or 26 (`engines: "^22 || ^24 || ^26"`): 22 and 24 are
-the versions SAP BTP's Cloud Foundry Node.js buildpack offers, and 26 is
-supported as well.
+5.0.0 depends on `@mcp-abap-adt/auth-providers` `^6.0.0`, `@mcp-abap-adt/auth-errors`
+`^2.1.1`, `@mcp-abap-adt/interfaces-auth` `^7.5.0`, `@mcp-abap-adt/interfaces-auth-sap`
+`^3.3.0`, `@mcp-abap-adt/interfaces-auth-broker` `^1.3.0` and
+`@mcp-abap-adt/interfaces-utils` `^1.1.0`. Declare `auth-providers` yourself — the renewal
+strategies (`refreshThenLogin`, `refreshOnly`) and the interactive strategies come from it —
+and `auth-errors` to read a failure. The stores are yours to choose: `@mcp-abap-adt/auth-stores`
+`^4.0.0`, or any implementation of the `@mcp-abap-adt/interfaces-auth-broker` contracts. Keep
+one installed copy of each contract package (`npm ls @mcp-abap-adt/interfaces-auth`,
+`npm ls @mcp-abap-adt/auth-errors`): a failure of another copy is still read correctly, but
+loses its diagnostics.
+
+Requires Node.js 22, 24 or 26 (`engines: "^22 || ^24 || ^26"`): 22 and 24 are the versions
+SAP BTP's Cloud Foundry Node.js buildpack offers, and 26 is supported as well.
 
 ## Usage
 
-### Basic Usage
-
-This is the token API with a provider of your own — the 3.x way, which keeps
-working. The broker takes a session store, an optional service key store, and
-a token provider implementing `IRefreshableTokenProvider` (from
-`@mcp-abap-adt/interfaces-auth`) — or a factory that builds one per
-destination. Without a `provider` the token API serves what the destination
-states, on the provider `getProvider` builds (see *Getting Tokens*); for a
-`@mcp-abap-adt/connection` 10 connector, use `getProvider` itself.
+### A Provider for a Connector: `getProvider`
 
 ```typescript
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
+  browserCallbackStrategy,
+  linuxDefaultBrowser,
+  refreshThenLogin,
+} from '@mcp-abap-adt/auth-providers';
+import {
   AbapServiceKeyStore,
   AbapSessionStore,
+  EnvDestinationStore,
 } from '@mcp-abap-adt/auth-stores';
-import {
-  AuthorizationCodeProvider,
-  browserCallbackStrategy,
-} from '@mcp-abap-adt/auth-providers';
 
 const broker = new AuthBroker(
   {
+    // The means: <destinations>/<name>.env, else the SAP service key <keys>/<name>.json.
+    serviceKeyStore: new EnvDestinationStore('/path/to/destinations', {
+      fallback: new AbapServiceKeyStore('/path/to/keys', {
+        grantType: 'authorization_code',
+      }),
+    }),
+    // The secret: the token or cookies, its expiry, the refresh token, its binding.
     sessionStore: new AbapSessionStore('/path/to/sessions'),
-    serviceKeyStore: new AbapServiceKeyStore('/path/to/keys'), // optional
-    // Called once per destination, seeded with what the stores hold.
-    provider: (destination, authConfig, connConfig) => {
-      if (!authConfig) throw new Error(`No UAA credentials for ${destination}`);
-      return new AuthorizationCodeProvider({
-        uaaUrl: authConfig.uaaUrl,
-        clientId: authConfig.uaaClientId,
-        clientSecret: authConfig.uaaClientSecret,
-        refreshToken: authConfig.refreshToken, // stored by an earlier login
-        accessToken: connConfig.authorizationToken, // reused while valid
-        authorization: browserCallbackStrategy({ browser: 'system' }),
-      });
-    },
+    // How a token provider renews: refresh, then log in (4.x's steps). Required.
+    renewal: () => refreshThenLogin(),
+    // What a session write that did not land means. Required.
+    onWriteFailure: 'fail',
+    // The interactive half of authorization_code: the platform's default browser.
+    authorization: () => browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
   },
   logger, // optional ILogger
 );
 
-const token = await broker.getToken('TRIAL');
+const session = new AbortController(); // the connector's session: abort it when the session ends
+const provider = await broker.getProvider('TRIAL', { signal: session.signal });
+// new AdtCloudConnector({ url, client, authType: 'jwt' }, provider, transport, logger) …
 ```
 
-The factory receives:
+`getProvider(destination)` returns the `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth`
+7) that a `@mcp-abap-adt/connection` 14 connector takes as it is. The broker reads two stores,
+each for one role:
 
-- `authConfig` — the UAA credentials: the session's own when it holds them,
-  else the service key's; carrying the refresh token the session stored.
-  `null` when no store has credentials (a SAML flow needs none).
-- `connConfig` — the session's connection config, with `serviceUrl` resolved
-  (from the session, else the service key) and the token stored last.
+- **the means** — `authType`, `grantType`, basic's user and password, the SNC, OIDC and SAML
+  fields, `serviceUrl`, the client — from the **service key store** (`getConnectionConfig`,
+  `getAuthorizationConfig`, and `getClientCertificate` when a `clientAuthentication` strategy
+  asks), and only from there;
+- **the secret** — the token or session cookies, `expiresAt`, the refresh token, and what it
+  is bound to — from the **session store** (`loadSession`), and only from there.
 
-These are 3.x's reads, in 3.x's order, kept for this path: a session store
-that still answers a client or a URL is read first. auth-stores 3's session
-stores answer neither, so the key store's are what is found. What the broker
-writes back is the session secret alone (see *Getting Tokens*).
+Nothing is inferred: the destination's `authType` (and `grantType`, for `jwt` and `saml`)
+decides the provider, never which other fields are present.
 
-A provider instance can be passed instead of a factory; it is then used as
-given, for every destination, and the broker seeds it with nothing:
-
-```typescript
-const broker = new AuthBroker({
-  sessionStore: new AbapSessionStore('/path/to/sessions'),
-  provider: new AuthorizationCodeProvider({
-    uaaUrl, clientId, clientSecret,
-    authorization: browserCallbackStrategy({ browser: 'system' }),
-  }),
-});
-```
-
-> `AuthorizationCodeProvider` and the other `@mcp-abap-adt/auth-providers` 5
-> providers implement `IRefreshableTokenProvider` (from `@mcp-abap-adt/interfaces-auth`
-> 3). Since auth-providers 5 the interactive ones take their `authorization`
-> strategy explicitly — none is built for you.
-
-### A Provider for a Connector: `getProvider`
-
-`getProvider(destination)` returns the `IAuthProvider` (from
-`@mcp-abap-adt/interfaces-auth` 3) that a `@mcp-abap-adt/connection` 10
-connector takes as it is. The destination states which provider it gets; the
-broker reads two stores, each for one role:
-
-- **the means** — `authType`, `grantType`, basic's user and password, the SNC,
-  OIDC and SAML fields, `serviceUrl`, the client — from the **service key store**
-  (`getConnectionConfig`), and only from there;
-- **the secret** — the token or session cookies, `expiresAt`, the refresh
-  token — from the **session store** (`loadSession`), and only from there.
-
-Means a session store happens to answer are not read, and neither is a token
-or cookies a key store happens to answer. Nothing is inferred: the
-destination's `authType` (and `grantType`, for `jwt` and `saml`) decides the
-provider, never which other fields are present.
-
-```typescript
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-
-const broker = new AuthBroker({
-  serviceKeyStore: myKeyStore, // the means — required by getProvider
-  sessionStore: mySessionStore, // the secret
-  // no `provider`: that option is the token API's source, not getProvider's
-});
-
-const provider = await broker.getProvider('DEV'); // an IAuthProvider
-// const connection = createAbapConnection({ url, provider }, logger) …
-```
-
-| `authType` / `grantType` | Provider (auth-providers 5.3) | Read from the key store | Read from the session store |
+| `authType` / `grantType` | Provider (auth-providers 6) | Read from the key store | Read from the session store |
 |---|---|---|---|
 | `basic` (no grant read) | `new BasicAuthProvider(username, password)` | `username`, `password` | nothing |
 | `snc` (no grant read) | `SncLogonProvider.forSecureLoginClient({ partnerName, qop, sncLib, myName, logger })` | `sncPartnerName` (required); `sncQop`, `sncLib`, `sncMyName` when set | nothing |
-| `jwt` / `authorization_code` | `AuthorizationCodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret`; `serviceUrl`, `sapClient` for the binding | the seed: `authorizationToken`, `refreshToken`, `expiresAt` — used only when `issuedFor` and `issuedBy` match |
+| `jwt` / `authorization_code` | `AuthorizationCodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret`; `serviceUrl`, `sapClient` for the binding | the seed: `authorizationToken`, `refreshToken`, `expiresAt` — see *A Credential Stays Bound to Its Identity* |
 | `jwt` / `client_credentials` | `ClientCredentialsProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret`; `serviceUrl`, `sapClient` for the binding | nothing (the row takes the client alone) |
-| `jwt` / `passcode` | `UaaPasscodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = a public client); `serviceUrl`, `sapClient` for the binding | the seed: `authorizationToken`, `refreshToken`, `expiresAt` — used only when `issuedFor` and `issuedBy` match |
-| `jwt` / `oidc_authorization_code` | `OidcBrowserProvider` (PKCE) | `uaaClientId`, `uaaClientSecret` (`''` = a public client); `oidcIssuerUrl`, or `oidcAuthorizationEndpoint` + `oidcTokenEndpoint`; `oidcScopes`; `serviceUrl`, `sapClient` for the binding | the seed — used only when `issuedFor` and `issuedBy` match |
+| `jwt` / `passcode` | `UaaPasscodeProvider` | the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = a public client); `serviceUrl`, `sapClient` | the seed, as above |
+| `jwt` / `oidc_authorization_code` | `OidcBrowserProvider` (PKCE) | `uaaClientId`, `uaaClientSecret` (`''` = a public client); `oidcIssuerUrl`, or `oidcAuthorizationEndpoint` + `oidcTokenEndpoint`; `oidcScopes`; `serviceUrl`, `sapClient` | the seed, as above |
 | `jwt` / `device_code` | `OidcDeviceFlowProvider` | the client as above; `oidcIssuerUrl`, or `oidcDeviceAuthorizationEndpoint` + `oidcTokenEndpoint`; `oidcScopes`; `serviceUrl`, `sapClient` | the seed, as above |
 | `jwt` / `password` | `OidcPasswordProvider` | the client as above; `username`, `password`; `oidcIssuerUrl`, or `oidcTokenEndpoint`; `oidcScopes`; `serviceUrl`, `sapClient` | the seed, as above |
-| `jwt` / `token_exchange` | `OidcTokenExchangeProvider` (RFC 8693) | the client as above; `oidcSubjectToken`, `oidcSubjectTokenType`; `oidcAudience`, `oidcActorToken`, `oidcActorTokenType` when set; `oidcScopes`, joined by one space into its `scope`; `oidcIssuerUrl`, or `oidcTokenEndpoint`; `serviceUrl`, `sapClient` | the seed, as above (it has no refresh grant: a renewal exchanges again) |
-| `saml` / `saml2_pure` | `Saml2PureProvider` | `samlIdpSsoUrl`, `samlSpEntityId`, `samlIdpEntityId` (the expected issuer), `samlIdpCertificates`; `samlAcsUrl`, `samlRelayState`, `samlIdpInitiated`, `samlClockSkewMs` when set; `serviceUrl`, `sapClient` for the binding | the seed: `sessionCookies`, `expiresAt` — used only when `issuedFor` and `issuedBy` match |
-| `saml` / `saml2_bearer` | `Saml2BearerProvider` (RFC 7522) | the same SAML fields; `samlTokenUrl` when set; the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = a public client); `serviceUrl`, `sapClient` | the seed: `authorizationToken`, `refreshToken`, `expiresAt` — used only when `issuedFor` and `issuedBy` match |
-| `jwt` / `none` | `TokenAuthProvider.fixed(authorizationToken)` | `authType`, `grantType`, `serviceUrl` (+ `sapClient`); an issuer, when stated: `oidcIssuerUrl`, or the client's `uaaUrl` + `uaaClientId` | `authorizationToken` (required), `issuedFor` (required to match); `issuedBy` when the means state an issuer |
-| `saml` / `none` | `new SamlAuthProvider(sessionCookies)` | `authType`, `grantType`, `serviceUrl` (+ `sapClient`); `samlAcsUrl` when stated | `sessionCookies` (required), `issuedFor` (required to match); `issuedBy` when `samlAcsUrl` is stated |
+| `jwt` / `token_exchange` | `OidcTokenExchangeProvider` (RFC 8693) | the client as above; `oidcSubjectToken`, `oidcSubjectTokenType`; `oidcAudience`, `oidcActorToken`, `oidcActorTokenType` when set; `oidcScopes`, joined by one space into its `scope`; `oidcIssuerUrl`, or `oidcTokenEndpoint`; `serviceUrl`, `sapClient` | nothing: its subject token is a secret and cannot bind a stored session, so it obtains a fresh token after every restart (no refresh grant: a renewal exchanges again) |
+| `saml` / `saml2_pure` | `Saml2PureProvider` | `samlIdpSsoUrl`, `samlSpEntityId`, `samlIdpEntityId` (the expected issuer), `samlIdpCertificates`; `samlAcsUrl`, `samlRelayState`, `samlIdpInitiated`, `samlClockSkewMs` when set; `serviceUrl`, `sapClient` | the seed: `sessionCookies`, `expiresAt` |
+| `saml` / `saml2_bearer` | `Saml2BearerProvider` (RFC 7522) | the same SAML fields; `samlTokenUrl` when set; the client: `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`''` = a public client); `serviceUrl`, `sapClient` | the seed: `authorizationToken`, `refreshToken`, `expiresAt` |
+| `jwt` / `none` | `TokenAuthProvider.fixed(authorizationToken)` | `authType`, `grantType`, `serviceUrl` (+ `sapClient`); the client and `oidcIssuerUrl` when stated | `authorizationToken` (required), `issuedFor` and `issuedBy` (required to match exactly) |
+| `saml` / `none` | `new SamlAuthProvider(sessionCookies)` | `authType`, `grantType`, `serviceUrl` (+ `sapClient`); `samlAcsUrl` when stated | `sessionCookies` (required), `issuedFor` and `issuedBy` (required to match exactly) |
 
-**No provider reads `serviceUrl`.** The URL of the system is where the
-connector connects, not authorization data: no token provider reads it — a
-UAA grant needs the client and `uaaUrl` — so `getProvider` neither requires it
-nor passes it to a provider. Give the connector its URL from your key store
-(`getConnectionConfig`), as the key store answers it. The broker reads it,
-with `sapClient`, for one thing only: to bind a stored secret to the resource
-it was obtained for (see *A Secret Is Bound to Its Resource and Issuer*). A
-token destination without it still gets its provider, but no stored secret
-is reused for it.
+The allowed pairs are `jwt` with `authorization_code`, `client_credentials`, `passcode`,
+`oidc_authorization_code`, `device_code`, `password`, `token_exchange` or `none`, and `saml`
+with `saml2_pure`, `saml2_bearer` or `none`. A pair outside them is a `DestinationConfigError`
+naming `grantType`.
 
-`none` is how a handed-over credential is stated: the key store says
-`grantType: 'none'`, and the token or cookies live in the session. The SNC
-row takes the contract's own defaults when a field is absent — the library is
-discovered (`SNC_LIB_64`, `SNC_LIB`, the Secure Login Client's install path)
-when `sncLib` is, the user's SNC name comes from the credential when
-`sncMyName` is, and `qop` is the provider's `'9'` when `sncQop` is.
+**No provider reads `serviceUrl`.** The URL of the system is where the connector connects, not
+authorization data: give the connector its URL from your key store (`getConnectionConfig`). The
+broker reads it, with `sapClient`, for one thing only: to bind a stored secret to the resource
+it was obtained for. A token destination without it still gets its provider, but no stored
+secret is reused for it (except on the `clientAuthentication` strategy path, below).
 
-The allowed pairs are `jwt` with `authorization_code`, `client_credentials`,
-`passcode`, `oidc_authorization_code`, `device_code`, `password`,
-`token_exchange` or `none`, and `saml` with `saml2_pure`, `saml2_bearer` or
-`none`. A pair outside them is a `DestinationConfigError` naming `grantType`.
+`none` is how a handed-over credential is stated: the key store says `grantType: 'none'`, and
+the token or cookies live in the session. The SNC row takes the contract's own defaults when a
+field is absent — the library is discovered (`SNC_LIB_64`, `SNC_LIB`, the Secure Login Client's
+install path) when `sncLib` is, the user's SNC name comes from the credential when `sncMyName`
+is, and `qop` is the provider's `'9'` when `sncQop` is.
 
-**The UAA grants.** The client comes from the key store's
-`getAuthorizationConfig` — never from the session store. A session is the
-seed: the stored token is presented while it is valid (a JWT's own `exp`
-decides; the stored `expiresAt` serves a token that carries none), and the
-stored refresh token renews it. Without a session the provider is built
-unseeded and obtains its first token at `prepare()`. `uaaClientSecret: ''` is
-a public client: `passcode` takes it as no secret; `AuthorizationCodeProvider`
-and `ClientCredentialsProvider` require a secret, so for them `''` is missing.
-With a `clientAuthentication` strategy no secret is read or required: the
-client authenticates with the strategy's answer — a certificate, say (see *How
-the Client Authenticates*).
+**The UAA grants.** The client comes from the key store's `getAuthorizationConfig` — never from
+the session store. A seed is presented while it is valid (a JWT's own `exp` decides; the stored
+`expiresAt` serves a token that carries none), and its refresh token renews it, as the renewal
+strategy says. Without a seed the provider obtains its first token at `prepare()`.
+`uaaClientSecret: ''` is a public client: `passcode` takes it as no secret;
+`AuthorizationCodeProvider` and `ClientCredentialsProvider` require a secret, so for them `''`
+is missing. With a `clientAuthentication` strategy no secret is read or required (see *How the
+Client Authenticates*).
 
-**The `authorization` option** is the interactive half of
-`authorization_code` and `passcode`: a function of the destination and the
-grant, returning the `IAuthorizationStrategy<string>` the provider logs in
-with. The broker calls it once, when it builds that destination's provider,
-and never disposes what it returns — whoever constructs, disposes. For
-`passcode` the strategy is handed `<uaaUrl>/passcode` as the URL to send the
-user to, and returns the code. There is no default: a destination whose grant
-needs it, without it, is a `DestinationConfigError` naming `authorization`.
-A headless process passes one that refuses (see *Headless Processes*).
+**The OIDC grants.** The client is the key store's `getAuthorizationConfig` again: `uaaClientId`,
+and `uaaClientSecret` — `''` is a public client, sent with no secret. The endpoints come from
+`oidcIssuerUrl`, which the provider discovers them from, or — without it — from every explicit
+endpoint the row reads; without either the error names `oidcIssuerUrl` and the endpoints
+missing. `oidcScopes` is passed as given (`token_exchange` takes one `scope` string: the scopes
+joined by a space). The subject and actor tokens of `token_exchange` and the user and password
+of `password` are means: sent to the token endpoint, never written to the session.
 
-```typescript
-import { browserCallbackStrategy, manualPasscodeStrategy } from '@mcp-abap-adt/auth-providers';
+**The SAML grants.** Each provider validates the assertion before anything uses it, with a
+validator the broker composes from the destination's trust and your replay store:
+`createSignedResponseValidator` for `saml2_pure` (the Response must be signed — the cookies'
+system receives it whole) and `createSignedAssertionValidator` for `saml2_bearer` (the Assertion
+must be signed — the token endpoint receives it alone), from `samlIdpCertificates` (PEM or
+base64 DER; several during a rotation), `samlClockSkewMs` and `assertionReplayStore(destination)`;
+`samlIdpEntityId` is the issuer every assertion must name. A certificate the validator cannot
+read is a `DestinationConfigError` naming `samlIdpCertificates` and carrying the validator's
+error; a `samlClockSkewMs` that is not a whole, non-negative number of milliseconds is one naming
+`samlClockSkewMs`. `samlIdpInitiated: true` declares an IdP-initiated login: no AuthnRequest,
+and an assertion carrying no `InResponseTo` — your strategy then hands over the SAMLResponse
+without asking for an authorization URL. Cookies carry no expiry of their own, so `saml2_pure`
+keeps them until the assertion's earliest `NotOnOrAfter` (less the provider's one-minute
+margin); SAML has no refresh token, so its renewal is a new login through your strategy.
+`saml2_bearer` posts the Assertion to `samlTokenUrl`, else `<uaaUrl>/oauth/token`, with the
+client, and renews by its refresh token.
 
-const broker = new AuthBroker({
-  serviceKeyStore: myKeyStore,
-  sessionStore: mySessionStore,
-  authorization: (destination, grant) =>
-    grant === 'passcode'
-      ? manualPasscodeStrategy({ timeoutMs: 300_000 })
-      : browserCallbackStrategy({ timeoutMs: 120_000 }),
-});
-```
-
-**The OIDC grants.** The client is the key store's `getAuthorizationConfig`
-again: `uaaClientId`, and `uaaClientSecret` — `''` is a public client, sent
-with no secret. (A key store answers a client when it holds one: from
-auth-stores 3.2.0, `EnvDestinationStore` answers one whenever `uaaClientId`
-is stated, a missing `uaaUrl` or secret as `''` — so an OIDC destination
-states its issuer in `oidcIssuerUrl` alone, and a public client no secret.)
-The endpoints come from `oidcIssuerUrl`, which the provider discovers them
-from, or — without it — from every explicit endpoint the row reads
-(`oidcAuthorizationEndpoint`, `oidcDeviceAuthorizationEndpoint`,
-`oidcTokenEndpoint`); without either the error names `oidcIssuerUrl` and the
-endpoints missing. `oidcScopes` is passed as given (`token_exchange` takes
-one `scope` string: the scopes joined by a space). The subject and actor
-tokens of `token_exchange` and the user and password of `password` are
-means: sent to the token endpoint, never written to the session.
-
-**The SAML grants.** Each provider validates the assertion before anything
-uses it, with a validator the broker composes from the destination's trust
-and your replay store: `createSignedResponseValidator` for `saml2_pure` (the
-Response must be signed — the cookies' system receives it whole) and
-`createSignedAssertionValidator` for `saml2_bearer` (the Assertion must be
-signed — the token endpoint receives it alone), from `samlIdpCertificates`
-(PEM or base64 DER; several during a rotation), `samlClockSkewMs` and
-`assertionReplayStore(destination)`; `samlIdpEntityId` is the issuer every
-assertion must name. A certificate the validator cannot read, or a
-`samlClockSkewMs` that is not a whole, non-negative number of milliseconds,
-is a `DestinationConfigError` naming the field. `samlIdpInitiated: true`
-declares an IdP-initiated login: no AuthnRequest, and an assertion carrying
-no `InResponseTo` — your strategy then hands over the SAMLResponse without
-asking for an authorization URL (a strategy that asks gets Oops from
-`prepare()`). `saml2_pure` is seeded with the stored cookies and their
-`expiresAt` — cookies carry no expiry of their own, so the provider keeps them
-until the assertion's earliest `NotOnOrAfter` (less the provider's one-minute
-margin: an identity provider whose assertions live a minute or less makes
-every request a login); SAML has no refresh token, so a renewal is a new
-login through your strategy. `saml2_bearer` posts the Assertion to
-`samlTokenUrl`, else `<uaaUrl>/oauth/token`, with the client, and renews by
-its refresh token.
-
-**The collaborator options** — each a function of the destination, called
-once when that destination's provider is built, never disposed by the
-broker, and required only by the rows that use it; a row whose option is
-missing is a `DestinationConfigError` naming it:
+**The collaborator options** — each a function of the destination, called once per build of
+that destination's provider (again for every new build, see *A Credential Stays Bound to Its
+Identity*), never disposed by the broker, and required only by the rows that use it; a row whose
+option is missing is a `DestinationConfigError` naming it:
 
 | Option | Rows | What it returns |
 |---|---|---|
-| `authorization(destination, grant)` | `authorization_code`, `passcode`, `saml2_pure`, `saml2_bearer` (the grant is passed) | the `IAuthorizationStrategy<string>` that conducts the login — for the SAML grants, the one that returns the SAMLResponse (`samlCallbackStrategy`, `manualSamlResponseStrategy`, …) |
+| `authorization(destination, grant)` | `authorization_code`, `passcode`, `saml2_pure`, `saml2_bearer` (the grant is passed: a `StrategyGrant`) | the `IAuthorizationStrategy<string>` that conducts the login — for `passcode`, the one that asks for the code (handed `<uaaUrl>/passcode` as the URL); for the SAML grants, the one that returns the SAMLResponse |
 | `oidcAuthorization(destination)` | `oidc_authorization_code` | an `IAuthorizationStrategy<OidcCallbackResult>` (`oidcCallbackStrategy`, or `asOidcResult(…)` over a string strategy) |
 | `deviceCodePresenter(destination)` | `device_code` | an `IDeviceCodePresenter` that shows the user the verification URL and code (`consoleDeviceCodePresenter(logger)`, or your UI) |
 | `samlCookies(destination)` | `saml2_pure` | `(samlResponse) => Promise<string>`: posts the validated SAMLResponse to the system's ACS and returns the session cookies it sets |
 | `assertionReplayStore(destination)` | `saml2_pure`, `saml2_bearer` | the `IAssertionReplayStore` the validator records each assertion in, refusing one presented twice — `defaultReplayStore` (process-wide, in memory) or a shared one of yours |
 
+A strategy you write yourself must honour `AuthorizationRequest.signal` (auth-providers 6):
+when it aborts, the strategy stops waiting and releases what it holds before it settles.
+
 ```typescript
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
+  browserCallbackStrategy,
   consoleDeviceCodePresenter,
   defaultReplayStore,
+  linuxDefaultBrowser,
+  manualPasscodeStrategy,
   oidcCallbackStrategy,
+  refreshThenLogin,
   samlCallbackStrategy,
 } from '@mcp-abap-adt/auth-providers';
 
-const broker = new AuthBroker(
+const browser = linuxDefaultBrowser(); // macDefaultBrowser(), windowsDefaultBrowser(), …
+
+const ssoBroker = new AuthBroker(
   {
     serviceKeyStore: myKeyStore,
     sessionStore: mySessionStore,
+    renewal: () => refreshThenLogin(),
+    onWriteFailure: 'fail',
     authorization: (destination, grant) =>
-      grant === 'saml2_pure' || grant === 'saml2_bearer'
-        ? samlCallbackStrategy({ timeoutMs: 120_000 })
-        : browserCallbackStrategy({ timeoutMs: 120_000 }),
-    oidcAuthorization: () => oidcCallbackStrategy({ timeoutMs: 120_000 }),
+      grant === 'passcode'
+        ? manualPasscodeStrategy()
+        : grant === 'saml2_pure' || grant === 'saml2_bearer'
+          ? samlCallbackStrategy({ browser })
+          : browserCallbackStrategy({ browser }),
+    oidcAuthorization: () => oidcCallbackStrategy({ browser }),
     deviceCodePresenter: () => consoleDeviceCodePresenter(logger),
     samlCookies: (destination) => (samlResponse) =>
       postToAcs(destination, samlResponse), // yours: the system's ACS answers Set-Cookie
@@ -307,168 +229,370 @@ const broker = new AuthBroker(
 );
 ```
 
-### A Secret Is Bound to Its Resource and Issuer
+A login waits until it ends or a signal aborts it — no strategy of auth-providers 6 has a
+timeout. A bound is yours to compose: the strategy's `signal` option, or the signal you pass the
+broker (`AbortSignal.timeout(ms)`).
 
-A token's audience, cookies' host and path, a system's client: presenting a
-secret to a resource it was not obtained for is a leak, and a secret from
-another authorization server or client must not stand in for this
-destination's. So the session store keeps, beside the secret, two strings
-(`IConnectionConfig`, `@mcp-abap-adt/interfaces-auth-broker` 1.1.0):
+### How a Token Provider Renews: `renewal`
 
-- **`issuedFor`** — the resource: `serviceUrl` with the SAP client, e.g.
-  `https://my-abap.example.com:443/sap/bc/adt?sap-client=100`;
-- **`issuedBy`** — who issued it, to which client: `uaaUrl` with
-  `client_id=<uaaClientId>` for the UAA grants and `saml2_bearer`, e.g.
-  `https://sub.authentication.us10.hana.ondemand.com:443?client_id=sb-abap-trial`;
-  `oidcIssuerUrl` — else `uaaUrl` — with `client_id=<uaaClientId>` for the
-  OIDC grants; for `saml2_pure`'s cookies, the ACS of the system that set
-  them: `samlAcsUrl`, origin and path.
+```typescript
+import type { AuthBrokerConfig } from '@mcp-abap-adt/auth-broker';
+import { refreshOnly, refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 
-The broker computes both from the destination's means and compares them,
-canonicalised on **both** sides, with what the session holds:
+// The same for every destination: refresh, then log in — what 4.x did.
+const sameForAll: AuthBrokerConfig['renewal'] = () => refreshThenLogin();
 
-- **The canonical form:** scheme and host lower-cased; the port explicit
-  (`443` for `https`, `80` for `http`); the path without a trailing `/` (the
-  root path is empty); one query parameter at most — `sap-client` (the means'
-  `sapClient` wins over a `sap-client` already in `serviceUrl`) or
-  `client_id` — parsed and re-encoded, so a value percent-encoded on one side
-  and plain on the other compares equal; no user info, no other parameter,
-  no fragment. A URL that does not parse binds nothing. A store keeps the
-  strings as given and need not canonicalise them.
-- **The grants that obtain a secret** (UAA, OIDC, SAML)**:** a stored secret seeds the provider only when **both**
-  stored values equal the computed ones. Otherwise — either different, or
-  absent on either side (no `serviceUrl` in the means, an OIDC destination
-  stating neither `oidcIssuerUrl` nor `uaaUrl`, a `saml2_pure` one without
-  `samlAcsUrl`, a session written without them) — the secret is not used,
-  **refresh token included**: the
-  provider is built as with no session and logs in afresh by its grant, and
-  one `warn` line says only `<destination>: the stored session secret is not
-  recorded as issued under the destination's current means; not used, the
-  provider obtains a new one` — never a URI, a record or a token. A
-  destination that can never be seeded (`token_exchange`, a client missing,
-  or no `serviceUrl`) is not seeded on any start: that is a `debug` line,
-  not a `warn`. The new secret is written with both fields.
-- **The `none` rows** present a credential the broker cannot obtain again, so
-  a mismatch is refused, not discarded: a `DestinationConfigError` naming
-  `issuedFor` when the stored resource differs or is absent (or the means
-  state no `serviceUrl`), and naming `issuedBy` when the means state an issuer
-  (`oidcIssuerUrl` or the client for `jwt`, `samlAcsUrl` for `saml` — then
-  canonicalised as origin and path) and the stored one differs or is absent.
-  Means that state no issuer leave `issuedBy` uncompared.
-- **The binding does not check the token.** Its audience stays the
-  resource's to enforce; the broker compares two strings and parses no token.
-- **`bindingOf(means, client?)` — for a consumer that hands over a
-  credential.** A `none` destination presents a token or cookies the broker
-  cannot obtain; whoever writes them to the session store must write the
-  binding beside them. `bindingOf` answers exactly what the broker computes for
-  those means — the one function `getProvider` checks against and `persist`
-  writes (`issuedFor` from `serviceUrl` + `sapClient`, `issuedBy` from the
-  issuer, client or ACS the grant uses) — so a consumer never canonicalises a
-  URI itself:
+// Per destination or grant: a headless destination never logs in.
+const perDestination: AuthBrokerConfig['renewal'] = (destination, grant) =>
+  destination === 'HEADLESS' || grant === 'device_code' ? refreshOnly() : refreshThenLogin();
+```
 
-  ```typescript
-  const means = await keyStore.getConnectionConfig('DEV'); // saml / none
-  await sessionStore.saveSession('DEV', {
-    sessionCookies: cookies,
-    ...bindingOf(means ?? {}), // { issuedFor: 'https://dev.example.com:443?sap-client=100' }
-  });
+`renewal(destination, grant)` is called once per build of every token row — the UAA, OIDC and
+SAML grants (`TokenGrant`: every `DestinationGrant` but `none`) — after every other check of the
+row has passed and before the provider's constructor; its answer is the provider's `renewal`,
+unchanged. The broker never wraps, inspects or calls it.
+
+- **Required for every token row, no default.** A token row built without it is a
+  `DestinationConfigError` with `missingFields` naming `renewal` — together with every other
+  field and option the row lacks, in one error — before any collaborator is called and before
+  anything is cached. `basic`, `snc` and the `none` rows build without it.
+- **A `renewal` that throws** is a `DestinationConfigError(['renewal'])`, "the renewal option
+  failed", carrying what it threw as auth-errors reads it (`error`); nothing is built or cached.
+  A provider that refuses the strategy it was given (one whose `next` is not a function) is a
+  `DestinationConfigError` naming `renewal` too, "the provider refused the configuration the
+  destination states", carrying the provider's error.
+- **Never called for the token API's consumer `provider`**: an instance or a factory's result
+  is your composition, and brings its own renewal.
+
+`refreshThenLogin()` refreshes when there is a refresh token and logs in through the row's
+interactive strategy when the refresh is refused or there is none. `refreshOnly()` never logs
+in: a headless process uses it, or an `authorization` strategy that refuses (see *Headless
+Processes*).
+
+### Session Writes: `onWriteFailure`, the Write Queue and `flush()`
+
+Every token provider `getProvider` builds writes what it obtains back to the session store
+before it answers, whichever moment triggered the renewal: `prepare()`, `authorize()` on expiry,
+or `rejected()` after a 401. A renewal inside a connector is stored before the connector resends.
+The broker builds each provider's persistence from auth-providers' own
+`refreshStatePersistence` over one write path of its own; you cannot give a provider the broker
+builds a persistence strategy of yours, since the broker writes the binding beside the secret.
+
+`onWriteFailure: 'fail'` suits a command or a test that must know the secret landed;
+`onWriteFailure: 'continue'` a long-running server that goes on best effort. **It is required** for every destination that writes a secret — a token row
+`getProvider` builds, and every call of the token API with a `provider` of yours. Without it the
+build (or the call) throws `DestinationConfigError` naming `onWriteFailure`; `basic`, `snc` and
+`none` destinations do not need it. One option serves both paths.
+
+- **`'fail'`:** the call whose write did not land fails — `unknown`, `persisting-tokens`
+  ("persisting the tokens failed (unknown error, EACCES)", the code only when it is
+  allowlisted): for a provider the broker built, the provider's awaited report fails its
+  `getTokens()` / `refreshTokens()` or its moment, and the token API relays that failure; on
+  the consumer path the token API rejects with the same failure. And **while the destination's
+  last write is pending, its calls are refused until a write lands**: `getProvider`, `getToken`
+  and `refreshToken` ask "is the destination's last write pending?" on entry and once more right
+  before they return success; each time the answer is yes they retry that write — it lands, the
+  call goes on; it fails, the call rejects with the same failure. "Pending" is any write not yet
+  landed: failed, queued or in flight. **The limit:** a provider already handed to a connector
+  answers its moments from its own state; a moment that commits nothing (a valid cached token
+  presented) is not refused because of a pending write. Every moment that renews writes, and
+  awaits its write.
+- **`'continue'`:** no call fails because of a write. A failed write is logged (`warn`, the
+  failure's `logFields` only), stays pending, and the call goes on.
+
+**The write queue.** The writes of one destination run one at a time, in the order they were
+queued, so an older write never runs after — and never overwrites — a newer one; destinations
+never wait on each other. A write of a provider that has since been replaced (see *A Credential
+Stays Bound to Its Identity*) is dropped once the new provider has written. **A failed write
+stays pending** — the latest state its provider reported, which every later write of that
+provider carries too — and is retried by the destination's next write or by `flush()`. **There
+is no retry timer**: nothing is retried on its own. Every wait on the queue races its caller's
+signal: an abort releases that caller at once with auth-errors' `aborted` failure — never with
+success — and the write runs on, landing or failing on its own.
+
+**The store's contract.** `saveSession` settles: it resolves or rejects. A store whose
+`saveSession` never settles holds its destination's queue; avoiding that is yours (each waiting
+caller is still released by its own signal). auth-stores 4's `saveSession` **merges** — a field
+left out keeps what is stored — so the broker states every field that must not survive:
+
+| What the provider reported | What one `saveSession` writes |
+|---|---|
+| a token | `authorizationToken`, `expiresAt`, `refreshToken` (below), `issuedFor` (`''` when the means state no `serviceUrl`), `issuedBy` |
+| `saml2_pure`'s cookies (`tokenType: 'saml'`) | `sessionCookies`, `expiresAt`, `refreshToken: ''` (SAML has none, and one stored beside earlier cookies or a token is not this credential's), `issuedFor`, `issuedBy` |
+| a refresh token discarded before any credential is held | **only** `refreshToken: ''` — the stored credential keeps its own binding and loses its refresh token |
+
+**The refresh token a provider owns.** Each provider the broker builds owns a refresh token: the
+one it was seeded with from a session bound to it, or none; then each write updates it — a new
+one written makes it owned, a discard makes it none. A write that reports no new refresh token
+writes the owned one, or `''` when it owns none — never one read from the store at write time.
+So a refresh token is persisted only by the provider that obtained it or was seeded with it and
+has not discarded or replaced it since; a refresh token another provider of the destination
+wrote never ends up beside this provider's credential. `expiresAt` is the provider's report,
+absolute. A destination the key store states as `basic` or `snc` at write time is not written.
+
+**`flush({ signal? })`** waits for every write queued so far and gives each pending one one more
+attempt. It resolves when all landed, and rejects with an `AggregateError` ("Session writes
+still failing for "<destination>", …; each stays pending until its destination's next write or
+flush()") whose `errors` are one `SessionWriteFailure` per destination still failing:
+`destination`, and `error` — the store's error as auth-errors classifies it (`unknown`,
+`persisting-tokens`), never its message; its own message is `"<destination>": <reason>`. What
+still fails stays pending. Call it on shutdown — on `SIGTERM`, before a stdio transport closes —
+to know whether every token is stored:
+
+```typescript
+import { SessionWriteFailure } from '@mcp-abap-adt/auth-broker';
+
+process.on('SIGTERM', async () => {
+  try {
+    await broker.flush();
+  } catch (error) {
+    for (const failure of error instanceof AggregateError ? error.errors : [error]) {
+      if (failure instanceof SessionWriteFailure) {
+        logger.error(`Not stored: ${failure.destination}: ${failure.error.reason}`);
+      }
+    }
+  }
+  process.exit(0);
+});
+```
+
+**Across restarts.** A new broker on the same stores seeds each token row only from a session
+bound to its means, and with its refresh token only when that is not empty:
+
+| Before the restart | After it |
+|---|---|
+| a refused refresh discarded the refresh token R, and its `''` write landed | no refresh token: the renewal strategy decides (with `refreshThenLogin()`, a login) |
+| the same, the `''` write still pending when the process ended | `'fail'`: you noticed — every call failed and `flush()` rejected before exit; `'continue'`: **R comes back** from the store |
+| a new refresh token R2 landed | R2 |
+| a token-only result while R was held | R — the one that provider owned |
+| a session obtained under other means | discarded, not seeded (one `warn` line) |
+
+A remaining limit, auth-providers' own: a process that dies between a discard and its report
+reaching the broker may present the stored R once after a restart.
+
+### A Credential Stays Bound to Its Identity
+
+A token's audience, cookies' host, a refresh token's issuer: presenting a secret to a resource
+it was not obtained for, or for an identity it was not obtained under, is a leak. So the session
+store keeps two strings beside the secret, and the broker reuses a stored secret only when both
+are exactly what the destination's current means give.
+
+- **`issuedFor`** — the resource: `serviceUrl` with the SAP client, canonical (4.x's form):
+  scheme and host lower-cased, the port explicit (`443` / `80`), the path without a trailing
+  `/`, one query parameter `sap-client` (the means' `sapClient` first), e.g.
+  `https://my-abap.example.com:443/sap/bc/adt?sap-client=100`. Both sides are canonicalised
+  before they are compared.
+- **`issuedBy`** — a versioned record only the broker produces, compared by exact equality and
+  never parsed:
+
+  ```
+  mcp-abap-adt-binding/2;<row>;<clientId>;<uaaUrl>;<oidcIssuerUrl>;<oidcTokenEndpoint>;
+    <oidcAuthorizationEndpoint>;<oidcDeviceAuthorizationEndpoint>;<oidcAudience>;
+    <samlIdpSsoUrl>;<samlAcsUrl>;<samlTokenUrl>;<certUrl>;<trust>
   ```
 
-  A destination that states no `jwt` / `saml` type or no grant binds nothing
-  (`{}`). `mcp-sso … --cookie` writes its cookies this way.
+  (one line; broken here for reading). `row` is `authType/grantType` — or `provider/…` for the
+  token API's consumer provider. Each address field is **the exact string the row hands its
+  provider**, `encodeURIComponent`-encoded, `""` when the row hands it none — never
+  canonicalised. `trust` is the lower-case hex SHA-256 of the row's non-secret trust input, or
+  `""`.
+
+Which fields each row fills, and its trust input:
+
+| Row | Address fields | Trust input (hashed, in order) |
+|---|---|---|
+| UAA (`authorization_code`, `client_credentials`, `passcode`) | `clientId`, `uaaUrl`; `certUrl` when the build read a certificate client | `clientCertificate` (the certificate client's public certificate, when read — never its key) |
+| OIDC (`oidc_authorization_code`, `device_code`, `password`, `token_exchange`) | `clientId`, `oidcIssuerUrl`, `oidcTokenEndpoint`; `oidcAuthorizationEndpoint` (`oidc_authorization_code`), `oidcDeviceAuthorizationEndpoint` (`device_code`), `oidcAudience` (`token_exchange`); `certUrl` as above | `oidcScopes`; `username` (`password`); `oidcSubjectTokenType`, `oidcActorTokenType` (`token_exchange`); `clientCertificate` |
+| `saml2_pure` | `samlIdpSsoUrl`, `samlAcsUrl` | `samlIdpCertificates`, `samlIdpEntityId`, `samlSpEntityId`, `samlClockSkewMs`, `samlIdpInitiated` |
+| `saml2_bearer` | `clientId`, `uaaUrl`, `samlIdpSsoUrl`, `samlAcsUrl`, `samlTokenUrl`; `certUrl` as above | the SAML trust above, then `clientCertificate` |
+| `jwt` / `none` | `clientId`, `uaaUrl`, `oidcIssuerUrl` as the means state them | none |
+| `saml` / `none` | `samlAcsUrl` | none |
+| the token API's consumer factory | `clientId`, `uaaUrl` of the client it was handed; an instance: none | none |
+
+**No secret takes part in either string, nor a hash of one** — not the password, the client
+secret, a key, a subject or actor token: a hash in a session file can be checked offline against
+guesses. The consequence: after a restart, a session obtained under a previous password or
+client secret of the *same* user or client may seed (a revoked credential is refused by the
+server and renewed through the renewal strategy); within one process any secret change makes a
+new provider (below).
+
+**When a stored secret seeds a provider.** Only the first build of a destination in a broker may
+start from the store, and only when the stored `issuedFor` and `issuedBy` equal the build's
+exactly **and** the build's binding is *fully stated*: its record holds the client the row
+authenticates and every server address its provider sends a credential to:
+
+| Row | Fully stated when the record holds |
+|---|---|
+| UAA | `clientId` and `uaaUrl`; and `certUrl` when the build read the certificate client |
+| OIDC | `clientId`; the token endpoint (`oidcTokenEndpoint`, or `oidcIssuerUrl` it is discovered from); for `oidc_authorization_code` the authorization endpoint, for `device_code` the device endpoint (each explicit, or the issuer); `certUrl` as above |
+| `saml2_bearer` | `clientId`, `samlIdpSsoUrl`, and the token endpoint (`samlTokenUrl`, or `uaaUrl`); `certUrl` as above |
+| `saml2_pure` | `samlIdpSsoUrl` and `samlAcsUrl` |
+| `token_exchange`, the token API's consumer provider | never |
+
+The token, cookies and expiry then come from the same session read whose binding was checked,
+and so does the refresh token the provider owns from then on. Otherwise the stored secret is not
+used, **refresh token included**: the provider is built as with no session and obtains a new one
+by its grant, and one `warn` line says only `<destination>: the stored session secret is not
+recorded as issued under the destination's current means; not used, the provider obtains a new
+one` — never a URI, a record or a token. A destination that can never be seeded (`token_exchange`,
+means lacking what the record needs, or no `serviceUrl`) gets a `debug` line instead, on every
+start. An OIDC destination with explicit endpoints and a client but no issuer is fully stated,
+and is reused after a restart when its means are unchanged.
+
+**The `none` rows** present a credential the broker cannot obtain again, so a mismatch is
+refused, not discarded: a `DestinationConfigError` naming `issuedFor` when the stored resource
+differs or is absent (or the means state no `serviceUrl`), and `issuedBy` when the stored record
+is not exactly the row's.
+
+**A provider is never changed.** Every call of `getProvider` and of the token API re-reads what
+the destination's provider was built from — the means, the client, and the certificate client
+when the build read it — and compares everything the build read, exactly (arrays element by
+element, an absent value distinct from `''`), secrets included (held in memory beside the
+provider, never logged, never persisted). Unchanged: the cached provider, as it is. **Anything
+changed, by a single character** — trust, a secret, an address, the row: a **new provider**,
+which starts with nothing — no token, no refresh token, nothing of the old provider and nothing
+of a session written under other means: it logs in. The old one is never handed out again for
+that destination; whoever already holds it keeps it, and its late writes are dropped once the
+new one has written. A rotated client certificate is picked up the same way: at the next call, a
+new provider presenting it.
+
+**`bindingOf(means, client?)` — for a consumer that hands over a credential.** A `none`
+destination presents a token or cookies the broker cannot obtain; whoever writes them to the
+session store writes the binding beside them. `bindingOf` answers exactly what `getProvider`
+compares for those means — `issuedFor` and the version-2 `issuedBy` of the row the means state —
+so a consumer never builds a record itself:
+
+```typescript
+import { bindingOf } from '@mcp-abap-adt/auth-broker';
+
+const means = await keyStore.getConnectionConfig('DEV'); // saml / none
+await sessionStore.saveSession('DEV', {
+  sessionCookies: cookies,
+  refreshToken: '', // auth-stores 4 merges: clear what an earlier session left
+  ...bindingOf(means ?? {}),
+  // { issuedFor: 'https://dev.example.com:443?sap-client=100',
+  //   issuedBy: 'mcp-abap-adt-binding/2;saml/none;;;;;;;;;;;;' }
+});
+```
+
+A destination that states no `jwt` / `saml` type or no grant binds nothing (`{}`). A token row
+built with a `clientAuthentication` strategy writes more than `bindingOf` knows (the certificate
+client's `certUrl` and certificate), so `bindingOf` is for handed-over credentials.
 
 **What you meet:**
 
-1. **A custom `ISessionStore`** (a database, a message log, a secret store)
-   must persist `issuedFor` and `issuedBy` beside the secret, and answer
-   them from `loadSession`. One that drops them still type-checks, but the
-   broker then never reuses its sessions: every process start is a fresh
-   login — a browser each time for an interactive grant.
-2. **A headless process whose strategy refuses logins** gets Oops ("login
-   required") from `prepare()` / `rejected()` on a mismatch, instead of
-   presenting a foreign secret; log in again with the CLI.
-3. **Changing a destination's URL, SAP client, UAA or client** costs one
-   fresh login — intended.
-4. **Session files written before auth-stores 3.1.0** keep working: its
-   session stores answer `issuedFor` from the file's `SAP_URL` (+
-   `SAP_CLIENT`) and `issuedBy` from `SAP_UAA_URL` + `SAP_UAA_CLIENT_ID`,
-   which the 3.x broker and CLI wrote with the token — so a stored token whose
-   URL and client are the destination's is reused. XSUAA sessions written with
-   an empty URL have no `issuedFor`, and log in once.
+1. **A custom `ISessionStore`** (a database, a secret store) must persist `issuedFor` and
+   `issuedBy` beside the secret, byte for byte, answer them from `loadSession`, take
+   `refreshToken: ''` as "clear the stored one", and settle every `saveSession`. One that drops
+   them still type-checks, but the broker then never reuses its sessions: every process start
+   is a fresh login.
+2. **The first run after upgrading to 5.0.0** reads every earlier session as unbound (see
+   *Migrating to 5.0.0*): one login, or one token request, per token destination.
+3. **Changing a destination's URL, SAP client, client, grant, any server address or any trust
+   value** costs one fresh login — **even a cosmetic change** (a trailing `/`, a case change, a
+   port written out): addresses are compared exactly.
+4. **A headless process whose strategy refuses logins** gets Oops ("login required") from
+   `prepare()` / `rejected()` on a mismatch, instead of presenting a foreign secret; log in
+   again with the CLI.
 
-**One provider per destination** for the broker's life, shared with the token
-API when the broker has no `provider` option (see *Getting Tokens*):
-concurrent first calls share one build, and a build that threw is tried again
-on the next call. A destination rewritten from outside is picked up by a new
-broker.
+### Cancellation: `signal`
+
+```typescript
+const session = new AbortController(); // one per connector session
+const provider = await broker.getProvider('TRIAL', { signal: session.signal });
+const token = await broker.getToken('TRIAL', { signal: AbortSignal.timeout(60_000) });
+const refresher = broker.createTokenRefresher('TRIAL', { signal: session.signal });
+await broker.flush({ signal: AbortSignal.timeout(10_000) });
+session.abort(); // the session closed: a login its provider started now is aborted
+```
+
+Every call takes `BrokerCallOptions`, `{ readonly signal?: AbortSignal | undefined }`. A signal says "this caller no longer needs the answer". Its abort releases **that caller alone**
+from every wait it has — the store reads, the shared build, its write — with auth-errors'
+`aborted` failure (`interactive-login`, `outcome: 'aborted'`, "the authorization was aborted"),
+never with success; the work it waited on runs on for the others. The waiter rules are
+auth-errors' `sharedAttempt`; the broker implements none of its own.
+
+- **Concurrent callers of one destination share one resolution**, per path (below). One
+  caller's abort rejects only its promise. When every caller has aborted, the attempt leaves the
+  slot at once: a caller arriving meanwhile starts a fresh one, and a build that completes after
+  its attempt was aborted is never cached, never handed out, and writes nothing.
+- **`getProvider`'s signal is attached to the provider it answers** — built or from the cache —
+  when that provider has parties: every token provider and the SNC provider. A login that
+  provider starts later in a moment (`rejected()` above all) is aborted once every session
+  holding it has aborted its signal. `getProvider` without a signal attaches nothing. Tie the
+  signal to the connector's session: abort it when the session closes.
+- **The token API never attaches.** `getToken` / `refreshToken` pass the call's signal to the
+  provider's `getTokens({ signal })` / `refreshTokens({ signal })`; a token call can neither keep
+  a later moment's login alive nor bound it. `createTokenRefresher(destination, { signal })`
+  makes every call of the refresher a waiter with that signal.
+- **A cached provider after every caller has gone** stays cached. Its parties were released by
+  their aborts, so a moment's login it starts later runs unbounded — the next caller that gave
+  no signal can log in on it; one that gives a signal is attached again.
+- **The `clientAuthentication` strategy** gets the build's attempt as
+  `ClientAuthenticationContext.signal`: it aborts when every caller waiting on the build has
+  gone. Store reads take no signal (the store contract has none): the caller is released at
+  once, the read completes on its own and its result is dropped.
+- **No bound of the broker's own.** The broker sets no timeout, adds no signal of its own and
+  has no timer; nothing bounds anybody's wait. A caller that wants a bound passes
+  `AbortSignal.timeout(ms)`.
 
 ### How the Client Authenticates: `clientAuthentication`
 
-Every grant whose client authenticates to the authorization server — the UAA
-grants (`authorization_code`, `client_credentials`, `passcode`), the OIDC
-grants (`oidc_authorization_code`, `device_code`, `password`,
-`token_exchange`) and `saml2_bearer` — sends the client's secret, as in 4.0.0,
-unless you tell the broker otherwise. An XSUAA service key created with
-`{"credential-type": "x509"}` holds no secret: it holds a client certificate,
-its private key and the mTLS host the certificate is presented to (`certurl`).
-How the client authenticates is your choice, stated as a strategy — the broker
-never infers it from a key's shape and has no default:
+Every grant whose client authenticates to the authorization server — the UAA grants, the OIDC
+grants and `saml2_bearer` (`ClientAuthenticationGrant`) — sends the client's secret, unless you
+tell the broker otherwise. An XSUAA service key created with `{"credential-type": "x509"}` holds
+no secret: it holds a client certificate, its private key and the mTLS host the certificate is
+presented to (`certurl`). How the client authenticates is your choice, stated as a strategy —
+the broker never infers it from a key's shape and has no default:
 
 ```typescript
-import {
-  AuthBroker,
-  fromServiceKeyCertificate,
-} from '@mcp-abap-adt/auth-broker';
-import {
-  XsuaaServiceKeyStore,
-  XsuaaSessionStore,
-} from '@mcp-abap-adt/auth-stores';
+import { AuthBroker, fromServiceKeyCertificate } from '@mcp-abap-adt/auth-broker';
+import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
+import { XsuaaServiceKeyStore, XsuaaSessionStore } from '@mcp-abap-adt/auth-stores';
 
-const broker = new AuthBroker({
+const x509Broker = new AuthBroker({
   serviceKeyStore: new XsuaaServiceKeyStore('/path/to/keys', {
     grantType: 'client_credentials',
   }),
   sessionStore: new XsuaaSessionStore('/path/to/sessions'),
+  renewal: () => refreshThenLogin(),
+  onWriteFailure: 'fail',
   // The key's certificate, presented at <certurl>/oauth/token.
   clientAuthentication: fromServiceKeyCertificate(),
 });
 
-const provider = await broker.getProvider('mcp'); // its client: the certificate
+const certificateProvider = await x509Broker.getProvider('mcp');
 ```
 
-**The strategy** is `(context) => Promise<IClientAuthentication>`
-(`ClientAuthenticationStrategy`). The broker calls it once when it builds a
-destination's provider, with a `ClientAuthenticationContext`:
+**The strategy** is `(context) => Promise<IClientAuthentication>` (`ClientAuthenticationStrategy`).
+The broker calls it once per build of a destination's provider, with a
+`ClientAuthenticationContext`:
 
-- `destination` and `grant` (a `ClientAuthenticationGrant`, one of the eight
-  above);
-- `client` — the secret client the key store's `getAuthorizationConfig`
-  answered, as `uaaUrl`, `uaaClientId` and `uaaClientSecret` only — never a
-  refresh token or any other field the store answered with it — or `null`
-  (an x509 key answers `null` there, never a client with an empty secret);
-- `readCertificate()` — the key store's certificate client
-  (`IClientCertificate`: `uaaUrl`, `clientId`, `certificate`, `key`,
-  `certUrl`), read **only when called**, at most once per build; `null` when
-  the store holds none or implements no `getClientCertificate`.
+- `destination` and `grant` (a `ClientAuthenticationGrant`);
+- `client` — the secret client the key store's `getAuthorizationConfig` answered, as `uaaUrl`,
+  `uaaClientId` and `uaaClientSecret` only — never a refresh token — or `null` (an x509 key
+  answers `null` there);
+- `readCertificate()` — the key store's certificate client (`IClientCertificate`: `uaaUrl`,
+  `clientId`, `certificate`, `key`, `certUrl`), read **only when called**, at most once per
+  build; `null` when the store holds none or implements no `getClientCertificate`;
+- `signal` — the build's attempt (see *Cancellation*).
 
-Its answer goes to the provider as `clientAuthentication`, and **no client
-secret goes with it** (auth-providers 5.3 refuses both). A given strategy
-always answers or throws: there is no "nothing" answer, so an explicit choice
-never falls back to the secret. `saml2_pure`, the `none` rows, `basic` and
-`snc` authenticate no client and never call it.
+Its answer goes to the provider as `clientAuthentication`, and **no client secret goes with it**
+(auth-providers 6 refuses both). A given strategy always answers or throws: there is no
+"nothing" answer, so an explicit choice never falls back to the secret. `saml2_pure`, the `none`
+rows, `basic` and `snc` authenticate no client and never call it.
 
 **The two shipped factories** each fail closed:
 
-| Factory | Answers | Throws (→ the refusal below) |
+| Factory | Answers | Refuses |
 |---|---|---|
 | `fromServiceKeyCertificate()` | auth-providers' `tlsClientCertificate` with the certificate and key `readCertificate()` answers, against `<certUrl>/oauth/token` (a trailing `/` of `certUrl` dropped). The material is checked before the factory answers, so a malformed, incomplete or expired certificate is refused when the provider is built, not at its first token request | the store answers no certificate client: "the destination has no client certificate" |
 | `fromServiceKeySecret({ encoding })` | auth-providers' `clientSecretBasic` with the secret client's `uaaClientSecret`, in an `Authorization: Basic` header. `encoding` is required: `'raw'` for XSUAA (measured — it does not form-decode), `'form'` for UAA and Keycloak (RFC 6749 §2.3.1); anything else is a `TypeError` when the factory is made | no secret client, or an empty secret: "the destination has no client secret" |
 
-**Composing them is yours.** A fallback, and its order, is your statement,
-never the broker's. Branch on what the key holds (`readCertificate()` is
-memoised, so the factory reads the same answer); do not `catch` a factory's
-refusal and fall back — that would also swallow an expired, incomplete or
-unreadable certificate and send the secret instead:
+**Composing them is yours.** A fallback, and its order, is your statement, never the broker's.
+Branch on what the key holds (`readCertificate()` is memoised, so the factory reads the same
+answer); do not `catch` a factory's refusal and fall back — that would also swallow an expired,
+incomplete or unreadable certificate and send the secret instead:
 
 ```typescript
 import {
@@ -478,8 +602,6 @@ import {
 } from '@mcp-abap-adt/auth-broker';
 
 // The certificate when the key holds one, else the secret in a Basic header.
-// Decided by what the key holds, never by a failure: an expired, incomplete or
-// unreadable certificate is refused, not replaced by the secret.
 const certificateElseSecret: ClientAuthenticationStrategy = async (context) =>
   (await context.readCertificate())
     ? fromServiceKeyCertificate()(context)
@@ -493,31 +615,17 @@ const byGrant: ClientAuthenticationStrategy = (context) =>
 ```
 
 **Where the certificate comes from** — `IServiceKeyStore.getClientCertificate?`
-(`@mcp-abap-adt/interfaces-auth-broker` 1.2.0, optional), which auth-stores
-3.3.0 implements:
+(`@mcp-abap-adt/interfaces-auth-broker`, optional), which auth-stores implements:
 
-- **`XsuaaServiceKeyStore`** — a key (bare, or wrapped in `credentials`)
-  carrying `url`, `clientid`, `certificate`, `key` and `certurl` and no
-  `clientsecret` is an x509 key: `getAuthorizationConfig` answers `null`,
-  `getClientCertificate` the certificate client. A key carrying both a secret
-  and a complete certificate offers both — the secret client as before, the
-  certificate client beside it — and your strategy picks; the store does not
-  read `credential-type` to choose. A key carrying only part of a
-  certificate client is refused by `getClientCertificate` (`incomplete`),
-  naming the missing fields, never a value. `AbapServiceKeyStore` holds no
-  certificate client.
-- **`EnvDestinationStore`** — three means variables, each a path or a URL,
-  never PEM: `SAP_UAA_CLIENT_CERT_PATH`, `SAP_UAA_CLIENT_KEY_PATH`,
-  `SAP_UAA_CERT_URL` (`XSUAA_UAA_CLIENT_CERT_PATH`, … with
-  `XSUAA_DESTINATION_VARS`), beside `SAP_UAA_URL` / `SAP_UAA_CLIENT_ID` and
-  **without** `SAP_UAA_CLIENT_SECRET`. All three and no secret is a
-  certificate client (the two files read when `getClientCertificate` is
-  called); none of them is 4.0.0's answer; some but not all, or any beside the
-  secret, is the store's `ClientCertificateError` from both methods, naming
-  the variables. A file that states neither a client id, a secret nor any of
-  the three asks its `fallback` — so an `EnvDestinationStore` over an `XsuaaServiceKeyStore`
-  answers the x509 key's certificate client. See auth-stores' README for the
-  details.
+- **`XsuaaServiceKeyStore`** — a key (bare, or wrapped in `credentials`) carrying `url`,
+  `clientid`, `certificate`, `key` and `certurl` and no `clientsecret` is an x509 key:
+  `getAuthorizationConfig` answers `null`, `getClientCertificate` the certificate client. A key
+  carrying both a secret and a complete certificate offers both, and your strategy picks.
+  `AbapServiceKeyStore` holds no certificate client.
+- **`EnvDestinationStore`** — three means variables, each a path or a URL, never PEM:
+  `SAP_UAA_CLIENT_CERT_PATH`, `SAP_UAA_CLIENT_KEY_PATH`, `SAP_UAA_CERT_URL`
+  (`XSUAA_UAA_CLIENT_CERT_PATH`, … with `XSUAA_DESTINATION_VARS`), beside `SAP_UAA_URL` /
+  `SAP_UAA_CLIENT_ID` and **without** `SAP_UAA_CLIENT_SECRET`. See auth-stores' README.
 
 ```env
 # A certificate destination — EnvDestinationStore (ABAP_DESTINATION_VARS)
@@ -531,264 +639,65 @@ SAP_UAA_CLIENT_KEY_PATH=/home/you/keys/client.key
 SAP_UAA_CERT_URL=https://your-account.authentication.cert.us10.hana.ondemand.com
 ```
 
-**Without a strategy nothing changes:** the client secret, exactly as 4.0.0,
-and nothing certificate-related is read — no `getClientCertificate`, no file.
-A client row whose key store answers no client, or one without a client id,
-now says, after 4.0.0's words, `a certificate client needs a clientAuthentication strategy` (see
-*Migrating from 4.0.0*).
+**Without a strategy** the client secret goes to the provider and nothing certificate-related is
+read. A client row whose key store answers no client, or one without a client id, is refused
+naming the fields, and its message adds `a certificate client needs a clientAuthentication
+strategy`.
 
-**With a strategy, what the row requires** is its client's identity —
-`uaaUrl` and `uaaClientId` (the OIDC rows: `uaaClientId`) — taken from the
-secret client when the key store has one, else from the certificate client
-(`uaaUrl`, `clientId`), read through the same memoised `readCertificate`; the
-secret is no longer required.
+**With a strategy, what the row requires** is its client's identity — `uaaUrl` and
+`uaaClientId` (the OIDC rows: `uaaClientId`) — taken from the secret client when the key store
+has one, else from the certificate client (`uaaUrl`, `clientId`); the secret is no longer
+required. The record names that identity, and — when the build read the certificate client —
+its `certUrl` and, in the trust digest, its certificate. On this path a resource neither the
+means nor the stored session states matches (an XSUAA destination without a service URL reuses
+its own session); a resource stated on one side only never matches.
 
-**The binding on the strategy path.** A secret is bound to the client's
-identity (`issuedBy` = `uaaUrl` + `client_id`), never to how the client
-authenticates and never to PEM:
-
-- a certificate destination's tokens are stored with `issuedBy` from the
-  certificate client's `uaaUrl` and `clientId`, reused after the broker is
-  recreated, and dropped after the issuer or the client id changes;
-- a secret key and an x509 key of the **same client id** at the same
-  `uaaUrl` (as an XSUAA instance's keys are) share one session: switching the
-  destination from one to the other keeps its token and refresh token;
-- the resource (`issuedFor`) matches when both sides state it and it is
-  equal — **or when neither does**: means with no `serviceUrl`, or one that
-  does not parse (the CLI's XSUAA placeholder is such a URL), and a session
-  stored without `issuedFor`. A resource stated on one side only never
-  matches. So an XSUAA destination without a service URL reuses its own
-  session instead of logging in on every run; the client identity still
-  decides. (Without a strategy, 4.0.0's rule stands: an absent resource
-  matches nothing.)
-
-**The token API with a factory of yours** gets the same strategy. For a
-destination whose grant authenticates a client, the broker resolves the
-strategy first and calls your factory with a **fourth argument**,
-`TokenProviderClient` — never a certificate, a key or a secret:
-
-| Field | What it is |
-|---|---|
-| `clientAuthentication` | the strategy's answer, to hand to your provider |
-| `uaaUrl`, `clientId` | the client's identity: the secret client's when the stores hold one, else the certificate client's; absent when there is neither |
-| `refreshToken` | the refresh token the session stored — only when the session is bound to this resource and this client identity, and only from that session read (a refresh token a store's `getAuthorizationConfig` carries is dropped on this path; `authConfig` carries the same bound one) |
-
-```typescript
-import {
-  AuthBroker,
-  fromServiceKeyCertificate,
-  type TokenProviderFactory,
-} from '@mcp-abap-adt/auth-broker';
-import { ClientCredentialsProvider } from '@mcp-abap-adt/auth-providers';
-import {
-  XsuaaServiceKeyStore,
-  XsuaaSessionStore,
-} from '@mcp-abap-adt/auth-stores';
-
-const certificateClient: TokenProviderFactory = (
-  destination,
-  _authConfig, // null for an x509 key
-  _connConfig,
-  client,
-) => {
-  if (!client?.clientAuthentication || !client.uaaUrl || !client.clientId) {
-    throw new Error(`No client for ${destination}`);
-  }
-  return new ClientCredentialsProvider({
-    uaaUrl: client.uaaUrl,
-    clientId: client.clientId,
-    clientAuthentication: client.clientAuthentication,
-  });
-};
-
-const tokenBroker = new AuthBroker({
-  serviceKeyStore: new XsuaaServiceKeyStore('/path/to/keys', {
-    grantType: 'client_credentials',
-  }),
-  sessionStore: new XsuaaSessionStore('/path/to/sessions'),
-  clientAuthentication: fromServiceKeyCertificate(),
-  provider: certificateClient,
-});
-
-const token = await tokenBroker.getToken('mcp');
-```
-
-On this path:
-
-- the destination must state its `authType` (`jwt` or `saml`) and
-  `grantType` — the strategy is told the grant — else a
-  `DestinationConfigError` naming `authType`, `grantType`; a `saml2_pure` or
-  `none` destination authenticates no client, and its factory gets three
-  arguments, as in 4.0.0;
-- every stored secret your factory is seeded with passes only when the
-  session is bound to this resource and this client identity: the refresh
-  token (in the fourth argument, and in `authConfig` for a secret client), and
-  the stored token, cookies and expiry in `connConfig` — so a refresh token
-  can never reach another authorization server. A result without a refresh
-  token carries forward only a bound one. (Without a strategy, 4.0.0's
-  carry-over stands: the stored refresh token whatever its binding.)
-- what the factory is handed is built from allowlists, never a store's
-  answer passed whole: `authConfig` is `uaaUrl`, `uaaClientId`,
-  `uaaClientSecret` and the bound refresh token; `connConfig` is
-  `serviceUrl`, `sapClient`, `language`, `authType`, `grantType`, plus — when
-  that same connection read is bound — `authorizationToken`,
-  `sessionCookies`, `expiresAt`, `issuedFor`, `issuedBy`. Anything else a
-  store answers (a password, grant data, a field outside the type) stays
-  behind; without a strategy the reads go through as in 4.0.0;
-- a factory that throws is a `DestinationConfigError` naming `provider`,
-  `clientAuthentication`, in fixed words — what it threw is not kept;
-- a provider **instance** given as `provider` is your own composition: the
-  token API uses it as given and calls no strategy for it.
-
-**A strategy that fails carries nothing out.** Whatever the strategy, a store
-it reads or the certificate check throws — and an answer that is no
-`IClientAuthentication` — becomes a `DestinationConfigError` with
-`missingFields: ['clientAuthentication']`, before any provider exists, in
-fixed words chosen by the error's class only — no `cause`, nothing of the
-thrown message:
+**A strategy that fails carries nothing out but what auth-errors admits.** Whatever the
+strategy, a store it reads or the certificate check throws — and an answer that is no
+`IClientAuthentication` — becomes a `DestinationConfigError` with `missingFields:
+['clientAuthentication']`, before any provider exists:
 
 | Words (after `Destination "<name>": `) | When |
 |---|---|
 | `the clientAuthentication strategy refused: the destination has no client certificate` | `fromServiceKeyCertificate()`, no certificate client |
 | `the clientAuthentication strategy refused: the destination has no client secret` | `fromServiceKeySecret()`, no secret client or an empty secret |
-| `the clientAuthentication strategy refused: the client certificate is incomplete` / `has expired` / `could not be used` | the certificate check refused the material |
+| `the clientAuthentication strategy failed: <reason>` | anything else; `error` carries what was thrown as auth-errors reads it — for an unusable certificate, auth-providers' `client-certificate` failure, whose reason is `the client certificate is incomplete`, `… could not be used` or `… has expired` (its `hint` in `error.hint`); for your own error, its classification only |
 | `the clientAuthentication strategy answered no client authentication` | the answer has no `authenticate` function |
 | `the client certificate could not be read` | the store failed reading the certificate client for the row's identity |
-| `the clientAuthentication strategy failed` | anything else — your strategy's own error, a store's error (an incomplete `.env`), an unreadable file |
+| `the client certificate the key store answered holds no certificate` | a certificate client whose `certificate` is not a string |
 
-A certificate, a key or a file's content never reaches a log line, a refusal,
-a `DestinationConfigError`, a thrown message or the session store.
+A certificate, a key or a file's content never reaches a log line, a refusal, a
+`DestinationConfigError`, a thrown message or the session store.
 
-**The certificate is pinned for the broker's lifetime.** It is read when the
-destination's provider is built, and that provider is cached per destination
-for as long as the `AuthBroker` lives. An XSUAA x509 key's certificate lives
-about seven days: a long-running process then gets `the client certificate
-has expired` from its provider until it builds a new `AuthBroker`, and
-replacing the key or the PEM files changes nothing before that. Rotating
-certificates is out of scope: create a new key, then a new broker (restart).
-
-**What is measured.** `client_credentials` with an x509 XSUAA service key,
-against XSUAA on a BTP trial (2026-10-05; the instance's `credential-types`
-`["binding-secret", "x509"]`, its key created with
-`{"credential-type": "x509"}`): through the broker
-(`fromServiceKeyCertificate()` + `XsuaaServiceKeyStore`, `getProvider` and the
-token API), through `mcp-auth --client-auth certificate` and through
-`generate-env-from-service-key --client-auth certificate`, each followed by a
-fresh broker over the written destination — see *Testing*. **Not measured:**
-`authorization_code` and `passcode` over x509 (the broker builds them, nothing
-has run them against XSUAA), the OIDC grants and `saml2_bearer` with a
-strategy, and ABAP environment service keys with x509 (`AbapServiceKeyStore`
-holds no certificate client).
-
-### Persistence and `flush()`
-
-Every token provider `getProvider` builds writes what it obtains back to the
-session store, through its `onTokens` hook, before it answers — whichever
-moment triggered the renewal: `prepare()`, `authorize()` on expiry, or
-`rejected()` after a 401. A renewal inside a connector is stored before the
-connector resends.
-
-- **The secret alone, with its binding, in one write**:
-  `saveSession(destination, { authorizationToken, expiresAt, refreshToken,
-  issuedFor, issuedBy })` — or, for `saml2_pure`'s cookies (a result of
-  `tokenType: 'saml'`), `{ sessionCookies, expiresAt, issuedFor, issuedBy }`,
-  with no refresh token: SAML has none. `saml2_bearer`'s result is a token
-  and is written as one — `issuedFor` / `issuedBy` as computed when the
-  provider was built, each left out when the means lack its source (so the
-  store clears it). No means is ever written — not `serviceUrl`, not
-  `authType`, not the client: the client secret lives in the key store, and
-  the broker never writes the key store (its contract has no write method).
-  `expiresAt` is the result's, else the `expires_in` it reported counted from
-  when it arrived. A result without a refresh token keeps the one the session
-  holds — when that one is bound where the new secret is; one bound to
-  another resource or issuer is not carried into it.
-- **`basic` and `snc` are never written**: they obtain no session secret, and
-  `none` obtains nothing either. A destination the key store states as
-  `basic` or `snc` at write time is not written.
-- **The token API writes through the same path** (see *Getting Tokens*):
-  with a `provider` of yours, every answer it gets is written as above — the
-  stored refresh token carried forward whatever its binding, as your provider
-  was seeded with it.
-- **A failed write does not fail the authentication.** The connector goes on
-  with the token it holds; the broker keeps the result pending for that
-  destination and retries on its own — one second, doubling, capped at one
-  minute — on a timer that never keeps the process alive. A newer result
-  replaces the pending one; writes for one destination never overlap. Each
-  failure is logged by its class name, never its message. The token API's
-  caller still gets the failure: `getToken()` / `refreshToken()` throw the
-  store's error for the token they received, while the retry goes on.
-- **`flush()`** gives every pending write one more attempt, resolves when all
-  have landed, and rejects (an `AggregateError` naming the destinations; each
-  of its `errors` is `"<destination>": <error class>` — never the store's own
-  message, which may quote what was being written) when the store still
-  refuses — the broker keeps retrying.
-  Call it on shutdown — on `SIGTERM`, before a stdio transport closes — to
-  know whether every token is stored.
-
-```typescript
-process.on('SIGTERM', async () => {
-  try {
-    await broker.flush();
-  } catch (error) {
-    logger.error(`Tokens not stored: ${(error as Error).message}`);
-  }
-  process.exit(0);
-});
-```
-
-**A destination that lacks what its type needs** is a `DestinationConfigError`
-(see *Error Handling*), thrown by `getProvider` before any provider exists —
-never a provider built only to refuse in `prepare()`.
+**What is measured.** `client_credentials` with an x509 XSUAA service key, against XSUAA on a BTP
+trial (2026-10-05, on 4.1.0: `fromServiceKeyCertificate()` + `XsuaaServiceKeyStore`, through
+`getProvider` and the token API, and through the CLI) — see *Testing*. **Not measured:**
+`authorization_code` and `passcode` over x509, the OIDC grants and `saml2_bearer` with a
+strategy, and ABAP environment service keys with x509.
 
 ### Headless Processes (No Browser)
 
-Whether a login may open a browser is the provider's authorization strategy,
-not a broker option. A process nobody is watching (an MCP server on stdio, a
-CI job) gives the provider a strategy that refuses, and catches its own error —
-the broker hands it back unchanged:
+Whether a login may happen is the renewal strategy's and the interactive strategy's, not a
+broker switch. A process nobody is watching (an MCP server on stdio, a CI job) gives the broker
+`renewal: () => refreshOnly()` — never a login — or strategies that refuse:
 
 ```typescript
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
+
 class LoginRequiredError extends Error {}
 
-const provider = new AuthorizationCodeProvider({
-  uaaUrl, clientId, clientSecret, refreshToken,
-  authorization: {
-    authorize: async () => {
-      throw new LoginRequiredError('Run mcp-auth to log in');
-    },
-  },
-});
-
-try {
-  await broker.getToken('TRIAL');
-} catch (error) {
-  if (error instanceof LoginRequiredError) {
-    // No usable token or refresh token: a person has to log in.
-  }
-}
-```
-
-A cached token that is still valid, or a refresh token the UAA accepts, never
-reaches the strategy.
-
-With `getProvider` the same holds for every collaborator option: give the
-broker an `authorization` / `oidcAuthorization` that refuses, and a
-`deviceCodePresenter` that routes the code to wherever a person can see it —
-or refuses. The provider then runs on its stored secret and refresh token;
-when a login is needed, `prepare()` / `rejected()` answer Oops — whose
-refusal carries fixed wording, never the message of what your collaborator
-threw — and nothing is written:
-
-```typescript
 const refuseLogin = {
-  authorize: async () => {
+  authorize: async (): Promise<never> => {
     throw new LoginRequiredError('Run mcp-auth to log in');
   },
 };
 
-const broker = new AuthBroker({
+const headless = new AuthBroker({
   serviceKeyStore: myKeyStore,
   sessionStore: mySessionStore,
+  renewal: () => refreshThenLogin(),
+  onWriteFailure: 'continue',
   authorization: () => refuseLogin,
   oidcAuthorization: () => refuseLogin,
   deviceCodePresenter: () => ({
@@ -799,245 +708,284 @@ const broker = new AuthBroker({
 });
 ```
 
-### Custom Browser Auth Port
+The provider runs on its stored secret and refresh token; when a login is needed, `prepare()` /
+`rejected()` answer Oops and `getToken()` rejects with the provider's `AuthProviderFailure` —
+fixed wording, never the message of what your strategy threw — and nothing is written. A cached token that is still valid, or a refresh token the
+server accepts, never reaches the strategy.
 
-How a login is conducted — including which port the local OAuth2 callback
-listens on — is an `IAuthorizationStrategy` passed as `authorization`, not a
-field on the provider config. `browserCallbackStrategy` from
-`@mcp-abap-adt/auth-providers` builds the ready-made one; its default port is
-`61001`, chosen to sit well clear of the range application servers and
-proxies typically use (e.g. `3001`/`3333`). Pass `port` to avoid conflicts
-with a specific redirect URI registered at the identity provider:
+### Custom Callback Port
+
+How a login is conducted — including which port the local OAuth2 callback listens on — is the
+strategy you return from `authorization`, not a broker option. `browserCallbackStrategy` from
+`@mcp-abap-adt/auth-providers` listens on `61001` by default, clear of the range application
+servers and proxies typically use (`3001` / `3333`). Pass `port` to match a redirect URI
+registered at the identity provider:
 
 ```typescript
-new AuthorizationCodeProvider({
-  uaaUrl, clientId, clientSecret,
-  authorization: browserCallbackStrategy({ browser: 'system', port: 4001 }),
-});
+import type { AuthBrokerConfig } from '@mcp-abap-adt/auth-broker';
+import { browserCallbackStrategy, linuxDefaultBrowser } from '@mcp-abap-adt/auth-providers';
+
+const onPort4001: AuthBrokerConfig['authorization'] = () =>
+  browserCallbackStrategy({ browser: linuxDefaultBrowser(), port: 4001 });
 ```
 
-### Getting Tokens
+Every listener is loopback-only; a user whose browser is on another machine tunnels the port
+(`ssh -L`).
+
+### Getting Tokens: the Token API
 
 ```typescript
-// The provider's current token: cached while valid, else refreshed or logged in.
+// The provider's current token: cached while valid, else renewed as its strategy says.
 const token = await broker.getToken('TRIAL');
 
 // A new token, never the cached one — after the server refused the token (401).
-const newToken = await broker.refreshToken('TRIAL');
+const newToken = await broker.refreshToken('TRIAL', { signal });
 ```
 
-**Which provider answers.**
+**Two paths, two providers.** The token API answers from one of two paths, each resolved, cached
+and bound on its own:
 
-- **No `provider` option** — the destination's own: the very provider
-  `getProvider('TRIAL')` hands out, from the same per-destination cache. A
-  connector and the token API in one process therefore share one token, one
-  refresh token and one renewal: a `refreshToken()` while the connector renews
-  in `rejected()` joins that renewal, and a token the connector renewed is
-  what `getToken()` answers next. The destination must state a grant that
-  obtains a token — every grant but `none` (see the table under *A Provider
-  for a Connector*); a `none` destination is a `DestinationConfigError`
-  naming `provider`, before any provider is built.
-- **A `provider` option** — yours, as in 3.x (see *Basic Usage*): the factory
-  is called once per destination (concurrent first calls build once; a call
-  after one that threw builds again), an instance serves every destination.
-
-**What is written.** The session secret alone, in one `saveSession` — the
-token, or the cookies of a SAML result (`tokenType: 'saml'`), its
-`expiresAt`, the refresh token (the stored one carried forward when the
-result has none), and what the secret is bound to (`issuedFor`, `issuedBy`,
-see *A Secret Is Bound to Its Resource and Issuer*). Never `serviceUrl`,
-`authType` or a client: they are means, and live in the key store.
-
-- Without a `provider`, the token API writes nothing itself: the provider's
-  `onTokens` writes every token it obtains (see *Persistence and `flush()`*),
-  and a cache hit writes nothing.
-- With a `provider`, the token API writes after every answer, cache hits
-  included, through the same write path. `issuedFor` is the `serviceUrl` it
-  resolved, with the SAP client; `issuedBy` the client a factory was handed —
-  an instance is handed none, so what it obtains is bound to no issuer and
-  `getProvider` never seeds from it. Both are fixed when your provider is
-  built for the destination (an instance: at its first call for it) and kept
-  with it: a URL or client changed later never re-labels a token that
-  provider obtained — a new broker picks the change up.
-
-**A write that fails** reaches the caller: `getToken()` / `refreshToken()`
-throw the store's error, as raised, for the token they received — and the
-broker keeps retrying that write on its own; `flush()` tells you when it
-landed.
-
-**A destination stated `basic` or `snc` has no token API.** The token API
-reads the destination's `authType` from the key store first and, for `basic`
-or `snc`, throws `DestinationConfigError` naming `authType` before any provider
-is asked — a token written over such a session would replace a credential
-that is not one. A key store that states no `authType` (a 3.x setup), or no
-key store, is served as before.
-
-**Two token sources, with a `provider` option.** `getProvider` never uses
-the `provider` option: the destination states its own provider. A process
-that gives the broker a `provider` and also calls `getProvider` for the same
-destination has two token sources for it — each with its own token and
-renewal, both writing to the same session. Use one of them per destination;
-or, to hand your own provider to a connector, wrap the token API:
-`TokenAuthProvider.from(broker.createTokenRefresher('TRIAL'))`
-(`@mcp-abap-adt/auth-providers`), whose every renewal the token API writes.
-
-### Creating Token Refresher for DI
-
-`createTokenRefresher(destination)` returns an `ITokenRefresher` (from
-`@mcp-abap-adt/interfaces-auth`) bound to one destination — `getToken()` is
-`broker.getToken(destination)`, `refreshToken()` is
-`broker.refreshToken(destination)` — for a connection of your own that asks
-for a token per request and for a new one after a 401. It is unchanged since
-3.x and not deprecated: calm-server injects it into its own connection.
+- **No `provider` option — the row path:** the destination's own provider, the very one
+  `getProvider` hands out (the same cache; never through `getProvider` itself). A connector and
+  the token API in one process share one token, one refresh token and one renewal; the token API
+  writes nothing itself (the provider's persistence does, and a cache hit writes nothing). The
+  destination must state a grant that obtains a token; a `none` destination is a
+  `DestinationConfigError` naming `provider`.
+- **A `provider` option — the consumer path:** yours. An instance is used as given, for every
+  destination; a factory is called once per destination and again whenever what it was handed
+  changes (its new provider starting with nothing). Every answer — cache hits included — is
+  written through the same write queue, raced against the call's signal, with the binding fixed
+  when the provider was taken into use (`issuedFor` the URL with the SAP client, `issuedBy` the
+  `provider/…` record): the result is authoritative — a result without a refresh token writes
+  `refreshToken: ''`.
 
 ```typescript
-const tokenRefresher = broker.createTokenRefresher('TRIAL');
+import { AuthBroker, type TokenProviderFactory } from '@mcp-abap-adt/auth-broker';
+import { ClientCredentialsProvider, refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 
-// In your own connection:
-const token = await tokenRefresher.getToken();
-// …the server answered 401:
-const newToken = await tokenRefresher.refreshToken();
+const clientCredentials: TokenProviderFactory = (destination, authConfig) => {
+  if (!authConfig) throw new Error(`No client for ${destination}`);
+  return new ClientCredentialsProvider({
+    uaaUrl: authConfig.uaaUrl,
+    clientId: authConfig.uaaClientId,
+    clientSecret: authConfig.uaaClientSecret,
+    renewal: refreshThenLogin(), // yours: the broker gives a provider of yours none
+    // No persistence: the token API writes every answer of this provider itself.
+  });
+};
+
+const tokenBroker = new AuthBroker({
+  serviceKeyStore: myKeyStore,
+  sessionStore: mySessionStore,
+  provider: clientCredentials,
+  onWriteFailure: 'fail', // the token API writes every answer
+});
 ```
 
-A `@mcp-abap-adt/connection` 10 connector takes an `IAuthProvider` instead:
-give it `await broker.getProvider('TRIAL')`.
+**The factory is handed the means and the client, never a stored secret.** `authConfig` is the
+client (`uaaUrl`, `uaaClientId`, `uaaClientSecret` — the session store's when it answers one,
+else the key store's; `refreshToken` present as a key, never a value), or `null` when no store
+has a client. `connConfig` is `serviceUrl` (the session's, else the key store's; neither is an
+error before the factory is called), `sapClient`, `language`, `authType`, `grantType` — no
+token, cookies, expiry, refresh token or binding. The broker cannot know what your factory
+composes from what it is handed, so the consumer path is **never seeded from the store**: a
+provider of yours that must resume after a restart composes that itself — its own seed and its
+own persistence (`refreshStatePersistence` over a store of yours) — or use the row path, whose
+providers the broker seeds from a matching record.
 
-## Migrating from 4.0.0
+**An instance after the means changed** cannot be rebuilt, and the identity of the credential it
+holds is unknown to the broker: once the identity the instance was first used for changes, the
+token API refuses the destination — `DestinationConfigError(['provider'])`, "the destination's
+means changed since the provider instance was first used for it" — until a new broker.
 
-4.1.0 is a minor: nothing to change to keep 4.0.0's behaviour. Without a
-`clientAuthentication` strategy every destination is served as before and
-nothing certificate-related is read. What a 4.0.0 consumer may still notice:
+**A destination stated `basic` or `snc` has no token API**: the token API reads the
+destination's `authType` first and throws `DestinationConfigError` naming `authType` before any
+provider is asked. A key store that states no `authType`, or no key store, is served by a
+`provider` of yours as before.
 
-1. **A refusal's message gains a hint.** A UAA, OIDC or `saml2_bearer`
-   destination whose key store answers no client (or one without a client
-   id) is still a `DestinationConfigError` with the same `missingFields`; its
-   message now ends with `; a certificate client needs a clientAuthentication
-   strategy`. Match on `missingFields` or the class, never the message.
-2. **Dependencies.** `@mcp-abap-adt/interfaces-auth-broker` `^1.2.0` (the
-   optional `IServiceKeyStore.getClientCertificate` and `IClientCertificate`),
-   `@mcp-abap-adt/interfaces-auth` `^3.2.0` and `@mcp-abap-adt/auth-providers`
-   `^5.3.0` (`IClientAuthentication`). A key store that reads x509 keys is
-   auth-stores `^3.3.0`; an older store simply has no certificate client.
-3. **New exports:** `fromServiceKeyCertificate`, `fromServiceKeySecret`, and
-   the types `ClientAuthenticationStrategy`, `ClientAuthenticationContext`,
-   `ClientAuthenticationGrant`, `FromServiceKeySecretOptions`,
-   `TokenProviderClient`, `IClientCertificate`, `IClientAuthentication`.
+**Two token sources, with a `provider` option.** `getProvider` never uses the `provider` option.
+A process that gives the broker a `provider` and also calls `getProvider` for the same
+destination has two providers for it — each with its own token, renewal and binding record,
+both writing the same session. Use one path per destination; or, to hand your own provider to a
+connector, wrap the token API: `TokenAuthProvider.from(broker.createTokenRefresher('TRIAL'))`
+(`@mcp-abap-adt/auth-providers`), whose every renewal the token API writes.
 
-**Adopting a strategy** (`clientAuthentication`, see *How the Client
-Authenticates*) changes, for the destinations it applies to:
+### Creating a Token Refresher for DI
 
-- **No secret goes to the provider** — the strategy's answer does; a
-  provider's constructor refuses both.
-- **A secret is bound to the client's identity**: a secret key and an x509
-  key of the same client id at the same `uaaUrl` share one session, so
-  switching between them keeps the token and the refresh token; a destination
-  stating no parseable `serviceUrl` reuses a session stored without
-  `issuedFor`, which 4.0.0 never did.
-- **The token API with a factory of yours** passes the fourth argument; seeds
-  your factory with a stored refresh token, token or cookies only when the
-  session is bound here (4.0.0 carried the stored refresh token over whatever
-  its binding); refuses a destination that states no `authType` / `grantType`;
-  and turns a throwing factory into a `DestinationConfigError` naming
-  `provider`, `clientAuthentication`.
+`createTokenRefresher(destination, { signal? })` returns an `ITokenRefresher` (from
+`@mcp-abap-adt/interfaces-auth`) bound to one destination — `getToken()` is
+`broker.getToken(destination, { signal })`, `refreshToken()` is
+`broker.refreshToken(destination, { signal })` — for a connection of your own that asks for a
+token per request and for a new one after a 401.
 
-## Migrating from 3.x
+```typescript
+const tokenRefresher = broker.createTokenRefresher('TRIAL', { signal: session.signal });
 
-4.0.0 is a major: what a 3.x consumer must do, in short (the full list is the
-[CHANGELOG](CHANGELOG.md)'s 4.0.0 entry).
+const current = await tokenRefresher.getToken();
+// …the server answered 401:
+const renewed = await tokenRefresher.refreshToken();
+```
 
-1. **Session store: `@mcp-abap-adt/auth-stores` 3 or later** (`^3.1.0` for
-   the binding), or one of your own on the
-   `@mcp-abap-adt/interfaces-auth-broker` contract. The broker writes the
-   secret alone — token or cookies, `expiresAt`, refresh token, `issuedFor`,
-   `issuedBy` — and auth-stores 1.x/2.x's session stores refuse such a write
-   (their `AbapSessionStore` throws without `serviceUrl`): they are not
-   supported. A custom store must keep `issuedFor` and `issuedBy`.
-2. **State the means in a key store**, not in the session: `authType`, and
-   for `jwt` / `saml` a `grantType`; the client; the URL. For a SAP service
-   key, `new AbapServiceKeyStore(dir, { grantType: 'authorization_code' })`
-   (or `XsuaaServiceKeyStore`); otherwise `EnvDestinationStore(dir, {
-   fallback })`. A 3.x session file is a readable destination as it is once
-   it states `SAP_AUTH_TYPE` (and `SAP_GRANT_TYPE` for `jwt` / `saml`).
-3. **A connector of `@mcp-abap-adt/connection` 10** takes `await
-   broker.getProvider(destination)` — no `getToken` before connecting, no
-   token refresher. Give the broker the collaborators its grants need
-   (`authorization`, `oidcAuthorization`, `deviceCodePresenter`,
-   `samlCookies`, `assertionReplayStore`); there is no default.
-4. **The token API** keeps its calls, signatures and 3.x reads with a
-   `provider` of yours; it writes the secret alone, refuses a destination
-   stated `basic` or `snc`, and throws a failed write while the broker retries
-   it.
-5. **`getConnectionConfig` / `getAuthorizationConfig`** compose the key
-   store's means with the session's secret; a URL or client kept only in the
-   session store is not found any more.
-6. **New:** catch `DestinationConfigError`; call `flush()` on shutdown;
-   write `bindingOf(means)` beside a credential you hand over yourself.
-7. **Contracts:** `interfaces-auth` 3, `interfaces-auth-sap` 2,
-   `interfaces-auth-broker` 1.1 (the store contracts moved there from
-   `interfaces-auth-sap`), auth-providers 5. The commands are
-   `@mcp-abap-adt/auth-broker-cli` 2.0.0.
+A `@mcp-abap-adt/connection` 14 connector takes an `IAuthProvider` instead: give it `await
+broker.getProvider('TRIAL', { signal })`.
 
-## Migrating from 2.2.0
+## Errors
 
-1. `tokenProvider` is now `provider`, and the `browser` argument is gone:
-   `new AuthBroker({ sessionStore, serviceKeyStore, tokenProvider }, 'system', logger)`
-   becomes `new AuthBroker({ sessionStore, serviceKeyStore, provider }, logger)`.
-2. The provider must implement `IRefreshableTokenProvider` (`refreshTokens()`,
-   a new token, never the cached one) — `@mcp-abap-adt/auth-providers` 4.2.0
-   providers do. Pass a factory instead of an instance to have the broker seed
-   it with the stored refresh token and token.
-3. `allowBrowserAuth: false` and `BROWSER_AUTH_REQUIRED` are gone: give the
-   provider an authorization strategy that refuses and catch your own error
-   (see *Headless Processes*). A browser login that fails — timeout, the
-   identity provider's refusal, a busy callback port — is auth-providers'
-   `BrowserAuthError` (from 4.2.0).
-4. Provider errors arrive unchanged: match on the class or `code`, not on the
-   old `Token provider … error for <destination>` messages.
-5. The broker no longer writes the client secret into the session store. Read
-   it from the service key store if you relied on finding it in the session.
-6. `refreshToken()` now forces a new token; it used to return `getToken()`'s.
-7. Node.js 22, 24 or 26; SAML runs need the IdP trust (see *Migrating `mcp-sso`
-   SAML runs from 2.2.0* in the [CLI's README](../auth-broker-cli/README.md)).
+**A provider's failure passes as the same object.** Whatever a provider throws from
+`getTokens()` / `refreshTokens()` — an `AuthProviderFailure` of `@mcp-abap-adt/auth-errors` —
+`getToken()` / `refreshToken()` rethrow unchanged, so its kind, facts, words and diagnostics are
+the provider's; the moments of a provider `getProvider` hands out are never wrapped. Read a
+failure with auth-errors, never by class or message:
+
+```typescript
+import { isDestinationConfigError } from '@mcp-abap-adt/auth-broker';
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
+
+try {
+  await broker.getToken('TRIAL', { signal });
+} catch (error) {
+  if (isDestinationConfigError(error)) {
+    // Names only: error.missingFields, e.g. ['renewal'] or ['uaaClientSecret'].
+    logger.error(`${error.destination} lacks: ${error.missingFields.join(', ')}`);
+  } else if (isAuthProviderFailure(error)) {
+    const failure = readFailure(error, 'token-source');
+    // failure.kind: 'interactive-login', 'credential-refused', 'request-failed', …
+    logger.error(failure.hint ? `${failure.reason} — ${failure.hint}` : failure.reason);
+  }
+  throw error;
+}
+```
+
+`readFailure(thrown, operation)` gives the same kind and facts for a failure of another
+installed copy of auth-errors (its diagnostics dropped); `matchKind(failure, handlers)` switches
+over every kind. auth-providers' *Migrating to 6.0.0* maps each 5.x error class to its kind.
+
+**The failures the broker makes itself** are `AuthProviderFailure`s minted by auth-errors, no
+free words of its own:
+
+| When | Kind and facts | Words |
+|---|---|---|
+| a caller's signal aborted | `interactive-login`, `outcome: 'aborted'` | the authorization was aborted |
+| a session write did not land, under `'fail'` (the consumer path; the row path's provider answers the same) | `unknown`, `operation: 'persisting-tokens'`, an allowlisted `code` | persisting the tokens failed (unknown error[, CODE]) |
+| a provider answered no token | `request-failed`, `operation: 'token-source'`, `problem: 'no-access-token'` | the token source returned no access_token |
+
+**`DestinationConfigError`** — a destination that lacks what its type needs, thrown by
+`getProvider` (and the token API) before any provider is asked. It carries `name:
+'DestinationConfigError'`, `code: 'DESTINATION_CONFIG'`, `destination` and `missingFields` —
+store field or broker option names only, never a value — and, when a provider's or a strategy's
+failure caused the refusal, `error`: that failure as auth-errors read it (`IAuthProviderError`:
+kind, facts, rendered `reason` and `hint`, admitted diagnostics — no `cause`, no message of any
+thrown value). Its message is `Destination "<destination>": <reason> (<fields>)`, the reason
+followed by `: <error.reason>` when `error` is present; `error.hint` is not in the message.
+Recognise it with `isDestinationConfigError(value)` — structural, so a JSON copy and one of
+another installed copy of this package answer true — rather than `instanceof`.
+
+| Case | `missingFields` |
+|---|---|
+| no `serviceKeyStore` option (`getProvider`) | `serviceKeyStore` |
+| the token API with neither a `provider` nor a `serviceKeyStore` option | `provider`, `serviceKeyStore` |
+| the token API on a destination stated `basic` or `snc` | `authType` |
+| the token API without a `provider` option, on a `jwt` / `none` or `saml` / `none` destination | `provider` |
+| a token row built with no `renewal` option | `renewal` (beside every other missing field) |
+| a destination that writes a secret (a token row, or the token API with a `provider`) and no `onWriteFailure` option (`'fail'` / `'continue'`) | `onWriteFailure` |
+| the `renewal` option threw (`error` carried) | `renewal` |
+| a provider's constructor refused the configuration the row gave it (`error` carried) | the store fields its configuration facts name, or none |
+| the token API with an instance `provider` after the destination's identity changed | `provider` |
+| the key store has no means for the destination — whatever the session holds | `authType` |
+| no `authType`, `''`, or one that is not `basic`, `jwt`, `saml`, `snc` | `authType` |
+| `jwt` / `saml` without `grantType`, `''`, or a pair outside the table | `grantType` |
+| `basic` without user or password (`''` counts as missing) | `username`, `password` — each that is missing |
+| `snc` without `sncPartnerName` | `sncPartnerName` |
+| `snc` whose settings the provider refuses (`error` carried) | the store field its facts name, e.g. `sncQop`; for another kind, the SNC fields the means state |
+| `jwt` / `none` without a token in the session | `authorizationToken` |
+| `saml` / `none` without cookies in the session | `sessionCookies` |
+| `jwt` / `none`, `saml` / `none` whose stored `issuedFor` is not the destination's resource, or is absent, or the means state no `serviceUrl` | `issuedFor` |
+| `jwt` / `none`, `saml` / `none` whose stored `issuedBy` is not exactly the row's record (a 4.x binding included) | `issuedBy` |
+| a UAA grant without its client in the key store (`''` counts as missing) | `uaaUrl`, `uaaClientId`, and `uaaClientSecret` for `authorization_code` / `client_credentials` — each that is missing |
+| `authorization_code` / `passcode` without the `authorization` option | `authorization` |
+| an OIDC grant without its client's id in the key store | `uaaClientId` |
+| an OIDC grant with neither `oidcIssuerUrl` nor every endpoint its row reads | `oidcIssuerUrl`, and each endpoint missing |
+| `oidcScopes` that is not a list of strings; `oidcActorTokenType` that is not a string | `oidcScopes`, `oidcActorTokenType` |
+| `password` without user or password | `username`, `password` — each that is missing |
+| `token_exchange` without its subject | `oidcSubjectToken`, `oidcSubjectTokenType` — each that is missing |
+| `oidc_authorization_code` without the `oidcAuthorization` option | `oidcAuthorization` |
+| `device_code` without the `deviceCodePresenter` option | `deviceCodePresenter` |
+| a SAML grant without its trust (`''` and an empty certificate list count as missing) | `samlIdpSsoUrl`, `samlSpEntityId`, `samlIdpEntityId`, `samlIdpCertificates` — each that is missing |
+| `samlIdpInitiated` that is not a boolean | `samlIdpInitiated` |
+| `saml2_bearer` without its client | `uaaUrl`, `uaaClientId` — each that is missing |
+| a client row (UAA, OIDC, `saml2_bearer`) with no client id and no `clientAuthentication` strategy | as above; the message adds `a certificate client needs a clientAuthentication strategy` |
+| the `clientAuthentication` strategy threw, refused, or answered no client authentication; the certificate client could not be read | `clientAuthentication` (see *How the Client Authenticates*) |
+| the token API with a `clientAuthentication` strategy and a factory, on a destination that states no `jwt` / `saml` type | `authType`, `grantType` |
+| the token API's factory threw beside a `clientAuthentication` strategy | `provider`, `clientAuthentication` |
+| a SAML grant without its collaborators | `authorization`, `samlCookies` (`saml2_pure`), `assertionReplayStore` — each that is missing |
+| a certificate the validator cannot read (`error` carried) | `samlIdpCertificates` |
+| a `samlClockSkewMs` that is not a whole, non-negative number | `samlClockSkewMs` |
+| a store answered a field in a shape the broker cannot take (a function, a getter that throws) | that field |
+
+Kept as the broker's own configuration words, none copying a provider's: the reason of every row
+above, "the destination has no client certificate / secret", and the hint `a certificate client
+needs a clientAuthentication strategy`.
+
+**What is not an auth failure:**
+
+- **A store's read failure** (anything but `FILE_NOT_FOUND`, which is absence) reaches the
+  caller as the store raised it — your collaborator's error, returned to you, also through the
+  shared resolution. A store that answers `null`, or fails with `FILE_NOT_FOUND` (logged at
+  debug), means "nothing here".
+- **The constructor's argument checks** (`AuthBroker: sessionStore is required`, …) are plain
+  `Error`s naming option names: a programming error.
+- **The token API with a factory and no `serviceUrl`** in either store: `Session for destination
+  "<name>" is missing required field 'serviceUrl'`, a plain `Error`, before the factory is
+  called.
+- **`flush()`** rejects with the `AggregateError` of `SessionWriteFailure`s above.
+
+## Logging and `authDebug`
+
+Pass an `ILogger` (`@mcp-abap-adt/interfaces-utils`) as the constructor's second argument;
+without one nothing is logged. Every line goes through a guard: a logger that throws or rejects
+changes no outcome. The broker never writes to stdout.
+
+**What is logged:** `debug` — the broker's initialization (whether a key store is given; the
+`provider` option: `none`, `factory` or `instance`), each provider build (`{ authType, grant,
+seeded }`), the token API's method, a replaced provider's write dropped, a destination whose
+means never let a stored secret be used; `info` — each session secret saved (`{ credential:
+'token' | 'cookies', hasRefreshToken, expiresAt }`), a refresh token cleared; `warn` — a stored
+secret not recorded under the current means and not used, a session write that failed (`Session
+write for <destination> failed; it stays pending until the destination's next write or
+flush()`, with the failure's `logFields`), a write not made because the destination is now
+`basic` / `snc`. The destination name is the only free value.
+
+**What is never logged:** any part of a token, refresh token, password or secret, a store's or a
+provider's message, a URL, a client id, `state`.
+
+After a login, at `info`, your logger is called with the message `[AuthBroker] Session secret
+saved for TRIAL` and the meta `{ credential: 'token', hasRefreshToken: true, expiresAt:
+1790000000000 }`.
+
+**`authDebug`.** `authDebug: true` is passed to every token provider the broker builds; on only
+for `true` itself — absent, `false`, `'true'` or `1` is off — and **never read from the
+environment** (no `DEBUG_*` variable changes anything). The broker's logger is the providers'
+logger, so the provider's one debug line for a refused token request lands in yours. With
+`authDebug` that line names the request's secrets in the provider's prepared form (the first and
+last four characters around a length marker) and never the server's text; without it no line
+carries a secret or server text. A `provider` of yours — an instance or what a factory builds —
+keeps its own setting.
 
 ## Configuration
 
 ### Environment Variables
 
-The library reads no environment variable: the stores take their directories
-from their constructors, and the providers their settings from the
-destination's means and the collaborators you give the broker. (In the
-repository's test suites, `DEBUG_BROKER=true` — or `DEBUG_AUTH_BROKER=true`,
-`DEBUG=broker` — turns on the test logger, its level from `AUTH_LOG_LEVEL`.)
-
-### Logging
-
-Pass an `ILogger` as the constructor's second argument (for instance
-`DefaultLogger` from `@mcp-abap-adt/logger`); without one, nothing is logged.
-
-**What is logged:** the broker's initialization (whether a key store is
-given; the `provider` option: `none`, `factory` or `instance`), each provider build (the destination's `authType` and grant, whether
-it was seeded), each session secret saved (token or cookies, whether a
-refresh token came back, the expiry), a stored secret discarded because it is
-bound elsewhere (the destination only), and each failed write with the error's
-class name.
-
-**What is never logged:** any part of a token, refresh token, password or
-secret — not a prefix, not a suffix — nor a store error's message, which may
-quote what was being written.
-
-With `DefaultLogger` at `info`:
-
-```
-[INFO] ℹ️ [AuthBroker] Session secret saved for TRIAL
-{"credential":"token","hasRefreshToken":true,"expiresAt":1790000000000}
-```
+The library reads no environment variable: the stores take their directories from their
+constructors, the providers their settings from the destination's means and the collaborators
+you give the broker, and `authDebug` is an option. (In the repository's test suites,
+`DEBUG_BROKER=true` — or `DEBUG_AUTH_BROKER=true`, `DEBUG=broker` — turns on the test logger,
+its level from `AUTH_LOG_LEVEL`.)
 
 ### File Structure
 
-With `@mcp-abap-adt/auth-stores` 3 one `<destination>.env` file can hold a
-destination whole, each store reading and writing only its own keys — the
-means through `EnvDestinationStore`, the secret through `AbapSessionStore`
-(or both in separate directories, as you compose them):
+With `@mcp-abap-adt/auth-stores` 4 one `<destination>.env` file can hold a destination whole,
+each store reading and writing only its own keys — the means through `EnvDestinationStore`, the
+secret through `AbapSessionStore` (or both in separate directories, as you compose them):
 
 ```env
 # The means — EnvDestinationStore (ABAP_DESTINATION_VARS); the broker never writes them
@@ -1054,24 +1002,23 @@ SAP_JWT_TOKEN=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
 SAP_EXPIRES_AT=1790000000000
 SAP_REFRESH_TOKEN=refresh_token_string
 SAP_ISSUED_FOR=https://your-system.abap.us10.hana.ondemand.com:443?sap-client=100
-SAP_ISSUED_BY=https://your-account.authentication.us10.hana.ondemand.com:443?client_id=client_id
+SAP_ISSUED_BY=mcp-abap-adt-binding/2;jwt/authorization_code;client_id;https%3A%2F%2Fyour-account.authentication.us10.hana.ondemand.com;;;;;;;;;;8be36724f0e889f23f88526620417e7545eed1115742c715e2bc8da01678d785
 ```
 
 A client that authenticates with a certificate states `SAP_UAA_CLIENT_CERT_PATH`,
-`SAP_UAA_CLIENT_KEY_PATH` and `SAP_UAA_CERT_URL` — paths and a URL, never PEM —
-in place of `SAP_UAA_CLIENT_SECRET` (see *How the Client Authenticates*).
-SAML cookies are `SAP_SESSION_COOKIES_B64` in place of `SAP_JWT_TOKEN`. The
-XSUAA stores use the same names with `XSUAA_` (`XSUAA_DESTINATION_VARS`,
-`XSUAA_SESSION_VARS`; the URL is `XSUAA_MCP_URL`). Every means key
-(`SAP_USERNAME`, `SAP_SNC_*`, `SAP_OIDC_*`, `SAP_SAML_*`, …) is listed in
+`SAP_UAA_CLIENT_KEY_PATH` and `SAP_UAA_CERT_URL` — paths and a URL, never PEM — in place of
+`SAP_UAA_CLIENT_SECRET`. SAML cookies are `SAP_SESSION_COOKIES_B64` in place of
+`SAP_JWT_TOKEN`. The XSUAA stores use the same names with `XSUAA_` (`XSUAA_DESTINATION_VARS`,
+`XSUAA_SESSION_VARS`; the URL is `XSUAA_MCP_URL`). Every means key (`SAP_USERNAME`,
+`SAP_SNC_*`, `SAP_OIDC_*`, `SAP_SAML_*`, …) is listed in
 [USAGE.md](../../docs/using/USAGE.md#environment-variables).
 
 #### Service Key File (`{destination}.json`)
 
-A SAP service key, read by `AbapServiceKeyStore` (an ABAP environment key:
-the client and the ABAP URL) or `XsuaaServiceKeyStore` (an XSUAA key: the
-client). A key cannot state which grant the destination uses, so the store is
-told: `new AbapServiceKeyStore(dir, { grantType: 'authorization_code' })`.
+A SAP service key, read by `AbapServiceKeyStore` (an ABAP environment key: the client and the
+ABAP URL) or `XsuaaServiceKeyStore` (an XSUAA key: the client). A key cannot state which grant
+the destination uses, so the store is told: `new AbapServiceKeyStore(dir, { grantType:
+'authorization_code' })`.
 
 ```json
 {
@@ -1084,13 +1031,11 @@ told: `new AbapServiceKeyStore(dir, { grantType: 'authorization_code' })`.
 }
 ```
 
-An XSUAA key carries no URL of the resource it authorizes for: state it as
-means in an `EnvDestinationStore` (`XSUAA_MCP_URL`, with
-`XSUAA_DESTINATION_VARS`) whose `fallback` is the `XsuaaServiceKeyStore`.
-
-An x509 XSUAA key (created with `{"credential-type": "x509"}`) holds a
+An XSUAA key carries no URL of the resource it authorizes for: state it as means in an
+`EnvDestinationStore` (`XSUAA_MCP_URL`, with `XSUAA_DESTINATION_VARS`) whose `fallback` is the
+`XsuaaServiceKeyStore`. An x509 XSUAA key (created with `{"credential-type": "x509"}`) holds a
 certificate client instead of a secret — the broker uses it only beside a
-`clientAuthentication` strategy (see *How the Client Authenticates*):
+`clientAuthentication` strategy:
 
 ```json
 {
@@ -1103,401 +1048,199 @@ certificate client instead of a secret — the broker uses it only beside a
 }
 ```
 
-## Responsibilities and Design Principles
+## Responsibilities
 
-### Core Development Principle
+**The broker** reads each store for its role; builds one provider per destination and path — the
+one the destination states, or yours — and rebuilds it when what it was built from changes; asks
+it once (`getTokens()` for `getToken()`, `refreshTokens()` for `refreshToken()`) with no retry of
+its own; writes what it obtains, the secret alone with its binding, one write at a time per
+destination. It works through the contracts only — `IServiceKeyStore`, `ISessionStore`,
+`IAuthProvider`, `IRefreshableTokenProvider` — and constructs auth-providers' classes by name
+only to build the one a destination states. It never imports `@mcp-abap-adt/auth-stores`.
 
-**Interface-Only Communication**: This package follows a fundamental development principle: **all interactions with external dependencies happen ONLY through interfaces**. The code knows **NOTHING beyond what is defined in the interfaces**.
+**It does not** implement storage (the stores do), token acquisition, refresh or the token's
+validity (the providers do), how a login is conducted (the strategies you give), when to renew
+(the renewal strategy you give), or what a failed write means (your `onWriteFailure`). It copies
+no secret: the client secret stays in the key store, and the broker never writes the key store
+(its contract has no write method).
 
-This means:
-- Does not know about concrete store classes (e.g., `AbapSessionStore`); the provider classes it knows only to construct the one a destination states, and hands out as `IAuthProvider`
-- Does not know about internal data structures or methods not defined in interfaces
-- Does not make assumptions about implementation behavior beyond interface contracts
-- Does not access properties or methods not explicitly defined in interfaces
-
-This principle ensures:
-- **Loose coupling**: `AuthBroker` is decoupled from concrete implementations
-- **Flexibility**: New implementations can be added without modifying `AuthBroker`
-- **Testability**: Easy to mock dependencies for testing
-- **Maintainability**: Changes to implementations don't affect `AuthBroker`
-
-### Package Responsibilities
-
-The `@mcp-abap-adt/auth-broker` package defines **interfaces** and provides **orchestration logic** for authentication. It does **not** implement concrete storage or token acquisition mechanisms - these are provided by separate packages (`@mcp-abap-adt/auth-stores`, `@mcp-abap-adt/auth-providers`).
-
-#### What AuthBroker Does
-
-- **Resolves what the stores hold**: the means from the key store, the secret from the session store (and, for a `provider` of yours, the 3.x reads: the service URL and the UAA credentials, session first)
-- **Builds or reuses the provider**: one per destination — the one the destination states, shared by `getProvider` and the token API; or your factory, called once per destination
-- **Asks the provider once**: `getTokens()` for `getToken()`, `refreshTokens()` for `refreshToken()` — no retries, no fallbacks
-- **Persists the answer**: the session secret alone — token or session cookies, `expiresAt`, the refresh token, and what it is bound to — to `sessionStore`, retrying a write that fails
-- **Works with interfaces only**: `IServiceKeyStore`, `ISessionStore`, `IAuthProvider`, `IRefreshableTokenProvider`
-
-#### What AuthBroker Does NOT Do
-
-- **Does NOT implement storage**: File I/O, parsing, and storage logic are handled by concrete store implementations from `@mcp-abap-adt/auth-stores`
-- **Does NOT implement token acquisition**: OAuth2 flows, refresh token logic, and client credentials are handled by concrete provider implementations from `@mcp-abap-adt/auth-providers`
-- **Does NOT judge the token**: whether a cached token is still valid, and whether to refresh or log in, is the provider's decision
-- **Does NOT decide how a login is conducted**: browser, headless or pasted code is the provider's authorization strategy
-- **Does NOT copy secrets**: the client secret stays in the service key store
-
-### Consumer Responsibilities
-
-The **consumer** (application using `AuthBroker`) is responsible for:
-
-1. **Composing the stores and collaborators**: an `IServiceKeyStore` for the means and an `ISessionStore` for the secret — with auth-stores 3:
-   - **ABAP systems (a SAP service key)**: `AbapServiceKeyStore(dir, { grantType })`, alone or as the `fallback` of an `EnvDestinationStore`, and `AbapSessionStore` (or `SafeAbapSessionStore`, in memory)
-   - **Destinations without a key** (basic, SNC, OIDC, SAML, `none`): `EnvDestinationStore(dir)` and `AbapSessionStore`
-   - **XSUAA services**: `EnvDestinationStore(dir, { variables: XSUAA_DESTINATION_VARS, fallback: new XsuaaServiceKeyStore(keys, { grantType }) })` and `XsuaaSessionStore` (or `SafeXsuaaSessionStore`)
-   - the collaborator options the destinations' grants need — or, for the token API the 3.x way, an `IRefreshableTokenProvider` of your own
-
-2. **Stating the means in the key store**: `authType`, `grantType` and the fields its row reads, the client, and `serviceUrl` — for the token API with a `provider` of yours, the service URL comes from the session, else the key store.
-
-3. **A session store that takes the secret alone**: the broker writes the token or cookies, `expiresAt`, the refresh token, `issuedFor` and `issuedBy` in one `saveSession`, and nothing else. auth-stores 3's session stores do; auth-stores 1.x/2.x's `AbapSessionStore` and `SafeAbapSessionStore` refuse a write without `serviceUrl` (measured on 1.2.3, 1.2.4, 2.0.0), so a token API on them throws after every token. A custom store must also keep `issuedFor` and `issuedBy`.
-
-### Store Responsibilities
-
-Concrete `ISessionStore` implementations are responsible for:
-
-- **Handling their own data format**: Each store knows its internal data format (e.g., `AbapSessionData`, `BtpBaseSessionData`)
-- **Converting between formats**: Converting between `IConfig`/`IConnectionConfig` and internal storage format
-- **Taking the secret alone**: a session store is written the secret and its binding only, and keeps what it held beside them (auth-stores 3 refuses means outright)
-
-### Provider Responsibilities
-
-Concrete `IRefreshableTokenProvider` implementations are responsible for:
-
-- **Obtaining tokens**: Using OAuth2 flows, refresh tokens, or client credentials to obtain JWT tokens
-- **Managing token lifecycle**: Caching, validating, refreshing, and re-authenticating as needed (`getTokens()`)
-- **Forcing a new token**: `refreshTokens()` — never the cached one
-- **Reporting failures with typed errors**, which the broker passes on unchanged
-
-### Design Principles
-
-1. **Interface-Only Communication** (Core Principle): All interactions with external dependencies happen **ONLY through interfaces**. The code knows **NOTHING beyond what is defined in the interfaces** (see [Core Development Principle](#core-development-principle) above)
-2. **Dependency Inversion Principle (DIP)**: `AuthBroker` depends on abstractions (`IServiceKeyStore`, `ISessionStore`, `IAuthProvider`, `IRefreshableTokenProvider`), not concrete store implementations; the providers it builds it hands out as `IAuthProvider`
-3. **Single Responsibility**: Each component has a single, well-defined responsibility:
-   - `AuthBroker`: Orchestration — resolving, asking, persisting
-   - `ISessionStore`: Session data storage and retrieval
-   - `IRefreshableTokenProvider`: Token acquisition and lifecycle
-   - `IServiceKeyStore`: Service key storage and retrieval
-4. **Interface Segregation**: Interfaces are focused and minimal, containing only what's necessary for their specific purpose
-5. **Open/Closed Principle**: New store and provider implementations can be added without modifying `AuthBroker`
+**You** compose the stores, the collaborators, `renewal` and `onWriteFailure`; state the means in
+the key store; and give a session store that keeps `issuedFor` / `issuedBy` exactly, takes
+`refreshToken: ''` as clearing, and settles every `saveSession`.
 
 ## API
 
-### `AuthBroker`
-
-#### Constructor
-
 ```typescript
-new AuthBroker(
-  config: {
-    sessionStore: ISessionStore;        // required
-    serviceKeyStore?: IServiceKeyStore; // getProvider needs it
-    provider?:                          // the token API's, optional
-      | IRefreshableTokenProvider
-      | ((
-          destination: string,
-          authConfig: IAuthorizationConfig | null,
-          connConfig: IConnectionConfig,
-          client?: TokenProviderClient, // only beside clientAuthentication (4.1.0)
-        ) => IRefreshableTokenProvider);
-    // Collaborators, each a function of the destination, called once per
-    // build, never disposed by the broker:
-    authorization?: (destination: string, grant: StrategyGrant) => IAuthorizationStrategy<string>; // authorization_code, passcode, saml2_pure, saml2_bearer
-    oidcAuthorization?: (destination: string) => IAuthorizationStrategy<OidcCallbackResult>; // oidc_authorization_code
-    deviceCodePresenter?: (destination: string) => IDeviceCodePresenter; // device_code
-    samlCookies?: (destination: string) => (samlResponse: string) => Promise<string>; // saml2_pure
-    assertionReplayStore?: (destination: string) => IAssertionReplayStore; // saml2_pure, saml2_bearer
-    // How a client authenticates (4.1.0): every grant that authenticates one
-    clientAuthentication?: ClientAuthenticationStrategy;
-  },
-  logger?: ILogger,
-)
-```
+import type {
+  BrokerCallOptions,
+  ClientAuthenticationStrategy,
+  IAuthorizationConfig,
+  IConnectionConfig,
+  ILogger,
+  IRefreshableTokenProvider,
+  IRenewalStrategy,
+  IServiceKeyStore,
+  ISessionStore,
+  ITokenRefresher,
+  StrategyGrant,
+  TokenGrant,
+  TokenProviderClient,
+} from '@mcp-abap-adt/auth-broker';
+import type { IDeviceCodePresenter, OidcCallbackResult } from '@mcp-abap-adt/auth-providers';
+import type {
+  IAssertionReplayStore,
+  IAuthorizationStrategy,
+  IAuthProvider,
+} from '@mcp-abap-adt/interfaces-auth';
 
-**Parameters:**
-- `config.sessionStore` - **Required** - The session secret: the token or cookies, `expiresAt`, the refresh token, and what it is bound to (`issuedFor`, `issuedBy`). For the token API with a `provider`, its `serviceUrl`, or the service key's, is required (3.x's reads).
-- `config.serviceKeyStore` - The means: `authType`, `grantType`, the client, basic's user and password, the SNC, OIDC and SAML fields, `serviceUrl`. **Required by `getProvider`**, which has no other source of means.
-- `config.provider` - The token API's source (`getToken`, `refreshToken`, `createTokenRefresher`): a provider instance, used for every destination, or a factory (`TokenProviderFactory`), called once per destination and seeded with what the stores hold (see *Basic Usage*); beside a `clientAuthentication` strategy, with a fourth argument (`TokenProviderClient`, see *How the Client Authenticates*). Not used by `getProvider`. Without it, the token API asks the provider `getProvider` builds for the destination (see *Getting Tokens*); with neither it nor a `serviceKeyStore`, the token API throws `DestinationConfigError` naming both.
-- `config.authorization` - The interactive strategy of `jwt` / `authorization_code`, `jwt` / `passcode`, `saml` / `saml2_pure` and `saml` / `saml2_bearer`, as a function of the destination and the grant (see *A Provider for a Connector*).
-- `config.oidcAuthorization` - The interactive strategy of `jwt` / `oidc_authorization_code`.
-- `config.deviceCodePresenter` - Where `jwt` / `device_code` shows the user the verification URL and code.
-- `config.samlCookies` - `saml2_pure`: turns the validated SAMLResponse into the system's session cookies.
-- `config.assertionReplayStore` - The replay store the SAML validators record each assertion in.
-- `config.clientAuthentication` - How the client of every grant that authenticates one (the UAA and OIDC grants, `saml2_bearer`) authenticates to the authorization server: a `ClientAuthenticationStrategy` — `fromServiceKeyCertificate()`, `fromServiceKeySecret({ encoding })`, or your own composition. Called once per build; absent, the client secret as in 4.0.0 and nothing certificate-related is read (see *How the Client Authenticates*).
-- Each collaborator option is required only by the rows that use it (missing → `DestinationConfigError` naming it); the broker supplies no default, calls it once per build, and disposes nothing it returns.
-- `logger` - Optional logger. If not provided, nothing is logged.
-
-**Available Implementations:**
-- **Means** (auth-stores 3): `EnvDestinationStore(directory, { fallback? })`, `AbapServiceKeyStore(directory, { grantType?, log? })`, `XsuaaServiceKeyStore(directory, { grantType?, log? })`
-- **Secret** (auth-stores 3): `AbapSessionStore(directory, log?)`, `SafeAbapSessionStore(log?)`, `XsuaaSessionStore(directory, log?)`, `SafeXsuaaSessionStore(log?)`, `EnvFileSessionStore(file, log?)`
-- **Providers** (auth-providers 5): `AuthorizationCodeProvider(...)`, `ClientCredentialsProvider(...)` and the rest, for a `provider` of yours
-
-#### Methods
-
-##### `getProvider(destination: string): Promise<IAuthProvider>`
-
-The `IAuthProvider` the destination states, built from the key store's means
-and the session store's secret (see *A Provider for a Connector*). Cached per
-destination; a failed build is retried on the next call. Throws
-`DestinationConfigError` for a destination that lacks what its type needs, and
-passes a store failure other than absence on as the store raised it.
-
-##### `flush(): Promise<void>`
-
-Every session write still pending gets one more attempt. Resolves when all
-have landed; rejects with an `AggregateError` naming the destinations whose
-store still refuses (its `errors` carry each destination and the store
-error's class only, never its message) — the broker keeps retrying them. See *Persistence and `flush()`*.
-
-##### `getToken(destination: string): Promise<string>`
-
-1. Reads the destination's `authType` from the key store: `basic` or `snc` is a `DestinationConfigError` naming `authType`, before any provider is asked.
-2. **Without a `provider` option:** takes the provider `getProvider(destination)` hands out (the same cache; a `none` destination is a `DestinationConfigError` naming `provider`), calls `getTokens()` once, and writes nothing itself — the provider's `onTokens` wrote anything new.
-3. **With one:** resolves `serviceUrl` (session, else service key; an error if neither has one), builds the provider on first use (factory form) seeded with the credentials, the stored refresh token and the stored token — or uses the instance — calls `getTokens()` once, and writes the result: the secret alone, through the broker's write path.
-4. Throws the store's error if the write of this token failed (the broker keeps retrying it); else returns the token.
-
-##### `refreshToken(destination: string): Promise<string>`
-
-The same, with `provider.refreshTokens()`: a new token, never the cached one —
-for a caller whose token the server has just refused. A renewal already in
-flight for the destination (a connector's, in `rejected()`) is joined.
-
-##### `getAuthorizationConfig(destination)` / `getConnectionConfig(destination)`
-
-The two stores composed, each for its role:
-
-- `getConnectionConfig` — the service key store's means with the session's
-  secret (`authorizationToken`, `sessionCookies`, `expiresAt`) laid over them;
-  `null` when neither store holds anything.
-- `getAuthorizationConfig` — the service key store's client (`uaaUrl`,
-  `uaaClientId`, `uaaClientSecret`) with the session's refresh token; `null`
-  when the key store has no client — an x509 key's included: it never answers
-  a certificate or a key.
-
-Means a session store answers (a client, a URL, an `authType`) are not read,
-nor a secret a key store answers. Up to 3.1.0 both answered the session's
-configuration whole, and the key's only when the session had none.
-
-##### `createTokenRefresher(destination): ITokenRefresher`
-
-`getToken()` and `refreshToken()` bound to one destination, for injection into a connection of your own. Unchanged since 3.x; not deprecated.
-
-##### Error Handling
-
-- **`DestinationConfigError`** — a destination that lacks what its type needs.
-  `getProvider` throws it before any provider is asked; so does the token
-  API, for the same destinations and for those below. It carries `code:
-  'DESTINATION_CONFIG'`, `destination`, `missingFields` — field or option
-  names only. When a provider's constructor refused (an `sncQop` outside `1`,
-  `2`, `3`, `8`, `9`), the store field is named and the provider's own error
-  is not kept — its message quotes the value. **No stored value
-  reaches it**: not a password, not a token, not an `authType` that is none of
-  the four. Thrown for:
-
-  | Case | `missingFields` |
-  |---|---|
-  | no `serviceKeyStore` option (`getProvider`) | `serviceKeyStore` |
-  | the token API with neither a `provider` nor a `serviceKeyStore` option | `provider`, `serviceKeyStore` |
-  | the token API on a destination stated `basic` or `snc` | `authType` |
-  | the token API without a `provider` option, on a `jwt` / `none` or `saml` / `none` destination | `provider` |
-  | the key store has no means for the destination — whatever the session holds | `authType` |
-  | no `authType`, `''`, or one that is not `basic`, `jwt`, `saml`, `snc` | `authType` |
-  | `jwt` / `saml` without `grantType`, `''`, or a pair outside the table | `grantType` |
-  | `basic` without user or password (`''` counts as missing) | `username`, `password` — each that is missing |
-  | `snc` without `sncPartnerName` | `sncPartnerName` |
-  | `snc` whose settings the provider refuses | the store field, e.g. `sncQop` |
-  | `jwt` / `none` without a token in the session | `authorizationToken` |
-  | `saml` / `none` without cookies in the session | `sessionCookies` |
-  | `jwt` / `none`, `saml` / `none` whose stored `issuedFor` is not the destination's resource, or is absent, or the means state no `serviceUrl` | `issuedFor` |
-  | `jwt` / `none`, `saml` / `none` whose means state an issuer and whose stored `issuedBy` is not it, or is absent | `issuedBy` |
-  | a UAA grant without its client in the key store (`''` counts as missing) | `uaaUrl`, `uaaClientId`, and `uaaClientSecret` for `authorization_code` / `client_credentials` — each that is missing |
-  | `authorization_code` / `passcode` without the `authorization` option | `authorization` |
-  | an OIDC grant without its client's id in the key store | `uaaClientId` |
-  | an OIDC grant with neither `oidcIssuerUrl` nor every endpoint its row reads | `oidcIssuerUrl`, and each endpoint missing: `oidcAuthorizationEndpoint` / `oidcDeviceAuthorizationEndpoint`, `oidcTokenEndpoint` |
-  | `password` without user or password | `username`, `password` — each that is missing |
-  | `token_exchange` without its subject | `oidcSubjectToken`, `oidcSubjectTokenType` — each that is missing |
-  | `oidc_authorization_code` without the `oidcAuthorization` option | `oidcAuthorization` |
-  | `device_code` without the `deviceCodePresenter` option | `deviceCodePresenter` |
-  | a SAML grant without its trust (`''` and an empty certificate list count as missing) | `samlIdpSsoUrl`, `samlSpEntityId`, `samlIdpEntityId`, `samlIdpCertificates` — each that is missing |
-  | `saml2_bearer` without its client | `uaaUrl`, `uaaClientId` — each that is missing |
-  | a client row (UAA, OIDC, `saml2_bearer`) with no client id and no `clientAuthentication` strategy | as above; the message adds `a certificate client needs a clientAuthentication strategy` |
-  | the `clientAuthentication` strategy threw, refused, or answered no client authentication; the certificate client could not be read | `clientAuthentication` (fixed words, see *How the Client Authenticates*) |
-  | the token API with a `clientAuthentication` strategy and a factory, on a destination that states no `jwt` / `saml` type | `authType`, `grantType` |
-  | the token API's factory threw beside a `clientAuthentication` strategy | `provider`, `clientAuthentication` |
-  | a SAML grant without its collaborators | `authorization`, `samlCookies` (`saml2_pure`), `assertionReplayStore` — each that is missing |
-  | a certificate the validator cannot read | `samlIdpCertificates` |
-  | a `samlClockSkewMs` that is not a whole, non-negative number | `samlClockSkewMs` |
-
-- **Provider errors propagate unchanged** — the same object, with its class,
-  `code`, `missingFields` and `cause`: auth-providers' `ValidationError`,
-  `BrowserAuthError`, `AssertionValidationError`, network errors (`ECONNREFUSED`,
-  `ETIMEDOUT`, `ENOTFOUND`), and whatever your authorization strategy throws.
-  The broker does not retry a failed call.
-- **Store reads: absence is an answer, a failure is not.** A store that answers
-  `null`, or fails with `FILE_NOT_FOUND` (logged at debug), means "nothing
-  here", and the broker goes on to the next source. Any other store failure —
-  a service key that is not valid JSON, a file the process may not read — is
-  thrown unchanged. A failure in the reads that come before the token (the
-  session's connection config, the service key) stops the call before the
-  provider is asked; one in the reads that save it (the session's
-  authorization config, the session) arrives after the provider answered and
-  the new token was written. (The session stores of
-  auth-stores answer an unreadable session file with `null` themselves, so it
-  reads as absent before the broker sees it.)
-- **Store writes**: a write that fails reaches the token API's caller — the
-  store's error, as raised, for the token it received — and is retried by the
-  broker all the same. A `getProvider` provider's write never fails the
-  authentication; it is retried, and `flush()` reports it.
-- **A provider result without a token** is an error.
-
-```typescript
-import { DestinationConfigError } from '@mcp-abap-adt/auth-broker';
-import { ValidationError } from '@mcp-abap-adt/auth-providers';
-
-try {
-  const provider = await broker.getProvider('TRIAL');
-} catch (error) {
-  if (error instanceof DestinationConfigError) {
-    logger.error(`${error.destination} lacks: ${error.missingFields.join(', ')}`);
-  }
-  throw error;
+export interface AuthBrokerConfig {
+  sessionStore: ISessionStore;                                   // required
+  serviceKeyStore?: IServiceKeyStore | undefined;                // getProvider needs it
+  provider?: IRefreshableTokenProvider | TokenProviderFactory | undefined; // the token API's own
+  authorization?: ((destination: string, grant: StrategyGrant) => IAuthorizationStrategy<string>) | undefined;
+  oidcAuthorization?: ((destination: string) => IAuthorizationStrategy<OidcCallbackResult>) | undefined;
+  deviceCodePresenter?: ((destination: string) => IDeviceCodePresenter) | undefined;
+  samlCookies?: ((destination: string) => (samlResponse: string) => Promise<string>) | undefined;
+  assertionReplayStore?: ((destination: string) => IAssertionReplayStore) | undefined;
+  clientAuthentication?: ClientAuthenticationStrategy | undefined;
+  renewal?: ((destination: string, grant: TokenGrant) => IRenewalStrategy) | undefined; // required by token rows
+  onWriteFailure?: 'fail' | 'continue' | undefined;              // required where a secret is written
+  authDebug?: boolean | undefined;                               // on only for true
 }
 
-try {
-  const token = await broker.getToken('TRIAL');
-} catch (error) {
-  if (error instanceof ValidationError) {
-    logger.error(`Missing: ${error.missingFields?.join(', ')}`);
-  }
-  throw error;
+export declare class AuthBroker {
+  constructor(config: AuthBrokerConfig, logger?: ILogger);
+  getProvider(destination: string, options?: BrokerCallOptions): Promise<IAuthProvider>;
+  getToken(destination: string, options?: BrokerCallOptions): Promise<string>;
+  refreshToken(destination: string, options?: BrokerCallOptions): Promise<string>;
+  flush(options?: BrokerCallOptions): Promise<void>;
+  createTokenRefresher(destination: string, options?: BrokerCallOptions): ITokenRefresher;
+  getAuthorizationConfig(destination: string): Promise<IAuthorizationConfig | null>;
+  getConnectionConfig(destination: string): Promise<IConnectionConfig | null>;
 }
+
+export type TokenProviderFactory = (
+  destination: string,
+  authConfig: IAuthorizationConfig | null,
+  connConfig: IConnectionConfig,
+  client?: TokenProviderClient, // only beside clientAuthentication, for a grant that authenticates a client
+) => IRefreshableTokenProvider;
 ```
 
-#### Secrets in the Session Store
+- **`getProvider(destination, { signal? })`** — the `IAuthProvider` the destination states (see
+  *A Provider for a Connector*): the cached one while what its build read is unchanged, else a
+  new build. A token or SNC provider gets the signal attached. Throws `DestinationConfigError`
+  for a destination that lacks what its type needs; under `'fail'`, the `persisting-tokens`
+  failure while the destination's last write is pending; a store's read failure as the store
+  raised it.
+- **`getToken(destination, { signal? })`** / **`refreshToken(destination, { signal? })`** —
+  `getTokens()` / `refreshTokens()` of the destination's provider (row path) or of yours
+  (consumer path), the signal passed to it; a renewal already in flight is joined. See *Getting
+  Tokens*.
+- **`flush({ signal? })`** — one more attempt for every pending write; see *Session Writes*.
+- **`createTokenRefresher(destination, { signal? })`** — `getToken` / `refreshToken` bound to
+  one destination and signal.
+- **`getConnectionConfig(destination)`** — the key store's means with the session's
+  `authorizationToken`, `sessionCookies`, `expiresAt`, `issuedFor` and `issuedBy` laid over
+  them; `null` when neither store holds anything. **`getAuthorizationConfig(destination)`** —
+  the key store's client (`uaaUrl`, `uaaClientId`, `uaaClientSecret`) with the session's refresh
+  token; `null` when the key store has no client (an x509 key's included). Store reads with no
+  signal.
+- **`TokenProviderClient`** — the factory's fourth argument: `clientAuthentication` (the
+  strategy's answer), `uaaUrl` and `clientId` (the client identity); never a certificate, a key,
+  a secret or a refresh token (`refreshToken` stays in the type and is never set).
+- **`StrategyGrant`** — `'authorization_code' | 'passcode' | 'saml2_pure' | 'saml2_bearer'`;
+  **`TokenGrant`** — every `DestinationGrant` but `'none'`; **`BrokerCallOptions`** —
+  `{ signal? }`.
+- **`bindingOf(means, client?)`**, **`fromServiceKeyCertificate()`**,
+  **`fromServiceKeySecret({ encoding })`**, **`DestinationConfigError`**,
+  **`isDestinationConfigError`**, **`SessionWriteFailure`** — above.
+- Re-exported types: `IClientAuthentication`, `IRenewalStrategy`, `ITokenRefresher` (from
+  `interfaces-auth`), `IClientCertificate` (`interfaces-auth-broker`), `AuthType`
+  (`interfaces-auth-sap`), `ILogger` (`interfaces-utils`), the store contracts
+  (`IAuthorizationConfig`, `IConnectionConfig`, `IServiceKeyStore`, `ISessionStore`, `IConfig`)
+  and the token provider contracts (`IRefreshableTokenProvider`, `ITokenProvider`,
+  `ITokenResult`, `TokenProviderOptions`). `IAuthProvider` is not re-exported: take it from
+  `@mcp-abap-adt/interfaces-auth`.
 
-Everything the broker writes — a `getProvider` provider's token and the
-token API's alike — is the secret alone: `authorizationToken` (or
-`sessionCookies`), `expiresAt`, `refreshToken`, with `issuedFor` and
-`issuedBy`, in one `saveSession`, and nothing else (see *Persistence and
-`flush()`*). Never the client secret, never `serviceUrl` or `authType`:
-`setConnectionConfig` and `setAuthorizationConfig` are not called. A store
-that merges a write into what it holds keeps a client or URL it held beside
-the secret; auth-stores 3 holds the secret alone.
+## Migrating to 5.0.0
 
-The stored refresh token comes back through `loadSession()`, which the broker
-reads to seed the next process's provider.
+What a 4.x consumer must now do, row by row. The full list of changes is the
+[CHANGELOG](CHANGELOG.md)'s 5.0.0 entry.
 
-### Token Providers
+| 4.x | 5.0.0 — what to do |
+|---|---|
+| `@mcp-abap-adt/auth-providers` 5, `interfaces-auth` 3, `auth-stores` 3 | auth-providers `^6.0.0`, interfaces-auth `^7.5.0`, auth-errors `^2.1.1`, auth-stores `^4.0.0`; one installed copy of each contract (`npm ls`) |
+| token rows renewed by the provider's built-in rule | pass `renewal: () => refreshThenLogin()` — 4.x's steps; without `renewal` a token row is refused (`missingFields: ['renewal']`) |
+| a `getProvider` provider's failed write never failed the authentication; the token API threw the store's error | pass `onWriteFailure`: `'continue'` keeps 4.x's connector behaviour (best effort); `'fail'` keeps 4.x's token-API behaviour and extends it to the connector and to every later call of the destination while the write is pending. Without it a destination that writes a secret is refused |
+| errors of the token API: auth-providers 5.x classes (`ValidationError`, `BrowserAuthError`, `RefreshError`, …) | `AuthProviderFailure`: read it with `readFailure(error, operation)` and `matchKind` (auth-errors); auth-providers' *Migrating to 6.0.0* maps each class to its kind |
+| the token API's failed write: the store's own error | `AuthProviderFailure`, `unknown`, `persisting-tokens` (with an allowlisted `code`), only with `'fail'` |
+| "Token provider did not return authorization token …" (`Error`) | `request-failed`, `no-access-token`, operation `token-source` |
+| `error instanceof DestinationConfigError` | `isDestinationConfigError(error)`; `error.error` is the provider's error when one caused the refusal, and the message adds `: <its reason>` |
+| a provider's `ValidationError` thrown raw by `getProvider` (rows other than SNC) | a `DestinationConfigError` naming the store fields, the provider's error in `error` |
+| the certificate words of `clientAuthentication` (`incomplete` / `expired` / `could not be used`) | `error.reason` of the carried `client-certificate` failure; the message reads `the clientAuthentication strategy failed: <reason>` |
+| the token API with a consumer `provider`: a call waited for its session write however long the store took | the wait races the call's `signal`: an abort releases the caller (`aborted`) while the write runs on |
+| a failed session write was retried on a timer (1 s, doubling to 60 s) | no timer: it stays pending and is retried by the destination's next write or `flush()` — **call `flush()` on shutdown**. Under `'fail'` the destination's calls are refused while it is pending |
+| a store whose `saveSession` never settled kept being retried | **the store's contract:** `saveSession` must settle (resolve or reject). One that never settles holds that destination's write queue; each waiting caller is released by its own signal |
+| `flush()`'s `AggregateError.errors`: `Error("<dest>": <class>)` | `SessionWriteFailure` (`destination`, `error`) |
+| `getProvider(d)`, `getToken(d)`, `refreshToken(d)` | unchanged calls; each also takes `{ signal }` — tie a session's close to `getProvider`'s signal and each request's cancellation to the token API's |
+| providers' 30 s / 300 s login timeouts | none: a login waits until it ends or a signal aborts it; bound it with your own signal or the strategy's `signal` option |
+| collaborator strategies of auth-providers 5 (`browserCallbackStrategy({ browser: 'system', timeoutMs })`, `openUrl`) | auth-providers 6's: `browser` an `IBrowser` (`linuxDefaultBrowser()`, `macDefaultBrowser()`, `windowsDefaultBrowser()`, …), `signal` instead of `timeoutMs`, `redirectUri` required for the manual ones; a strategy of yours must honour `AuthorizationRequest.signal` |
+| a stored session bound by `issuedFor` / `issuedBy` (issuer and client) | the binding also names the row: `issuedBy` is a versioned record. **Every session written before 5.0.0 reads as unbound once**: for each token destination the stored token and refresh token are not used (one `warn` line) and the provider's first renewal is a **login, not a refresh** — interactive for `authorization_code`, `passcode`, `oidc_authorization_code`, `device_code` and the SAML grants; a token request for `client_credentials`, `password`, `token_exchange`. **A headless consumer must run that login once per destination after upgrading** (e.g. `mcp-auth --env <file>` or `--service-key` with CLI 3.0.0). A handed-over credential (`none`) is refused naming `issuedBy` until written again with 5.0.0's `bindingOf`. A switch of grant with unchanged resource and client no longer reuses the other grant's credential |
+| SAML trust (`samlIdpCertificates`, `samlIdpEntityId`, `samlSpEntityId`, `samlClockSkewMs`, `samlIdpInitiated`), OIDC scopes, the `password` grant's user, the certificate client's certificate, changed | the destination **logs in once** — within a running broker and after a restart; 4.x kept the cached provider and its session, accepting assertions under the trust it was built with |
+| any other value a build reads changed (a password, a client secret, a subject token, an option of the means) | within a running broker: a new provider, **one login**; after a restart, only a change the record holds (above) forces a login — a secret is not persisted in any form |
+| a `token_exchange` destination | obtains a fresh token after every restart (one token request, no interaction): its subject is a secret and cannot bind a stored session |
+| a server address the destination states changed (`uaaUrl`, `oidcIssuerUrl`, the three OIDC endpoints, `oidcAudience`, `samlIdpSsoUrl`, `samlAcsUrl`, `samlTokenUrl`, a certificate client's `certUrl`) or its client id | the stored token and refresh token are not reused: the destination **logs in once** after the change (4.x refreshed with the old refresh token at the new address, or kept its token). **Even a cosmetic change counts** — a trailing `/`, a case change, a port written out: the strings are compared exactly |
+| an OIDC destination with explicit endpoints only (no `oidcIssuerUrl`, no `uaaUrl`) — 4.x never seeded its session | **now reused after a restart** when its means are unchanged, byte for byte. Only a destination whose means lack the client the row authenticates, or an address its credential goes to, is never seeded and logs in after every restart |
+| means changed under a running broker were picked up by a new broker | picked up at the next call: a changed identity rebuilds the destination's provider, unseeded; an instance `provider` is refused for that destination until a new broker |
+| the token API's factory seeded with whatever the session held (`authConfig.refreshToken`, `connConfig`'s token and expiry, the fourth argument's `refreshToken`) | **handed no stored secret at all**: the means and the client only. A factory that relied on the stored session to resume after a restart must compose that itself — give its provider its own persistence (e.g. `refreshStatePersistence` over a store of yours) and its own seed — or use `getProvider`'s path, whose providers the broker seeds from a matching record. The broker still writes what the provider returns, with the `provider/…` record |
+| a consumer provider's result without a refresh token kept the stored one | it clears it (`refreshToken: ''`): auth-providers 6 providers return the refresh token they hold |
+| `onTokens` of the built providers | `persistence` (internal: nothing to do) |
+| `DEBUG_*` environment variables | the broker reads none; `authDebug: true` for the providers' debug line |
 
-Provider implementations live in `@mcp-abap-adt/auth-providers` 5. `getProvider`
-builds the one the destination states (see *A Provider for a Connector*); for
-the token API the 3.x way you pass one yourself — an `IRefreshableTokenProvider`
-or a factory:
-
-- **`ClientCredentialsProvider`** — `client_credentials`: no user, no browser,
-  no refresh token.
-- **`AuthorizationCodeProvider`** — `authorization_code`: refreshes by the
-  stored refresh token, and logs in through the `authorization` strategy you
-  give it — there is no default. `browserCallbackStrategy({ browser?, port?,
-  timeoutMs? })` builds the usual one (callback port `61001` unless `port` is
-  given; held only for the duration of a login).
-
-```typescript
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-import {
-  XsuaaServiceKeyStore,
-  XsuaaSessionStore,
-} from '@mcp-abap-adt/auth-stores';
-import { ClientCredentialsProvider } from '@mcp-abap-adt/auth-providers';
-
-// XSUAA, client_credentials: credentials from the service key
-const xsuaaBroker = new AuthBroker({
-  sessionStore: new XsuaaSessionStore('/path/to/sessions'),
-  serviceKeyStore: new XsuaaServiceKeyStore('/path/to/keys'),
-  provider: (destination, authConfig) => {
-    if (!authConfig) throw new Error(`No UAA credentials for ${destination}`);
-    return new ClientCredentialsProvider({
-      uaaUrl: authConfig.uaaUrl,
-      clientId: authConfig.uaaClientId,
-      clientSecret: authConfig.uaaClientSecret,
-    });
-  },
-});
-```
+**The first run after upgrading costs one login (or one token request) per token destination**:
+plan it for headless consumers before switching them over. Migrations from earlier majors are in
+the [CHANGELOG](CHANGELOG.md) (*Migrating from 3.x* under 4.0.0; 4.1.0's additions under 4.1.0).
 
 ## Testing
 
-The library's tests are in `packages/auth-broker/src/__tests__/` and use Jest.
-Run them from the repository root, where the dev dependencies are installed:
+The library's tests are in `packages/auth-broker/src/__tests__/` and use Jest. Run them from the
+repository root, where the dev dependencies are installed — never `npx jest` directly (the npm
+script sets `--experimental-vm-modules`):
 
 ```bash
-# Every workspace's tests (library and CLI)
-npm test
-
-# The library's only
 npm test -w @mcp-abap-adt/auth-broker
-
-# One file, or one case
-npm test -w @mcp-abap-adt/auth-broker -- AuthBroker.test.ts
 npm test -w @mcp-abap-adt/auth-broker -- AuthBroker.test.ts -t "name of the case"
 ```
 
-Tests run sequentially (`maxWorkers: 1` and `maxConcurrency: 1` in
-`packages/auth-broker/jest.config.js`). `AuthBroker.test.ts` needs nothing;
-`AuthBroker.integration.test.ts` reads real service keys and sessions, and
-every case in it returns early unless the configuration below names a real
-destination.
-
-### Test Setup
-
-1. Copy `packages/auth-broker/tests/test-config.yaml.template` to
-   `packages/auth-broker/tests/test-config.yaml` (until the workspace layout it
-   lived in `tests/` at the repository root; move an existing copy)
-2. Fill in configuration values (paths, destinations, MCP URL for XSUAA)
-3. Place service key files in configured `service_keys_dir`:
-   - `{destination}.json` for ABAP tests (e.g., `trial.json`)
-   - `{btp_destination}.json` for XSUAA tests (e.g., `btp.json`)
-
-Without `test-config.yaml` the template is read, its placeholders disable every
-integration case, and the run reaches no system.
+Tests run sequentially (`maxWorkers: 1`, `maxConcurrency: 1`). The broker suites need nothing:
+fake stores of the contract or auth-stores 4 in temporary directories, real providers, a token
+endpoint the test starts on `127.0.0.1`. `AuthBroker.integration.test.ts` reads real service
+keys and sessions only when `packages/auth-broker/tests/test-config.yaml` exists (from the
+template beside it); without it every case returns at once. The stand (`npm run test:stand`,
+UAA and Keycloak in Docker), the live checks (`npm run test:live`, `npm run test:live:x509`) and
+what each needs: [`docs/development/TESTING.md`](../../docs/development/TESTING.md).
 
 ### The x509 Live Check
 
-`npm run test:live:x509` (from the repository root or this package) runs
-`client_credentials` with an x509 XSUAA service key against a real BTP
-subaccount: it builds, creates an `xsuaa` / `application` instance
-(`credential-types: ["binding-secret", "x509"]`) and a key made with
-`{"credential-type": "x509"}`, runs `src/__tests__/live/x509.live.test.ts`
-— the broker with `fromServiceKeyCertificate()`, `mcp-auth --client-auth
-certificate`, `generate-env-from-service-key --client-auth certificate`, a
-fresh broker over each written destination, and a failing run that leaves the
-previous destination untouched and prints no PEM — and removes everything,
-also when a test fails. Not in `npm test`, not in CI.
-
-It refuses to run unless `XSUAA_CF_API`, `XSUAA_CF_ORG` and `XSUAA_CF_SPACE`
-equal exactly what `cf target` shows (`cf login -a <api> --sso -o <org> -s
-<space>` first). It touches only what it created: each resource is recorded
-with its GUID in a ledger, `tests/live/x509/.local/owned` (gitignored, with
-the key and its PEM files, owner-only), bound to that API, org and space, and
-re-checked before every reuse or delete; a name held by anything else is
-refused. A failed teardown exits non-zero and keeps `.local/` — run
-`tests/live/x509/teardown.sh` with the same three variables. `X509_KEEP=1`
-keeps the environment for another run; `-- -t "(b)"` runs one case. Last run:
-BTP trial, 2026-10-05, all five cases passed.
+`npm run test:live:x509` (from the repository root or this package) runs `client_credentials`
+with an x509 XSUAA service key against a real BTP subaccount: it builds, creates an `xsuaa` /
+`application` instance (`credential-types: ["binding-secret", "x509"]`) and a key made with
+`{"credential-type": "x509"}`, runs `src/__tests__/live/x509.live.test.ts` — the broker with
+`fromServiceKeyCertificate()`, `mcp-auth --client-auth certificate`, `generate-env
+--client-auth certificate`, a fresh broker over each written destination, and a failing run that
+leaves the previous destination untouched and prints no PEM — and removes everything, also when
+a test fails. Not in `npm test`, not in CI. It refuses to run unless `XSUAA_CF_API`,
+`XSUAA_CF_ORG` and `XSUAA_CF_SPACE` equal exactly what `cf target` shows, and touches only what
+it recorded in its ledger (`tests/live/x509/.local/owned`). Last run: BTP trial, 2026-10-05, on
+4.1.0, all five cases passed.
 
 ## Documentation
 
-Complete documentation is available in the repository's [`docs/`](../../docs/) directory:
-
-- **[Architecture](../../docs/architecture/ARCHITECTURE.md)** - System architecture and design decisions
-- **[Testing](../../docs/development/TESTING.md)** - Where the suites live, what they need, the release checks
-- **[Installation](../../docs/installing/INSTALLATION.md)** - Installation and setup guide
-- **[Usage](../../docs/using/USAGE.md)** - API reference and usage examples
-
-See [docs/README.md](../../docs/README.md) for the complete documentation index.
+The repository's [`docs/`](../../docs/): [Architecture](../../docs/architecture/ARCHITECTURE.md),
+[Exports](../../docs/architecture/EXPORTS.md), [Testing](../../docs/development/TESTING.md),
+[Installation](../../docs/installing/INSTALLATION.md), [Usage](../../docs/using/USAGE.md); the
+index is [docs/README.md](../../docs/README.md).
 
 ## Contributors
 
@@ -1527,4 +1270,3 @@ set of additional permissions over the GPL and cannot be read alone.
 program — importing it, as every consumer of an npm package does — does not put
 your program under the LGPL. What the licence asks is that changes *to this
 library* stay free, and that your users can replace it with their own build.
-
