@@ -160,6 +160,20 @@ export async function runMcpSso(
   // when --config wasn't given.
   applyFileConfig(options, providerConfigFromFile);
 
+  // A pasted SAML login declares its ACS (§10.5), refused naming --acs-url
+  // before anything is read or fetched. The --config file, read above, is
+  // one source; the other is the SP metadata — only saml2-bearer's, and only
+  // when the run names one (--saml-metadata, a UAA URL, --service-key) — so
+  // such a run is checked once that metadata has been read, below.
+  const spMetadataStated =
+    options.flow === 'bearer' &&
+    (options.samlMetadataPath !== undefined ||
+      options.uaaUrl !== undefined ||
+      options.serviceKeyPath !== undefined);
+  if (pastesSamlResponse(options) && !spMetadataStated) {
+    declaredAcs(options);
+  }
+
   // The browser is mapped only for a login that opens one — what the run
   // states, from a flag or the --config file, else `auto` — and then before
   // anything else is read or written: a name this platform has no launcher
@@ -253,9 +267,8 @@ export async function runMcpSso(
     process.exit(1);
   }
 
-  // A pasted SAML login declares its ACS — from --acs-url, the SP metadata
-  // or the --config file, all merged by now — or is refused naming
-  // --acs-url, before anything is read or written (§10.5).
+  // The same check once the SP metadata is merged: a bearer run that names
+  // its metadata, refused before the destination is read or written.
   if (pastesSamlResponse(options)) {
     declaredAcs(options);
   }

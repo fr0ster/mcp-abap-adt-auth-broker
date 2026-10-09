@@ -90,6 +90,8 @@ let outDir: string;
 let spies: jest.SpyInstance[];
 let metadataServer: http.Server;
 let metadataUrl: string;
+/** Every path the metadata server was asked for. */
+const metadataRequests: string[] = [];
 
 const logger: ILogger = {
   info: () => {},
@@ -106,6 +108,7 @@ function spMetadata(alias: string): string {
 beforeAll(async () => {
   // `<uaa.url>/saml/metadata` for the service-key runs, as XSUAA serves it.
   metadataServer = http.createServer((request, response) => {
+    metadataRequests.push(request.url ?? '');
     if (request.url === '/authentication/saml/metadata') {
       response.writeHead(200, { 'content-type': 'application/xml' });
       response.end(spMetadata(`${metadataUrl}/oauth/token/alias/key`));
@@ -132,6 +135,7 @@ beforeEach(() => {
   outDir = path.join(root, 'out');
   fs.mkdirSync(workDir);
   mockOutcomes.length = 0;
+  metadataRequests.length = 0;
   mockInterfaces.length = 0;
   spies = [
     jest.spyOn(console, 'log').mockImplementation(() => {}),
@@ -285,6 +289,37 @@ describe('no ACS from any source: refused naming --acs-url, nothing read or writ
     expect(fs.existsSync(outDir)).toBe(false);
     expect(mockInterfaces).toHaveLength(0);
     expect(mockOutcomes).toHaveLength(0);
+  });
+});
+
+describe('no ACS from any source: refused before any metadata is fetched (§10.5)', () => {
+  it.each([
+    ...FLOWS.map(
+      ([name, flow]) =>
+        [
+          `saml2-pure ${name}`,
+          () => pure(flow, ['--idp-metadata', `${metadataUrl}/idp-metadata`]),
+        ] as const,
+    ),
+    ...FLOWS.map(
+      ([name, flow]) =>
+        [
+          `saml2-bearer ${name}`,
+          () => ({
+            ...bearerWithoutUaa(flow),
+            idpMetadata: `${metadataUrl}/idp-metadata`,
+          }),
+        ] as const,
+    ),
+  ])('%s with --idp-metadata', async (_case, options) => {
+    const thrown = await run(options()).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(isUsageError(thrown)).toBe(true);
+    expect(failureLines(thrown).join('\n')).toContain('--acs-url');
+    expect(metadataRequests).toEqual([]);
+    expect(fs.readdirSync(workDir)).toEqual([]);
   });
 });
 

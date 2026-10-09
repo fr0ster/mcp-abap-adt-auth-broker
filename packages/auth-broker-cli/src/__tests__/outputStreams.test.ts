@@ -566,6 +566,9 @@ describe("the CLI's own I/O: refused in its own words naming the flag", () => {
       '--idp-metadata',
       missing,
       '--idp-initiated',
+      // The pasted login's ACS: without one, refused before any read.
+      '--acs-url',
+      'https://uaa.example/oauth/token/alias/x',
       '--output',
       path.join(root, 'out', 'sso.env'),
     ]);
@@ -584,6 +587,9 @@ describe("the CLI's own I/O: refused in its own words naming the flag", () => {
       '--idp-metadata',
       `http://127.0.0.1:${port}/meta?sig=SIG-MARKER`,
       '--idp-initiated',
+      // The pasted login's ACS: without one, refused before any read.
+      '--acs-url',
+      'https://uaa.example/oauth/token/alias/x',
       '--output',
       path.join(root, 'out', 'sso.env'),
     ]);
