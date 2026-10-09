@@ -41,9 +41,7 @@
  *   npm run generate-env -- mcp ./mcp.json ./mcp.env --grant client_credentials --client-auth secret --basic-encoding raw
  */
 
-import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
-import { asContract } from './contractShape';
-import { runGenerateEnv } from './generateEnv';
+import { generateEnvStrategy, runGenerateEnv } from './generateEnv';
 import { underInterrupt } from './interrupt';
 import { printFailure } from './output';
 
@@ -53,16 +51,10 @@ underInterrupt('generate-env', ({ signal, workDir }) =>
   runGenerateEnv(process.argv.slice(2), {
     workDir,
     signal,
-    // No port override: this script has no `--redirect-port` flag, so the
-    // callback port is the strategy's own choice. The login waits until the
-    // user ends it: the run's signal, no bound of this script's own.
+    // The login waits until the user ends it: the run's signal, no bound
+    // of this script's own.
     authorization: (browser, loginSignal) =>
-      browserCallbackStrategy(
-        asContract<Parameters<typeof browserCallbackStrategy>[0]>({
-          browser,
-          signal: loginSignal,
-        }),
-      ),
+      generateEnvStrategy(browser, loginSignal),
   }),
 )
   .then((code) => process.exit(code))

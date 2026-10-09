@@ -20,6 +20,25 @@
  * test's own (a signal to this process would end the test run).
  */
 
+// A terminal that shows the question on stderr and never answers it: a paste
+// waits until its signal abandons the read (which closes the interface).
+jest.mock('node:readline', () => ({
+  createInterface: () => {
+    const onClose: Array<() => void> = [];
+    return {
+      on: (event: string, listener: () => void) => {
+        if (event === 'close') onClose.push(listener);
+      },
+      question: (prompt: string) => {
+        process.stderr.write(prompt);
+      },
+      close: () => {
+        for (const listener of onClose.splice(0)) listener();
+      },
+    };
+  },
+}));
+
 import { type ChildProcess, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
@@ -27,12 +46,30 @@ import * as http from 'node:http';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { readFailure } from '@mcp-abap-adt/auth-errors';
 import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
-import { runGenerateEnv } from '../generateEnv';
+import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
+import { generateEnvStrategy, runGenerateEnv } from '../generateEnv';
 import { type InterruptHost, underInterrupt } from '../interrupt';
+import {
+  buildOidcBrowserAuthorization,
+  buildPasscodeAuthorization,
+  buildSamlAuthorization,
+  type McpSsoOptions,
+} from '../mcpSsoConfig';
+import { authCodeStrategy, type McpAuthOptions } from '../runMcpAuth';
+import { isUsageError } from '../subcommandArgs';
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..', '..');
 const BIN = path.join(PACKAGE_ROOT, 'dist', 'mcp-auth.js');
+/** The generate-env script, run as `npm run generate-env` runs it: through tsx. */
+const SCRIPT = path.join(
+  PACKAGE_ROOT,
+  'src',
+  'generate-env-from-service-key.ts',
+);
+/** The script has no `--redirect-port`: its callback is the strategy's default. */
+const DEFAULT_CALLBACK_PORT = 61001;
 const IDP_CERT = path.join(__dirname, 'fixtures', 'certificates', 'server.crt');
 
 const ABORTED = '❌ the authorization was aborted';
@@ -141,19 +178,28 @@ interface Exit {
   stderr: string;
 }
 
+/** What a spawned command runs: node's arguments before the command's, and where. */
+interface Entry {
+  nodeArgs: string[];
+  cwd: string;
+}
+
 /**
- * Runs the built bin under `node`, its `TMPDIR` the test's `tmp`, its stdin
- * a pipe left open (a paste waits on it). Once `waiting` sees the login wait
- * on stderr, sends `signals` to the child's pid, one after the other.
+ * Runs `entry` — the built bin, unless stated — under `node`, its `TMPDIR`
+ * the test's `tmp`, its stdin a pipe left open (a paste waits on it). Once
+ * `waiting` sees the login wait on stderr, sends `signals` to the child's
+ * pid, one after the other.
  */
 function runUntilSignalled(
   args: string[],
   waiting: (stderr: string) => boolean,
   signals: NodeJS.Signals[],
   tmp: string,
+  entry?: Entry,
 ): Promise<Exit> {
-  const child = spawn(process.execPath, [BIN, ...args], {
-    cwd: root,
+  const { nodeArgs, cwd } = entry ?? { nodeArgs: [BIN], cwd: root };
+  const child = spawn(process.execPath, [...nodeArgs, ...args], {
+    cwd,
     env: { PATH: process.env.PATH ?? '', HOME: root, TMPDIR: tmp },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -334,11 +380,230 @@ describe('the built bin: a signal to its pid ends the waiting login', () => {
         expect(exit.stderr).toContain(ABORTED);
         expect(exit.stderr).not.toContain(STACK);
         expect(exit.stdout).toBe('');
+        // After the child's exit the OS has freed its sockets whatever the
+        // strategy did: this proves the process ended, no more. That the
+        // strategy releases the port as its login settles — the process
+        // still alive — is proven in process: the strategies' cases and
+        // generate-env's, each binding once right after the abort settled.
         if (kind.listens) expect(await canBind(port)).toBe(true);
         expect(fs.readdirSync(tmp)).toEqual([]);
         expect(fs.readFileSync(output, 'utf8')).toBe(UNTOUCHED);
       }, 20_000);
     }
+  }
+});
+
+describe('the generate-env script itself: a signal to its pid ends the waiting login', () => {
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    it(`${signal}: aborted, exit ${EXIT_CODES[signal]}, no stack, port free, its work directory gone, the session file untouched`, async () => {
+      // The script binds the strategy's default port: it must be free.
+      expect(await canBind(DEFAULT_CALLBACK_PORT)).toBe(true);
+      const server = await pendingServer();
+      const tmp = path.join(root, 'tmp');
+      fs.mkdirSync(tmp);
+      const sessionPath = path.join(root, 'sessions', 'TRIAL.env');
+      fs.mkdirSync(path.dirname(sessionPath));
+      fs.writeFileSync(sessionPath, UNTOUCHED);
+      const workDirs = () =>
+        fs.readdirSync(tmp).filter((name) => name.startsWith('generate-env-'));
+      let workDirsWhileWaiting: string[] = [];
+      const exit = await runUntilSignalled(
+        [
+          'TRIAL',
+          serviceKey(server),
+          sessionPath,
+          '--grant',
+          'authorization_code',
+          '--browser',
+          'none',
+        ],
+        (stderr) => {
+          if (!stderr.includes('/oauth/authorize?')) return false;
+          workDirsWhileWaiting = workDirs();
+          return true;
+        },
+        [signal],
+        tmp,
+        { nodeArgs: ['--import', 'tsx', SCRIPT], cwd: PACKAGE_ROOT },
+      );
+      expect(exit.signal).toBeNull();
+      expect(exit.code).toBe(EXIT_CODES[signal]);
+      expect(exit.stderr).toContain(ABORTED);
+      expect(exit.stderr).not.toContain(STACK);
+      expect(exit.stdout).toBe('');
+      expect(await canBind(DEFAULT_CALLBACK_PORT)).toBe(true);
+      // Its work directory existed while the login waited, and is gone.
+      expect(workDirsWhileWaiting).toHaveLength(1);
+      expect(workDirs()).toEqual([]);
+      expect(fs.readFileSync(sessionPath, 'utf8')).toBe(UNTOUCHED);
+    }, 30_000);
+  }
+});
+
+/**
+ * Whether a login's rejection says it was aborted: auth-errors' `aborted`,
+ * or — the IdP-initiated paste, the CLI's own strategy — the reader's
+ * "abandoned" refusal.
+ */
+function endedByAbort(error: unknown): boolean {
+  if (isUsageError(error)) {
+    return String((error as Error).message).includes('the read was aborted');
+  }
+  const failure = readFailure(error, 'authorizing');
+  return (
+    failure.kind === 'interactive-login' &&
+    (failure.facts as { outcome?: string }).outcome === 'aborted'
+  );
+}
+
+interface BuiltStrategy {
+  name: string;
+  build: (port: number, signal: AbortSignal) => IAuthorizationStrategy<unknown>;
+  /** The port it listens on, or `undefined` for a paste. */
+  port: (free: number) => number | undefined;
+  /** The login waits: its prompt is on stderr. */
+  waiting: string;
+}
+
+const AUTH_CODE_OPTIONS: McpAuthOptions = {
+  outputFile: 'unused.env',
+  authType: 'xsuaa',
+  browser: 'none',
+  credential: false,
+  format: 'env',
+};
+const SSO_OPTIONS = { authType: 'abap', format: 'env' } as McpSsoOptions;
+const SAML_OPTIONS = {
+  ...SSO_OPTIONS,
+  protocol: 'saml2',
+  flow: 'pure',
+  browser: 'none',
+} as McpSsoOptions;
+const ACS = 'https://abap.example.com/sap/saml2/sp/acs/100';
+
+const STRATEGIES: BuiltStrategy[] = [
+  {
+    name: 'mcp-auth browser login (authCodeStrategy)',
+    build: (port, signal) =>
+      authCodeStrategy({ ...AUTH_CODE_OPTIONS, redirectPort: port }, signal),
+    port: (free) => free,
+    waiting: 'https://idp.example.com/authorize?',
+  },
+  {
+    name: 'generate-env browser login (generateEnvStrategy)',
+    build: (_port, signal) => generateEnvStrategy(undefined, signal),
+    port: () => DEFAULT_CALLBACK_PORT,
+    waiting: 'https://idp.example.com/authorize?',
+  },
+  {
+    name: 'oidc browser',
+    build: (port, signal) =>
+      buildOidcBrowserAuthorization(
+        {
+          ...SSO_OPTIONS,
+          protocol: 'oidc',
+          flow: 'browser',
+          browser: 'none',
+          redirectPort: port,
+        } as McpSsoOptions,
+        signal,
+      ),
+    port: (free) => free,
+    waiting: 'https://idp.example.com/authorize?',
+  },
+  {
+    name: 'SAML browser',
+    build: (port, signal) =>
+      buildSamlAuthorization({ ...SAML_OPTIONS, redirectPort: port }, signal),
+    port: (free) => free,
+    waiting: 'https://idp.example.com/authorize?',
+  },
+  {
+    name: 'manual SAML paste',
+    build: (_port, signal) =>
+      buildSamlAuthorization(
+        { ...SAML_OPTIONS, assertionFlow: 'manual', acsUrl: ACS },
+        signal,
+      ),
+    port: () => undefined,
+    waiting: 'Paste the SAMLResponse',
+  },
+  {
+    name: 'IdP-initiated SAML paste',
+    build: (_port, signal) =>
+      buildSamlAuthorization(
+        {
+          ...SAML_OPTIONS,
+          flow: 'bearer',
+          idpInitiated: true,
+          assertionFlow: 'manual',
+          acsUrl: ACS,
+        },
+        signal,
+      ),
+    port: () => undefined,
+    waiting: 'paste the SAMLResponse',
+  },
+  {
+    name: 'passcode paste',
+    build: (_port, signal) =>
+      buildPasscodeAuthorization(
+        { ...SSO_OPTIONS, protocol: 'oidc', flow: 'password' } as McpSsoOptions,
+        signal,
+      ),
+    port: () => undefined,
+    waiting: 'Paste the Temporary Authentication Code',
+  },
+];
+
+describe('each strategy the CLI builds ends on the run’s signal alone', () => {
+  // The request's own signal never aborts: no provider stands between the
+  // run and the strategy, so only the strategy's `signal` option ends it.
+  for (const built of STRATEGIES) {
+    it(`${built.name}: the run's signal ends it aborted, its port released before it settled`, async () => {
+      const port = built.port(await freePort());
+      if (port !== undefined) expect(await canBind(port)).toBe(true);
+      const run = new AbortController();
+      const stderr = captureStderr();
+      let error: unknown;
+      try {
+        const authorizing = built.build(port ?? 0, run.signal).authorize({
+          // A code login's URL must carry `state` and an S256 challenge.
+          buildAuthorizationUrl: async (redirectUri) =>
+            `https://idp.example.com/authorize?${new URLSearchParams({
+              response_type: 'code',
+              client_id: 'cli',
+              redirect_uri: redirectUri,
+              state: 'state-0123456789abcdef0123456789abcdef',
+              code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+              code_challenge_method: 'S256',
+            })}`,
+          signal: new AbortController().signal,
+        });
+        let done = false;
+        const settled = authorizing.then(
+          () => undefined,
+          (thrown: unknown) => thrown,
+        );
+        void settled.finally(() => {
+          done = true;
+        });
+        await until(() => done || stderr.text().includes(built.waiting));
+        // Still waiting when the run aborts: it settled on nothing else.
+        expect(done).toBe(false);
+        if (port !== undefined) expect(await canBind(port)).toBe(false);
+        run.abort();
+        error = await settled;
+        // Bound once, right after the login settled.
+        if (port !== undefined) expect(await canBind(port)).toBe(true);
+      } finally {
+        // A case that failed leaves no login behind.
+        run.abort();
+        stderr.restore();
+      }
+      expect(error).toBeDefined();
+      expect(endedByAbort(error)).toBe(true);
+    }, 20_000);
   }
 });
 
@@ -562,9 +827,9 @@ describe('generate-env under the interrupt, in process', () => {
         expect(await canBind(port)).toBe(false);
         emitter.emit(signal);
         exitCode = await running;
-        // The strategy releases its socket as its login settles, which
-        // follows the abort: the port is bound once it has.
-        await until(() => canBind(port));
+        // Bound once, the run just settled and this process alive: the
+        // strategy released its socket before its login settled.
+        expect(await canBind(port)).toBe(true);
       } finally {
         stderr.restore();
       }
@@ -598,7 +863,7 @@ describe('generate-env under the interrupt, in process', () => {
       expect(await canBind(port)).toBe(false);
       emitter.emit('SIGINT');
       exitCode = await running;
-      await until(() => canBind(port));
+      expect(await canBind(port)).toBe(true);
     } finally {
       jest.useRealTimers();
       stderr.restore();
@@ -619,6 +884,26 @@ describe('sources: no timer bounds a login', () => {
       return entry.name.endsWith('.ts') ? [file] : [];
     });
   }
+
+  it('the walk finds the CLI’s sources, tests left out', () => {
+    const found = sources(path.join(PACKAGE_ROOT, 'src')).map((file) =>
+      path.relative(PACKAGE_ROOT, file),
+    );
+    expect(found).toEqual(
+      expect.arrayContaining(
+        [
+          'interrupt.ts',
+          'mcp-auth.ts',
+          'mcpSsoConfig.ts',
+          'runMcpAuth.ts',
+          'runMcpSso.ts',
+          'generateEnv.ts',
+          'generate-env-from-service-key.ts',
+        ].map((file) => path.join('src', file)),
+      ),
+    );
+    expect(found.some((file) => file.includes('__tests__'))).toBe(false);
+  });
 
   it.each([
     'INTERACTIVE_LOGIN_TIMEOUT_MS',

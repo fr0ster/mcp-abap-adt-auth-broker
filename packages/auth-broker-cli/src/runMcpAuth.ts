@@ -23,6 +23,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
+  browserCallbackStrategy,
   refreshThenLogin,
   type staticCodeStrategy,
 } from '@mcp-abap-adt/auth-providers';
@@ -48,6 +49,7 @@ import {
   readCertificateClient,
   serviceKeyStoreFor,
 } from './clientAuthentication';
+import { asContract } from './contractShape';
 import {
   completeMeans,
   flushed,
@@ -144,6 +146,26 @@ export interface McpAuthContext {
 }
 
 /** Runs `mcp-auth`; resolves the exit code. Usage errors exit the process. */
+/**
+ * The authorization code login's strategy, as the bin composes it: the browser
+ * callback on `--redirect-port` (the strategy's own default when not given),
+ * the browser `--browser` / `--browser-program` state, ended by `signal` —
+ * the run's — and by nothing else: no bound.
+ */
+export function authCodeStrategy(
+  options: McpAuthOptions,
+  signal: AbortSignal | undefined,
+  platform: string = process.platform,
+): AuthorizationStrategy {
+  return browserCallbackStrategy(
+    asContract<Parameters<typeof browserCallbackStrategy>[0]>({
+      browser: mcpAuthBrowser(options, platform),
+      port: options.redirectPort,
+      signal,
+    }),
+  );
+}
+
 export async function runMcpAuth(
   options: McpAuthOptions,
   { logger, workDir, authorization, platform, signal }: McpAuthContext,
@@ -472,17 +494,20 @@ export async function runMcpAuth(
   if (!stored) {
     return 1;
   }
-  // An interrupted run writes no output.
-  signal?.throwIfAborted();
-
   if (options.format === 'env') {
+    // An interrupted run writes no output: checked with nothing awaited
+    // between the check and the write.
+    signal?.throwIfAborted();
     writeOutputFile(files, resolvedOutputPath);
     progress(`✅ .env file created: ${resolvedOutputPath}`);
   } else {
     // A certificate client is no secret client, so the stores' JSON view
     // leaves it out: its identity, paths and `certurl` are added — never PEM.
+    const json = await jsonOutput(files, destination, {});
+    // An interrupted run writes no output: checked after the last await.
+    signal?.throwIfAborted();
     writeJsonFile(resolvedOutputPath, {
-      ...(await jsonOutput(files, destination, {})),
+      ...json,
       ...(certificateFiles
         ? {
             uaaUrl: client.uaaUrl,

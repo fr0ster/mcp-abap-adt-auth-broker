@@ -377,17 +377,17 @@ export async function runMcpSso(
   if (!stored) {
     return 1;
   }
-  // An interrupted run writes no output.
-  signal?.throwIfAborted();
-
   if (options.format === 'env') {
+    // An interrupted run writes no output: checked with nothing awaited
+    // between the check and the write.
+    signal?.throwIfAborted();
     writeOutputFile(files, resolvedOutputPath);
     progress(`✅ .env file created: ${resolvedOutputPath}`);
   } else {
-    writeJsonFile(
-      resolvedOutputPath,
-      await jsonOutput(files, destination, { tokenType: true }),
-    );
+    const json = await jsonOutput(files, destination, { tokenType: true });
+    // An interrupted run writes no output: checked after the last await.
+    signal?.throwIfAborted();
+    writeJsonFile(resolvedOutputPath, json);
     progress(`✅ JSON file created: ${resolvedOutputPath}`);
   }
   return 0;

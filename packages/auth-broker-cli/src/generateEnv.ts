@@ -25,7 +25,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
+import {
+  browserCallbackStrategy,
+  refreshThenLogin,
+} from '@mcp-abap-adt/auth-providers';
 import type { XsuaaServiceKeyStore } from '@mcp-abap-adt/auth-stores';
 import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
 import {
@@ -46,6 +49,7 @@ import {
   readCertificateClient,
   serviceKeyStoreFor,
 } from './clientAuthentication';
+import { asContract } from './contractShape';
 import {
   completeMeans,
   flushed,
@@ -94,6 +98,24 @@ export interface GenerateEnvContext {
    * Absent: nothing ends the login but its result.
    */
   signal?: AbortSignal | undefined;
+}
+
+/**
+ * The script's authorization code strategy: the browser callback on the
+ * strategy's own default port (the script has no `--redirect-port`), the
+ * browser the run states, ended by `signal` — the run's — and by nothing
+ * else: no bound.
+ */
+export function generateEnvStrategy(
+  browser: IBrowser | undefined,
+  signal: AbortSignal | undefined,
+): AuthorizationStrategy {
+  return browserCallbackStrategy(
+    asContract<Parameters<typeof browserCallbackStrategy>[0]>({
+      browser,
+      signal,
+    }),
+  );
 }
 
 /** Runs the script; resolves the exit code. */

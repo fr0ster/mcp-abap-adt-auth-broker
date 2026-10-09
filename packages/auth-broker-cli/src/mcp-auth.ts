@@ -20,12 +20,14 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
-import { asContract } from './contractShape';
 import { underInterrupt } from './interrupt';
 import type { McpSsoOptions } from './mcpSsoConfig';
 import { createCliLogger, printFailure, toStderr } from './output';
-import { type McpAuthOptions, mcpAuthBrowser, runMcpAuth } from './runMcpAuth';
+import {
+  authCodeStrategy,
+  type McpAuthOptions,
+  runMcpAuth,
+} from './runMcpAuth';
 import { runMcpSso } from './runMcpSso';
 import {
   isUsageError,
@@ -532,18 +534,10 @@ function runAuthCode(options: McpAuthOptions): Promise<number> {
       logger: createCliLogger({ verbose: isVerbose(options) }),
       workDir,
       signal,
-      // Passing `options.redirectPort` as given, so an omitted
-      // --redirect-port lets the strategy bind its own default rather than
-      // this CLI pinning a number it doesn't own. The login waits until the
-      // user ends it: the run's signal, no bound.
-      authorization: (run, loginSignal) =>
-        browserCallbackStrategy(
-          asContract<Parameters<typeof browserCallbackStrategy>[0]>({
-            browser: mcpAuthBrowser(run),
-            port: run.redirectPort,
-            signal: loginSignal,
-          }),
-        ),
+      // `--redirect-port` as given, so an omitted one lets the strategy bind
+      // its own default. The login waits until the user ends it: the run's
+      // signal, no bound.
+      authorization: (run, loginSignal) => authCodeStrategy(run, loginSignal),
     }),
   );
 }
