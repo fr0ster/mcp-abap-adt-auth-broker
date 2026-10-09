@@ -48,6 +48,8 @@ packages/auth-broker/src/__tests__/
 │   └── samlGrants.test.ts               # the SAML grants, Keycloak to UAA, in Docker
 ├── live/
 │   ├── getProvider.live.test.ts         # getProvider through connection 14 against real systems
+│   ├── browserLogin.live.test.ts        # mcp-auth with a real browser, a person logs in; the .env opens ADT
+│   ├── adtProbe.ts                      # the jwt case's ADT check, shared by both suites above
 │   └── x509.live.test.ts                # an x509 XSUAA key through the broker and the CLI
 ├── tools/
 │   └── shapeCheckCopy.test.ts           # tools/check-provider-shape.mjs is auth-errors 2.1.1's, byte for byte
@@ -257,6 +259,7 @@ is for. Only status codes and response sizes are printed — never a value from 
 | `basic` over RFC (`rfcConversationFrom`) | a machine with the SAP NW RFC SDK and `@mcp-abap-adt/sap-rfc-lite` built against it | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_RFC_DESTINATION`; optional `SAP_SYSNR` |
 | `snc` over RFC | Windows or macOS with an SNC library (the SAP Secure Login Client, logged on), the NW RFC SDK and `sap-rfc-lite` | `AUTH_BROKER_LIVE_KEYS_DIR`, `AUTH_BROKER_LIVE_SNC_DESTINATION`; optional `SAP_SYSNR` |
 | `jwt` / `authorization_code` over HTTP (`AdtCloudConnector`) | any machine that reaches a BTP ABAP environment (trial), with a session holding a refresh token | `AUTH_BROKER_LIVE_SERVICE_KEYS_DIR`, `AUTH_BROKER_LIVE_JWT_DESTINATION`, `AUTH_BROKER_LIVE_SESSIONS_DIR` |
+| browser login (`browserLogin.live.test.ts`) | a machine with a browser and a person to log in, that reaches the same BTP ABAP environment; the CLI built | `AUTH_BROKER_LIVE_BROWSERS`, `AUTH_BROKER_LIVE_SERVICE_KEYS_DIR`, `AUTH_BROKER_LIVE_JWT_DESTINATION` |
 
 **The `jwt` case** seeds the session with a well-formed JWT the system did not issue: the first
 request is a 401, the provider renews by the stored refresh token in `rejected()`, the request is
@@ -271,6 +274,45 @@ not use its refresh token, the refusing strategy fails the login, and the case f
 it (one 401, renewed, `200`). A session written by a 5.0.0 `getProvider` over the same key is
 read from the code, not measured. Logging in once with CLI 3.0.0 makes the case runnable. Where the server rotates refresh tokens the
 run spends the original's refresh token; log in again afterwards.
+
+**The browser login** (`browserLogin.live.test.ts`) measures `mcp-auth` with a real browser on
+the platform it runs on. `AUTH_BROKER_LIVE_BROWSERS` is a comma-separated list, one case per item,
+run one after another (they share the callback port, 61001, which must be free): a `--browser`
+value (`auto`, `system`, `chrome`, `edge`, `firefox`) or `program:<path or name>` for
+`--browser-program` (everything after the first `:`). Each case runs the built
+`packages/auth-broker-cli/dist/mcp-auth.js --service-key <dir>/<destination>.json --output
+<tmp>/<n>-<item>.env --type abap --browser <item>` (or `--browser-program`) as a child process (`node`, an argument array, no
+shell) in a fresh temporary directory; the browser opens and **a person logs in** — the run has
+no timeout of its own, only Jest's ten minutes for the person (plus a minute for the ADT check),
+after which the run is sent `SIGTERM`. It asserts exit 0, stdout empty, no token, refresh token
+or client secret on stderr, and `SAP_JWT_TOKEN`, `SAP_REFRESH_TOKEN`, `SAP_ISSUED_FOR` and
+`SAP_ISSUED_BY` in the `.env`; then, on a copy of that `.env` as `<tmp>/sessions/<destination>.env`,
+the `jwt` case's check (`adtProbe.ts`: a refused token seeded, the 401 renewed by refresh, 200).
+It prints only the exit code, the streams' sizes, the tokens' lengths and the ADT status and
+size, so the output can be pasted. Without `AUTH_BROKER_LIVE_BROWSERS` it is skipped — set it only
+where a person will log in, since it opens a browser. Build first (`npm run build`).
+
+```bash
+# macOS
+npm run build
+AUTH_BROKER_LIVE_SERVICE_KEYS_DIR=~/.config/mcp-abap-adt/service-keys \
+AUTH_BROKER_LIVE_JWT_DESTINATION=trial \
+AUTH_BROKER_LIVE_BROWSERS=auto,chrome \
+npm run test:live -- -t "browser login"
+```
+
+```powershell
+# Windows 11 (PowerShell)
+npm run build
+$env:AUTH_BROKER_LIVE_SERVICE_KEYS_DIR = "$HOME\Documents\mcp-abap-adt\service-keys"
+$env:AUTH_BROKER_LIVE_JWT_DESTINATION = 'trial'
+$env:AUTH_BROKER_LIVE_BROWSERS = 'auto,edge'
+npm run test:live '--' -t 'browser login'
+```
+
+On Linux the same as macOS, e.g. `AUTH_BROKER_LIVE_BROWSERS=auto,chrome,firefox,program:chromium`.
+A program is run as given: on macOS `program:` names an application (`open -a`), on Windows a
+program for `Start-Process`.
 
 **The destinations.** `AUTH_BROKER_LIVE_KEYS_DIR` is a directory of `<destination>.env` files read
 by auth-stores 4's `EnvDestinationStore`. A `basic` destination:

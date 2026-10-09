@@ -60,46 +60,31 @@ import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
-  AbapServiceKeyStore,
-  AbapSessionStore,
   EnvDestinationStore,
   SafeAbapSessionStore,
 } from '@mcp-abap-adt/auth-stores';
 // connection 14 loads without the RFC addon: rfcConversationFrom requires it
 // only when a conversation is opened, so the HTTP case runs where it is absent.
 import {
-  AdtCloudConnector,
   AdtOnPremConnector,
-  CloudHttpTransport,
   OnPremHttpTransport,
   RfcTransport,
   rfcConversationFrom,
 } from '@mcp-abap-adt/connection';
-import type {
-  IAuthorizationStrategy,
-  IAuthProvider,
-  IAuthRejection,
-} from '@mcp-abap-adt/interfaces-auth';
 import type { IConnectionConfig } from '@mcp-abap-adt/interfaces-auth-broker';
 import { asContract } from '../../contractShape';
 import { AuthBroker } from '../../index';
 import { describeWhere, runLog as log } from '../helpers/describeWhere';
 import { STATED } from '../helpers/stated';
+import {
+  byteSize,
+  type ConnectorConfig,
+  expectRefusedTokenRenewed,
+  PROBE,
+  quiet,
+} from './adtProbe';
 
 const env = process.env;
-
-/** A silent logger for the connector: the case prints only what it asserts. */
-const quiet = {
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  debug: () => {},
-};
-
-/** The lightest ADT read connection 14's own live suite measures. */
-const PROBE = '/sap/bc/adt/compatibility/graph';
-
-type ConnectorConfig = ConstructorParameters<typeof AdtOnPremConnector>[0];
 
 /** The variables among `names` that are not set, or are set to ''. */
 function unset(names: string[]): string[] {
@@ -215,12 +200,6 @@ async function addressOf(
   });
 }
 
-function byteSize(data: unknown): number {
-  return typeof data === 'string'
-    ? Buffer.byteLength(data)
-    : Buffer.byteLength(JSON.stringify(data ?? ''));
-}
-
 describeWhere(
   'basic over HTTP — an on-premise system (getProvider → connection 14 OnPremHttpTransport)',
   basicHttpUnavailable(),
@@ -326,46 +305,6 @@ describeWhere(
   },
 );
 
-/** A JWT the system did not issue: well-formed, unsigned, `exp` an hour ahead. */
-function refusedJwt(): string {
-  const part = (value: object) =>
-    Buffer.from(JSON.stringify(value)).toString('base64url');
-  return `${part({ alg: 'none', typ: 'JWT' })}.${part({
-    sub: 'auth-broker-live',
-    exp: Math.floor(Date.now() / 1000) + 3600,
-  })}.refused`;
-}
-
-/** The provider, with every rejection it is handed recorded. */
-function recordingRejections(provider: IAuthProvider): {
-  provider: IAuthProvider;
-  rejections: IAuthRejection[];
-} {
-  const rejections: IAuthRejection[] = [];
-  return {
-    rejections,
-    provider: {
-      kind: provider.kind,
-      prepare: () => provider.prepare(),
-      establish: (logon) => provider.establish(logon),
-      authorize: (request) => provider.authorize(request),
-      rejected: (rejection) => {
-        rejections.push(rejection);
-        return provider.rejected(rejection);
-      },
-    },
-  };
-}
-
-/** This case renews by refresh: a login would mean a browser, so it is refused. */
-const refuseLogin: IAuthorizationStrategy<string> = {
-  authorize: async () => {
-    throw new Error(
-      'this case renews by the stored refresh token; it never logs in',
-    );
-  },
-};
-
 describeWhere(
   'jwt / authorization_code over HTTP — a BTP ABAP environment (getProvider → connection 14 CloudHttpTransport)',
   jwtUnavailable(),
@@ -392,96 +331,13 @@ describeWhere(
         );
       }
       fs.copyFileSync(original, path.join(copy, `${destination}.env`));
-      const sessions = new AbapSessionStore(copy);
-      const stored = await sessions.loadSession(destination);
-      if (!stored?.refreshToken) {
-        throw new Error(
-          `the session of "${destination}" holds no refresh token: log in again with the CLI`,
-        );
-      }
-      if (!stored.issuedFor || !stored.issuedBy) {
-        throw new Error(
-          `the session of "${destination}" answers no binding (SAP_ISSUED_FOR / SAP_ISSUED_BY): log in again with mcp-auth 3`,
-        );
-      }
-      const refused = refusedJwt();
-      // auth-stores merges: the refused token is written under the binding
-      // the file answered, its refresh token kept.
-      await sessions.saveSession(destination, {
-        authorizationToken: refused,
-        refreshToken: stored.refreshToken,
-        issuedFor: stored.issuedFor,
-        issuedBy: stored.issuedBy,
+      // The check (adtProbe.ts) is shared with browserLogin.live.test.ts.
+      await expectRefusedTokenRenewed({
+        sessionsDir: copy,
+        serviceKeysDir: env.AUTH_BROKER_LIVE_SERVICE_KEYS_DIR as string,
+        destination,
+        label: 'jwt over HTTP',
       });
-
-      const keys = new AbapServiceKeyStore(
-        env.AUTH_BROKER_LIVE_SERVICE_KEYS_DIR as string,
-        { grantType: 'authorization_code' },
-      );
-      const broker = new AuthBroker({
-        ...STATED,
-        serviceKeyStore: keys,
-        sessionStore: sessions,
-        authorization: () => refuseLogin,
-      });
-      const means: IConnectionConfig | null =
-        await keys.getConnectionConfig(destination);
-      if (!means?.serviceUrl) {
-        throw new Error(
-          `the service key of "${destination}" in AUTH_BROKER_LIVE_SERVICE_KEYS_DIR states no ABAP URL`,
-        );
-      }
-      const recorded = recordingRejections(
-        await broker.getProvider(destination),
-      );
-      const connector = new AdtCloudConnector(
-        asContract<ConnectorConfig>({
-          url: means.serviceUrl,
-          client: means.sapClient,
-          authType: 'jwt',
-        }),
-        recorded.provider,
-        new CloudHttpTransport(
-          () => ({}),
-          quiet,
-          asContract<ConstructorParameters<typeof CloudHttpTransport>[2]>({
-            client: means.sapClient,
-            baseUrl: means.serviceUrl,
-          }),
-        ),
-        quiet,
-      );
-      try {
-        await connector.connect();
-        const response = await connector.makeAdtRequest({
-          method: 'GET',
-          url: PROBE,
-          headers: { Accept: 'application/xml' },
-          timeout: 15_000,
-        });
-        log.info(
-          `jwt over HTTP: ${recorded.rejections.length} rejection(s) (${recorded.rejections
-            .map((r) => r.status ?? r.at)
-            .join(
-              ', ',
-            )}); GET ${PROBE} → ${response.status}, ${byteSize(response.data)} bytes`,
-        );
-        expect(response.status).toBe(200);
-      } finally {
-        await connector.disconnect();
-      }
-
-      expect(recorded.rejections.map((r) => r.status)).toEqual([401]);
-      await broker.flush();
-      const after = await sessions.loadSession(destination);
-      expect(after?.authorizationToken).toEqual(expect.any(String));
-      expect(after?.authorizationToken).not.toBe(refused);
-      // The renewal wrote the binding beside it, computed from the key.
-      expect(after?.issuedFor).toEqual(expect.any(String));
-      expect(after?.issuedBy).toEqual(expect.any(String));
-      log.info(
-        `jwt over HTTP: the session file holds a new token (${after?.authorizationToken?.length} chars)`,
-      );
     }, 90_000);
   },
 );
