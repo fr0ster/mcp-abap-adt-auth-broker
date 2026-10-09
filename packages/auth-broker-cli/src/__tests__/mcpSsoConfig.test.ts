@@ -742,12 +742,17 @@ describe('mcp-auth oidc / saml2-* CLI/config merge', () => {
         );
       });
 
-      it('refuses a certificate file that does not exist', () => {
-        expect(() =>
-          readIdpCertificateFile(path.join(tempDir, 'missing.pem')),
-        ).toThrow('process.exit(1)');
-        expect(errorSpy).toHaveBeenCalledWith(
-          expect.stringContaining('missing.pem'),
+      it('refuses a certificate file that does not exist: the flag, the path as given and ENOENT', () => {
+        const missing = path.join(tempDir, 'missing.pem');
+        let thrown: unknown;
+        try {
+          readIdpCertificateFile(missing);
+        } catch (error) {
+          thrown = error;
+        }
+        expect(isUsageError(thrown)).toBe(true);
+        expect(failureLines(thrown).join('\n')).toBe(
+          `❌ --idp-cert: ${missing} cannot be read (ENOENT)`,
         );
       });
     });

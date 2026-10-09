@@ -398,7 +398,7 @@ function showSsoHelp(subcommand: SsoSubcommand): void {
   console.log('');
   console.log('Usage:');
   console.log(
-    `  mcp-auth ${subcommand}${subcommand === 'oidc' ? ' --flow <browser|device|password|token_exchange>' : ''} --output <path> [options]`,
+    `  mcp-auth ${subcommand}${subcommand === 'oidc' ? ' [--flow <browser|device|password|token_exchange>]' : ''} --output <path> [options]`,
   );
   console.log('');
   console.log('Required Options:');
@@ -406,8 +406,16 @@ function showSsoHelp(subcommand: SsoSubcommand): void {
     '  --output <path>           Output file path (not with --env or --destination: written back)',
   );
   if (subcommand === 'oidc') {
+    console.log('');
+    console.log('Flow:');
     console.log(
-      "  --flow <flow>             browser|device|password|token_exchange (or the --config file's flow)",
+      '  --flow <flow>             browser|device|password|token_exchange. Optional where the run',
+    );
+    console.log(
+      "                            states it otherwise: the --config file's flow, or the grant of the",
+    );
+    console.log(
+      '                            session file (--env, --destination), which a given --flow must match',
     );
   }
   console.log('');

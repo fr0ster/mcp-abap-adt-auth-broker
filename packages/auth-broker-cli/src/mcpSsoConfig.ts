@@ -47,6 +47,7 @@ import {
 } from './certificateText';
 import { asContract } from './contractShape';
 import type { StatedMeans } from './destination';
+import { systemCodeOf } from './output';
 import { UsageError } from './subcommandArgs';
 import { withoutTrailingSlashes } from './urlText';
 
@@ -458,9 +459,11 @@ export function readIdpCertificateFile(filePath: string): string[] {
   let content: Buffer;
   try {
     content = readFileSync(resolved);
-  } catch {
-    console.error(`❌ IdP certificate file not found: ${resolved}`);
-    process.exit(1);
+  } catch (error) {
+    // The flag and the path as the user gave it, with the system code.
+    throw new UsageError(
+      `--idp-cert: ${filePath} cannot be read${systemCodeOf(error)}`,
+    );
   }
   const { entries, binary } = readCertificateFile(content);
   const readable = binary

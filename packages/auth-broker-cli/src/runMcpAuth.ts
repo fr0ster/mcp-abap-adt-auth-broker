@@ -66,7 +66,7 @@ import {
   writeJsonFile,
   writeOutputFile,
 } from './destination';
-import { progress } from './output';
+import { cannotReadFile, progress, unreadableFile } from './output';
 import { sessionClientAuth } from './sessionClientAuth';
 import {
   noGrantRefusal,
@@ -299,9 +299,12 @@ export async function runMcpAuth(
     const resolvedServiceKeyPath = source.serviceKeyPath;
     let serviceKeyDir = path.dirname(resolvedServiceKeyPath);
 
-    if (!fs.existsSync(resolvedServiceKeyPath)) {
-      console.error(`❌ Service key file not found: ${resolvedServiceKeyPath}`);
-      process.exit(1);
+    // The flag that gave the path, and the path as the user gave it.
+    const unreadable = unreadableFile(resolvedServiceKeyPath);
+    if (unreadable !== undefined) {
+      throw options.serviceKeyPath !== undefined
+        ? cannotReadFile('--service-key', options.serviceKeyPath, unreadable)
+        : cannotReadFile('--destination', resolvedServiceKeyPath, unreadable);
     }
     // Which parser reads the key: the ABAP format nests the client under
     // `uaa`, the XSUAA format holds it flat. The format, not the grant: the

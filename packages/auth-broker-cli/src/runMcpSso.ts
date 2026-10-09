@@ -10,7 +10,6 @@
  * is written: a secret the store did not take is a failed run.
  */
 
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AuthBroker, bindingOf } from '@mcp-abap-adt/auth-broker';
 import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
@@ -42,7 +41,12 @@ import {
   ssoBrowser,
   ssoRow,
 } from './mcpSsoConfig';
-import { printFailure, progress } from './output';
+import {
+  cannotReadFile,
+  printFailure,
+  progress,
+  unreadableFile,
+} from './output';
 import { applySamlMetadata, loadMetadata } from './samlMetadata';
 import { sessionClientAuth } from './sessionClientAuth';
 import {
@@ -239,6 +243,8 @@ export async function runMcpSso(
       '--format json needs --output: the session file is written back as .env',
     );
   }
+  // The service key as the user gave it, for a refusal naming --service-key.
+  const givenServiceKey = options.serviceKeyPath;
   // A service key's path, for every check below that asks whether the run
   // has one; a session file is the seed, nothing else.
   options.serviceKeyPath =
@@ -248,9 +254,15 @@ export async function runMcpSso(
   const destination =
     source?.destination ??
     path.basename(resolvedOutputPath, path.extname(resolvedOutputPath));
-  if (options.serviceKeyPath && !fs.existsSync(options.serviceKeyPath)) {
-    console.error(`❌ Service key file not found: ${options.serviceKeyPath}`);
-    process.exit(1);
+  // The service key a source names — --service-key as given, or the one
+  // --destination found — refused naming its flag when it cannot be read.
+  if (options.serviceKeyPath !== undefined) {
+    const unreadable = unreadableFile(options.serviceKeyPath);
+    if (unreadable !== undefined) {
+      throw givenServiceKey !== undefined
+        ? cannotReadFile('--service-key', givenServiceKey, unreadable)
+        : cannotReadFile('--destination', options.serviceKeyPath, unreadable);
+    }
   }
 
   // A session file states its means (D25) and is used as it is: a flag that
@@ -320,9 +332,9 @@ export async function runMcpSso(
   let providerConfigFromFile: ReturnType<typeof normalizeProviderConfig> = null;
   if (options.configPath) {
     const resolvedConfigPath = path.resolve(options.configPath);
-    if (!fs.existsSync(resolvedConfigPath)) {
-      console.error(`❌ Config file not found: ${resolvedConfigPath}`);
-      process.exit(1);
+    const unreadable = unreadableFile(resolvedConfigPath);
+    if (unreadable !== undefined) {
+      throw cannotReadFile('--config', options.configPath, unreadable);
     }
     // Read in fixed words: the parser's message would quote the file.
     let raw: unknown;
@@ -482,7 +494,7 @@ export async function runMcpSso(
     const stated = await files.keyStore.getConnectionConfig(destination);
     if (!stated?.serviceUrl) {
       console.error(
-        '❌ ABAP requires --service-url or existing env with SAP URL',
+        '❌ An ABAP session needs its system URL: give --service-url, or a session file that states SAP_URL (--env or --destination)',
       );
       process.exit(1);
     }

@@ -22,7 +22,6 @@
  * beside `certurl`, never holds their PEM.
  */
 
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
 import {
@@ -59,7 +58,14 @@ import {
   writeOutputFile,
 } from './destination';
 import { readJsonFile } from './jsonFile';
-import { createCliLogger, printFailure, progress, toStderr } from './output';
+import {
+  cannotReadFile,
+  createCliLogger,
+  printFailure,
+  progress,
+  toStderr,
+  unreadableFile,
+} from './output';
 import type { AuthorizationStrategy } from './runMcpAuth';
 import { UsageError } from './subcommandArgs';
 
@@ -229,8 +235,17 @@ export async function runGenerateEnv(
   );
   const serviceKeyDir = path.dirname(resolvedServiceKeyPath);
 
-  if (!fs.existsSync(resolvedServiceKeyPath)) {
-    console.error(`❌ Service key file not found: ${resolvedServiceKeyPath}`);
+  // The positional service-key-path names it (or the default
+  // <destination>.json): the path as given, with the system code.
+  const unreadable = unreadableFile(resolvedServiceKeyPath);
+  if (unreadable !== undefined) {
+    printFailure(
+      cannotReadFile(
+        'service-key-path',
+        serviceKeyPath ?? resolvedServiceKeyPath,
+        unreadable,
+      ),
+    );
     return 1;
   }
 

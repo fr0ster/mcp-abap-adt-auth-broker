@@ -124,6 +124,21 @@ describe('generate-env', () => {
     },
   );
 
+  it('a service key path that cannot be read: the argument, the path as given and ENOENT; nothing written', async () => {
+    const session = path.join(root, 'sessions', 'mcp.env');
+    await expect(
+      runGenerateEnv(
+        ['mcp', 'nope.json', session, '--grant', 'client_credentials'],
+        noBrowser,
+      ),
+    ).resolves.toBe(1);
+    expect(console.error).toHaveBeenCalledWith(
+      '❌ service-key-path: nope.json cannot be read (ENOENT)',
+    );
+    expect(server.requests).toHaveLength(0);
+    expect(fs.existsSync(session)).toBe(false);
+  });
+
   it('refuses a grant a service key client does not serve alone', async () => {
     await expect(
       runGenerateEnv(['mcp', xsuaaKey(), '--grant', 'password'], noBrowser),

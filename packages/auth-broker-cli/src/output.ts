@@ -14,6 +14,7 @@
  * module-private brand, `isUsageError`).
  */
 
+import * as fs from 'node:fs';
 import { isDestinationConfigError } from '@mcp-abap-adt/auth-broker';
 import {
   isAuthProviderFailure,
@@ -25,7 +26,7 @@ import type {
   Operation,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { isUsageError } from './subcommandArgs';
+import { isUsageError, UsageError } from './subcommandArgs';
 
 /** Where a line goes: stderr, unless a test states otherwise. */
 export type LineWriter = (line: string) => void;
@@ -146,6 +147,29 @@ export function systemCodeOf(thrown: unknown): string {
     }
   }
   return '';
+}
+
+/**
+ * Whether the CLI can read a file a flag named: `undefined` when it can, else
+ * the system code it gave — ` (ENOENT)`, or `''` for one not allowlisted — so a
+ * refusal reads `<flag>: <path as given> cannot be read (CODE)`.
+ */
+export function unreadableFile(file: string): string | undefined {
+  try {
+    fs.accessSync(file, fs.constants.R_OK);
+    return undefined;
+  } catch (error) {
+    return systemCodeOf(error);
+  }
+}
+
+/** The CLI's refusal of a file a flag named that it cannot read. */
+export function cannotReadFile(
+  flag: string,
+  given: string,
+  code: string,
+): UsageError {
+  return new UsageError(`${flag}: ${given} cannot be read${code}`);
 }
 
 /** `❌ reason`, or `❌ reason — hint`; then the diagnostics, when there are any. */

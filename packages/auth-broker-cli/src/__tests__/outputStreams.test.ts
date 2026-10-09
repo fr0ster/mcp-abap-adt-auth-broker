@@ -601,6 +601,55 @@ describe("the CLI's own I/O: refused in its own words naming the flag", () => {
     expect(run.stderr).not.toContain(`127.0.0.1:${port}`);
   });
 
+  it.each([
+    ['--service-key', ['--service-key', 'nope.json', '--output', 'out/a.env']],
+    [
+      '--service-key',
+      [
+        'oidc',
+        '--flow',
+        'device',
+        '--service-key',
+        'nope.json',
+        '--output',
+        'out/a.env',
+        '--type',
+        'xsuaa',
+      ],
+    ],
+    ['--config', ['oidc', '--config', 'nope.json', '--output', 'out/a.env']],
+    [
+      '--idp-cert',
+      [
+        'saml2-pure',
+        '--idp-sso-url',
+        'https://idp.example/sso',
+        '--sp-entity-id',
+        'sp',
+        '--idp-cert',
+        'nope.json',
+        '--idp-entity-id',
+        'https://idp.example',
+        '--service-url',
+        'https://abap.example',
+        '--output',
+        'out/a.env',
+      ],
+    ],
+  ])(
+    'a missing %s file: the flag, the path as given and ENOENT',
+    async (flag, args) => {
+      const run = await runBin(args);
+      expect(run.code).toBe(1);
+      expect(run.stdout).toBe('');
+      expect(run.stderr).toContain(
+        `❌ ${flag}: nope.json cannot be read (ENOENT)`,
+      );
+      expect(run.stderr).not.toContain('not found');
+      expect(fs.existsSync(path.join(root, 'out', 'a.env'))).toBe(false);
+    },
+  );
+
   it('an --output that cannot be written: the flag, the path and EACCES', async () => {
     server.answer('/oauth/token', TOKENS);
     const locked = path.join(root, 'locked');

@@ -89,6 +89,9 @@ version only. What a 2.x user must do, row by row: the README's *Migrating to 3.
 - A session file is read as auth-stores reads it (`dotenv`): `export`, quoting, comments,
   duplicates.
 - `--cookie` writes `refreshToken: ''` and both binding fields.
+- A file a flag names that cannot be read is refused as `<flag>: <the path as given> cannot be
+  read (CODE)` — `--service-key`, `--config`, `--idp-cert`, and `generate-env`'s
+  `service-key-path` (2.x: "Service key file not found: <absolute path>" and its kin).
 - `generate-env` takes `--browser` / `--browser-program`, `--verbose`, `--auth-debug`, runs under
   the same interrupt, and always logs in.
 - **Built under a stricter compiler**, as `@mcp-abap-adt/auth-broker`: `noImplicitReturns`,
