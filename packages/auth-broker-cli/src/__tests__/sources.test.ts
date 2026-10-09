@@ -14,7 +14,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { staticCodeStrategy } from '@mcp-abap-adt/auth-providers';
 import { runMcpAuth } from '../runMcpAuth';
-import { destinationBases, splitBasePaths, standardFolder } from '../source';
+import { destinationFolders, splitBasePaths, standardFolder } from '../source';
 import {
   type LocalServer,
   startLocalServer,
@@ -63,40 +63,107 @@ describe('AUTH_BROKER_PATH: one or several base folders', () => {
   });
 });
 
-describe('the folder levels, each overriding the next', () => {
+describe('the folder levels, each overriding the next — as the server’s getPlatformPaths', () => {
   const unix = { home: '/home/u', platform: 'linux' };
+  const both = (
+    bases: string[],
+    join = (b: string, s: string) => `${b}/${s}`,
+  ) => ({
+    sessions: bases.map((b) => join(b, 'sessions')),
+    serviceKeys: bases.map((b) => join(b, 'service-keys')),
+  });
 
   it('--destination-dir first, whatever the variable', () => {
     expect(
-      destinationBases(
+      destinationFolders(
         { destinationDir: '/dests' },
         { ...unix, authBrokerPath: '/a;/b' },
       ),
-    ).toEqual(['/dests']);
+    ).toEqual(both(['/dests']));
   });
 
   it('then AUTH_BROKER_PATH, every folder in order', () => {
     expect(
-      destinationBases({}, { ...unix, authBrokerPath: '/a;/b:/c' }),
-    ).toEqual(['/a', '/b', '/c']);
+      destinationFolders({}, { ...unix, authBrokerPath: '/a;/b:/c' }),
+    ).toEqual(both(['/a', '/b', '/c']));
+  });
+
+  it('an entry ending in the subfolder looked for is read as its parent base — that subfolder only, as the server', () => {
+    expect(
+      destinationFolders(
+        {},
+        { ...unix, authBrokerPath: '/x/sessions;/y/service-keys;/z' },
+      ),
+    ).toEqual({
+      sessions: ['/x/sessions', '/y/service-keys/sessions', '/z/sessions'],
+      serviceKeys: [
+        '/x/sessions/service-keys',
+        '/y/service-keys',
+        '/z/service-keys',
+      ],
+    });
+    expect(
+      destinationFolders(
+        { destinationDir: '/d/sessions' },
+        { ...unix, authBrokerPath: undefined },
+      ),
+    ).toEqual({
+      sessions: ['/d/sessions'],
+      serviceKeys: ['/d/sessions/service-keys'],
+    });
+  });
+
+  it('each list without duplicates, in order', () => {
+    expect(
+      destinationFolders(
+        {},
+        { ...unix, authBrokerPath: '/a;/a/sessions;/b;/a/' },
+      ),
+    ).toEqual({
+      sessions: ['/a/sessions', '/b/sessions'],
+      serviceKeys: [
+        '/a/service-keys',
+        '/a/sessions/service-keys',
+        '/b/service-keys',
+      ],
+    });
   });
 
   it('then the standard folder: the variable absent or empty', () => {
     for (const authBrokerPath of [undefined, '', ';:']) {
-      expect(destinationBases({}, { ...unix, authBrokerPath })).toEqual([
-        '/home/u/.config/mcp-abap-adt',
-      ]);
+      expect(destinationFolders({}, { ...unix, authBrokerPath })).toEqual(
+        both(['/home/u/.config/mcp-abap-adt']),
+      );
     }
+  });
+
+  it('Windows paths by the platform stated, never the native resolver', () => {
+    const win = (b: string, s: string) => `${b}\\${s}`;
     expect(
-      destinationBases(
+      destinationFolders(
+        {},
+        { home: 'C:\\Users\\u', platform: 'win32', authBrokerPath: undefined },
+      ),
+    ).toEqual(both(['C:\\Users\\u\\Documents\\mcp-abap-adt'], win));
+    expect(
+      destinationFolders(
         {},
         {
           home: 'C:\\Users\\u',
           platform: 'win32',
-          authBrokerPath: undefined,
+          authBrokerPath: 'C:\\a;D:\\b\\service-keys',
         },
       ),
-    ).toEqual(['C:\\Users\\u\\Documents\\mcp-abap-adt']);
+    ).toEqual({
+      sessions: ['C:\\a\\sessions', 'D:\\b\\service-keys\\sessions'],
+      serviceKeys: ['C:\\a\\service-keys', 'D:\\b\\service-keys'],
+    });
+    expect(
+      destinationFolders(
+        { destinationDir: 'E:\\dests' },
+        { home: 'C:\\Users\\u', platform: 'win32', authBrokerPath: undefined },
+      ),
+    ).toEqual(both(['E:\\dests'], win));
   });
 });
 
@@ -251,8 +318,15 @@ describe('the built bin reads the folder as the process states it', () => {
     const result = await runBin(['--destination', NAME], { HOME: home });
     expect(result.code).toBe(1);
     expect(result.stdout).toBe('');
+    const base = path.join(home, '.config', 'mcp-abap-adt');
     expect(result.stderr).toContain(
-      `❌ --destination: ${NAME} is in none of ${path.join(home, '.config', 'mcp-abap-adt')} (sessions/${NAME}.env, service-keys/${NAME}.json)`,
+      `❌ --destination: ${NAME} is in none of ${path.join(base, 'sessions')} (as ${NAME}.env) and ${path.join(base, 'service-keys')} (as ${NAME}.json)`,
     );
+    // A run-time usage error ends as a parse-time one does (M4).
+    expect(
+      result.stderr
+        .trimEnd()
+        .endsWith('Run "mcp-auth --help" for usage information'),
+    ).toBe(true);
   });
 });

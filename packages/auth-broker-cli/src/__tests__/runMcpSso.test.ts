@@ -30,6 +30,7 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import type { McpSsoOptions } from '../mcpSsoConfig';
 import { runMcpSso } from '../runMcpSso';
 import { parseSubcommandArgs, type SsoSubcommand } from '../subcommandArgs';
+import { CLIENT_CRT } from './helpers/certificates';
 import {
   meansKeys,
   readEnvKeys,
@@ -524,8 +525,9 @@ describe('mcp-auth saml2-pure --cookie over a pre-existing session bound to othe
       [
         `SAP_URL=${SERVICE_URL}`,
         'SAP_CLIENT=100',
-        'SAP_AUTH_TYPE=jwt',
-        'SAP_GRANT_TYPE=authorization_code',
+        // A cookie destination whose stored secret is bound to other means.
+        'SAP_AUTH_TYPE=saml',
+        'SAP_GRANT_TYPE=none',
         'SAP_JWT_TOKEN=T0-OLD-TOKEN',
         'SAP_REFRESH_TOKEN=R-OLD-MARKER',
         'SAP_ISSUED_FOR=https://other.example.com:443',
@@ -1146,6 +1148,155 @@ describe('D25: --cookie hands over the secret — it is no means flag', () => {
         sessionCookies: 'SAP_SESSIONID=xyz',
         issuedFor: 'https://abap.example.com:443?sap-client=200',
       }),
+    );
+  });
+});
+
+describe('D25 fix round: --cookie only over a cookie session; the exact --env file', () => {
+  function bare(subcommand: SsoSubcommand, args: string[]): McpSsoOptions {
+    const parsed = parseSubcommandArgs(subcommand, args);
+    if (parsed.kind !== 'sso') throw new Error(`not a run: ${parsed.kind}`);
+    return parsed.options;
+  }
+
+  /** A populated saml2_pure destination file: system, client, IdP, ACS, trust. */
+  async function samlPureFile(): Promise<string> {
+    const dir = path.join(root, 'saml');
+    fs.mkdirSync(dir, { recursive: true });
+    await new EnvDestinationStore(dir).setDestination(DEST, {
+      authType: 'saml',
+      grantType: 'saml2_pure',
+      serviceUrl: SERVICE_URL,
+      sapClient: '100',
+      samlIdpSsoUrl: 'https://idp.example.com/sso',
+      samlIdpEntityId: 'https://idp.example.com/metadata',
+      samlIdpCertificates: [CLIENT_CRT],
+      samlSpEntityId: 'my-sp',
+      samlAcsUrl: 'https://abap.example.com/sap/saml2/sp/acs/100',
+      samlRelayState: 'relay',
+    } as never);
+    return path.join(dir, `${DEST}.env`);
+  }
+
+  it('over a populated saml2_pure file: only the auth and grant type change, every other means line kept, the cookies bound and written back', async () => {
+    const file = await samlPureFile();
+    const before = readEnvKeys(file);
+    const beforeLines = fs
+      .readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((line) => line !== '');
+    await expect(
+      run(bare('saml2-pure', ['--cookie', 'SAP_SESSIONID=new', '--env', file])),
+    ).resolves.toBe(0);
+    const after = readEnvKeys(file);
+    expect(after.SAP_AUTH_TYPE).toBe('saml');
+    expect(after.SAP_GRANT_TYPE).toBe('none');
+    for (const [key, value] of Object.entries(before)) {
+      if (key === 'SAP_GRANT_TYPE') continue;
+      expect([key, after[key]]).toEqual([key, value]);
+    }
+    const added = Object.keys(after).filter((key) => !(key in before));
+    expect(added.filter((key) => !sessionKeys('abap').includes(key))).toEqual(
+      [],
+    );
+    // No stray line: every line is a key of one store or a line kept.
+    const lines = fs
+      .readFileSync(file, 'utf8')
+      .split('\n')
+      .filter((line) => line !== '');
+    expect(lines.length).toBe(beforeLines.length + added.length);
+    const session = await new AbapSessionStore(path.dirname(file)).loadSession(
+      DEST,
+    );
+    expect(session).toEqual(
+      expect.objectContaining({
+        sessionCookies: 'SAP_SESSIONID=new',
+        issuedFor: 'https://abap.example.com:443?sap-client=100',
+      }),
+    );
+  });
+
+  it.each([
+    ['authorization_code', 'jwt'],
+    ['password', 'jwt'],
+    ['saml2_bearer', 'saml'],
+  ])(
+    'beside a %s session: refused naming --cookie and the grant, the file untouched',
+    async (grant, authType) => {
+      const file = path.join(root, `${DEST}.env`);
+      fs.writeFileSync(
+        file,
+        `SAP_URL=${SERVICE_URL}\nSAP_AUTH_TYPE=${authType}\nSAP_GRANT_TYPE=${grant}\nSAP_JWT_TOKEN=T\n`,
+      );
+      const before = fs.readFileSync(file);
+      const thrown = await run(
+        bare('saml2-pure', ['--cookie', 'A=1', '--env', file]),
+      ).catch((e: unknown) => e);
+      expect((thrown as Error).message).toBe(
+        `--cookie and --env: the session file states the grant ${grant}; cookies are handed over only to a cookie session (saml2_pure or none)`,
+      );
+      expect(fs.readFileSync(file)).toEqual(before);
+      expect(sessionWrites).toEqual([]);
+    },
+  );
+
+  /** A password-grant session file from a first login, its token expired. */
+  async function passwordSession(): Promise<string> {
+    server.answer('/token', tokenAnswer('pw'));
+    await expect(
+      run(
+        options({
+          ...form('oidc', ['--flow', 'password']),
+          clientId: 'cli',
+          clientSecret: 'cli-secret',
+          issuerUrl: server.url,
+          tokenEndpoint: `${server.url}/token`,
+          username: 'alice',
+          password: 'alice-password',
+        }),
+      ),
+    ).resolves.toBe(0);
+    return path.join(outDir, `${DEST}.env`);
+  }
+
+  it.each([['.env'], ['session.backup']])(
+    '--env reads the exact file given (%s), never an adjacent <name>.env',
+    async (fileName) => {
+      const source = await passwordSession();
+      const dir = path.join(root, 'exact');
+      fs.mkdirSync(dir);
+      const file = path.join(dir, fileName);
+      fs.copyFileSync(source, file);
+      const decoy = path.join(
+        dir,
+        fileName === '.env' ? '.env.env' : 'session.env',
+      );
+      // Another subcommand's grant: read, it would refuse the run.
+      fs.writeFileSync(
+        decoy,
+        'SAP_AUTH_TYPE=saml\nSAP_GRANT_TYPE=saml2_bearer\n',
+      );
+      const decoyBefore = fs.readFileSync(decoy);
+      const before = fs.readFileSync(file);
+      const sent = server.requests.length;
+      await expect(run(bare('oidc', ['--env', file]))).resolves.toBe(0);
+      expect(server.requests).toHaveLength(sent);
+      expect(fs.readFileSync(file)).toEqual(before);
+      expect(fs.readFileSync(decoy)).toEqual(decoyBefore);
+    },
+  );
+
+  it('an XSUAA_* file without --type xsuaa: the refusal says to add --type xsuaa', async () => {
+    const file = path.join(root, `${DEST}.env`);
+    fs.writeFileSync(
+      file,
+      'XSUAA_AUTH_TYPE=jwt\nXSUAA_GRANT_TYPE=password\nXSUAA_UAA_URL=https://uaa\n',
+    );
+    const thrown = await run(bare('oidc', ['--env', file])).catch(
+      (e: unknown) => e,
+    );
+    expect((thrown as Error).message).toBe(
+      '--env: the session file holds XSUAA_* variables: add --type xsuaa',
     );
   });
 });

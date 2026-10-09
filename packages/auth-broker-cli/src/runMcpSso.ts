@@ -15,8 +15,7 @@ import * as path from 'node:path';
 import { AuthBroker, bindingOf } from '@mcp-abap-adt/auth-broker';
 import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 import {
-  EnvDestinationStore,
-  XSUAA_DESTINATION_VARS,
+  type EnvDestinationStore,
   XsuaaServiceKeyStore,
 } from '@mcp-abap-adt/auth-stores';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
@@ -45,6 +44,7 @@ import {
 import { printFailure, progress } from './output';
 import { applySamlMetadata, loadMetadata } from './samlMetadata';
 import {
+  noGrantRefusal,
   processEnvironment,
   type RunSource,
   resolveSource,
@@ -141,22 +141,12 @@ function subcommandText(options: McpSsoOptions): string {
 async function sessionRow(
   options: McpSsoOptions,
   source: Extract<RunSource, { kind: 'session' }>,
+  means: SessionMeans,
 ): Promise<SsoRow> {
-  const store = new EnvDestinationStore(
-    path.dirname(source.sessionPath),
-    options.authType === 'xsuaa'
-      ? { variables: XSUAA_DESTINATION_VARS }
-      : undefined,
-  );
-  const means = await store.getConnectionConfig(
-    path.basename(source.sessionPath, path.extname(source.sessionPath)),
-  );
   const grant = means?.grantType;
   const authType = means?.authType;
   if (grant === undefined || (authType !== 'jwt' && authType !== 'saml')) {
-    throw new UsageError(
-      `${source.flag}: the session file states no grant (SAP_AUTH_TYPE, SAP_GRANT_TYPE); state the means with flags`,
-    );
+    throw noGrantRefusal(source.sessionPath, options.authType, source.flag);
   }
   const runs = FLOW_OF_GRANT[grant];
   const flowGiven = options.flow !== undefined;
@@ -173,6 +163,30 @@ async function sessionRow(
   options.acsUrl ??= means?.samlAcsUrl;
   options.idpInitiated ??= means?.samlIdpInitiated;
   return { authType, grantType: grant };
+}
+
+/** The means a session file states, as its key store reads them. */
+type SessionMeans = Awaited<
+  ReturnType<EnvDestinationStore['getConnectionConfig']>
+>;
+
+/**
+ * The means of the exact session file the run names, read from the run's
+ * private copy of it (`openDestination`) — never by a directory store over
+ * the file's own folder, which would read `<name>.env` beside it instead.
+ */
+async function sessionMeans(
+  options: McpSsoOptions,
+  source: Extract<RunSource, { kind: 'session' }>,
+  workDir: string,
+): Promise<SessionMeans> {
+  const copy = openDestination(
+    workDir,
+    source.destination,
+    options.authType,
+    source.sessionPath,
+  );
+  return copy.keyStore.getConnectionConfig(source.destination);
 }
 
 export interface McpSsoContext {
@@ -251,10 +265,31 @@ export async function runMcpSso(
     options.cookie !== undefined &&
     options.protocol === 'saml2' &&
     options.flow === 'pure';
-  const fileRow =
-    source?.kind === 'session' && !handsOverCookies
-      ? await sessionRow(options, source)
+  const means =
+    source?.kind === 'session'
+      ? await sessionMeans(options, source, workDir)
       : undefined;
+  // Only a cookie session takes handed-over cookies: a destination of any
+  // other grant is never turned into one.
+  if (source?.kind === 'session' && handsOverCookies) {
+    const grant = means?.grantType;
+    const cookieSession =
+      grant === undefined ||
+      (means?.authType === 'saml' &&
+        (grant === 'none' || grant === 'saml2_pure'));
+    if (!cookieSession) {
+      throw new UsageError(
+        `--cookie and ${source.flag}: the session file states the grant ${grant}; cookies are handed over only to a cookie session (saml2_pure or none)`,
+      );
+    }
+  }
+  const cookiesOverSession = source?.kind === 'session' && handsOverCookies;
+  const fileRow: SsoRow | undefined =
+    source?.kind !== 'session'
+      ? undefined
+      : cookiesOverSession
+        ? { authType: 'saml', grantType: 'none' }
+        : await sessionRow(options, source, means ?? null);
 
   const allowTokenEndpointWithServiceKey =
     options.protocol === 'saml2' && options.flow === 'bearer';
@@ -453,8 +488,15 @@ export async function runMcpSso(
 
   const row = fileRow ?? ssoRow(options);
   if (fileRow === undefined) {
-    const means = buildDestinationMeans(options);
-    await files.keyStore.setDestination(destination, completeMeans(means));
+    const stated = buildDestinationMeans(options);
+    await files.keyStore.setDestination(destination, completeMeans(stated));
+  } else if (cookiesOverSession) {
+    // The handover's row, and nothing else: every other means field of the
+    // file — its system, SAP client, IdP, ACS, trust — stays as it is.
+    await files.keyStore.setDestination(destination, {
+      authType: 'saml',
+      grantType: 'none',
+    });
   }
   progress(
     `📝 Destination "${destination}": ${row.authType} / ${row.grantType}`,

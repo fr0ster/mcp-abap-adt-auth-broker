@@ -666,6 +666,10 @@ main().then(
     // In words auth-errors, the broker or this CLI rendered: never a
     // foreign value's message, never a stack (§10.9).
     printFailure(error);
+    // A usage error found at run time ends as one found while parsing.
+    if (isUsageError(error)) {
+      toStderr('Run "mcp-auth --help" for usage information');
+    }
     process.exit(1);
   },
 );

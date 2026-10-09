@@ -146,25 +146,53 @@ export function splitBasePaths(value: string, platform: string): string[] {
   return parts.map((part) => part.trim()).filter((part) => part !== '');
 }
 
+/** The folders a destination's files live in, each list in search order. */
+export interface DestinationFolders {
+  /** Where `<name>.env` is looked for; the first is where a new one is written. */
+  sessions: string[];
+  /** Where `<name>.json` is looked for. */
+  serviceKeys: string[];
+}
+
 /**
- * The base folders `--destination` looks in, in order: `--destination-dir`;
- * else `AUTH_BROKER_PATH`'s folders; else the standard folder.
+ * The folders `--destination` looks in, as the server's `getPlatformPaths`
+ * builds them: the base folders — `--destination-dir`; else
+ * `AUTH_BROKER_PATH`'s; else the standard folder — each resolved, an entry
+ * already ending in `sessions` / `service-keys` read as its parent, and the
+ * subfolder joined; each list without duplicates, in order. Paths are read
+ * with the stated platform's own path rules, never the native ones.
  */
-export function destinationBases(
+export function destinationFolders(
   flags: Pick<SourceFlags, 'destinationDir'>,
   environment: SourceEnvironment,
-): string[] {
+): DestinationFolders {
+  const rules = environment.platform === 'win32' ? path.win32 : path.posix;
+  let bases: string[];
   if (flags.destinationDir !== undefined) {
-    return [path.resolve(flags.destinationDir)];
+    bases = [flags.destinationDir];
+  } else {
+    const listed =
+      environment.authBrokerPath === undefined
+        ? []
+        : splitBasePaths(environment.authBrokerPath, environment.platform);
+    bases =
+      listed.length > 0
+        ? listed
+        : [standardFolder(environment.platform, environment.home)];
   }
-  const listed =
-    environment.authBrokerPath === undefined
-      ? []
-      : splitBasePaths(environment.authBrokerPath, environment.platform);
-  if (listed.length > 0) {
-    return listed.map((folder) => path.resolve(folder));
-  }
-  return [standardFolder(environment.platform, environment.home)];
+  const under = (subfolder: 'sessions' | 'service-keys'): string[] => {
+    const folders: string[] = [];
+    for (const base of bases) {
+      let resolved = rules.resolve(base);
+      if (rules.basename(resolved) === subfolder) {
+        resolved = rules.dirname(resolved);
+      }
+      const folder = rules.normalize(rules.join(resolved, subfolder));
+      if (!folders.includes(folder)) folders.push(folder);
+    }
+    return folders;
+  };
+  return { sessions: under('sessions'), serviceKeys: under('service-keys') };
 }
 
 /** What a run reads and where it writes, once its source is resolved. */
@@ -236,13 +264,12 @@ export function resolveSource(
   }
   const name = flags.destination;
   if (name === undefined) return undefined;
-  // The process is read only when no folder was given.
-  const bases =
-    flags.destinationDir === undefined
-      ? destinationBases({}, environment())
-      : [path.resolve(flags.destinationDir)];
-  for (const base of bases) {
-    const sessionPath = path.join(base, 'sessions', `${name}.env`);
+  const environmentNow = environment();
+  const folders = destinationFolders(flags, environmentNow);
+  const rules = environmentNow.platform === 'win32' ? path.win32 : path.posix;
+  // Sessions first, every folder in order; then service keys (as the server).
+  for (const folder of folders.sessions) {
+    const sessionPath = rules.join(folder, `${name}.env`);
     if (isFile(sessionPath)) {
       return {
         kind: 'session',
@@ -252,19 +279,50 @@ export function resolveSource(
         flag: '--destination',
       };
     }
-    const serviceKeyPath = path.join(base, 'service-keys', `${name}.json`);
+  }
+  for (const folder of folders.serviceKeys) {
+    const serviceKeyPath = rules.join(folder, `${name}.json`);
     if (isFile(serviceKeyPath)) {
       return {
         kind: 'service-key',
         serviceKeyPath,
         destination: name,
-        // A new session goes to the first folder.
+        // A new session goes to the first sessions folder.
         output:
-          output ?? path.join(bases[0] as string, 'sessions', `${name}.env`),
+          output ?? rules.join(folders.sessions[0] as string, `${name}.env`),
       };
     }
   }
   throw new UsageError(
-    `--destination: ${name} is in none of ${bases.join(', ')} (sessions/${name}.env, service-keys/${name}.json)`,
+    `--destination: ${name} is in none of ${folders.sessions.join(', ')} (as ${name}.env) and ${folders.serviceKeys.join(', ')} (as ${name}.json)`,
+  );
+}
+
+/**
+ * The refusal of a session file that states no grant under the variable set
+ * `authType` reads: when it holds the other set's grant, the `--type` that
+ * reads it; else that the file states no grant. Lines are read by plain
+ * string code.
+ */
+export function noGrantRefusal(
+  file: string,
+  authType: 'abap' | 'xsuaa',
+  flag: '--env' | '--destination',
+): UsageError {
+  let lines: string[] = [];
+  try {
+    lines = fs.readFileSync(file, 'utf8').split('\n');
+  } catch {
+    // Unreadable: the plain refusal below.
+  }
+  const other = authType === 'abap' ? 'XSUAA_' : 'SAP_';
+  if (lines.some((line) => line.trim().startsWith(`${other}GRANT_TYPE=`))) {
+    return new UsageError(
+      `${flag}: the session file holds ${other}* variables: add --type ${authType === 'abap' ? 'xsuaa' : 'abap'}`,
+    );
+  }
+  const own = authType === 'abap' ? 'SAP' : 'XSUAA';
+  return new UsageError(
+    `${flag}: the session file states no grant (${own}_AUTH_TYPE, ${own}_GRANT_TYPE); state the means with --service-key`,
   );
 }

@@ -66,6 +66,7 @@ import {
 } from './destination';
 import { progress } from './output';
 import {
+  noGrantRefusal,
   processEnvironment,
   type RunSource,
   resolveSource,
@@ -473,10 +474,11 @@ export async function runMcpAuth(
     if (stated !== 'authorization_code' && stated !== 'client_credentials') {
       const subcommand =
         stated === undefined ? undefined : SUBCOMMAND_OF_GRANT[stated];
+      if (stated === undefined) {
+        throw noGrantRefusal(source.sessionPath, options.authType, source.flag);
+      }
       throw new UsageError(
-        stated === undefined
-          ? `${source.flag}: the session file states no grant (SAP_GRANT_TYPE); state the means with --service-key`
-          : `${source.flag}: the session file states the grant ${stated}${subcommand ? `: run mcp-auth ${subcommand}` : ''}`,
+        `${source.flag}: the session file states the grant ${stated}${subcommand ? `: run mcp-auth ${subcommand}` : ''}`,
       );
     }
     grantType = stated;

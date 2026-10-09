@@ -488,6 +488,47 @@ describe('three sources, one per run (D25)', () => {
       expect(fs.readFileSync(previous)).toEqual(before);
     });
 
+    it.each([['.env'], ['session.backup']])(
+      'the exact file given (%s): read and written back, an adjacent <name>.env never read',
+      async (fileName) => {
+        const previous = await previousSession();
+        const dir = path.join(root, 'exact');
+        fs.mkdirSync(dir);
+        const file = path.join(dir, fileName);
+        fs.copyFileSync(previous, file);
+        expireStoredToken(file, 'abap');
+        // A conflicting file where a directory store would look.
+        const decoy = path.join(
+          dir,
+          fileName === '.env' ? '.env.env' : 'session.env',
+        );
+        fs.writeFileSync(
+          decoy,
+          'SAP_AUTH_TYPE=jwt\nSAP_GRANT_TYPE=device_code\n',
+        );
+        const decoyBefore = fs.readFileSync(decoy);
+        const sent = server.requests.length;
+        await expect(run(envRun(file))).resolves.toBe(0);
+        expect(
+          server.requests.slice(sent).map((r) => r.form.grant_type),
+        ).toEqual(['refresh_token']);
+        expect(readEnvKeys(file).SAP_REFRESH_TOKEN).toBe('uaa-refresh-2');
+        expect(fs.readFileSync(decoy)).toEqual(decoyBefore);
+      },
+    );
+
+    it('an XSUAA_* file without --type xsuaa: the refusal says to add --type xsuaa', async () => {
+      const file = path.join(root, `${DEST}.env`);
+      fs.writeFileSync(
+        file,
+        'XSUAA_AUTH_TYPE=jwt\nXSUAA_GRANT_TYPE=authorization_code\nXSUAA_UAA_URL=https://uaa\n',
+      );
+      const thrown = await run(envRun(file)).catch((e: unknown) => e);
+      expect((thrown as Error).message).toBe(
+        '--env: the session file holds XSUAA_* variables: add --type xsuaa',
+      );
+    });
+
     it('no file at the path: a usage error naming --env, nothing sent', async () => {
       const missing = path.join(root, 'missing.env');
       const thrown = await run(envRun(missing)).catch((e: unknown) => e);
@@ -587,7 +628,7 @@ describe('three sources, one per run (D25)', () => {
       const thrown = await run(destinationRun()).catch((e: unknown) => e);
       expect(isUsageError(thrown)).toBe(true);
       expect((thrown as Error).message).toBe(
-        `--destination: ${DEST} is in none of ${dests()} (sessions/${DEST}.env, service-keys/${DEST}.json)`,
+        `--destination: ${DEST} is in none of ${path.join(dests(), 'sessions')} (as ${DEST}.env) and ${path.join(dests(), 'service-keys')} (as ${DEST}.json)`,
       );
       expect(server.requests).toHaveLength(0);
     });
@@ -676,6 +717,34 @@ describe('three sources, one per run (D25)', () => {
           jwtName((await sessionAt(sessionFile(first)))?.authorizationToken),
         ).toBe('uaa-access-1');
         expect(fs.existsSync(sessionFile(later))).toBe(false);
+      });
+
+      it('sessions and service keys are their own lists: a session in a later folder beats a key in the first (as the server)', async () => {
+        const first = path.join(root, 'first');
+        keyIn(first);
+        const later = path.join(root, 'later');
+        const [fromLater] = await sessionsIn(later);
+        const sent = server.requests.length;
+        await expect(
+          run(
+            destinationRun({ destinationDir: undefined, outputFile: output() }),
+            environment(`${first};${later}`),
+          ),
+        ).resolves.toBe(0);
+        expect(server.requests).toHaveLength(sent);
+        expect(fs.readFileSync(output())).toEqual(fromLater);
+      });
+
+      it('an AUTH_BROKER_PATH entry naming the sessions folder is read as its base (as the server)', async () => {
+        const base = path.join(root, 'named');
+        const [fromNamed] = await sessionsIn(base);
+        await expect(
+          run(
+            destinationRun({ destinationDir: undefined, outputFile: output() }),
+            environment(path.join(base, 'sessions')),
+          ),
+        ).resolves.toBe(0);
+        expect(fs.readFileSync(output())).toEqual(fromNamed);
       });
 
       it('the standard folder when neither is given', async () => {
