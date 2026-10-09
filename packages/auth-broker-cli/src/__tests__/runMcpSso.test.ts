@@ -821,3 +821,189 @@ describe('--service-key whose UAA URL ends in a long run of slashes', () => {
     );
   });
 });
+
+describe('three sources, one per run (D25)', () => {
+  /** What `mcp-auth <subcommand> <args>` parses to, with no --output added. */
+  function bare(subcommand: SsoSubcommand, args: string[]): McpSsoOptions {
+    const parsed = parseSubcommandArgs(subcommand, args);
+    if (parsed.kind !== 'sso') throw new Error(`not a run: ${parsed.kind}`);
+    return parsed.options;
+  }
+
+  /** A password-grant destination from a first login, copied to `<root>/<DEST>.env`. */
+  async function previousSession(): Promise<string> {
+    server.answer('/token', tokenAnswer('pw'));
+    await expect(
+      run(
+        options({
+          ...form('oidc', ['--flow', 'password']),
+          clientId: 'cli',
+          clientSecret: 'cli-secret',
+          issuerUrl: server.url,
+          tokenEndpoint: `${server.url}/token`,
+          username: 'alice',
+          password: 'alice-password',
+        }),
+      ),
+    ).resolves.toBe(0);
+    const previous = path.join(root, `${DEST}.env`);
+    fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
+    return previous;
+  }
+
+  function sessionAt(file: string) {
+    return new AbapSessionStore(path.dirname(file)).loadSession(
+      path.basename(file, '.env'),
+    );
+  }
+
+  /** The session in `file` holds a token that expired an hour ago. */
+  function expire(file: string): void {
+    const past = Math.floor(Date.now() / 1000) - 3600;
+    const part = (value: object) =>
+      Buffer.from(JSON.stringify(value)).toString('base64url');
+    const lines = fs
+      .readFileSync(file, 'utf8')
+      .split('\n')
+      .map((line) => {
+        if (line.startsWith('SAP_JWT_TOKEN=')) {
+          return `SAP_JWT_TOKEN=${part({ alg: 'none' })}.${part({ sub: 'old', exp: past })}.`;
+        }
+        if (line.startsWith('SAP_EXPIRES_AT=')) {
+          return `SAP_EXPIRES_AT=${past * 1000}`;
+        }
+        return line;
+      });
+    fs.writeFileSync(file, lines.join('\n'));
+  }
+
+  it('--env alone: the means from the file — a valid token reused, no request, the file as it was', async () => {
+    const previous = await previousSession();
+    const before = fs.readFileSync(previous);
+    const sent = server.requests.length;
+    await expect(run(bare('oidc', ['--env', previous]))).resolves.toBe(0);
+    expect(server.requests).toHaveLength(sent);
+    expect(fs.readFileSync(previous)).toEqual(before);
+  });
+
+  it('--env alone, expired: one refresh, written back to the file', async () => {
+    const previous = await previousSession();
+    expire(previous);
+    const sent = server.requests.length;
+    await expect(
+      run(bare('oidc', ['--flow', 'password', '--env', previous])),
+    ).resolves.toBe(0);
+    expect(server.requests.slice(sent).map((r) => r.form)).toEqual([
+      expect.objectContaining({
+        grant_type: 'refresh_token',
+        refresh_token: 'pw-refresh-1',
+      }),
+    ]);
+    expect(jwtName((await sessionAt(previous))?.authorizationToken)).toBe(
+      'pw-access-2',
+    );
+  });
+
+  it('--env whose file states another grant than the flow: a usage error naming --env, nothing sent', async () => {
+    const previous = await previousSession();
+    const sent = server.requests.length;
+    const thrown = await run(
+      bare('oidc', ['--flow', 'device', '--env', previous]),
+    ).catch((e: unknown) => e);
+    expect((thrown as Error).message).toBe(
+      `--env: the session file states the grant password, not mcp-auth oidc --flow device`,
+    );
+    expect(server.requests).toHaveLength(sent);
+    const pure = await run(bare('saml2-pure', ['--env', previous])).catch(
+      (e: unknown) => e,
+    );
+    expect((pure as Error).message).toBe(
+      `--env: the session file states the grant password, not mcp-auth saml2-pure`,
+    );
+  });
+
+  it('--service-key twice: two logins, each a new pair; the --output session is not read', async () => {
+    const key = path.join(root, `${DEST}.json`);
+    fs.writeFileSync(
+      key,
+      JSON.stringify({
+        url: `${server.url}/authentication`,
+        clientid: 'key-client',
+        clientsecret: 'key-secret',
+      }),
+    );
+    server.answer('/authentication/oauth/token', tokenAnswer('key'));
+    const o = () =>
+      options({
+        serviceUrl: undefined,
+        ...form('oidc', ['--flow', 'password', '--type', 'xsuaa']),
+        serviceKeyPath: key,
+        username: 'alice',
+        password: 'alice-password',
+      });
+    await expect(run(o())).resolves.toBe(0);
+    await expect(run(o())).resolves.toBe(0);
+    expect(server.requests.map((r) => r.form.grant_type)).toEqual([
+      'password',
+      'password',
+    ]);
+    const second = await sessionStoreOf('xsuaa').loadSession(DEST);
+    expect(jwtName(second?.authorizationToken)).toBe('key-access-2');
+  });
+
+  it('--destination: sessions/<name>.env as --env', async () => {
+    const previous = await previousSession();
+    const dests = path.join(root, 'dests');
+    fs.mkdirSync(path.join(dests, 'sessions'), { recursive: true });
+    const file = path.join(dests, 'sessions', `${DEST}.env`);
+    fs.copyFileSync(previous, file);
+    expire(file);
+    const sent = server.requests.length;
+    await expect(
+      run(bare('oidc', ['--destination', DEST, '--destination-dir', dests])),
+    ).resolves.toBe(0);
+    expect(server.requests.slice(sent).map((r) => r.form.grant_type)).toEqual([
+      'refresh_token',
+    ]);
+    expect(jwtName((await sessionAt(file))?.authorizationToken)).toBe(
+      'pw-access-2',
+    );
+  });
+
+  it('--destination with no session: service-keys/<name>.json, the session written to sessions/<name>.env', async () => {
+    const dests = path.join(root, 'dests');
+    fs.mkdirSync(path.join(dests, 'service-keys'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dests, 'service-keys', `${DEST}.json`),
+      JSON.stringify({
+        url: `${server.url}/authentication`,
+        clientid: 'key-client',
+        clientsecret: 'key-secret',
+      }),
+    );
+    server.answer('/authentication/oauth/token', tokenAnswer('key'));
+    await expect(
+      run(
+        bare('oidc', [
+          '--flow',
+          'password',
+          '--type',
+          'xsuaa',
+          '--username',
+          'alice',
+          '--password',
+          'alice-password',
+          '--destination',
+          DEST,
+          '--destination-dir',
+          dests,
+        ]),
+      ),
+    ).resolves.toBe(0);
+    expect(server.requests.map((r) => r.form.grant_type)).toEqual(['password']);
+    const written = await new XsuaaSessionStore(
+      path.join(dests, 'sessions'),
+    ).loadSession(DEST);
+    expect(jwtName(written?.authorizationToken)).toBe('key-access-1');
+  });
+});

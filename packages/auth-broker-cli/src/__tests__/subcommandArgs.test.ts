@@ -30,12 +30,14 @@ import { parse210 } from './helpers/mcpSso210';
 
 const PACKAGE_ROOT = path.resolve(__dirname, '..', '..');
 
-/** Every flag 2.1.0's `mcp-sso` read that takes a value, each given once. */
+/**
+ * Every flag 2.1.0's `mcp-sso` read that takes a value, each given once — of
+ * the three sources one, `--service-key`: two together are a usage error
+ * (D25), tested below.
+ */
 const VALUE_FLAGS = [
   ['--output', './sso.env'],
-  ['--env', './previous.env'],
   ['--service-key', './sso.json'],
-  ['--destination', 'sso'],
   ['--type', 'xsuaa'],
   ['--format', 'json'],
   ['--service-url', 'https://svc.example.com'],
@@ -451,11 +453,9 @@ describe('help, version and the command', () => {
 
   it('mcp-auth and mcp-auth auth-code read the same options; --dev is refused there too', () => {
     const args = [
-      '--service-key',
-      './k.json',
-      '--output',
-      './o.env',
       '--env',
+      './o.env',
+      '--output',
       './o.env',
       '--type',
       'xsuaa',
@@ -476,8 +476,10 @@ describe('help, version and the command', () => {
     const expected = {
       kind: 'auth-code',
       options: {
-        serviceKeyPath: './k.json',
+        serviceKeyPath: undefined,
         envFilePath: './o.env',
+        destination: undefined,
+        destinationDir: undefined,
         outputFile: './o.env',
         authType: 'xsuaa',
         browser: 'none',
@@ -541,4 +543,121 @@ describe('the parser reads no process.argv; the package installs mcp-auth alone'
     expect(source.includes('child_process')).toBe(false);
     expect(source.includes('spawn')).toBe(false);
   });
+});
+
+describe('three sources, one per run (D25)', () => {
+  const SOURCES = [
+    ['--service-key', './k.json'],
+    ['--env', './o.env'],
+    ['--destination', 'TRIAL'],
+  ] as const;
+  const PAIRS = [
+    [SOURCES[0], SOURCES[1]],
+    [SOURCES[0], SOURCES[2]],
+    [SOURCES[1], SOURCES[2]],
+  ] as const;
+
+  it.each(SUBCOMMANDS.map((subcommand) => [subcommand]))(
+    '%s: two sources together are a usage error naming both',
+    (subcommand) => {
+      for (const [a, b] of PAIRS) {
+        for (const order of [
+          [...a, ...b],
+          [...b, ...a],
+        ]) {
+          const error = thrownBy(() =>
+            parseSubcommandArgs(subcommand, [...order, '--output', './o.env']),
+          );
+          expect(isUsageError(error)).toBe(true);
+          expect((error as Error).message).toBe(
+            `${a[0]} and ${b[0]} are two sources: give one of --service-key, --env and --destination`,
+          );
+        }
+      }
+      const all = thrownBy(() =>
+        parseSubcommandArgs(subcommand, [...SOURCES.flat(), '--output', 'o']),
+      );
+      expect((all as Error).message).toBe(
+        '--service-key, --env and --destination are three sources: give one of --service-key, --env and --destination',
+      );
+    },
+  );
+
+  it('auth-code: no source is a usage error naming the three', () => {
+    const error = thrownBy(() =>
+      parseCommandLine(['--output', './o.env', '--credential']),
+    );
+    expect(isUsageError(error)).toBe(true);
+    expect((error as Error).message).toBe(
+      'a source is required: --service-key <path>, --env <path> or --destination <name>',
+    );
+  });
+
+  it('--service-key needs --output; --env and --destination do not', () => {
+    const error = thrownBy(() => parseCommandLine(['--service-key', 'k']));
+    expect((error as Error).message).toBe(
+      '--output is required with --service-key',
+    );
+    expect(parseCommandLine(['--env', './o.env'])).toMatchObject({
+      kind: 'auth-code',
+      options: { envFilePath: './o.env', outputFile: undefined },
+    });
+    expect(
+      parseCommandLine([
+        '--destination',
+        'TRIAL',
+        '--destination-dir',
+        './dests',
+      ]),
+    ).toMatchObject({
+      kind: 'auth-code',
+      options: {
+        destination: 'TRIAL',
+        destinationDir: './dests',
+        outputFile: undefined,
+      },
+    });
+    expect(
+      ssoOptions(
+        parseSubcommandArgs('oidc', [
+          '--flow',
+          'device',
+          '--destination',
+          'TRIAL',
+          '--destination-dir',
+          './dests',
+        ]),
+      ),
+    ).toMatchObject({ destination: 'TRIAL', destinationDir: './dests' });
+  });
+
+  it.each(SUBCOMMANDS.map((subcommand) => [subcommand]))(
+    '%s: --destination-dir without --destination is refused',
+    (subcommand) => {
+      const error = thrownBy(() =>
+        parseSubcommandArgs(subcommand, [
+          '--env',
+          './o.env',
+          '--destination-dir',
+          './dests',
+        ]),
+      );
+      expect((error as Error).message).toBe(
+        '--destination-dir applies only to --destination',
+      );
+    },
+  );
+
+  it.each([['../x'], ['a/b'], ['a\\b'], ['.'], ['..'], ['']])(
+    '--destination %p is a name, not a path: refused',
+    (name) => {
+      const error = thrownBy(() =>
+        parseCommandLine(['--destination', name, '--credential']),
+      );
+      expect(isUsageError(error)).toBe(true);
+      expect((error as Error).message).toBe(
+        '--destination needs a destination name, not a path',
+      );
+    },
+  );
 });

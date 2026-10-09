@@ -14,7 +14,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AuthBroker, bindingOf } from '@mcp-abap-adt/auth-broker';
 import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
-import { XsuaaServiceKeyStore } from '@mcp-abap-adt/auth-stores';
+import {
+  EnvDestinationStore,
+  XSUAA_DESTINATION_VARS,
+  XsuaaServiceKeyStore,
+} from '@mcp-abap-adt/auth-stores';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   completeMeans,
@@ -34,13 +38,129 @@ import {
   normalizeProviderConfig,
   opensBrowser,
   pastesSamlResponse,
+  type SsoRow,
   ssoBrowser,
   ssoRow,
 } from './mcpSsoConfig';
 import { printFailure, progress } from './output';
 import { applySamlMetadata, loadMetadata } from './samlMetadata';
+import {
+  processEnvironment,
+  type RunSource,
+  resolveSource,
+  type SourceEnvironment,
+} from './source';
 import { UsageError } from './subcommandArgs';
 import { withoutTrailingSlashes } from './urlText';
+
+/**
+ * The flags that state means (`buildDestinationMeans` reads them): given
+ * beside a session file, they are written over its means. The rest — the
+ * flow, the browser, a one-time code or passcode, an assertion — run the
+ * login and state nothing a destination keeps.
+ */
+const MEANS_OPTIONS = [
+  'configPath',
+  'serviceUrl',
+  'issuerUrl',
+  'authorizationEndpoint',
+  'tokenEndpoint',
+  'deviceAuthorizationEndpoint',
+  'clientId',
+  'clientSecret',
+  'scopes',
+  'scope',
+  'username',
+  'password',
+  'subjectToken',
+  'subjectTokenType',
+  'audience',
+  'actorToken',
+  'actorTokenType',
+  'idpSsoUrl',
+  'spEntityId',
+  'acsUrl',
+  'relayState',
+  'cookie',
+  'uaaUrl',
+  'samlMetadataPath',
+  'idpCertificates',
+  'idpCertificateFiles',
+  'idpEntityId',
+  'idpMetadata',
+  'idpInitiated',
+] as const satisfies readonly (keyof McpSsoOptions)[];
+
+function statesMeans(options: McpSsoOptions): boolean {
+  return MEANS_OPTIONS.some((field) => options[field] !== undefined);
+}
+
+/** The subcommand and flow each grant a destination states is run by. */
+const FLOW_OF_GRANT: Partial<
+  Record<string, { protocol: 'oidc' | 'saml2'; flow: McpSsoOptions['flow'] }>
+> = {
+  oidc_authorization_code: { protocol: 'oidc', flow: 'browser' },
+  device_code: { protocol: 'oidc', flow: 'device' },
+  password: { protocol: 'oidc', flow: 'password' },
+  passcode: { protocol: 'oidc', flow: 'password' },
+  token_exchange: { protocol: 'oidc', flow: 'token_exchange' },
+  saml2_pure: { protocol: 'saml2', flow: 'pure' },
+  none: { protocol: 'saml2', flow: 'pure' },
+  saml2_bearer: { protocol: 'saml2', flow: 'bearer' },
+};
+
+function subcommandText(options: McpSsoOptions): string {
+  if (options.protocol === 'oidc') {
+    return options.flow === undefined
+      ? 'mcp-auth oidc'
+      : `mcp-auth oidc --flow ${options.flow}`;
+  }
+  return `mcp-auth saml2-${options.flow}`;
+}
+
+/**
+ * The row a session file states, checked against the subcommand: its grant
+ * must be one this subcommand runs, and an `oidc` run without `--flow` takes
+ * the file's. What a pasted SAML login needs of the means — the ACS, whether
+ * the identity provider starts it — is read from the file where the run does
+ * not state it.
+ */
+async function sessionRow(
+  options: McpSsoOptions,
+  source: Extract<RunSource, { kind: 'session' }>,
+): Promise<SsoRow> {
+  const store = new EnvDestinationStore(
+    path.dirname(source.sessionPath),
+    options.authType === 'xsuaa'
+      ? { variables: XSUAA_DESTINATION_VARS }
+      : undefined,
+  );
+  const means = await store.getConnectionConfig(
+    path.basename(source.sessionPath, path.extname(source.sessionPath)),
+  );
+  const grant = means?.grantType;
+  const authType = means?.authType;
+  if (grant === undefined || (authType !== 'jwt' && authType !== 'saml')) {
+    throw new UsageError(
+      `${source.flag}: the session file states no grant (SAP_AUTH_TYPE, SAP_GRANT_TYPE); state the means with flags`,
+    );
+  }
+  const runs = FLOW_OF_GRANT[grant];
+  const flowGiven = options.flow !== undefined;
+  if (
+    runs === undefined ||
+    runs.protocol !== options.protocol ||
+    (flowGiven && runs.flow !== options.flow)
+  ) {
+    throw new UsageError(
+      `${source.flag}: the session file states the grant ${grant}, not ${subcommandText(options)}`,
+    );
+  }
+  options.flow = runs.flow;
+  options.acsUrl ??= means?.samlAcsUrl;
+  options.idpInitiated ??= means?.samlIdpInitiated;
+  return { authType, grantType: grant };
+}
 
 export interface McpSsoContext {
   /** The CLI's logger (stderr): the broker's, and the providers' it builds. */
@@ -49,6 +169,11 @@ export interface McpSsoContext {
   workDir: string;
   /** The platform the browser is mapped for; `process.platform` when absent. */
   platform?: string | undefined;
+  /**
+   * Where `--destination` looks; the process's own when absent, read only
+   * when needed.
+   */
+  environment?: SourceEnvironment | undefined;
   /**
    * The run's signal (`underInterrupt`): every wait of the run takes it —
    * the broker's calls, the provider's login, the strategies and the
@@ -60,56 +185,53 @@ export interface McpSsoContext {
 /** Runs one of those subcommands; resolves the exit code. Usage errors exit the process. */
 export async function runMcpSso(
   options: McpSsoOptions,
-  { logger, workDir, platform, signal }: McpSsoContext,
+  { logger, workDir, platform, signal, environment }: McpSsoContext,
 ): Promise<number> {
-  if (!options.outputFile) {
+  // The run's source (D25): a service key (a new login), a session file
+  // (reused, refreshed or logged in, written back), or none — the run states
+  // its means by flags or --config and logs in, as with a service key.
+  const source = resolveSource(
+    options,
+    options.outputFile,
+    () => environment ?? processEnvironment(),
+  );
+  const output = source?.output ?? options.outputFile;
+  if (!output) {
     console.error('❌ Missing required --output');
     process.exit(1);
   }
-
-  const resolvedOutputPath = path.resolve(options.outputFile);
-  const resolvedEnvPath = options.envFilePath
-    ? path.resolve(options.envFilePath)
-    : undefined;
-
-  let destination = options.destination;
-  if (options.serviceKeyPath) {
-    const resolvedServiceKeyPath = path.resolve(options.serviceKeyPath);
-    if (!fs.existsSync(resolvedServiceKeyPath)) {
-      console.error(`❌ Service key file not found: ${resolvedServiceKeyPath}`);
-      process.exit(1);
-    }
-    const serviceKeyFileName = path.basename(
-      resolvedServiceKeyPath,
-      path.extname(resolvedServiceKeyPath),
-    );
-    if (destination && destination !== serviceKeyFileName) {
-      console.error(
-        `❌ Destination mismatch: service key (${serviceKeyFileName}) vs output (${destination})`,
-      );
-      process.exit(1);
-    }
-    destination = serviceKeyFileName;
-  }
-  if (!destination) {
-    destination = path.basename(
-      resolvedOutputPath,
-      path.extname(resolvedOutputPath),
+  const resolvedOutputPath = path.resolve(output);
+  if (
+    source?.kind === 'session' &&
+    options.format === 'json' &&
+    options.outputFile === undefined
+  ) {
+    throw new UsageError(
+      '--format json needs --output: the session file is written back as .env',
     );
   }
-
-  if (resolvedEnvPath) {
-    const envName = path.basename(
-      resolvedEnvPath,
-      path.extname(resolvedEnvPath),
-    );
-    if (destination && envName !== destination) {
-      console.error(
-        `❌ Destination mismatch: env file (${envName}) vs output (${destination})`,
-      );
-      process.exit(1);
-    }
+  // A service key's path, for every check below that asks whether the run
+  // has one; a session file is the seed, nothing else.
+  options.serviceKeyPath =
+    source?.kind === 'service-key' ? source.serviceKeyPath : undefined;
+  const resolvedEnvPath =
+    source?.kind === 'session' ? source.sessionPath : undefined;
+  const destination =
+    source?.destination ??
+    path.basename(resolvedOutputPath, path.extname(resolvedOutputPath));
+  if (options.serviceKeyPath && !fs.existsSync(options.serviceKeyPath)) {
+    console.error(`❌ Service key file not found: ${options.serviceKeyPath}`);
+    process.exit(1);
   }
+
+  // A session file states its means (D25): a run that states none of its
+  // own takes them from the file, its subcommand checked against the file's
+  // grant; a run that states means writes them over the file's, and the
+  // broker then judges the session against them.
+  const fileRow =
+    source?.kind === 'session' && !statesMeans(options)
+      ? await sessionRow(options, source)
+      : undefined;
 
   const allowTokenEndpointWithServiceKey =
     options.protocol === 'saml2' && options.flow === 'bearer';
@@ -306,9 +428,11 @@ export async function runMcpSso(
     }
   }
 
-  const row = ssoRow(options);
-  const means = buildDestinationMeans(options);
-  await files.keyStore.setDestination(destination, completeMeans(means));
+  const row = fileRow ?? ssoRow(options);
+  if (fileRow === undefined) {
+    const means = buildDestinationMeans(options);
+    await files.keyStore.setDestination(destination, completeMeans(means));
+  }
   progress(
     `📝 Destination "${destination}": ${row.authType} / ${row.grantType}`,
   );
@@ -338,17 +462,24 @@ export async function runMcpSso(
     // (§5.2, §6.4): both binding fields (`issuedFor` '' when the means lack
     // its source) and `refreshToken: ''` — SAML has none, and one left
     // beside earlier cookies or a token is not this credential's.
-    const stated = await files.keyStore.getConnectionConfig(destination);
-    const binding = bindingOf(stated ?? {});
-    await files.sessionStore.saveSession(destination, {
-      sessionCookies: options.cookie,
-      refreshToken: '',
-      issuedFor: binding.issuedFor ?? '',
-      issuedBy: binding.issuedBy ?? '',
-    });
+    // A session file's cookies, with none handed over, stay as they are.
+    if (options.cookie !== undefined) {
+      const stated = await files.keyStore.getConnectionConfig(destination);
+      const binding = bindingOf(stated ?? {});
+      await files.sessionStore.saveSession(destination, {
+        sessionCookies: options.cookie,
+        refreshToken: '',
+        issuedFor: binding.issuedFor ?? '',
+        issuedBy: binding.issuedBy ?? '',
+      });
+    }
     // The destination as the broker will read it: refused here, not later.
     await broker.getProvider(destination, { signal });
-    progress(`✅ Session cookies stored`);
+    progress(
+      options.cookie === undefined
+        ? '✅ Session cookies kept'
+        : '✅ Session cookies stored',
+    );
   }
   // Whether the login threw, beside what it threw: a falsy value thrown
   // (undefined, 0, '') is a failure too.

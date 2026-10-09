@@ -70,8 +70,13 @@ export interface McpSsoOptions {
   /** `--auth-debug`: the broker's `authDebug: true`; implies `--verbose`. */
   authDebug?: true | undefined;
   outputFile?: string | undefined;
+  /** `--env`: the session file — one of the three sources (D25). */
   envFilePath?: string | undefined;
+  /** `--destination`: a destination of the standard folder (D25). */
   destination?: string | undefined;
+  /** `--destination-dir`: the folder `--destination` reads. */
+  destinationDir?: string | undefined;
+  /** `--service-key`: always a new login (D25). */
   serviceKeyPath?: string | undefined;
   authType: 'abap' | 'xsuaa';
   format: 'json' | 'env';

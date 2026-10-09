@@ -448,10 +448,15 @@ describe('sources (CLI src)', () => {
     }
   });
 
-  it('no environment variable is read (D17)', () => {
+  it('no environment variable is read but AUTH_BROKER_PATH, once, in source.ts (D17, D25)', () => {
+    const reads: string[] = [];
     for (const { file, text } of SOURCES) {
-      expect([file, code(text).includes('process.env')]).toEqual([file, false]);
+      const parts = code(text).split('process.env');
+      for (const after of parts.slice(1)) {
+        reads.push(`${file}: process.env${after.slice(0, 17)}`);
+      }
     }
+    expect(reads).toEqual(['source.ts: process.env.AUTH_BROKER_PATH']);
   });
 
   it('stdout only for help and --version: console.log only in mcp-auth.ts help and version', () => {

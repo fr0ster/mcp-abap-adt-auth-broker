@@ -52,10 +52,11 @@ export interface DestinationFiles {
 }
 
 /**
- * The two stores over `<directory>/<destination>.env`. An existing file named
- * by `--env` is copied there first, so its secret seeds the login and its means
- * are kept where this run does not restate them; the original is never
- * written.
+ * The two stores over `<directory>/<destination>.env`. A session file named by
+ * `--env` (or found by `--destination`) is copied there first, so the broker
+ * judges its session against its means; the original is never written. With
+ * no seed the file starts absent — whatever an earlier run left there — so no
+ * session is read (D25: a service key always logs in).
  */
 export function openDestination(
   directory: string,
@@ -64,7 +65,8 @@ export function openDestination(
   seedFile?: string,
 ): DestinationFiles {
   const file = path.join(directory, `${destination}.env`);
-  if (seedFile && fs.existsSync(seedFile)) {
+  fs.rmSync(file, { force: true });
+  if (seedFile !== undefined && fs.existsSync(seedFile)) {
     fs.copyFileSync(seedFile, file);
   }
   return type === 'xsuaa'

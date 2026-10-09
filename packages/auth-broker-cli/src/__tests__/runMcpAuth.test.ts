@@ -31,6 +31,7 @@ import {
 } from '@mcp-abap-adt/auth-stores';
 import { createCliLogger, failureLines } from '../output';
 import { type McpAuthOptions, runMcpAuth } from '../runMcpAuth';
+import type { SourceEnvironment } from '../source';
 import { isUsageError } from '../subcommandArgs';
 import {
   CLIENT_CRT,
@@ -149,9 +150,17 @@ function options(overrides: Partial<McpAuthOptions>): McpAuthOptions {
   };
 }
 
-/** The caller's interactive strategy: a code, counted when the provider asks. */
-function run(o: McpAuthOptions) {
+/**
+ * The caller's interactive strategy: a code, counted when the provider asks.
+ * `environment` is where `--destination` looks: never the user's own folder.
+ */
+function run(o: McpAuthOptions, environment?: SourceEnvironment) {
   return runMcpAuth(o, {
+    environment: environment ?? {
+      home: path.join(root, 'home'),
+      platform: 'linux',
+      authBrokerPath: undefined,
+    },
     // The logger the bin passes: stderr, from warn without --verbose.
     logger: createCliLogger({ verbose: o.verbose === true }),
     workDir,
@@ -283,73 +292,6 @@ describe('mcp-auth (authorization_code)', () => {
     expect(server.requests.length).toBe(before);
   });
 
-  it('with --env, the stored refresh token renews: no login', async () => {
-    server.answer('/oauth/token', tokenAnswer('uaa'));
-    await run(options({ serviceKeyPath: abapKey() }));
-    const previous = path.join(root, `${DEST}.env`);
-    fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
-    // The stored token has expired: the run must renew it.
-    expireStoredToken(previous, 'abap');
-    strategyCalls = 0;
-
-    await expect(
-      run(options({ serviceKeyPath: abapKey(), envFilePath: previous })),
-    ).resolves.toBe(0);
-    expect(strategyCalls).toBe(0);
-    expect(server.requests.at(-1)?.form).toEqual(
-      expect.objectContaining({
-        grant_type: 'refresh_token',
-        refresh_token: 'uaa-refresh-1',
-      }),
-    );
-    const renewed = await storesOf('abap').sessionStore.loadSession(DEST);
-    expect(jwtName(renewed?.authorizationToken)).toBe('uaa-access-2');
-  });
-
-  it('with --env holding a valid token bound to the means, the rerun reuses it: no request, no login', async () => {
-    server.answer('/oauth/token', tokenAnswer('uaa'));
-    await run(options({ serviceKeyPath: abapKey() }));
-    const previous = path.join(root, `${DEST}.env`);
-    fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
-    strategyCalls = 0;
-    const before = server.requests.length;
-
-    await expect(
-      run(options({ serviceKeyPath: abapKey(), envFilePath: previous })),
-    ).resolves.toBe(0);
-    expect(strategyCalls).toBe(0);
-    expect(server.requests).toHaveLength(before);
-    const kept = await storesOf('abap').sessionStore.loadSession(DEST);
-    expect(jwtName(kept?.authorizationToken)).toBe('uaa-access-1');
-    expect(kept?.refreshToken).toBe('uaa-refresh-1');
-  });
-
-  it('with --env holding a session bound elsewhere, the session is not used: a login follows, its refresh token sent nowhere', async () => {
-    server.answer('/oauth/token', tokenAnswer('uaa'));
-    await run(options({ serviceKeyPath: abapKey() }));
-    const previous = path.join(root, `${DEST}.env`);
-    fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
-    // A session written by CLI 2.x: its binding is not a 5.0.0 record.
-    rewriteEnvKey(previous, 'SAP_ISSUED_BY', 'key-client');
-    strategyCalls = 0;
-    const before = server.requests.length;
-
-    await expect(
-      run(options({ serviceKeyPath: abapKey(), envFilePath: previous })),
-    ).resolves.toBe(0);
-    expect(strategyCalls).toBe(1);
-    const sent = server.requests.slice(before);
-    expect(sent.map((r) => r.form.grant_type)).toEqual(['authorization_code']);
-    expect(JSON.stringify(sent)).not.toContain('uaa-refresh-1');
-    const renewed = await storesOf('abap').sessionStore.loadSession(DEST);
-    expect(jwtName(renewed?.authorizationToken)).toBe('uaa-access-2');
-    // The broker's warn line, on stderr through the CLI's logger at its
-    // default level: the stored session was not used.
-    expect(console.error).toHaveBeenCalledWith(
-      `[warn] [AuthBroker] ${DEST}: the stored session secret is not recorded as issued under the destination's current means; not used, the provider obtains a new one`,
-    );
-  });
-
   it.each(['env', 'json'] as const)(
     "an --output that cannot be written (--format %s): the flag, the path and its code — never the writer's message",
     async (format) => {
@@ -392,6 +334,356 @@ describe('mcp-auth (authorization_code)', () => {
       uaaUrl: server.url,
       uaaClientId: 'key-client',
       uaaClientSecret: CLIENT_SECRET,
+    });
+  });
+});
+
+describe('three sources, one per run (D25)', () => {
+  /** A first login's destination file, copied to `<root>/<DEST>.env`. */
+  async function previousSession(): Promise<string> {
+    server.answer('/oauth/token', tokenAnswer('uaa'));
+    await expect(run(options({ serviceKeyPath: abapKey() }))).resolves.toBe(0);
+    const previous = path.join(root, `${DEST}.env`);
+    fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
+    strategyCalls = 0;
+    return previous;
+  }
+
+  /** `--env <file>` alone: no service key, no --output. */
+  function envRun(file: string, overrides: Partial<McpAuthOptions> = {}) {
+    return options({ envFilePath: file, outputFile: undefined, ...overrides });
+  }
+
+  /** The session the file at `file` holds, read through the session store. */
+  function sessionAt(file: string) {
+    return new AbapSessionStore(path.dirname(file)).loadSession(
+      path.basename(file, '.env'),
+    );
+  }
+
+  describe('--service-key: always a new pair by login', () => {
+    it('twice: two logins, each writing a new pair; the existing --output session is not read', async () => {
+      server.answer('/oauth/token', tokenAnswer('uaa'));
+      const o = options({ serviceKeyPath: abapKey() });
+      await expect(run(o)).resolves.toBe(0);
+      await expect(run(o)).resolves.toBe(0);
+      expect(strategyCalls).toBe(2);
+      expect(server.requests.map((r) => r.form.grant_type)).toEqual([
+        'authorization_code',
+        'authorization_code',
+      ]);
+      expect(JSON.stringify(server.requests[1])).not.toContain('uaa-refresh-1');
+      const second = await storesOf('abap').sessionStore.loadSession(DEST);
+      expect(jwtName(second?.authorizationToken)).toBe('uaa-access-2');
+      expect(second?.refreshToken).toBe('uaa-refresh-2');
+    });
+  });
+
+  describe('--env <path>: the session file, written back', () => {
+    it('a valid token bound to the file’s means: no request, no login, the file byte for byte as it was', async () => {
+      const previous = await previousSession();
+      const before = fs.readFileSync(previous);
+      const sent = server.requests.length;
+      await expect(run(envRun(previous))).resolves.toBe(0);
+      expect(strategyCalls).toBe(0);
+      expect(server.requests).toHaveLength(sent);
+      expect(fs.readFileSync(previous)).toEqual(before);
+    });
+
+    it('an expired token: one refresh, no login, the new pair written back to the file', async () => {
+      const previous = await previousSession();
+      expireStoredToken(previous, 'abap');
+      const sent = server.requests.length;
+      await expect(run(envRun(previous))).resolves.toBe(0);
+      expect(strategyCalls).toBe(0);
+      expect(server.requests.slice(sent).map((r) => r.form)).toEqual([
+        expect.objectContaining({
+          grant_type: 'refresh_token',
+          refresh_token: 'uaa-refresh-1',
+        }),
+      ]);
+      const renewed = await sessionAt(previous);
+      expect(jwtName(renewed?.authorizationToken)).toBe('uaa-access-2');
+      expect(renewed?.refreshToken).toBe('uaa-refresh-2');
+    });
+
+    it('a refused refresh: a login, its new pair written back', async () => {
+      const previous = await previousSession();
+      expireStoredToken(previous, 'abap');
+      const login = tokenAnswer('login');
+      server.answer('/oauth/token', (form) =>
+        form.grant_type === 'refresh_token'
+          ? { status: 400, body: { error: 'invalid_grant' } }
+          : login(),
+      );
+      const sent = server.requests.length;
+      await expect(run(envRun(previous))).resolves.toBe(0);
+      expect(strategyCalls).toBe(1);
+      expect(server.requests.slice(sent).map((r) => r.form.grant_type)).toEqual(
+        ['refresh_token', 'authorization_code'],
+      );
+      const renewed = await sessionAt(previous);
+      expect(jwtName(renewed?.authorizationToken)).toBe('login-access-1');
+      expect(renewed?.refreshToken).toBe('login-refresh-1');
+    });
+
+    it('a session not bound to the file’s means: a login, its refresh token sent nowhere', async () => {
+      const previous = await previousSession();
+      // A session written by CLI 2.x: its binding is not a 5.0.0 record.
+      rewriteEnvKey(previous, 'SAP_ISSUED_BY', 'key-client');
+      const sent = server.requests.length;
+      await expect(run(envRun(previous))).resolves.toBe(0);
+      expect(strategyCalls).toBe(1);
+      const after = server.requests.slice(sent);
+      expect(after.map((r) => r.form.grant_type)).toEqual([
+        'authorization_code',
+      ]);
+      expect(JSON.stringify(after)).not.toContain('uaa-refresh-1');
+      const renewed = await sessionAt(previous);
+      expect(jwtName(renewed?.authorizationToken)).toBe('uaa-access-2');
+      expect(console.error).toHaveBeenCalledWith(
+        `[warn] [AuthBroker] ${DEST}: the stored session secret is not recorded as issued under the destination's current means; not used, the provider obtains a new one`,
+      );
+    });
+
+    it('with --output: written there, the session file left as it was', async () => {
+      const previous = await previousSession();
+      expireStoredToken(previous, 'abap');
+      const before = fs.readFileSync(previous);
+      const output = path.join(root, 'elsewhere', `${DEST}.env`);
+      await expect(run(envRun(previous, { outputFile: output }))).resolves.toBe(
+        0,
+      );
+      expect(fs.readFileSync(previous)).toEqual(before);
+      expect(jwtName((await sessionAt(output))?.authorizationToken)).toBe(
+        'uaa-access-2',
+      );
+    });
+
+    it('the means come from the file: a flag that states them is refused naming it', async () => {
+      const previous = await previousSession();
+      const before = fs.readFileSync(previous);
+      for (const [flag, overrides] of [
+        ['--credential', { credential: true }],
+        ['--service-url', { serviceUrl: 'https://other.example.com' }],
+        [
+          '--cert-path and --key-path',
+          {
+            clientAuth: 'certificate',
+            certPath: CLIENT_CRT_PATH,
+            keyPath: CLIENT_KEY_PATH,
+          },
+        ],
+      ] as const) {
+        const thrown = await run(envRun(previous, overrides)).catch(
+          (error: unknown) => error,
+        );
+        expect(isUsageError(thrown)).toBe(true);
+        expect((thrown as Error).message).toContain(flag);
+      }
+      expect(fs.readFileSync(previous)).toEqual(before);
+    });
+
+    it('no file at the path: a usage error naming --env, nothing sent', async () => {
+      const missing = path.join(root, 'missing.env');
+      const thrown = await run(envRun(missing)).catch((e: unknown) => e);
+      expect(isUsageError(thrown)).toBe(true);
+      expect((thrown as Error).message).toBe(
+        `--env: no session file at ${missing}`,
+      );
+      expect(server.requests).toHaveLength(0);
+    });
+
+    it('--format json without --output is refused: the session file stays .env', async () => {
+      const previous = await previousSession();
+      const before = fs.readFileSync(previous);
+      const thrown = await run(envRun(previous, { format: 'json' })).catch(
+        (e: unknown) => e,
+      );
+      expect((thrown as Error).message).toBe(
+        '--format json needs --output: the session file is written back as .env',
+      );
+      expect(fs.readFileSync(previous)).toEqual(before);
+    });
+  });
+
+  describe('--destination <name>: the standard folder', () => {
+    const dests = () => path.join(root, 'dests');
+    const sessionFile = (base = dests()) =>
+      path.join(base, 'sessions', `${DEST}.env`);
+
+    /** A service key at `<base>/service-keys/<DEST>.json`. */
+    function keyIn(base: string): void {
+      fs.mkdirSync(path.join(base, 'service-keys'), { recursive: true });
+      fs.copyFileSync(
+        abapKey(),
+        path.join(base, 'service-keys', `${DEST}.json`),
+      );
+    }
+
+    /** A valid session at `<base>/sessions/<DEST>.env`, from a first login. */
+    async function sessionIn(base: string): Promise<Buffer> {
+      const previous = await previousSession();
+      fs.mkdirSync(path.join(base, 'sessions'), { recursive: true });
+      fs.copyFileSync(previous, sessionFile(base));
+      return fs.readFileSync(sessionFile(base));
+    }
+
+    const destinationRun = (overrides: Partial<McpAuthOptions> = {}) =>
+      options({
+        destination: DEST,
+        destinationDir: dests(),
+        outputFile: undefined,
+        ...overrides,
+      });
+
+    it('sessions/<name>.env present: as --env — the valid token reused, no request, the file as it was', async () => {
+      const before = await sessionIn(dests());
+      keyIn(dests());
+      const sent = server.requests.length;
+      await expect(run(destinationRun())).resolves.toBe(0);
+      expect(strategyCalls).toBe(0);
+      expect(server.requests).toHaveLength(sent);
+      expect(fs.readFileSync(sessionFile())).toEqual(before);
+    });
+
+    it('sessions/<name>.env present and expired: refreshed and written back, the key beside it unused', async () => {
+      await sessionIn(dests());
+      keyIn(dests());
+      expireStoredToken(sessionFile(), 'abap');
+      const sent = server.requests.length;
+      await expect(run(destinationRun())).resolves.toBe(0);
+      expect(strategyCalls).toBe(0);
+      expect(server.requests.slice(sent).map((r) => r.form.grant_type)).toEqual(
+        ['refresh_token'],
+      );
+      expect(
+        jwtName((await sessionAt(sessionFile()))?.authorizationToken),
+      ).toBe('uaa-access-2');
+    });
+
+    it('no session: as --service-key from service-keys/<name>.json — a login, the session written to sessions/<name>.env; the next run reuses it', async () => {
+      server.answer('/oauth/token', tokenAnswer('uaa'));
+      keyIn(dests());
+      await expect(run(destinationRun())).resolves.toBe(0);
+      expect(strategyCalls).toBe(1);
+      expect(server.requests.map((r) => r.form.grant_type)).toEqual([
+        'authorization_code',
+      ]);
+      expect(
+        jwtName((await sessionAt(sessionFile()))?.authorizationToken),
+      ).toBe('uaa-access-1');
+
+      await expect(run(destinationRun())).resolves.toBe(0);
+      expect(strategyCalls).toBe(1);
+      expect(server.requests).toHaveLength(1);
+    });
+
+    it('neither file: a usage error naming the folders looked in, nothing sent', async () => {
+      const thrown = await run(destinationRun()).catch((e: unknown) => e);
+      expect(isUsageError(thrown)).toBe(true);
+      expect((thrown as Error).message).toBe(
+        `--destination: ${DEST} is in none of ${dests()} (sessions/${DEST}.env, service-keys/${DEST}.json)`,
+      );
+      expect(server.requests).toHaveLength(0);
+    });
+
+    describe('the folder: --destination-dir, else AUTH_BROKER_PATH, else the standard folder', () => {
+      const home = () => path.join(root, 'home');
+      const standard = () => path.join(home(), '.config', 'mcp-abap-adt');
+      const environment = (authBrokerPath?: string): SourceEnvironment => ({
+        home: home(),
+        platform: 'linux',
+        authBrokerPath,
+      });
+
+      /** Distinct files per folder: which one the run copied to --output. */
+      async function sessionsIn(...bases: string[]): Promise<Buffer[]> {
+        const files: Buffer[] = [];
+        for (const base of bases) {
+          files.push(await sessionIn(base));
+          // Each file distinct: a marker line the stores do not read.
+          fs.appendFileSync(sessionFile(base), `# ${base}\n`);
+          files[files.length - 1] = fs.readFileSync(sessionFile(base));
+        }
+        return files;
+      }
+
+      const output = () => path.join(root, 'out-dest', `${DEST}.env`);
+
+      it('--destination-dir over AUTH_BROKER_PATH', async () => {
+        const listed = path.join(root, 'listed');
+        const [given] = await sessionsIn(dests(), listed, standard());
+        await expect(
+          run(destinationRun({ outputFile: output() }), environment(listed)),
+        ).resolves.toBe(0);
+        expect(fs.readFileSync(output())).toEqual(given);
+      });
+
+      it('AUTH_BROKER_PATH over the standard folder', async () => {
+        const listed = path.join(root, 'listed');
+        const [fromVariable] = await sessionsIn(listed, standard());
+        await expect(
+          run(
+            destinationRun({ destinationDir: undefined, outputFile: output() }),
+            environment(listed),
+          ),
+        ).resolves.toBe(0);
+        expect(fs.readFileSync(output())).toEqual(fromVariable);
+      });
+
+      it('AUTH_BROKER_PATH with several folders (";" and ":"): read from the first that holds it', async () => {
+        const empty = path.join(root, 'empty');
+        fs.mkdirSync(empty);
+        const second = path.join(root, 'second');
+        const third = path.join(root, 'third');
+        const [fromSecond] = await sessionsIn(second, third);
+        for (const variable of [
+          `${empty};${second};${third}`,
+          `${empty}:${second}:${third}`,
+        ]) {
+          await expect(
+            run(
+              destinationRun({
+                destinationDir: undefined,
+                outputFile: output(),
+              }),
+              environment(variable),
+            ),
+          ).resolves.toBe(0);
+          expect(fs.readFileSync(output())).toEqual(fromSecond);
+        }
+      });
+
+      it('AUTH_BROKER_PATH with several folders: a key found in a later one, the new session written to the first', async () => {
+        server.answer('/oauth/token', tokenAnswer('uaa'));
+        const first = path.join(root, 'first');
+        fs.mkdirSync(first);
+        const later = path.join(root, 'later');
+        keyIn(later);
+        await expect(
+          run(
+            destinationRun({ destinationDir: undefined }),
+            environment(`${first};${later}`),
+          ),
+        ).resolves.toBe(0);
+        expect(strategyCalls).toBe(1);
+        expect(
+          jwtName((await sessionAt(sessionFile(first)))?.authorizationToken),
+        ).toBe('uaa-access-1');
+        expect(fs.existsSync(sessionFile(later))).toBe(false);
+      });
+
+      it('the standard folder when neither is given', async () => {
+        const [fromStandard] = await sessionsIn(standard());
+        await expect(
+          run(
+            destinationRun({ destinationDir: undefined, outputFile: output() }),
+            environment(undefined),
+          ),
+        ).resolves.toBe(0);
+        expect(fs.readFileSync(output())).toEqual(fromStandard);
+      });
     });
   });
 });
@@ -742,7 +1034,17 @@ describe('mcp-auth --client-auth', () => {
       fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
       expireStoredToken(previous, 'abap');
       strategyCalls = 0;
-      await expect(run({ ...o, envFilePath: previous })).resolves.toBe(0);
+      // --env alone: the file names the certificate files; --client-auth
+      // certificate states the strategy, with no paths of its own.
+      await expect(
+        run(
+          options({
+            envFilePath: previous,
+            outputFile: path.join(outDir, `${DEST}.env`),
+            clientAuth: 'certificate',
+          }),
+        ),
+      ).resolves.toBe(0);
       expect(strategyCalls).toBe(0);
       expect(certServer.requests.at(-1)?.form).toEqual(
         expect.objectContaining({
@@ -794,7 +1096,16 @@ describe('mcp-auth --client-auth', () => {
       fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
       expireStoredToken(previous, 'xsuaa');
       strategyCalls = 0;
-      await expect(run({ ...o, envFilePath: previous })).resolves.toBe(0);
+      await expect(
+        run(
+          options({
+            authType: 'xsuaa',
+            envFilePath: previous,
+            outputFile: path.join(outDir, `${DEST}.env`),
+            clientAuth: 'certificate',
+          }),
+        ),
+      ).resolves.toBe(0);
       expect(strategyCalls).toBe(0);
       expect(certServer.requests.at(-1)?.form).toEqual(
         expect.objectContaining({

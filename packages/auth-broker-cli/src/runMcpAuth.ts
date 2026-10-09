@@ -6,9 +6,15 @@
  * client and `serviceUrl` from the service key — through the key store's own
  * write method; then the login through the broker's token API with no
  * provider of its own: the broker's UAA row obtains the token and writes the
- * secret — the secret alone — to the session store, bound to the means, so an
- * `--env` rerun is seeded from it and a server's `getProvider` over the
- * output reuses it. `flush()` before the output is written.
+ * secret — the secret alone — to the session store, bound to the means, so a
+ * later `--env` run and a server's `getProvider` over the output reuse it.
+ * `flush()` before the output is written.
+ *
+ * The run's source (D25, `source.ts`): `--service-key` writes the means and
+ * always logs in, reading no session; `--env` (or `--destination` finding a
+ * session) takes the means and session from that file and lets the broker
+ * reuse, refresh or log in, written back to the file unless `--output` is
+ * given.
  *
  * How the client authenticates is the user's statement, never inferred from
  * the key: no `--client-auth` is the client secret, as 2.0.0;
@@ -59,15 +65,28 @@ import {
   writeOutputFile,
 } from './destination';
 import { progress } from './output';
+import {
+  processEnvironment,
+  type RunSource,
+  resolveSource,
+  type SourceEnvironment,
+} from './source';
 import { UsageError } from './subcommandArgs';
 
 /** An interactive strategy, as auth-providers' strategy factories return one. */
 export type AuthorizationStrategy = ReturnType<typeof staticCodeStrategy>;
 
 export interface McpAuthOptions {
-  serviceKeyPath?: string | undefined; // Optional if env file is provided
+  /** `--service-key`: always a new pair by login (D25). */
+  serviceKeyPath?: string | undefined;
+  /** `--env`: the session file — its means and session, written back (D25). */
   envFilePath?: string | undefined;
-  outputFile: string;
+  /** `--destination`: a destination of the standard folder (D25). */
+  destination?: string | undefined;
+  /** `--destination-dir`: the folder `--destination` reads. */
+  destinationDir?: string | undefined;
+  /** `--output`: required with `--service-key`; else the session file itself. */
+  outputFile?: string | undefined;
   authType: 'abap' | 'xsuaa';
   /** `--browser`: a name of the CLI's table (default `'auto'`), never a program. */
   browser: string;
@@ -143,9 +162,13 @@ export interface McpAuthContext {
   signal?: AbortSignal | undefined;
   /** The platform the browser is mapped for; `process.platform` when absent. */
   platform?: string | undefined;
+  /**
+   * Where `--destination` looks (`AUTH_BROKER_PATH`, the home folder, the
+   * platform); the process's own when absent, read only when needed.
+   */
+  environment?: SourceEnvironment | undefined;
 }
 
-/** Runs `mcp-auth`; resolves the exit code. Usage errors exit the process. */
 /**
  * The authorization code login's strategy, as the bin composes it: the browser
  * callback on `--redirect-port` (the strategy's own default when not given),
@@ -166,28 +189,87 @@ export function authCodeStrategy(
   );
 }
 
+/** The grants `mcp-auth [auth-code]` runs, and the subcommand of every other. */
+const SUBCOMMAND_OF_GRANT: Record<string, string> = {
+  authorization_code: 'auth-code',
+  client_credentials: 'auth-code',
+  oidc_authorization_code: 'oidc',
+  device_code: 'oidc',
+  password: 'oidc',
+  passcode: 'oidc',
+  token_exchange: 'oidc',
+  saml2_pure: 'saml2-pure',
+  none: 'saml2-pure',
+  saml2_bearer: 'saml2-bearer',
+};
+
+/**
+ * The flags that state means: a session source holds its own (D25), so each
+ * is refused beside it, named.
+ */
+function refuseMeansFlags(
+  options: McpAuthOptions,
+  flag: '--env' | '--destination',
+): void {
+  const stated = [
+    ['--credential', options.credential],
+    ['--service-url', options.serviceUrl !== undefined],
+  ] as const;
+  for (const [name, given] of stated) {
+    if (given) {
+      throw new UsageError(
+        `${name} states the means, which the session file of ${flag} holds: state them with --service-key`,
+      );
+    }
+  }
+}
+
 export async function runMcpAuth(
   options: McpAuthOptions,
-  { logger, workDir, authorization, platform, signal }: McpAuthContext,
+  {
+    logger,
+    workDir,
+    authorization,
+    platform,
+    signal,
+    environment,
+  }: McpAuthContext,
 ): Promise<number> {
+  // The run's one source (D25), resolved before anything is read or written.
+  const source: RunSource | undefined = resolveSource(
+    options,
+    options.outputFile,
+    () => environment ?? processEnvironment(),
+  );
+  if (source === undefined) {
+    throw new UsageError(
+      'a source is required: --service-key <path>, --env <path> or --destination <name>',
+    );
+  }
+  if (source.kind === 'session') {
+    refuseMeansFlags(options, source.flag);
+    if (options.format === 'json' && options.outputFile === undefined) {
+      throw new UsageError(
+        '--format json needs --output: the session file is written back as .env',
+      );
+    }
+  }
+  if (source.output === undefined) {
+    throw new UsageError('--output is required with --service-key');
+  }
   // The browser is mapped only for the login that opens one — the
   // authorization code login — and then before anything is read or written:
   // a name this platform has no launcher for is a usage error, never a
-  // guess. `--credential` opens none, so nothing is mapped or refused.
-  if (!options.credential) {
+  // guess. `--credential` opens none, so nothing is mapped or refused. A
+  // session file's grant is known once it is read, below.
+  if (source.kind === 'service-key' && !options.credential) {
     mcpAuthBrowser(options, platform ?? process.platform);
   }
-  const certificateFiles = clientAuthFlags(options);
-  const resolvedOutputPath = path.resolve(options.outputFile);
-  const resolvedEnvPath = options.envFilePath
-    ? path.resolve(options.envFilePath)
-    : undefined;
-
-  let destination: string | undefined;
-  const envExists = resolvedEnvPath ? fs.existsSync(resolvedEnvPath) : false;
-  if (resolvedEnvPath) {
-    destination = path.basename(resolvedEnvPath, path.extname(resolvedEnvPath));
-  }
+  const certificateFiles = clientAuthFlags(options, {
+    filesNamedByDestination: source.kind === 'session',
+  });
+  const resolvedOutputPath = source.output;
+  const destination = source.destination;
 
   // The client and URL the service key states, copied into the destination:
   // the output is read later on its own, with no service key beside it.
@@ -205,24 +287,14 @@ export async function runMcpAuth(
     certUrl: string;
   } | null = null;
 
-  if (options.serviceKeyPath) {
-    const resolvedServiceKeyPath = path.resolve(options.serviceKeyPath);
+  if (source.kind === 'service-key') {
+    const resolvedServiceKeyPath = source.serviceKeyPath;
     let serviceKeyDir = path.dirname(resolvedServiceKeyPath);
 
     if (!fs.existsSync(resolvedServiceKeyPath)) {
       console.error(`❌ Service key file not found: ${resolvedServiceKeyPath}`);
       process.exit(1);
     }
-
-    const serviceKeyFileName = path.basename(resolvedServiceKeyPath, '.json');
-    if (destination && destination !== serviceKeyFileName) {
-      console.error(
-        `❌ Destination mismatch: env file (${destination}) vs service key (${serviceKeyFileName})`,
-      );
-      process.exit(1);
-    }
-    destination = serviceKeyFileName;
-
     // Which parser reads the key: the ABAP format nests the client under
     // `uaa`, the XSUAA format holds it flat. The format, not the grant: the
     // grant is the command's (`--credential`), never read from the key.
@@ -346,25 +418,72 @@ export async function runMcpAuth(
     }
   }
 
-  if (!destination) {
-    console.error('❌ Destination could not be determined from inputs');
-    process.exit(1);
-  }
-
-  const grantType = options.credential
-    ? 'client_credentials'
-    : 'authorization_code';
-
   progress(`📁 Output file: ${resolvedOutputPath}`);
-  if (resolvedEnvPath) {
-    progress(
-      `📁 Env file: ${resolvedEnvPath} (${envExists ? 'found' : 'not found'})`,
-    );
-  }
-  if (options.serviceKeyPath) {
-    progress(`📁 Service key: ${path.resolve(options.serviceKeyPath)}`);
+  if (source.kind === 'session') {
+    progress(`📁 Session file: ${source.sessionPath}`);
+  } else {
+    progress(`📁 Service key: ${source.serviceKeyPath}`);
   }
   progress(`🔐 Auth type: ${options.authType}`);
+
+  // The destination in the run's private directory: a session file is copied
+  // there — its means and session the broker's to judge — and a service key's
+  // run starts from no file at all, so no session is read.
+  const files = openDestination(
+    workDir,
+    destination,
+    options.authType,
+    source.kind === 'session' ? source.sessionPath : undefined,
+  );
+
+  let grantType: 'authorization_code' | 'client_credentials';
+  if (source.kind === 'service-key') {
+    grantType = options.credential
+      ? 'client_credentials'
+      : 'authorization_code';
+    // The means, before the login: what the session's secret is obtained with.
+    // A certificate client is written as its paths and `certurl` — never PEM —
+    // and the store removes the client secret it replaces (and the reverse).
+    const serviceUrl = options.serviceUrl || keyServiceUrl;
+    await files.keyStore.setDestination(
+      destination,
+      completeMeans({
+        authType: 'jwt',
+        grantType,
+        serviceUrl,
+        ...(certificateFiles
+          ? {
+              ...(keyCertificate
+                ? {
+                    uaaUrl: keyCertificate.uaaUrl,
+                    uaaClientId: keyCertificate.clientId,
+                    uaaCertUrl: keyCertificate.certUrl,
+                  }
+                : {}),
+              uaaClientCertPath: certificateFiles.certPath,
+              uaaClientKeyPath: certificateFiles.keyPath,
+            }
+          : (keyClient ?? {})),
+      }),
+    );
+  } else {
+    // The means are the file's: this command runs only its own grants.
+    const stated = (await files.keyStore.getConnectionConfig(destination))
+      ?.grantType;
+    if (stated !== 'authorization_code' && stated !== 'client_credentials') {
+      const subcommand =
+        stated === undefined ? undefined : SUBCOMMAND_OF_GRANT[stated];
+      throw new UsageError(
+        stated === undefined
+          ? `${source.flag}: the session file states no grant (SAP_GRANT_TYPE); state the means with --service-key`
+          : `${source.flag}: the session file states the grant ${stated}${subcommand ? `: run mcp-auth ${subcommand}` : ''}`,
+      );
+    }
+    grantType = stated;
+    if (grantType === 'authorization_code') {
+      mcpAuthBrowser(options, platform ?? process.platform);
+    }
+  }
   progress(`🔑 Flow: ${grantType}`);
   if (options.clientAuth === 'secret') {
     progress(
@@ -374,8 +493,12 @@ export async function runMcpAuth(
     progress(
       `🔏 Client authentication: certificate (${certificateFiles.certPath}, ${certificateFiles.keyPath})`,
     );
+  } else if (options.clientAuth === 'certificate') {
+    progress(
+      '🔏 Client authentication: certificate (the session file names it)',
+    );
   }
-  if (!options.credential) {
+  if (grantType === 'authorization_code') {
     progress(
       `🌐 Browser: ${options.browserProgram === undefined ? options.browser : `program ${options.browserProgram}`}`,
     );
@@ -385,46 +508,9 @@ export async function runMcpAuth(
     progress(`🔗 Service URL: ${options.serviceUrl}`);
   }
 
-  if (!envExists && !options.serviceKeyPath) {
-    throw new UsageError('Env file not found and no service key provided.');
-  }
-
-  const files = openDestination(
-    workDir,
-    destination,
-    options.authType,
-    resolvedEnvPath,
-  );
-
-  // The means, before the login: what the session's secret is obtained with.
-  // A certificate client is written as its paths and `certurl` — never PEM —
-  // and the store removes the client secret it replaces (and the reverse).
-  const serviceUrl = options.serviceUrl || keyServiceUrl;
-  await files.keyStore.setDestination(
-    destination,
-    completeMeans({
-      authType: 'jwt',
-      grantType,
-      serviceUrl,
-      ...(certificateFiles
-        ? {
-            ...(keyCertificate
-              ? {
-                  uaaUrl: keyCertificate.uaaUrl,
-                  uaaClientId: keyCertificate.clientId,
-                  uaaCertUrl: keyCertificate.certUrl,
-                }
-              : {}),
-            uaaClientCertPath: certificateFiles.certPath,
-            uaaClientKeyPath: certificateFiles.keyPath,
-          }
-        : (keyClient ?? {})),
-    }),
-  );
-
   // Who the client is, as the destination now states it.
   let client: { uaaUrl: string; uaaClientId: string; certUrl?: string };
-  if (certificateFiles) {
+  if (options.clientAuth === 'certificate') {
     const stated = await files.keyStore.getClientCertificate(destination);
     if (!stated) {
       throw new UsageError(`Client certificate not found for ${destination}.`);
@@ -508,12 +594,13 @@ export async function runMcpAuth(
     signal?.throwIfAborted();
     writeJsonFile(resolvedOutputPath, {
       ...json,
-      ...(certificateFiles
+      // The paths are the flags' (a session file's stay in that file).
+      ...(options.clientAuth === 'certificate'
         ? {
             uaaUrl: client.uaaUrl,
             uaaClientId: client.uaaClientId,
-            uaaClientCertPath: certificateFiles.certPath,
-            uaaClientKeyPath: certificateFiles.keyPath,
+            uaaClientCertPath: certificateFiles?.certPath,
+            uaaClientKeyPath: certificateFiles?.keyPath,
             uaaCertUrl: client.certUrl,
           }
         : {}),

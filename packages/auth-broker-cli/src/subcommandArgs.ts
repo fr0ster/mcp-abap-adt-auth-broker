@@ -17,6 +17,7 @@
 
 import type { McpSsoOptions } from './mcpSsoConfig';
 import type { McpAuthOptions } from './runMcpAuth';
+import { checkSourceFlags } from './source';
 
 /** The subcommands, in the order help lists them. */
 export const SUBCOMMANDS = [
@@ -124,6 +125,8 @@ function unknownArgument(arg: string, position: number): UsageError {
 const AUTH_CODE_VALUE_FLAGS: readonly string[] = [
   '--service-key',
   '--env',
+  '--destination',
+  '--destination-dir',
   '--output',
   '--type',
   '--browser',
@@ -141,6 +144,8 @@ const AUTH_CODE_VALUE_FLAGS: readonly string[] = [
 function parseAuthCodeArgs(args: readonly string[]): McpAuthOptions {
   let serviceKeyPath: string | undefined;
   let envFilePath: string | undefined;
+  let destination: string | undefined;
+  let destinationDir: string | undefined;
   let outputFile: string | undefined;
   let authType: McpAuthOptions['authType'] = 'abap';
   let browser = 'auto';
@@ -175,6 +180,12 @@ function parseAuthCodeArgs(args: readonly string[]): McpAuthOptions {
         break;
       case '--env':
         envFilePath = next;
+        break;
+      case '--destination':
+        destination = next;
+        break;
+      case '--destination-dir':
+        destinationDir = next;
         break;
       case '--output':
         outputFile = next;
@@ -230,11 +241,14 @@ function parseAuthCodeArgs(args: readonly string[]): McpAuthOptions {
     i++;
   }
 
-  if (!outputFile) {
-    throw new UsageError('--output is required');
-  }
-  if (!serviceKeyPath && !envFilePath) {
-    throw new UsageError('either --service-key or --env must be provided');
+  // One source per run (D25); `--output` is where a service key's new pair
+  // goes — a session file is written back to itself unless it is given.
+  checkSourceFlags(
+    { serviceKeyPath, envFilePath, destination, destinationDir },
+    { required: true },
+  );
+  if (serviceKeyPath !== undefined && !outputFile) {
+    throw new UsageError('--output is required with --service-key');
   }
   if (browserProgram !== undefined && browserGiven) {
     throw new UsageError('--browser-program excludes --browser');
@@ -242,6 +256,8 @@ function parseAuthCodeArgs(args: readonly string[]): McpAuthOptions {
   return {
     serviceKeyPath,
     envFilePath,
+    destination,
+    destinationDir,
     outputFile,
     authType,
     browser,
@@ -329,6 +345,7 @@ const SSO_VALUE_FLAGS: Record<string, keyof McpSsoOptions> = {
   '--env': 'envFilePath',
   '--service-key': 'serviceKeyPath',
   '--destination': 'destination',
+  '--destination-dir': 'destinationDir',
   '--config': 'configPath',
   '--service-url': 'serviceUrl',
   '--browser': 'browser',
@@ -466,5 +483,8 @@ function parseSsoArgs(
         throw unknownArgument(arg, i);
     }
   }
+  // At most one source (D25): with none, the run states its means by flags
+  // or --config and logs in, as with a service key.
+  checkSourceFlags(options, { required: false });
   return options;
 }
