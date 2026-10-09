@@ -1772,27 +1772,46 @@ providers, each suite constructing `renewal` and `onWriteFailure` explicitly.
   interrupted run leaves it as it was.
 - The device code is shown on stderr with no logger enabled.
 
-### 13.3 What only a live system or a real browser can show
+### 13.3 The CLI against the stand
+
+Jest suites in `packages/auth-broker-cli/src/__tests__/stand/`, run by `npm run
+test:stand` beside the library's stand suites (locally and in CI), skipped
+without `UAA_URL` / `KEYCLOAK_URL`. Each runs the **built** `mcp-auth` bin as a
+child process against the Docker UAA and Keycloak. No real browser starts: the
+browser is `--browser-program` pointing at a fake program the suite writes,
+which receives the URL and plays the user through the stand's login and
+consent pages (the library's `formLogin`, reused, not copied).
+
+- **Browser login:** `mcp-auth --service-key <stand key>` (authorization code)
+  — the URL the fake receives carries `state` and an S256 `code_challenge`;
+  the login completes; the `.env` holds the token and the refresh token; stdout
+  is empty. **[break: drop `state` from the URL → red]**
+- **Interrupt:** `SIGINT`, and separately `SIGTERM`, sent while the fake holds
+  the URL without answering → exit 130 / 143, "the authorization was aborted"
+  on stderr, the callback port bound by the test afterwards, no output file.
+- **`--browser none`:** the URL is read from the child's stderr and the test
+  plays the login; the run completes.
+- **Device code** (Keycloak): the user code read from stderr, approved through
+  the stand's pages; the run completes.
+- **Manual SAML with a declared ACS** (Keycloak as the IdP):
+  `saml2-pure --assertion-flow manual` and `saml2-bearer --idp-initiated`, the
+  SAMLResponse given on stdin; the run completes, the session written.
+- **Refused refresh:** an `--env` session whose refresh token the stand has
+  revoked → the next run logs in; the file written back holds the new pair and
+  never the revoked token.
+- **`--env` reuse:** a valid bound session → no request (the stand's token
+  endpoint sees none), the file unchanged.
+
+### 13.4 What only a live system or a real browser can show
 
 Recorded with date and result before the release; none runs in CI.
 
-- **The CLI's interactive login in a real browser, per platform:** `mcp-auth
-  --type xsuaa` (authorization code, `state` + PKCE) against the XSUAA trial on
-  Linux (`auto` → `xdg-open`, `chrome`, `firefox`, `--browser-program
-  chromium`), macOS (`auto`, `chrome`) and Windows 11 (`auto` → `rundll32`,
-  `edge` → PowerShell `Start-Process`): token obtained, the `.env` opens ADT
-  (`getProvider` → connection 14).
-- **Ctrl+C at a real terminal** during each of those logins: exit 130, the
-  port free (bound again by hand), no output file.
-- **`--browser none`** over SSH with a tunnel: the URL prompt on stderr, the
-  login completes through the tunnel.
-- **Manual SAML with a declared ACS** against a real identity provider (IAS
-  or the Keycloak stand by hand), `mcp-auth saml2-pure --assertion-flow
-  manual` and `mcp-auth saml2-bearer --idp-initiated`.
-- **Device code** at a real terminal (Keycloak stand): the code visible on
-  stderr.
-- **Restart after a refused refresh** against the XSUAA trial with a revoked
-  refresh token: the next run logs in, the file holds no refresh token.
+- **A real browser starts, per platform:** `mcp-auth --type xsuaa` against the
+  XSUAA trial on Linux (`auto` → `xdg-open`, `chrome`, `firefox`,
+  `--browser-program chromium`), macOS (`auto`, `chrome`) and Windows 11
+  (`auto` → `rundll32`, `edge` → PowerShell `Start-Process`): the browser
+  opens, the token is obtained, the `.env` opens ADT (`getProvider` →
+  connection 14).
 - **`npm run test:live:x509`** and **`npm run test:live`** (basic/SNC/jwt over
   connection 14) re-run on 5.0.0.
 
