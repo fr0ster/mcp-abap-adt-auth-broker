@@ -1522,3 +1522,88 @@ describe('the consumer path is never seeded', () => {
     },
   );
 });
+
+// ---------------------------------------------------------------------------
+// A store that changes its answer in place
+// ---------------------------------------------------------------------------
+
+describe('a store that changes an array of its answer in place: the held provider keeps what its build read', () => {
+  /** A key store answering the very same objects on every read. */
+  function sharedKeyStore(state: KeyState): IServiceKeyStore {
+    return {
+      getServiceKey: async () => null,
+      getConnectionConfig: async () => state.means as IConnectionConfig,
+      getAuthorizationConfig: async () => state.client,
+    };
+  }
+
+  it('oidcScopes: the held provider asks for the scopes it was built with and writes their binding; the next call builds anew', async () => {
+    const scopes = ['openid', 'profile'];
+    const state: KeyState = {
+      means: { ...passwordMeans(), oidcScopes: scopes },
+      client: oidcClient(),
+    };
+    const sessions = sessionStore();
+    const b = new AuthBroker({
+      ...STATED,
+      sessionStore: sessions.store,
+      serviceKeyStore: sharedKeyStore(state),
+    });
+    const held = await b.getProvider(D);
+
+    scopes.push('admin');
+    await bearer(held);
+
+    expect(endpoint.requests.map((r) => r.params.scope)).toEqual([
+      'openid profile',
+    ]);
+    const original = oidcRecord(
+      'password',
+      {
+        oidcIssuerUrl: endpoint.url,
+        oidcScopes: ['openid', 'profile'],
+        username: 'alice',
+      },
+      'oidc-client',
+    );
+    expect(sessions.held()?.issuedBy).toBe(original);
+
+    const next = await b.getProvider(D);
+    expect(next).not.toBe(held);
+    await bearer(next);
+    expect(endpoint.requests.at(-1)?.params.scope).toBe('openid profile admin');
+  });
+
+  it('samlIdpCertificates: the held provider trusts the certificates it was built with and writes their binding; the next call builds anew', async () => {
+    const certificates = [idp1.certificatePem];
+    const h = samlHarness('saml2_pure', certificates);
+    const sessions = sessionStore();
+    const saml = samlLogin(() => idp1);
+    let n = 0;
+    const b = new AuthBroker({
+      ...STATED,
+      sessionStore: sessions.store,
+      serviceKeyStore: sharedKeyStore(h.state),
+      authorization: () => saml.strategy,
+      samlCookies: () => async () => {
+        n += 1;
+        return `MYSAPSSO2=cookies-${n}`;
+      },
+      assertionReplayStore: () => createInMemoryReplayStore(),
+    });
+    const means = {
+      ...(h.state.means as Parameters<typeof samlPureRecord>[0]),
+      samlIdpCertificates: [idp1.certificatePem],
+    };
+    const held = await b.getProvider(D);
+
+    // The store now trusts C2 alone — in place.
+    certificates[0] = idp2.certificatePem;
+    // C1's assertion is still accepted by the provider built to trust it.
+    expect(await cookiesOf(held)).toBe('MYSAPSSO2=cookies-1');
+    expect(sessions.held()?.issuedBy).toBe(samlPureRecord(means));
+
+    const next = await b.getProvider(D);
+    expect(next).not.toBe(held);
+  });
+});

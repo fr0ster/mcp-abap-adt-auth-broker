@@ -53,7 +53,12 @@ export class StoreReads {
   read(name: SourceName): Promise<object | null> {
     let answer = this.answers.get(name);
     if (!answer) {
-      answer = Promise.resolve().then(() => this.reader(name));
+      // One snapshot per answer: what the builders hand their providers and
+      // what the identity records are the same values, and a store that
+      // changes its object afterwards — in place — changes neither.
+      answer = Promise.resolve()
+        .then(() => this.reader(name))
+        .then((value) => snapshot(value));
       // Read by whoever asks; a failure is theirs to see, not an unhandled
       // rejection of the memo.
       answer.catch(() => {});
@@ -98,6 +103,23 @@ type Entry =
  * answer reads its `then` — which are no field a build reads: never noted.
  */
 const NOT_FIELDS: ReadonlySet<string> = new Set(['then', 'toJSON']);
+
+/**
+ * A store answer as the broker uses it: copied and frozen, deeply — arrays
+ * and plain objects element by element — so nothing the store does to its
+ * own object later reaches a provider built from it.
+ */
+function snapshot(value: object | null): object | null {
+  return value === null ? null : (frozen(copied(value)) as object);
+}
+
+function frozen(value: unknown): unknown {
+  if (Array.isArray(value) || isPlainObject(value)) {
+    for (const element of Object.values(value)) frozen(element);
+    Object.freeze(value);
+  }
+  return value;
+}
 
 /** A copy of a value as read: arrays and plain objects copied, element by element. */
 function copied(value: unknown): unknown {
