@@ -221,7 +221,8 @@ describeWhere(
   'x509 XSUAA service key — a BTP trial (broker fromServiceKeyCertificate, mcp-auth and generate-env with --client-auth certificate)',
   unavailable(),
   () => {
-    const local = LOCAL as string;
+    // Jest collects a skipped block too: no path may be built from an unset LOCAL.
+    const local = LOCAL ?? '';
     const keysDir = path.join(local, 'keys');
     const keyFile = path.join(keysDir, `${DESTINATION}.json`);
     const certPath = path.join(local, 'client.crt');
