@@ -848,6 +848,7 @@ export function opensBrowser(options: McpSsoOptions): boolean {
  */
 export function buildOidcBrowserAuthorization(
   options: McpSsoOptions,
+  signal?: AbortSignal | undefined,
 ): IAuthorizationStrategy<OidcCallbackResult> {
   if (options.code) {
     // The consumer already holds the code (manual paste / OOB redirect
@@ -863,10 +864,12 @@ export function buildOidcBrowserAuthorization(
   }
   // No fallback: an omitted --redirect-port lets the strategy bind its own
   // default port rather than this CLI pinning a number it doesn't own.
+  // The run's signal ends the login: no bound of its own.
   return oidcCallbackStrategy(
     asContract<Parameters<typeof oidcCallbackStrategy>[0]>({
       port: options.redirectPort,
       browser: ssoBrowser(options),
+      signal,
     }),
   );
 }
@@ -877,12 +880,15 @@ export function buildOidcBrowserAuthorization(
  */
 export function buildPasscodeAuthorization(
   options: McpSsoOptions,
+  signal?: AbortSignal | undefined,
 ): IAuthorizationStrategy<string> {
   if (options.passcode) {
     return staticCodeStrategy({ payload: options.passcode });
   }
+  // The run's signal ends the login; the read takes the login's own.
   return manualPasscodeStrategy({
-    read: (prompt, signal) => readManualInput(prompt, signal),
+    read: (prompt, loginSignal) => readManualInput(prompt, loginSignal),
+    signal,
   });
 }
 
@@ -923,6 +929,7 @@ export function declaredAcs(options: McpSsoOptions): string {
  */
 export function buildSamlAuthorization(
   options: McpSsoOptions,
+  signal?: AbortSignal | undefined,
 ): IAuthorizationStrategy<string> {
   if (options.assertion) {
     // The consumer already holds the assertion; nothing is opened or asked.
@@ -934,7 +941,7 @@ export function buildSamlAuthorization(
     );
   }
   if (options.idpInitiated) {
-    return buildIdpInitiatedAuthorization(options);
+    return buildIdpInitiatedAuthorization(options, signal);
   }
   const assertionFlow = options.assertionFlow || 'browser';
   if (assertionFlow !== 'browser') {
@@ -943,7 +950,8 @@ export function buildSamlAuthorization(
     // identity provider posts to: declared, never a localhost guess.
     return manualSamlResponseStrategy({
       redirectUri: declaredAcs(options),
-      read: (prompt, signal) => readManualInput(prompt, signal),
+      read: (prompt, loginSignal) => readManualInput(prompt, loginSignal),
+      signal,
     });
   }
   // No fallback: an omitted --redirect-port lets the strategy bind its own
@@ -952,6 +960,7 @@ export function buildSamlAuthorization(
     asContract<Parameters<typeof samlCallbackStrategy>[0]>({
       port: options.redirectPort,
       browser: ssoBrowser(options),
+      signal,
     }),
   );
 }
@@ -965,7 +974,10 @@ export function buildSamlAuthorization(
  * exists to open that URL, is refused rather than left to fail after the
  * provider is built.
  */
-function buildIdpInitiatedAuthorization(options: McpSsoOptions) {
+function buildIdpInitiatedAuthorization(
+  options: McpSsoOptions,
+  signal: AbortSignal | undefined,
+) {
   if (options.assertionFlow === 'browser') {
     console.error(
       '❌ --idp-initiated cannot use --assertion-flow browser: there is no request URL to open. ' +
@@ -977,11 +989,11 @@ function buildIdpInitiatedAuthorization(options: McpSsoOptions) {
   const redirectUri = declaredAcs(options);
   return {
     async authorize(request: AuthorizationRequest) {
-      // The login's signal ends the paste: every waiter gone, the read is
-      // abandoned and its readline closed.
+      // The login's signal ends the paste — every waiter gone — and so does
+      // the run's: the read is abandoned and its readline closed.
       const payload = await readManualInput(
         'Start the login at your identity provider, then paste the SAMLResponse (from the POST body): ',
-        request.signal,
+        eitherSignal(request.signal, signal),
       );
       if (!payload) {
         throw new UsageError('No SAMLResponse was provided');
@@ -991,6 +1003,16 @@ function buildIdpInitiatedAuthorization(options: McpSsoOptions) {
   };
 }
 
+/** A signal that aborts when either given one does; `undefined` for neither. */
+function eitherSignal(
+  ...signals: Array<AbortSignal | undefined>
+): AbortSignal | undefined {
+  const given = signals.filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  return given.length > 1 ? AbortSignal.any(given) : given[0];
+}
+
 /**
  * `saml2_pure`: the system's session cookies for the SAMLResponse. With
  * `--assertion-flow assertion` the response itself is presented; otherwise the
@@ -998,6 +1020,7 @@ function buildIdpInitiatedAuthorization(options: McpSsoOptions) {
  */
 export function buildSamlCookieProvider(
   options: McpSsoOptions,
+  signal?: AbortSignal | undefined,
 ): (samlResponse: string) => Promise<string> {
   const assertionFlow =
     options.assertionFlow || (options.assertion ? 'assertion' : 'browser');
@@ -1005,7 +1028,8 @@ export function buildSamlCookieProvider(
     if (assertionFlow === 'assertion') {
       return `SAMLResponse=${samlResponse}`;
     }
-    return readManualInput('Paste session cookies: ');
+    // The run's signal abandons the paste.
+    return readManualInput('Paste session cookies: ', signal);
   };
 }
 
@@ -1028,15 +1052,18 @@ export type SsoCollaborators = {
  * store the assertion validators share. The broker calls only the ones the
  * destination's grant uses, once, when it builds the provider.
  */
-export function buildCollaborators(options: McpSsoOptions): SsoCollaborators {
+export function buildCollaborators(
+  options: McpSsoOptions,
+  signal?: AbortSignal | undefined,
+): SsoCollaborators {
   return {
     authorization: (_destination, grant) => {
       switch (grant) {
         case 'passcode':
-          return buildPasscodeAuthorization(options);
+          return buildPasscodeAuthorization(options, signal);
         case 'saml2_pure':
         case 'saml2_bearer':
-          return buildSamlAuthorization(options);
+          return buildSamlAuthorization(options, signal);
         default:
           // These subcommands state no authorization_code destination: that is auth-code's.
           throw new UsageError(
@@ -1044,9 +1071,9 @@ export function buildCollaborators(options: McpSsoOptions): SsoCollaborators {
           );
       }
     },
-    oidcAuthorization: () => buildOidcBrowserAuthorization(options),
+    oidcAuthorization: () => buildOidcBrowserAuthorization(options, signal),
     deviceCodePresenter: () => consoleDeviceCodePresenter(),
-    samlCookies: () => buildSamlCookieProvider(options),
+    samlCookies: () => buildSamlCookieProvider(options, signal),
     assertionReplayStore: () => defaultReplayStore,
   };
 }

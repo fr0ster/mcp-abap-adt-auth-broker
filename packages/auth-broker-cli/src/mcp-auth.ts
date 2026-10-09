@@ -22,6 +22,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
 import { asContract } from './contractShape';
+import { underInterrupt } from './interrupt';
 import type { McpSsoOptions } from './mcpSsoConfig';
 import { createCliLogger, printFailure, toStderr } from './output';
 import { type McpAuthOptions, mcpAuthBrowser, runMcpAuth } from './runMcpAuth';
@@ -33,7 +34,6 @@ import {
   type SsoSubcommand,
   type Subcommand,
 } from './subcommandArgs';
-import { createWorkDir } from './workDir';
 
 function getVersion(): string {
   // This package's own manifest: dist/<bin>.js and src/<bin>.ts both sit one
@@ -520,34 +520,43 @@ function showHelp(subcommand: Subcommand | undefined): void {
   }
 }
 
-/** `mcp-auth [auth-code]`: the authorization code or client credentials login. */
-async function runAuthCode(options: McpAuthOptions): Promise<number> {
-  // Removed on any exit, error and signal included: it holds the secret.
-  const workDir = createWorkDir('mcp-auth');
-  return runMcpAuth(options, {
-    logger: createCliLogger({ verbose: isVerbose(options) }),
-    workDir,
-    // Passing `options.redirectPort` as given, so an omitted
-    // --redirect-port lets the strategy bind its own default rather than
-    // this CLI pinning a number it doesn't own.
-    authorization: (run) =>
-      browserCallbackStrategy(
-        asContract<Parameters<typeof browserCallbackStrategy>[0]>({
-          browser: mcpAuthBrowser(run),
-          port: run.redirectPort,
-        }),
-      ),
-  });
+/**
+ * `mcp-auth [auth-code]`: the authorization code or client credentials login,
+ * under the run's interrupt (§10.4): `SIGINT` / `SIGTERM` end it.
+ */
+function runAuthCode(options: McpAuthOptions): Promise<number> {
+  // The work directory is removed on any exit, error and signal included:
+  // it holds the secret.
+  return underInterrupt('mcp-auth', ({ signal, workDir }) =>
+    runMcpAuth(options, {
+      logger: createCliLogger({ verbose: isVerbose(options) }),
+      workDir,
+      signal,
+      // Passing `options.redirectPort` as given, so an omitted
+      // --redirect-port lets the strategy bind its own default rather than
+      // this CLI pinning a number it doesn't own. The login waits until the
+      // user ends it: the run's signal, no bound.
+      authorization: (run, loginSignal) =>
+        browserCallbackStrategy(
+          asContract<Parameters<typeof browserCallbackStrategy>[0]>({
+            browser: mcpAuthBrowser(run),
+            port: run.redirectPort,
+            signal: loginSignal,
+          }),
+        ),
+    }),
+  );
 }
 
-/** `mcp-auth oidc | saml2-pure | saml2-bearer`, in this process. */
-async function runSso(options: McpSsoOptions): Promise<number> {
-  // Removed on any exit, error and signal included: it holds the secret.
-  const workDir = createWorkDir('mcp-auth');
-  return runMcpSso(options, {
-    logger: createCliLogger({ verbose: isVerbose(options) }),
-    workDir,
-  });
+/** `mcp-auth oidc | saml2-pure | saml2-bearer`, in this process, under the run's interrupt. */
+function runSso(options: McpSsoOptions): Promise<number> {
+  return underInterrupt('mcp-auth', ({ signal, workDir }) =>
+    runMcpSso(options, {
+      logger: createCliLogger({ verbose: isVerbose(options) }),
+      workDir,
+      signal,
+    }),
+  );
 }
 
 async function main(): Promise<number> {

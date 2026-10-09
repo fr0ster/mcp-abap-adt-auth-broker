@@ -144,12 +144,15 @@ export function completeMeans(stated: StatedMeans): DestinationMeans {
  */
 export async function flushed(
   broker: AuthBroker,
+  signal?: AbortSignal | undefined,
   write: LineWriter = toStderr,
 ): Promise<boolean> {
   try {
-    await broker.flush();
+    await broker.flush({ signal });
     return true;
   } catch (error) {
+    // The run was ended by its signal: no write failed, the caller rethrows.
+    if (signal?.aborted) throw error;
     // Each destination still pending, in its SessionWriteFailure's words —
     // the store's error as auth-errors classified it — never the store's
     // message (§10.9).

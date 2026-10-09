@@ -44,20 +44,27 @@
 import { browserCallbackStrategy } from '@mcp-abap-adt/auth-providers';
 import { asContract } from './contractShape';
 import { runGenerateEnv } from './generateEnv';
+import { underInterrupt } from './interrupt';
 import { printFailure } from './output';
-import { createWorkDir } from './workDir';
 
-runGenerateEnv(process.argv.slice(2), {
-  // Removed on any exit, error and signal included: it holds the secret.
-  workDir: createWorkDir('generate-env'),
-  // No port override: this script has no `--redirect-port` flag, so the
-  // callback port is the strategy's own choice. The login waits until the
-  // user ends it: no bound of this script's own.
-  authorization: (browser) =>
-    browserCallbackStrategy(
-      asContract<Parameters<typeof browserCallbackStrategy>[0]>({ browser }),
-    ),
-})
+// Under the run's interrupt (§10.4): SIGINT / SIGTERM end the login; the
+// work directory — it holds the secret — is removed on any exit.
+underInterrupt('generate-env', ({ signal, workDir }) =>
+  runGenerateEnv(process.argv.slice(2), {
+    workDir,
+    signal,
+    // No port override: this script has no `--redirect-port` flag, so the
+    // callback port is the strategy's own choice. The login waits until the
+    // user ends it: the run's signal, no bound of this script's own.
+    authorization: (browser, loginSignal) =>
+      browserCallbackStrategy(
+        asContract<Parameters<typeof browserCallbackStrategy>[0]>({
+          browser,
+          signal: loginSignal,
+        }),
+      ),
+  }),
+)
   .then((code) => process.exit(code))
   .catch((error: unknown) => {
     // auth-errors', the broker's or this CLI's words: never a foreign

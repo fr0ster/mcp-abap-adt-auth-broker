@@ -49,12 +49,18 @@ export interface McpSsoContext {
   workDir: string;
   /** The platform the browser is mapped for; `process.platform` when absent. */
   platform?: string | undefined;
+  /**
+   * The run's signal (`underInterrupt`): every wait of the run takes it —
+   * the broker's calls, the provider's login, the strategies and the
+   * terminal reads. Absent: nothing ends the login but its result.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 /** Runs one of those subcommands; resolves the exit code. Usage errors exit the process. */
 export async function runMcpSso(
   options: McpSsoOptions,
-  { logger, workDir, platform }: McpSsoContext,
+  { logger, workDir, platform, signal }: McpSsoContext,
 ): Promise<number> {
   if (!options.outputFile) {
     console.error('❌ Missing required --output');
@@ -306,7 +312,7 @@ export async function runMcpSso(
     {
       sessionStore: files.sessionStore,
       serviceKeyStore: files.keyStore,
-      ...buildCollaborators(options),
+      ...buildCollaborators(options, signal),
       renewal: () => refreshThenLogin(),
       onWriteFailure: 'fail',
       // On only with --auth-debug (§10.7): never from the environment.
@@ -333,7 +339,7 @@ export async function runMcpSso(
       issuedBy: binding.issuedBy ?? '',
     });
     // The destination as the broker will read it: refused here, not later.
-    await broker.getProvider(destination);
+    await broker.getProvider(destination, { signal });
     progress(`✅ Session cookies stored`);
   }
   // Whether the login threw, beside what it threw: a falsy value thrown
@@ -341,9 +347,9 @@ export async function runMcpSso(
   let failed = false;
   let obtainError: unknown;
   if (row.grantType !== 'none') {
-    const provider = await broker.getProvider(destination);
+    const provider = await broker.getProvider(destination, { signal });
     const tokens = provider as Partial<{
-      getTokens: () => Promise<unknown>;
+      getTokens: (options?: { signal?: AbortSignal }) => Promise<unknown>;
     }>;
     if (typeof tokens.getTokens !== 'function') {
       throw new UsageError(
@@ -356,7 +362,7 @@ export async function runMcpSso(
     // (onWriteFailure: 'fail'). Either way the run fails, after one more
     // attempt at any write still pending.
     try {
-      await tokens.getTokens();
+      await tokens.getTokens(signal === undefined ? undefined : { signal });
       progress(`✅ Token obtained successfully`);
     } catch (error) {
       failed = true;
@@ -364,13 +370,15 @@ export async function runMcpSso(
     }
   }
 
-  const stored = await flushed(broker);
+  const stored = await flushed(broker, signal);
   if (failed) {
     throw obtainError;
   }
   if (!stored) {
     return 1;
   }
+  // An interrupted run writes no output.
+  signal?.throwIfAborted();
 
   if (options.format === 'env') {
     writeOutputFile(files, resolvedOutputPath);

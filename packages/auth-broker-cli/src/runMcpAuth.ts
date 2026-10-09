@@ -126,9 +126,19 @@ export interface McpAuthContext {
   /**
    * The interactive strategy of the authorization code login, stated by the
    * caller — the bin builds the browser callback from `--browser` and
-   * `--redirect-port`. Not called for `--credential`.
+   * `--redirect-port` — given the run's signal, which ends its login. Not
+   * called for `--credential`.
    */
-  authorization: (options: McpAuthOptions) => AuthorizationStrategy;
+  authorization: (
+    options: McpAuthOptions,
+    signal: AbortSignal | undefined,
+  ) => AuthorizationStrategy;
+  /**
+   * The run's signal (`underInterrupt`): every wait of the run takes it —
+   * the broker's calls and the strategy. Absent: nothing ends the login but
+   * its result.
+   */
+  signal?: AbortSignal | undefined;
   /** The platform the browser is mapped for; `process.platform` when absent. */
   platform?: string | undefined;
 }
@@ -136,7 +146,7 @@ export interface McpAuthContext {
 /** Runs `mcp-auth`; resolves the exit code. Usage errors exit the process. */
 export async function runMcpAuth(
   options: McpAuthOptions,
-  { logger, workDir, authorization, platform }: McpAuthContext,
+  { logger, workDir, authorization, platform, signal }: McpAuthContext,
 ): Promise<number> {
   // The browser is mapped only for the login that opens one — the
   // authorization code login — and then before anything is read or written:
@@ -436,7 +446,7 @@ export async function runMcpAuth(
       clientAuthentication,
       // Asked only for the authorization_code row; `--credential` logs in
       // with the client alone.
-      authorization: () => authorization(options),
+      authorization: () => authorization(options, signal),
     },
     logger,
   );
@@ -447,7 +457,7 @@ export async function runMcpAuth(
   let failed = false;
   let obtainError: unknown;
   try {
-    await broker.getToken(destination);
+    await broker.getToken(destination, { signal });
     progress(`✅ Token obtained successfully`);
   } catch (error) {
     // A failed login, or a token obtained whose write failed: either way the
@@ -455,13 +465,15 @@ export async function runMcpAuth(
     failed = true;
     obtainError = error;
   }
-  const stored = await flushed(broker);
+  const stored = await flushed(broker, signal);
   if (failed) {
     throw obtainError;
   }
   if (!stored) {
     return 1;
   }
+  // An interrupted run writes no output.
+  signal?.throwIfAborted();
 
   if (options.format === 'env') {
     writeOutputFile(files, resolvedOutputPath);

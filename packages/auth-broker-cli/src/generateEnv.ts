@@ -76,15 +76,24 @@ export interface GenerateEnvContext {
   /**
    * The interactive strategy of the authorization code grant, stated by the
    * caller, given the browser the run states for this platform (`undefined`:
-   * none — the URL is shown on stderr).
+   * none — the URL is shown on stderr) and the run's signal, which ends its
+   * login.
    */
-  authorization: (browser: IBrowser | undefined) => AuthorizationStrategy;
+  authorization: (
+    browser: IBrowser | undefined,
+    signal: AbortSignal | undefined,
+  ) => AuthorizationStrategy;
   /** The run's private directory (`createWorkDir`), removed by its creator. */
   workDir: string;
   /** The platform the browser is mapped for; `process.platform` when absent. */
   platform?: string | undefined;
   /** The browser factories; auth-providers' own when absent. */
   browsers?: BrowserFactories | undefined;
+  /**
+   * The run's signal (`underInterrupt`): every wait of the run takes it.
+   * Absent: nothing ends the login but its result.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 /** Runs the script; resolves the exit code. */
@@ -95,6 +104,7 @@ export async function runGenerateEnv(
     workDir,
     platform = process.platform,
     browsers = SHIPPED_BROWSERS,
+    signal,
   }: GenerateEnvContext,
 ): Promise<number> {
   const positional: string[] = [];
@@ -315,7 +325,7 @@ export async function runGenerateEnv(
       sessionStore: files.sessionStore,
       serviceKeyStore: files.keyStore,
       clientAuthentication: clientAuthenticationStrategy(flags),
-      authorization: () => authorization(browser),
+      authorization: () => authorization(browser, signal),
       renewal: () => refreshThenLogin(),
       onWriteFailure: 'fail',
       // On only with --auth-debug (§10.7): never from the environment.
@@ -332,11 +342,15 @@ export async function runGenerateEnv(
     // states (authorization_code, client_credentials) build a token provider,
     // which also has getTokens. A runtime check would add a refusal for a
     // provider that cannot be built here.
-    const provider = (await broker.getProvider(destination)) as unknown as {
-      getTokens: () => Promise<unknown>;
+    const provider = (await broker.getProvider(destination, {
+      signal,
+    })) as unknown as {
+      getTokens: (options?: { signal?: AbortSignal }) => Promise<unknown>;
     };
-    await provider.getTokens();
+    await provider.getTokens(signal === undefined ? undefined : { signal });
   } catch (error) {
+    // Ended by the user: the interrupt says so, not a failed login.
+    if (signal?.aborted) throw error;
     // A provider's failure — of any installed copy of auth-errors — in the
     // words auth-errors renders from its kind and facts; anything else in
     // auth-errors' unfamiliar words, never its message (§10.9).
@@ -349,10 +363,12 @@ export async function runGenerateEnv(
   }
   progress(`✅ Token obtained successfully`);
 
-  if (!(await flushed(broker))) {
+  if (!(await flushed(broker, signal))) {
     toStderr(`   ${resolvedSessionPath} is unchanged.`);
     return 1;
   }
+  // An interrupted run writes no session file.
+  signal?.throwIfAborted();
   writeOutputFile(files, resolvedSessionPath, 'the session path');
   progress(`✅ Session file written: ${resolvedSessionPath}`);
   return 0;
