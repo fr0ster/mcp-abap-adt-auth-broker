@@ -7,7 +7,7 @@ log in through it. Two packages, one repository.
 | package | what it is | depends on |
 |---|---|---|
 | [`@mcp-abap-adt/auth-broker`](packages/auth-broker) | the library: for a destination name, builds the `IAuthProvider` it states (`getProvider`) from the means in its key store and the secret in its session store, and stores every token or SAML session cookie that provider obtains, bound to the means it was obtained under; and the token API (`getToken`, `refreshToken`, `createTokenRefresher`) on that same provider, or on one you give it. You state how a provider renews and what a failed write means; every call takes a `signal` | the contract packages (`interfaces-auth`, `interfaces-auth-sap`, `interfaces-auth-broker`, `interfaces-utils`), `auth-providers`, `auth-errors` |
-| [`@mcp-abap-adt/auth-broker-cli`](packages/auth-broker-cli) | the `mcp-auth` command (subcommands `auth-code`, `oidc`, `saml2-pure`, `saml2-bearer`): service key, session file or named destination; UAA, OIDC, UAA passcode or SAML login, written as a destination — the means through `auth-stores`' destination store, the secret through the broker — to one `.env` file | the library, `auth-stores`, `auth-providers`, `auth-errors` |
+| [`@mcp-abap-adt/auth-broker-cli`](packages/auth-broker-cli) | the `mcp-auth` command (subcommands `auth-code`, `oidc`, `saml2-pure`, `saml2-bearer`): service key, session file or named destination; UAA, OIDC, UAA passcode or SAML login, written as a destination — the means through `auth-stores`' destination store, the secret through the broker — to one `.env` file | the library, `auth-stores`, `auth-providers`, `auth-errors`, `interfaces-auth`, `interfaces-utils`, `@xmldom/xmldom`, `dotenv` |
 
 ## Installing
 

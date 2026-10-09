@@ -206,10 +206,12 @@ answered 200, and after `flush()` the session file holds a new token and its bin
 logs in — its `authorization` strategy refuses — and never writes the original session file (it
 works on a copy). The means are the destination's SAP service key, read by
 `new AbapServiceKeyStore(dir, { grantType: 'authorization_code' })`. **The session must be bound
-to that key by auth-broker 5** — written by `mcp-auth --service-key <the key> --type abap` (CLI
-3.0.0), or by a 5.0.0 `getProvider` over the same key. A session written before 5.0.0 reads as
-unbound: the broker does not use its refresh token, the refusing strategy fails the login, and
-the case fails — log in once with CLI 3.0.0 first. Where the server rotates refresh tokens the
+to that key by auth-broker 5**: a session written before 5.0.0 reads as unbound — the broker does
+not use its refresh token, the refusing strategy fails the login, and the case fails. **Pending**
+(read from the code, not yet run on 5.0.0; the next `npm run test:live` decides it): that a
+session written by `mcp-auth --service-key <the key> --type abap` (CLI 3.0.0), or by a 5.0.0
+`getProvider` over the same key, carries exactly the binding this case computes, so logging in
+once with CLI 3.0.0 first makes the case runnable. Where the server rotates refresh tokens the
 run spends the original's refresh token; log in again afterwards.
 
 **The destinations.** `AUTH_BROKER_LIVE_KEYS_DIR` is a directory of `<destination>.env` files read

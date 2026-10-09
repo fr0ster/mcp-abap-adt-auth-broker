@@ -263,22 +263,46 @@ const certificateClient = await keys.getClientCertificate('mcp');
 const secret = await sessions.loadSession('mcp');
 ```
 
-A session store of your own must keep `issuedFor` and `issuedBy` beside the secret, byte for
-byte, take `refreshToken: ''` as clearing the stored one, and settle every `saveSession`:
+A session store of your own implements the whole `ISessionStore` — the constructor refuses one
+without `loadSession`, `saveSession`, `getConnectionConfig`, `getAuthorizationConfig`,
+`setConnectionConfig` and `setAuthorizationConfig`. It must keep `issuedFor` and `issuedBy`
+beside the secret, byte for byte, take `refreshToken: ''` as clearing the stored one, and settle
+every `saveSession`:
 
 ```typescript
-import type { IConfig, ISessionStore } from '@mcp-abap-adt/auth-broker';
+import {
+  AuthBroker,
+  type IConfig,
+  type ISessionStore,
+} from '@mcp-abap-adt/auth-broker';
+import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 
 declare const db: {
   get(key: string): Promise<IConfig | null>;
   merge(key: string, value: Partial<IConfig>): Promise<void>; // resolves or rejects, always
 };
 
-const dbSessionStore: Pick<ISessionStore, 'loadSession' | 'saveSession'> = {
+const dbSessionStore: ISessionStore = {
+  // The secret and its binding, as the broker wrote them.
   loadSession: (destination) => db.get(destination),
-  // The contract types the write as `IConfig | unknown`: the broker writes an IConfig.
+  // The contract types the write as `IConfig | unknown`: the broker writes an IConfig, every
+  // field it must not leave to the merge stated (refreshToken: '' clears the stored one).
   saveSession: (destination, config) => db.merge(destination, config as IConfig),
+  // A store of secrets holds no means: the broker reads them from the key store. (The token
+  // API with a provider of yours asks these first, then the key store.)
+  getConnectionConfig: async () => null,
+  getAuthorizationConfig: async () => null,
+  // Never called by the broker, which writes the secret alone through saveSession.
+  setConnectionConfig: async () => {},
+  setAuthorizationConfig: async () => {},
 };
+
+const withDbSessions = new AuthBroker({
+  serviceKeyStore: myKeyStore,
+  sessionStore: dbSessionStore,
+  renewal: () => refreshThenLogin(),
+  onWriteFailure: 'fail',
+});
 ```
 
 ### Environment Variables

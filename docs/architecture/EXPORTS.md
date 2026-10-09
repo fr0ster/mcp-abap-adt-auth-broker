@@ -33,7 +33,8 @@ export type { TokenGrant } from './destinations';
 | `onWriteFailure` | `'fail' \| 'continue'` — required by every destination that writes a secret; no default |
 | `authDebug` | `boolean` — passed to every token provider the broker builds; on only for `true` |
 
-`TokenGrant` is every `DestinationGrant` but `'none'`. `BrokerCallOptions` is
+`TokenGrant` is `'authorization_code' | 'client_credentials' | 'passcode' | 'oidc_authorization_code' | 'device_code' | 'password' | 'token_exchange' | 'saml2_pure' | 'saml2_bearer'` — every
+grant a destination may state but `'none'`. `BrokerCallOptions` is
 `{ readonly signal?: AbortSignal | undefined }`. `TokenProviderClient` — the factory's fourth
 argument, only beside a `clientAuthentication` strategy for a grant that authenticates a client:
 `clientAuthentication`, `uaaUrl`, `clientId`; never a certificate, key, secret or refresh token

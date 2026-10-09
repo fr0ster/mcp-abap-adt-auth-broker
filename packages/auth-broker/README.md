@@ -248,8 +248,8 @@ const perDestination: AuthBrokerConfig['renewal'] = (destination, grant) =>
 ```
 
 `renewal(destination, grant)` is called once per build of every token row — the UAA, OIDC and
-SAML grants (`TokenGrant`: every `DestinationGrant` but `none`) — after every other check of the
-row has passed and before the provider's constructor; its answer is the provider's `renewal`,
+SAML grants (`TokenGrant`: `'authorization_code' | 'client_credentials' | 'passcode' | 'oidc_authorization_code' | 'device_code' | 'password' | 'token_exchange' | 'saml2_pure' | 'saml2_bearer'`) — after every
+other check of the row has passed and before the provider's constructor; its answer is the provider's `renewal`,
 unchanged. The broker never wraps, inspects or calls it.
 
 - **Required for every token row, no default.** A token row built without it is a
@@ -1150,7 +1150,8 @@ export type TokenProviderFactory = (
   strategy's answer), `uaaUrl` and `clientId` (the client identity); never a certificate, a key,
   a secret or a refresh token (`refreshToken` stays in the type and is never set).
 - **`StrategyGrant`** — `'authorization_code' | 'passcode' | 'saml2_pure' | 'saml2_bearer'`;
-  **`TokenGrant`** — every `DestinationGrant` but `'none'`; **`BrokerCallOptions`** —
+  **`TokenGrant`** — `'authorization_code' | 'client_credentials' | 'passcode' | 'oidc_authorization_code' | 'device_code' | 'password' | 'token_exchange' | 'saml2_pure' | 'saml2_bearer'` (every grant a
+  destination may state but `'none'`); **`BrokerCallOptions`** —
   `{ signal? }`.
 - **`bindingOf(means, client?)`**, **`fromServiceKeyCertificate()`**,
   **`fromServiceKeySecret({ encoding })`**, **`DestinationConfigError`**,
