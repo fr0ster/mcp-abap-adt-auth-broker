@@ -466,23 +466,18 @@ describe('three sources, one per run (D25)', () => {
       for (const [flag, overrides] of [
         ['--credential', { credential: true }],
         ['--service-url', { serviceUrl: 'https://other.example.com' }],
-        [
-          '--cert-path and --key-path',
-          {
-            clientAuth: 'certificate',
-            certPath: CLIENT_CRT_PATH,
-            keyPath: CLIENT_KEY_PATH,
-          },
-        ],
+        ['--client-auth', { clientAuth: 'certificate' }],
+        ['--client-auth', { clientAuth: 'secret', basicEncoding: 'form' }],
+        ['--basic-encoding', { basicEncoding: 'raw' }],
+        ['--cert-path', { certPath: CLIENT_CRT_PATH }],
+        ['--key-path', { keyPath: CLIENT_KEY_PATH }],
       ] as const) {
         const thrown = await run(envRun(previous, overrides)).catch(
           (error: unknown) => error,
         );
         expect(isUsageError(thrown)).toBe(true);
         expect((thrown as Error).message).toBe(
-          flag.includes(' and ')
-            ? `${flag}: the session file names the certificate files`
-            : `${flag} and --env: the session file holds the means and is used as it is; state the means with --service-key instead`,
+          `${flag} and --env: the session file holds the means and is used as it is; state the means with --service-key instead`,
         );
       }
       expect(fs.readFileSync(previous)).toEqual(before);
@@ -1107,14 +1102,13 @@ describe('mcp-auth --client-auth', () => {
       fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
       expireStoredToken(previous, 'abap');
       strategyCalls = 0;
-      // --env alone: the file names the certificate files; --client-auth
-      // certificate states the strategy, with no paths of its own.
+      // --env alone: the client authentication is the file's — its
+      // certificate paths — with no flag (D25).
       await expect(
         run(
           options({
             envFilePath: previous,
             outputFile: path.join(outDir, `${DEST}.env`),
-            clientAuth: 'certificate',
           }),
         ),
       ).resolves.toBe(0);
@@ -1175,7 +1169,6 @@ describe('mcp-auth --client-auth', () => {
             authType: 'xsuaa',
             envFilePath: previous,
             outputFile: path.join(outDir, `${DEST}.env`),
-            clientAuth: 'certificate',
           }),
         ),
       ).resolves.toBe(0);
@@ -1343,6 +1336,50 @@ describe('mcp-auth --client-auth', () => {
         ),
       ).toBe(true);
       expect(pemCopies()).toEqual([]);
+    });
+
+    it('the Basic encoding is recorded in the file and read back: --env alone refreshes with the Basic header, no client_secret in the body', async () => {
+      server.answer('/oauth/token', tokenAnswer('basic'));
+      // A secret holding '+' and '%': form-encoded, they read %2B and %25 —
+      // a request without the recorded encoding sends them as they are.
+      const key = path.join(keysDir, `${DEST}.json`);
+      fs.writeFileSync(
+        key,
+        JSON.stringify({
+          uaa: {
+            url: server.url,
+            clientid: 'key-client',
+            clientsecret: 'se+cr%et',
+          },
+          abap: { url: SERVICE_URL },
+        }),
+      );
+      await expect(
+        run(
+          options({
+            serviceKeyPath: key,
+            clientAuth: 'secret',
+            basicEncoding: 'form',
+          }),
+        ),
+      ).resolves.toBe(0);
+      const file = path.join(outDir, `${DEST}.env`);
+      expect(readEnvKeys(file).SAP_UAA_BASIC_ENCODING).toBe('form');
+      const previous = path.join(root, `${DEST}.env`);
+      fs.copyFileSync(file, previous);
+      expireStoredToken(previous, 'abap');
+      const sent = server.requests.length;
+      await expect(
+        run(options({ envFilePath: previous, outputFile: undefined })),
+      ).resolves.toBe(0);
+      expect(strategyCalls).toBe(1);
+      const refresh = server.requests.slice(sent);
+      expect(refresh.map((r) => r.form.grant_type)).toEqual(['refresh_token']);
+      expect(refresh[0]!.form).not.toHaveProperty('client_secret');
+      expect(refresh[0]!.authorization).toBe(
+        `Basic ${Buffer.from('key-client:se%2Bcr%25et').toString('base64')}`,
+      );
+      expect(readEnvKeys(previous).SAP_UAA_BASIC_ENCODING).toBe('form');
     });
 
     it('an x509 key without a secret is refused', async () => {

@@ -53,16 +53,6 @@ export function present(value: unknown): value is string {
  */
 export function clientAuthFlags(
   flags: ClientAuthFlags,
-  {
-    filesNamedByDestination = false,
-  }: {
-    /**
-     * A session file is the run's source (`--env`, D25): it names the
-     * certificate files itself, so `--client-auth certificate` takes no
-     * paths, and `null` is returned.
-     */
-    filesNamedByDestination?: boolean;
-  } = {},
 ): CertificateFiles | null {
   const { clientAuth } = flags;
   if (
@@ -87,15 +77,6 @@ export function clientAuthFlags(
     ['--cert-path', flags.certPath],
     ['--key-path', flags.keyPath],
   ] as const;
-  if (filesNamedByDestination) {
-    const given = certificateFlags.filter(([, value]) => value !== undefined);
-    if (given.length > 0) {
-      throw new UsageError(
-        `${given.map(([flag]) => flag).join(' and ')}: the session file names the certificate files`,
-      );
-    }
-    return null;
-  }
   if (clientAuth !== 'certificate') {
     const stray = certificateFlags.filter(([, value]) => value !== undefined);
     if (stray.length > 0) {

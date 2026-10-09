@@ -240,3 +240,50 @@ export function writeJsonFile(
     });
   });
 }
+
+/**
+ * The variable that records `--basic-encoding` beside the client it applies
+ * to (`SAP_UAA_BASIC_ENCODING`, `XSUAA_UAA_BASIC_ENCODING` with `--type
+ * xsuaa`): neither store has a field for it, so the CLI writes and reads the
+ * one line itself, leaving every other line as it is.
+ */
+export function basicEncodingVariable(type: DestinationType): string {
+  return `${type === 'xsuaa' ? 'XSUAA' : 'SAP'}_UAA_BASIC_ENCODING`;
+}
+
+/** Sets `name=value` in `file` (replacing the line, or adding one); `undefined` removes it. */
+export function setFileVariable(
+  file: string,
+  name: string,
+  value: string | undefined,
+): void {
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+  const lines = text === '' ? [] : text.split('\n');
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+  const kept = lines.filter((line) => !line.startsWith(`${name}=`));
+  if (value !== undefined) kept.push(`${name}=${value}`);
+  fs.writeFileSync(file, `${kept.join('\n')}\n`, { mode: 0o600 });
+}
+
+/** The value of `name` in `file`, unquoted; `undefined` when absent. */
+export function readFileVariable(
+  file: string,
+  name: string,
+): string | undefined {
+  if (!fs.existsSync(file)) return undefined;
+  for (const raw of fs.readFileSync(file, 'utf8').split('\n')) {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+    if (!line.startsWith(`${name}=`)) continue;
+    let value = line.slice(name.length + 1);
+    const quote = value[0];
+    if (
+      value.length >= 2 &&
+      (quote === '"' || quote === "'") &&
+      value.endsWith(quote)
+    ) {
+      value = value.slice(1, -1);
+    }
+    return value;
+  }
+  return undefined;
+}

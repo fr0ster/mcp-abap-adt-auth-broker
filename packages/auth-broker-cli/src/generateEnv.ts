@@ -51,9 +51,11 @@ import {
 } from './clientAuthentication';
 import { asContract } from './contractShape';
 import {
+  basicEncodingVariable,
   completeMeans,
   flushed,
   openDestination,
+  setFileVariable,
   writeOutputFile,
 } from './destination';
 import { readJsonFile } from './jsonFile';
@@ -312,12 +314,13 @@ export async function runGenerateEnv(
     // An XSUAA key may carry no URL.
   }
 
-  // A copy of the session file, if there is one: it is replaced only below.
+  // A service key always obtains a new pair (D25): the run starts from no
+  // file, so no session is read — not even the one at the session path,
+  // which is replaced only below, once the secret is stored.
   const files = openDestination(
     workDir,
     destination,
     isXsuaa ? 'xsuaa' : 'abap',
-    resolvedSessionPath,
   );
   // A certificate client is written as its paths and `certurl` — never PEM —
   // and the store removes the client secret it replaces (and the reverse).
@@ -337,6 +340,12 @@ export async function runGenerateEnv(
           }
         : { uaaClientSecret: client.uaaClientSecret }),
     }),
+  );
+  // The Basic encoding, beside the client it applies to (as mcp-auth).
+  setFileVariable(
+    files.file,
+    basicEncodingVariable(isXsuaa ? 'xsuaa' : 'abap'),
+    flags.clientAuth === 'secret' ? flags.basicEncoding : undefined,
   );
 
   // The user's choice as the broker's strategy; none without `--client-auth`.

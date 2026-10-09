@@ -170,7 +170,10 @@ function showMainHelp(): void {
     '                          Not given: the client secret in the token request, as before.',
   );
   console.log(
-    '  --basic-encoding <enc>  With --client-auth secret (required): raw (XSUAA) or form (UAA, Keycloak)',
+    '  --basic-encoding <enc>  With --client-auth secret (required): raw (XSUAA) or form (UAA, Keycloak);',
+  );
+  console.log(
+    '                          recorded in the .env as SAP_UAA_BASIC_ENCODING (XSUAA_UAA_BASIC_ENCODING)',
   );
   console.log(
     '  --cert-path <path>      With --client-auth certificate (required): the client certificate PEM file',
@@ -310,11 +313,15 @@ function showMainHelp(): void {
     '    refresh token; if that fails, or there is none, or the session is not bound to these',
   );
   console.log(
-    "    means, the login runs. The means are the file's: --credential, --service-url, --cert-path",
+    "    means, the login runs. The means are the file's, client authentication included: its",
   );
   console.log(
-    '    and --key-path are refused beside it. To log in anew, run with --service-key.',
+    '    certificate paths, or the Basic encoding it records; --credential, --service-url,',
   );
+  console.log(
+    '    --client-auth, --basic-encoding, --cert-path and --key-path are refused beside it.',
+  );
+  console.log('    To log in anew, run with --service-key.');
   console.log('  - Authentication flow:');
   console.log('    * Default: authorization_code (browser-based OAuth2)');
   console.log(

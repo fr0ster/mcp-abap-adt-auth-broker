@@ -295,6 +295,27 @@ describe('generate-env', () => {
       expect(fs.readFileSync(session, 'utf8')).toBe(before);
     });
 
+    it('a valid bound session already at the session path is never read: a new login, the file replaced (D25)', async () => {
+      server.answer('/oauth/token', tokenAnswer('uaa'));
+      const args = [
+        'TRIAL',
+        abapKey(),
+        session,
+        '--grant',
+        'authorization_code',
+      ];
+      await expect(runGenerateEnv(args, noBrowser)).resolves.toBe(0);
+      const first = fs.readFileSync(session, 'utf8');
+      await expect(runGenerateEnv(args, noBrowser)).resolves.toBe(0);
+      expect(server.requests.map((r) => r.form.grant_type)).toEqual([
+        'authorization_code',
+        'authorization_code',
+      ]);
+      const second = fs.readFileSync(session, 'utf8');
+      expect(second).not.toBe(first);
+      expect(second).toContain('SAP_REFRESH_TOKEN=uaa-refresh-2');
+    });
+
     it('success replaces the means and writes the secret', async () => {
       server.answer('/oauth/token', tokenAnswer('cc', false));
       await expect(

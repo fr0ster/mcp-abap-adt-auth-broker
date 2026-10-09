@@ -57,10 +57,13 @@ import {
 } from './clientAuthentication';
 import { asContract } from './contractShape';
 import {
+  basicEncodingVariable,
   completeMeans,
   flushed,
   jsonOutput,
   openDestination,
+  readFileVariable,
+  setFileVariable,
   writeJsonFile,
   writeOutputFile,
 } from './destination';
@@ -212,9 +215,15 @@ function refuseMeansFlags(
   options: McpAuthOptions,
   flag: '--env' | '--destination',
 ): void {
+  // How the client authenticates is the file's too (D25): its certificate
+  // paths, or the Basic encoding it records.
   const stated = [
     ['--credential', options.credential],
     ['--service-url', options.serviceUrl !== undefined],
+    ['--client-auth', options.clientAuth !== undefined],
+    ['--basic-encoding', options.basicEncoding !== undefined],
+    ['--cert-path', options.certPath !== undefined],
+    ['--key-path', options.keyPath !== undefined],
   ] as const;
   for (const [name, given] of stated) {
     if (given) {
@@ -223,6 +232,29 @@ function refuseMeansFlags(
       );
     }
   }
+}
+
+/**
+ * How a session file's client authenticates, as the file records it: the
+ * certificate when it names certificate files, Basic with the encoding it
+ * records, else the client secret in the request.
+ */
+function fileClientAuth(
+  file: string,
+  type: 'abap' | 'xsuaa',
+  flag: '--env' | '--destination',
+): { clientAuth?: 'certificate' | 'secret'; basicEncoding?: 'raw' | 'form' } {
+  const prefix = type === 'xsuaa' ? 'XSUAA' : 'SAP';
+  if (readFileVariable(file, `${prefix}_UAA_CLIENT_CERT_PATH`) !== undefined) {
+    return { clientAuth: 'certificate' };
+  }
+  const name = basicEncodingVariable(type);
+  const encoding = readFileVariable(file, name);
+  if (encoding === undefined) return {};
+  if (encoding !== 'raw' && encoding !== 'form') {
+    throw new UsageError(`${flag}: ${name} must be raw or form`);
+  }
+  return { clientAuth: 'secret', basicEncoding: encoding };
 }
 
 export async function runMcpAuth(
@@ -266,9 +298,7 @@ export async function runMcpAuth(
   if (source.kind === 'service-key' && !options.credential) {
     mcpAuthBrowser(options, platform ?? process.platform);
   }
-  const certificateFiles = clientAuthFlags(options, {
-    filesNamedByDestination: source.kind === 'session',
-  });
+  const certificateFiles = clientAuthFlags(options);
   const resolvedOutputPath = source.output;
   const destination = source.destination;
 
@@ -467,6 +497,13 @@ export async function runMcpAuth(
           : (keyClient ?? {})),
       }),
     );
+    // The Basic encoding, beside the client it applies to: a later --env
+    // run reads it back (D25).
+    setFileVariable(
+      files.file,
+      basicEncodingVariable(options.authType),
+      options.clientAuth === 'secret' ? options.basicEncoding : undefined,
+    );
   } else {
     // The means are the file's: this command runs only its own grants.
     const stated = (await files.keyStore.getConnectionConfig(destination))
@@ -487,15 +524,21 @@ export async function runMcpAuth(
     }
   }
   progress(`🔑 Flow: ${grantType}`);
-  if (options.clientAuth === 'secret') {
+  // How the client authenticates: the flags with a service key; the file's
+  // record with a session file.
+  const clientAuth =
+    source.kind === 'service-key'
+      ? { clientAuth: options.clientAuth, basicEncoding: options.basicEncoding }
+      : fileClientAuth(files.file, options.authType, source.flag);
+  if (clientAuth.clientAuth === 'secret') {
     progress(
-      `🔏 Client authentication: secret (Basic, ${options.basicEncoding})`,
+      `🔏 Client authentication: secret (Basic, ${clientAuth.basicEncoding})`,
     );
   } else if (certificateFiles) {
     progress(
       `🔏 Client authentication: certificate (${certificateFiles.certPath}, ${certificateFiles.keyPath})`,
     );
-  } else if (options.clientAuth === 'certificate') {
+  } else if (clientAuth.clientAuth === 'certificate') {
     progress(
       '🔏 Client authentication: certificate (the session file names it)',
     );
@@ -512,7 +555,7 @@ export async function runMcpAuth(
 
   // Who the client is, as the destination now states it.
   let client: { uaaUrl: string; uaaClientId: string; certUrl?: string };
-  if (options.clientAuth === 'certificate') {
+  if (clientAuth.clientAuth === 'certificate') {
     const stated = await files.keyStore.getClientCertificate(destination);
     if (!stated) {
       throw new UsageError(`Client certificate not found for ${destination}.`);
@@ -537,7 +580,7 @@ export async function runMcpAuth(
   }
 
   // The user's choice as the broker's strategy; none without `--client-auth`.
-  const clientAuthentication = clientAuthenticationStrategy(options);
+  const clientAuthentication = clientAuthenticationStrategy(clientAuth);
 
   // The provider is the broker's UAA row (§10.2), the same composition a
   // server's getProvider builds over the output: the client the destination
@@ -597,7 +640,7 @@ export async function runMcpAuth(
     writeJsonFile(resolvedOutputPath, {
       ...json,
       // The paths are the flags' (a session file's stay in that file).
-      ...(options.clientAuth === 'certificate'
+      ...(clientAuth.clientAuth === 'certificate'
         ? {
             uaaUrl: client.uaaUrl,
             uaaClientId: client.uaaClientId,
