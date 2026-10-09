@@ -8,7 +8,8 @@
 	"files": {
 		"includes": [
 			"**",
-			"!!**/dist"
+			"!!**/dist",
+			"!!packages/*/tools/__fixtures__"
 		]
 	},
 	"formatter": {
