@@ -481,34 +481,43 @@ describe('mcp-auth saml2-pure --cookie', () => {
   });
 });
 
-describe('mcp-auth saml2-pure --cookie beside --env', () => {
-  it('is refused naming both: --env works on the session file as it is', async () => {
+describe('mcp-auth saml2-pure --cookie, the SAP client stated in --env', () => {
+  it('binds the cookies to the resource with its client: getProvider presents them', async () => {
     const previous = path.join(root, `${DEST}.env`);
     fs.writeFileSync(previous, `SAP_URL=${SERVICE_URL}\nSAP_CLIENT=100\n`);
-    const before = fs.readFileSync(previous);
-    const thrown = await run(
+    const code = await run(
       options({
         envFilePath: previous,
-        outputFile: undefined,
         serviceUrl: undefined,
         ...form('saml2-pure'),
         cookie: 'SAP_SESSIONID=abc',
       }),
-    ).catch((e: unknown) => e);
-    expect((thrown as Error).message).toBe(
-      '--cookie and --env: the session file holds the means and is used as it is; state the means with --service-key or flags alone instead',
     );
-    expect(sessionWrites).toEqual([]);
-    expect(fs.readFileSync(previous)).toEqual(before);
+    expect(code).toBe(0);
+    // The binding the broker computes — never one the CLI composes.
+    expect(sessionWrites.map((w) => w.config)).toEqual([
+      {
+        sessionCookies: 'SAP_SESSIONID=abc',
+        // The store merges: SAML has no refresh token, and one stored beside
+        // earlier cookies or a token is not this credential's (§5.2).
+        refreshToken: '',
+        issuedFor: 'https://abap.example.com:443?sap-client=100',
+        issuedBy: `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`,
+      },
+    ]);
+    const broker = new AuthBroker({
+      renewal: () => refreshThenLogin(),
+      onWriteFailure: 'fail',
+      sessionStore: sessionStoreOf('abap'),
+      serviceKeyStore: keyStoreOf('abap'),
+    });
+    await expect(broker.getProvider(DEST)).resolves.toBeDefined();
   });
 });
 
 describe('mcp-auth saml2-pure --cookie over a pre-existing session bound to other means (§13.1, the CLI path)', () => {
   it('the store holds the new record and no refresh token; a restart is not seeded with the old one', async () => {
-    // The old session sits in the --output file: cookies by flags are a
-    // fresh run, so it is read nowhere and replaced whole.
-    fs.mkdirSync(outDir, { recursive: true });
-    const previous = path.join(outDir, `${DEST}.env`);
+    const previous = path.join(root, `${DEST}.env`);
     const OLD_RECORD = `mcp-abap-adt-binding/2;jwt/authorization_code${';'.repeat(12)}`;
     fs.writeFileSync(
       previous,
@@ -526,6 +535,8 @@ describe('mcp-auth saml2-pure --cookie over a pre-existing session bound to othe
     );
     const code = await run(
       options({
+        envFilePath: previous,
+        serviceUrl: undefined,
         ...form('saml2-pure'),
         cookie: 'SAP_SESSIONID=new',
       }),
@@ -537,7 +548,7 @@ describe('mcp-auth saml2-pure --cookie over a pre-existing session bound to othe
     expect(session).toEqual(
       expect.objectContaining({
         sessionCookies: 'SAP_SESSIONID=new',
-        issuedFor: 'https://abap.example.com:443',
+        issuedFor: 'https://abap.example.com:443?sap-client=100',
         issuedBy: `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`,
       }),
     );
@@ -1040,7 +1051,12 @@ describe('D25: means from flags or --config are like --service-key; --env takes 
     ['oidc', ['--flow', 'password', '--username', 'bob'], '--username'],
     ['oidc', ['--config', './provider.json'], '--config'],
     ['saml2-pure', ['--idp-entity-id', 'https://idp'], '--idp-entity-id'],
-    ['saml2-pure', ['--cookie', 'A=1'], '--cookie'],
+    ['saml2-pure', ['--sp-entity-id', 'my-sp'], '--sp-entity-id'],
+    [
+      'saml2-pure',
+      ['--cookie', 'A=1', '--service-url', 'https://x'],
+      '--service-url',
+    ],
     ['saml2-bearer', ['--uaa-url', 'https://uaa'], '--uaa-url'],
     ['saml2-bearer', ['--idp-initiated'], '--idp-initiated'],
   ] as [SsoSubcommand, string[], string][])(
@@ -1075,6 +1091,61 @@ describe('D25: means from flags or --config are like --service-key; --env takes 
     ).catch((e: unknown) => e);
     expect((thrown as Error).message).toBe(
       `--client-id and --destination: ${WORDS}`,
+    );
+  });
+});
+
+describe('D25: --cookie hands over the secret — it is no means flag', () => {
+  const RECORD = `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`;
+
+  function bare(args: string[]): McpSsoOptions {
+    const parsed = parseSubcommandArgs('saml2-pure', args);
+    if (parsed.kind !== 'sso') throw new Error(`not a run: ${parsed.kind}`);
+    return parsed.options;
+  }
+
+  it('--cookie --env alone: bound to the file’s means, SAP client included, written back into that file', async () => {
+    const file = path.join(root, `${DEST}.env`);
+    fs.writeFileSync(file, `SAP_URL=${SERVICE_URL}\nSAP_CLIENT=100\n`);
+    await expect(
+      run(bare(['--cookie', 'SAP_SESSIONID=abc', '--env', file])),
+    ).resolves.toBe(0);
+    const session = await new AbapSessionStore(root).loadSession(DEST);
+    expect(session).toEqual(
+      expect.objectContaining({
+        sessionCookies: 'SAP_SESSIONID=abc',
+        issuedFor: 'https://abap.example.com:443?sap-client=100',
+        issuedBy: RECORD,
+      }),
+    );
+    expect(readEnvKeys(file).SAP_CLIENT).toBe('100');
+  });
+
+  it('--cookie --destination finding a session: written back into sessions/<name>.env', async () => {
+    const dests = path.join(root, 'dests');
+    const sessions = path.join(dests, 'sessions');
+    fs.mkdirSync(sessions, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessions, `${DEST}.env`),
+      `SAP_URL=${SERVICE_URL}\nSAP_CLIENT=200\n`,
+    );
+    await expect(
+      run(
+        bare([
+          '--cookie',
+          'SAP_SESSIONID=xyz',
+          '--destination',
+          DEST,
+          '--destination-dir',
+          dests,
+        ]),
+      ),
+    ).resolves.toBe(0);
+    expect(await new AbapSessionStore(sessions).loadSession(DEST)).toEqual(
+      expect.objectContaining({
+        sessionCookies: 'SAP_SESSIONID=xyz',
+        issuedFor: 'https://abap.example.com:443?sap-client=200',
+      }),
     );
   });
 });

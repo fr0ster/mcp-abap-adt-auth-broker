@@ -59,7 +59,8 @@ import { withoutTrailingSlashes } from './urlText';
  * login, as with a service key; beside a session file (`--env`, or
  * `--destination` finding one) each is refused (D25): the file is used as it
  * is. The rest — the flow, the browser, a one-time code or passcode, an
- * assertion — run the login and state nothing a destination keeps.
+ * assertion — run the login and state nothing a destination keeps; nor does
+ * `--cookie`, which hands over the secret itself.
  */
 const MEANS_FLAGS = {
   configPath: '--config',
@@ -83,7 +84,6 @@ const MEANS_FLAGS = {
   spEntityId: '--sp-entity-id',
   acsUrl: '--acs-url',
   relayState: '--relay-state',
-  cookie: '--cookie',
   uaaUrl: '--uaa-url',
   samlMetadataPath: '--saml-metadata',
   // Inline certificates come only from a --config file.
@@ -243,8 +243,18 @@ export async function runMcpSso(
   if (source?.kind === 'session') {
     refuseMeansBesideSession(options, source.flag);
   }
+  // Cookies handed over beside a session file (`saml2-pure --cookie`) are
+  // the secret, not means: the file's means stay as they are — its system,
+  // SAP client included — and only the row they are presented under becomes
+  // the handover's, `saml/none`, so the broker binds them with `bindingOf`.
+  const handsOverCookies =
+    options.cookie !== undefined &&
+    options.protocol === 'saml2' &&
+    options.flow === 'pure';
   const fileRow =
-    source?.kind === 'session' ? await sessionRow(options, source) : undefined;
+    source?.kind === 'session' && !handsOverCookies
+      ? await sessionRow(options, source)
+      : undefined;
 
   const allowTokenEndpointWithServiceKey =
     options.protocol === 'saml2' && options.flow === 'bearer';

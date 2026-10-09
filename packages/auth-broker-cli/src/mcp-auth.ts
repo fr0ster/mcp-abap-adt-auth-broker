@@ -560,6 +560,9 @@ function showSsoHelp(subcommand: SsoSubcommand): void {
     '  --cookie <value>           Session cookies handed over (pure SAML): stored as they are, no login',
   );
   console.log(
+    '                             (the secret, not means: allowed beside --env, bound to its means)',
+  );
+  console.log(
     '  --token-endpoint <url>     Token endpoint for SAML bearer exchange',
   );
   console.log('');
