@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/auth-broker",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "description": "Per-destination credential broker for SAP BTP and ABAP: the IAuthProvider a destination states, built from its key store and session store, with every secret it obtains stored back; and a token API",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
