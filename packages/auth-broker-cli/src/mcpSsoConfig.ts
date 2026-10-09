@@ -37,6 +37,14 @@ import {
   isBrowserName,
   SHIPPED_BROWSERS,
 } from './browser';
+import {
+  isBase64Text,
+  isDerCertificate,
+  isWhitespace,
+  isX509Certificate,
+  pemCertificateBlocks,
+  withoutWhitespace,
+} from './certificateText';
 import { asContract } from './contractShape';
 import type { StatedMeans } from './destination';
 import { UsageError } from './subcommandArgs';
@@ -407,16 +415,38 @@ export function applyFileConfig(
   }
 }
 
-const PEM_CERTIFICATE_BLOCK =
-  /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
-const BASE64_TEXT = /^[A-Za-z0-9+/]+={0,2}$/;
+/**
+ * The entries `idpCertificates` takes from one `--idp-cert` file's content,
+ * as 2.x read them, in linear code. A PEM file may hold several certificates
+ * (a rotation bundle); each becomes its own entry, since a single string is
+ * read as one certificate and the rest would be ignored. Other text with a
+ * `-----BEGIN`, or bare base64, is kept trimmed; anything else — a binary DER
+ * file (`.cer`, `.der`) — is base64-encoded.
+ */
+export function certificatesInFile(content: Buffer): string[] {
+  return readCertificateFile(content).entries;
+}
+
+/** The file's entries, and whether they are the file itself as binary DER. */
+function readCertificateFile(content: Buffer): {
+  entries: string[];
+  binary: boolean;
+} {
+  const text = content.toString('utf8');
+  const blocks = pemCertificateBlocks(text);
+  if (blocks.length > 0) {
+    return { entries: blocks, binary: false };
+  }
+  if (text.includes('-----BEGIN') || isBase64Text(withoutWhitespace(text))) {
+    return { entries: [text.trim()], binary: false };
+  }
+  return { entries: [content.toString('base64')], binary: true };
+}
 
 /**
- * Reads one `--idp-cert` file into the entries `idpCertificates` takes. A
- * PEM file may hold several certificates (a rotation bundle); each becomes
- * its own entry, since a single string is read as one certificate and the
- * rest would be ignored. A binary DER file (`.cer`, `.der`) is base64-encoded.
- * Whether the result is a certificate at all is the provider's check.
+ * Reads one `--idp-cert` file into the entries `idpCertificates` takes
+ * (`certificatesInFile`), each checked to be an X.509 certificate: a file
+ * that holds none is refused naming `--idp-cert` and the path the user gave.
  */
 export function readIdpCertificateFile(filePath: string): string[] {
   const resolved = resolvePath(filePath);
@@ -427,18 +457,14 @@ export function readIdpCertificateFile(filePath: string): string[] {
     console.error(`❌ IdP certificate file not found: ${resolved}`);
     process.exit(1);
   }
-  const text = content.toString('utf8');
-  const blocks = text.match(PEM_CERTIFICATE_BLOCK);
-  if (blocks) {
-    return blocks;
+  const { entries, binary } = readCertificateFile(content);
+  const readable = binary
+    ? isDerCertificate(content)
+    : entries.every(isX509Certificate);
+  if (!readable) {
+    throw new UsageError(`--idp-cert: ${resolved} holds no X.509 certificate`);
   }
-  if (
-    text.includes('-----BEGIN') ||
-    BASE64_TEXT.test(text.replace(/\s+/g, ''))
-  ) {
-    return [text.trim()];
-  }
-  return [content.toString('base64')];
+  return entries;
 }
 
 /**
@@ -592,10 +618,24 @@ function scopeList(scopes: unknown): string[] | undefined {
     : typeof scopes === 'string'
       ? [scopes]
       : [];
-  const split = list
-    .flatMap((entry) => String(entry).split(/[,\s]+/))
-    .filter(Boolean);
+  const split = list.flatMap((entry) => splitScopes(String(entry)));
   return split.length > 0 ? split : undefined;
+}
+
+/** `text` split on commas and whitespace, empty parts dropped, in one pass. */
+function splitScopes(text: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  for (const character of text) {
+    if (character === ',' || isWhitespace(character)) {
+      if (current !== '') parts.push(current);
+      current = '';
+    } else {
+      current += character;
+    }
+  }
+  if (current !== '') parts.push(current);
+  return parts;
 }
 
 /** The client of an OIDC row: an id, a secret (`''` a public client), a UAA URL when given. */

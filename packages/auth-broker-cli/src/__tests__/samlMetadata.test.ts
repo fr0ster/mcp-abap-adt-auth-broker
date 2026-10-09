@@ -11,6 +11,7 @@ import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { generateKeyMaterial } from '@mcp-abap-adt/auth-mocks';
 import * as ts from 'typescript';
 import { parseSamlTrustArg } from '../mcpSsoConfig';
 import { failureLines } from '../output';
@@ -36,9 +37,29 @@ const BEARER_ALIAS = `${UAA_URL}/oauth/token/alias/subaccount.aws-live`;
 
 const MD = 'urn:oasis:names:tc:SAML:2.0:metadata';
 const DS = 'http://www.w3.org/2000/09/xmldsig#';
-/** A `ds:KeyInfo` holding one certificate, as metadata carries it. */
+/** A real certificate per name, base64 DER as metadata carries it. */
+const certificates = new Map<string, string>();
+function cert(name: string): string {
+  let base64 = certificates.get(name);
+  if (base64 === undefined) {
+    base64 = generateKeyMaterial()
+      .certificatePem.split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '' && !line.startsWith('-----'))
+      .join('');
+    certificates.set(name, base64);
+  }
+  return base64;
+}
+/** A name of upper-case letters stands for its real certificate. */
+const isName = (text: string) =>
+  text !== '' && [...text].every((c) => (c >= 'A' && c <= 'Z') || c === '-');
+/**
+ * A `ds:KeyInfo` holding one certificate, as metadata carries it: a name's
+ * real certificate, or the text as given.
+ */
 const keyInfo = (certificate: string) =>
-  `<ds:KeyInfo><ds:X509Data><ds:X509Certificate>${certificate}</ds:X509Certificate></ds:X509Data></ds:KeyInfo>`;
+  `<ds:KeyInfo><ds:X509Data><ds:X509Certificate>${isName(certificate) ? cert(certificate) : certificate}</ds:X509Certificate></ds:X509Data></ds:KeyInfo>`;
 
 const loaderFor =
   (documents: Record<string, string>) => async (source: string) => {
@@ -70,7 +91,7 @@ describe('readIdpMetadata', () => {
         </md:IDPSSODescriptor>
       </md:EntityDescriptor>`);
 
-    expect(idp.certificates).toEqual(['SIGN', 'BOTH']);
+    expect(idp.certificates).toEqual([cert('SIGN'), cert('BOTH')]);
     // No redirect binding: the POST one stands in.
     expect(idp.ssoUrl).toBe('https://idp.example/post');
   });
@@ -86,7 +107,7 @@ describe('readIdpMetadata', () => {
         </IDPSSODescriptor>
       </EntityDescriptor>`);
 
-    expect(idp.certificates).toEqual(['IDP-KEY']);
+    expect(idp.certificates).toEqual([cert('IDP-KEY')]);
   });
 
   it('refuses a document that is not an identity provider', () => {
@@ -360,7 +381,7 @@ describe('federation metadata (an EntitiesDescriptor of several entities)', () =
     );
     expect(read).toEqual({
       entityId: 'https://idp-a',
-      certificates: ['CERTA'],
+      certificates: [cert('CERTA')],
       ssoUrl: 'https://CERTA.example/sso',
     });
   });
@@ -386,7 +407,7 @@ describe('federation metadata (an EntitiesDescriptor of several entities)', () =
       'https://idp-b',
     );
     expect(read.entityId).toBe('https://idp-b');
-    expect(read.certificates).toEqual(['CERTB']);
+    expect(read.certificates).toEqual([cert('CERTB')]);
   });
 
   it('refuses an entityID the metadata does not describe', () => {
@@ -416,7 +437,7 @@ describe('federation metadata (an EntitiesDescriptor of several entities)', () =
         ),
       }),
     );
-    expect(options.idpCertificates).toEqual(['CERTB']);
+    expect(options.idpCertificates).toEqual([cert('CERTB')]);
     expect(options.idpSsoUrl).toBe('https://CERTB.example/sso');
   });
 });
@@ -519,6 +540,40 @@ describe('hostile metadata: refused in the CLI’s own words, naming the flag', 
     );
   });
 
+  it('federation metadata nested 15,000 EntitiesDescriptors deep: read, no stack overflow', () => {
+    const depth = 15_000;
+    const xml = `<md:EntitiesDescriptor xmlns:md="${MD}" xmlns:ds="${DS}">${'<md:EntitiesDescriptor>'.repeat(depth)}${idpDocument(signing('DEEP')).replace(` xmlns:md="${MD}" xmlns:ds="${DS}"`, '')}${'</md:EntitiesDescriptor>'.repeat(depth)}</md:EntitiesDescriptor>`;
+    expect(Buffer.byteLength(xml)).toBeLessThan(MAX_METADATA_BYTES);
+    expect(readIdpMetadata(xml, undefined, '--idp-metadata')).toEqual({
+      entityId: 'https://idp.example',
+      certificates: [cert('DEEP')],
+      ssoUrl: undefined,
+    });
+  });
+
+  it.each([
+    ['malformed base64', 'MII*not+base64'],
+    [
+      'a no-break space inside',
+      `${cert('NBSP').slice(0, 40)}\u00a0${cert('NBSP').slice(40)}`,
+    ],
+    [
+      'base64 that is no certificate',
+      Buffer.from('not a certificate').toString('base64'),
+    ],
+    ['padding inside the text', 'MIIB=AAA'],
+  ])(
+    'a signing certificate that is %s: refused naming the flag',
+    (_case, text) => {
+      const xml = idpDocument(signing(text));
+      expect(
+        wordsOf(() => readIdpMetadata(xml, undefined, '--idp-metadata')),
+      ).toBe(
+        '❌ --idp-metadata: a signing key states a certificate that is not an X.509 certificate',
+      );
+    },
+  );
+
   it('an identity provider that states no entityID: refused', () => {
     const xml = idpDocument(signing('CERT'), '');
     expect(
@@ -548,7 +603,7 @@ describe('hostile metadata: refused in the CLI’s own words, naming the flag', 
     );
     expect(
       readIdpMetadata(xml, undefined, '--idp-metadata').certificates,
-    ).toEqual(['CERT']);
+    ).toEqual([cert('CERT')]);
   });
 
   it('an identity provider with no signing certificate, and none stated: refused naming the flag', async () => {
@@ -691,14 +746,19 @@ describe('sources: no regular expression over untrusted input', () => {
     return found;
   }
 
-  it.each([['samlMetadata.ts'], ['runMcpSso.ts'], ['urlText.ts']])(
-    '%s holds none',
-    (file) => {
-      expect([file, regularExpressionsIn(file)]).toEqual([file, []]);
-    },
-  );
+  it.each([
+    ['samlMetadata.ts'],
+    ['runMcpSso.ts'],
+    ['urlText.ts'],
+    ['mcpSsoConfig.ts'],
+    ['certificateText.ts'],
+  ])('%s holds none', (file) => {
+    expect([file, regularExpressionsIn(file)]).toEqual([file, []]);
+  });
 
   it('the reader sees one in a file that has them', () => {
-    expect(regularExpressionsIn('mcpSsoConfig.ts').length).toBeGreaterThan(0);
+    expect(
+      regularExpressionsIn('__tests__/helpers/destinationFiles.ts').length,
+    ).toBeGreaterThan(0);
   });
 });

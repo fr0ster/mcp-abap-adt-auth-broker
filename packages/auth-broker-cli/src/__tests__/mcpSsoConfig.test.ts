@@ -104,6 +104,7 @@ jest.mock('node:readline', () => ({
   },
 }));
 
+import { X509Certificate } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -112,6 +113,7 @@ import {
   applyFileConfig,
   buildCollaborators,
   buildDestinationMeans,
+  certificatesInFile,
   type McpSsoOptions,
   normalizeProviderConfig,
   parseSamlTrustArg,
@@ -627,21 +629,116 @@ describe('mcp-sso CLI/config merge', () => {
       );
     });
 
-    describe('certificate files', () => {
+    describe('certificate files: what a file holds (as 2.x read it, no regular expression)', () => {
       it('splits a PEM bundle into one entry per certificate', () => {
-        const file = writeFile('bundle.pem', `${PEM_A}\n${PEM_B}\n`);
-        expect(readIdpCertificateFile(file)).toEqual([PEM_A, PEM_B]);
+        expect(certificatesInFile(Buffer.from(`${PEM_A}\n${PEM_B}\n`))).toEqual(
+          [PEM_A, PEM_B],
+        );
+      });
+
+      it('takes each BEGIN to the first END after it, text between blocks dropped', () => {
+        expect(
+          certificatesInFile(
+            Buffer.from(`junk\n${PEM_A}\nbetween\n${PEM_B}\ntrailer`),
+          ),
+        ).toEqual([PEM_A, PEM_B]);
       });
 
       it('passes bare base64 DER through, trimmed', () => {
-        const file = writeFile('cert.b64', '  MIIBAAAA\n  ');
-        expect(readIdpCertificateFile(file)).toEqual(['MIIBAAAA']);
+        expect(certificatesInFile(Buffer.from('  MIIBAAAA\n  '))).toEqual([
+          'MIIBAAAA',
+        ]);
+      });
+
+      it('passes bare base64 broken by any whitespace (a no-break space too), trimmed', () => {
+        expect(certificatesInFile(Buffer.from('MIIB\u00a0AA\tAA==\n'))).toEqual(
+          ['MIIB\u00a0AA\tAA=='],
+        );
       });
 
       it('base64-encodes a binary DER file', () => {
         const der = Buffer.from([0x30, 0x82, 0x01, 0xff, 0x00, 0xa0]);
+        expect(certificatesInFile(der)).toEqual([der.toString('base64')]);
+      });
+
+      it.each([
+        ['three = of padding', 'MIIBAAAA==='],
+        ['padding inside', 'MII=BAAAA'],
+      ])('base64 with %s is binary: base64-encoded', (_case, text) => {
+        expect(certificatesInFile(Buffer.from(text))).toEqual([
+          Buffer.from(text).toString('base64'),
+        ]);
+      });
+
+      it('a BEGIN without END is kept whole, trimmed', () => {
+        expect(
+          certificatesInFile(
+            Buffer.from(' -----BEGIN CERTIFICATE-----\nAAAA '),
+          ),
+        ).toEqual(['-----BEGIN CERTIFICATE-----\nAAAA']);
+      });
+
+      it('megabytes of BEGIN with no END: one pass, the whole text kept', () => {
+        const text = '-----BEGIN CERTIFICATE-----\n'.repeat(200_000);
+        expect(certificatesInFile(Buffer.from(text))).toEqual([text.trim()]);
+      });
+    });
+
+    describe('certificate files: read and checked', () => {
+      const REAL_A = fs.readFileSync(
+        path.join(__dirname, 'fixtures', 'certificates', 'client.crt'),
+        'utf8',
+      );
+      const REAL_B = fs.readFileSync(
+        path.join(__dirname, 'fixtures', 'certificates', 'server.crt'),
+        'utf8',
+      );
+
+      it('a PEM bundle of real certificates: one entry per certificate', () => {
+        const file = writeFile('bundle.pem', `${REAL_A}\n${REAL_B}`);
+        expect(readIdpCertificateFile(file)).toEqual([
+          REAL_A.trim(),
+          REAL_B.trim(),
+        ]);
+      });
+
+      it('a real DER file: base64-encoded', () => {
+        const der = new X509Certificate(REAL_A).raw;
         const file = writeFile('cert.der', der);
         expect(readIdpCertificateFile(file)).toEqual([der.toString('base64')]);
+      });
+
+      it('megabytes of BEGIN without END after a real certificate: the certificate, promptly', () => {
+        const file = writeFile(
+          'huge.pem',
+          `${REAL_A}\n${'-----BEGIN CERTIFICATE-----\n'.repeat(200_000)}`,
+        );
+        expect(readIdpCertificateFile(file)).toEqual([REAL_A.trim()]);
+      });
+
+      it.each([
+        ['a PEM block that is no certificate', `${PEM_A}\n`],
+        ['bare base64 that is no certificate', 'MIIBAAAA\n'],
+        [
+          'a binary file that is no certificate',
+          Buffer.from([0x30, 0x82, 0x01]),
+        ],
+        [
+          'megabytes of BEGIN with no END',
+          '-----BEGIN CERTIFICATE-----\n'.repeat(200_000),
+        ],
+      ])('%s: refused naming --idp-cert and the path', (_case, content) => {
+        const file = writeFile('bad.pem', content);
+        let thrown: unknown;
+        try {
+          readIdpCertificateFile(file);
+        } catch (error) {
+          thrown = error;
+        }
+        expect(isUsageError(thrown)).toBe(true);
+        expect(failureLines(thrown).join('\n')).toBe(
+          `❌ --idp-cert: ${file} holds no X.509 certificate`,
+        );
       });
 
       it('refuses a certificate file that does not exist', () => {
@@ -746,7 +843,13 @@ describe('mcp-sso CLI/config merge', () => {
       'into the %s destination',
       (flow) => {
         it('states every certificate — inline and from files — and the entity id; the broker builds the validator', () => {
-          const file = writeFile('rotated.pem', PEM_B);
+          const rotated = fs
+            .readFileSync(
+              path.join(__dirname, 'fixtures', 'certificates', 'client.crt'),
+              'utf8',
+            )
+            .trim();
+          const file = writeFile('rotated.pem', rotated);
           const means = samlMeansOf(
             samlOptions(flow, {
               idpCertificates: [PEM_A],
@@ -758,7 +861,7 @@ describe('mcp-sso CLI/config merge', () => {
             expect.objectContaining({
               authType: 'saml',
               grantType: flow === 'pure' ? 'saml2_pure' : 'saml2_bearer',
-              samlIdpCertificates: [PEM_A, PEM_B],
+              samlIdpCertificates: [PEM_A, rotated],
               samlIdpEntityId: 'https://idp/meta',
               samlIdpSsoUrl: 'https://idp.example/sso',
               samlSpEntityId: 'sp-entity',
@@ -898,6 +1001,36 @@ describe('mcp-sso CLI/config merge', () => {
         });
       },
     );
+  });
+});
+
+describe('scopes as the store keeps them: split on commas and whitespace, no regular expression', () => {
+  const scopesOf = (scopes: unknown) =>
+    buildDestinationMeans({
+      authType: 'xsuaa',
+      format: 'env',
+      protocol: 'oidc',
+      flow: 'device',
+      clientId: 'c',
+      tokenEndpoint: 'https://uaa.example/oauth/token',
+      scopes: scopes as string[],
+    }).oidcScopes;
+
+  it.each([
+    ['openid, offline_access', ['openid', 'offline_access']],
+    [' a,,b\t c\u00a0d\n', ['a', 'b', 'c', 'd']],
+    [
+      ['x,y', 'z'],
+      ['x', 'y', 'z'],
+    ],
+    [[' , '], undefined],
+    ['', undefined],
+  ])('%p → %p', (scopes, expected) => {
+    expect(scopesOf(scopes)).toEqual(expected);
+  });
+
+  it('a long run of separators', () => {
+    expect(scopesOf(`a${', \t'.repeat(500_000)}b`)).toEqual(['a', 'b']);
   });
 });
 

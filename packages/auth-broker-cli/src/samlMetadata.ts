@@ -18,6 +18,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { DOMParser, type Element, type Node } from '@xmldom/xmldom';
+import { isBase64Text, isDerCertificate } from './certificateText';
 import { systemCodeOf } from './output';
 import { UsageError } from './subcommandArgs';
 import { withoutTrailingSlashes } from './urlText';
@@ -216,8 +217,12 @@ function attributeOf(element: Element, name: string): string | undefined {
     : undefined;
 }
 
-/** `text` without its whitespace, in one pass (base64 in metadata wraps). */
-function withoutWhitespace(text: string): string {
+/**
+ * `text` without XML's whitespace — space, tab, line feed, carriage return —
+ * in one pass (base64 in metadata wraps). Any other character, a no-break
+ * space included, stays and fails the certificate check.
+ */
+function withoutXmlWhitespace(text: string): string {
   let kept = '';
   for (const character of text) {
     if (
@@ -241,20 +246,24 @@ function withoutWhitespace(text: string): string {
  */
 function entitiesOf(root: Element, flag: string): Element[] {
   const entities: Element[] = [];
-  const walk = (element: Element) => {
+  // An explicit stack, in document order: a nest as deep as the size limit
+  // allows is walked without recursion.
+  const pending: Element[] = [root];
+  for (;;) {
+    const element = pending.pop();
+    if (element === undefined) break;
     if (isElement(element, MD, 'EntityDescriptor')) {
       entities.push(element);
-      return;
+      continue;
     }
-    if (!isElement(element, MD, 'EntitiesDescriptor')) return;
-    for (let i = 0; i < element.childNodes.length; i++) {
+    if (!isElement(element, MD, 'EntitiesDescriptor')) continue;
+    for (let i = element.childNodes.length - 1; i >= 0; i--) {
       const child = element.childNodes.item(i);
       if (child !== null && child.nodeType === child.ELEMENT_NODE) {
-        walk(child as Element);
+        pending.push(child as Element);
       }
     }
-  };
-  walk(root);
+  }
   const stated = isElement(root, MD, 'EntityDescriptor') ? 1 : 0;
   if (countBelow(root, MD, 'EntityDescriptor') + stated !== entities.length) {
     throw new UsageError(
@@ -332,10 +341,18 @@ function signingCertificatesOf(descriptor: Element, flag: string): string[] {
     for (const keyInfo of childrenOf(keyDescriptor, DS, 'KeyInfo')) {
       for (const x509Data of childrenOf(keyInfo, DS, 'X509Data')) {
         for (const element of childrenOf(x509Data, DS, 'X509Certificate')) {
-          const certificate = withoutWhitespace(element.textContent ?? '');
+          const certificate = withoutXmlWhitespace(element.textContent ?? '');
           if (certificate === '') {
             throw new UsageError(
               `${flag}: a signing key states no certificate`,
+            );
+          }
+          if (
+            !isBase64Text(certificate) ||
+            !isDerCertificate(Buffer.from(certificate, 'base64'))
+          ) {
+            throw new UsageError(
+              `${flag}: a signing key states a certificate that is not an X.509 certificate`,
             );
           }
           certificates.push(certificate);
