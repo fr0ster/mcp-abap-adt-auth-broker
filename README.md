@@ -53,7 +53,7 @@ Node.js 22, 24 or 26.
 npm ci
 npm run build      # Biome, then tsc -b over both packages
 npm test           # every workspace's Jest suites
-npm run check      # build, type checks, lint, dependency graph, shape check, packed tarballs, release tool
+npm run check      # build, type checks, lint, dependency graph, shape check (Jest), packed tarballs, release tool
 ```
 
 | Script | What it does |
@@ -63,18 +63,19 @@ npm run check      # build, type checks, lint, dependency graph, shape check, pa
 | `test:check` | type-checks both packages, tests included, under the strict flags of `tsconfig.base.json` |
 | `lint` / `lint:check` / `format` | Biome over `packages/` and `tools/`; `lint:check` fails on any warning |
 | `check:graph` | `tools/check-graph.js`: each package imports only what it may, declares it, and uses what it declares; the library never imports `auth-stores` |
-| `check:shape` | `tools/check-provider-shape.mjs` (a byte-identical copy of auth-errors 2.1.1's) with rules 4, 5, 6 over both packages: no type assertion to a contract error, refusal, outcome or failure; no spread or `Object.assign` of an error; a builder's diagnostics only from the listed sites |
+| `test:shape` | auth-errors' shape check (`@mcp-abap-adt/auth-errors/shape-check`), run in-process by each package's shape-check Jest test with the repository's own `typescript`: rules 4, 5, 6 over the package's own sources (its `tsconfig.json`, no site lists) — no type assertion to a contract error, refusal, outcome or failure; no spread or `Object.assign` of an error; a builder's diagnostics only from the listed sites (none here) — and each of three fixtures under `packages/<package>/tools/__fixtures__` refused by its rule alone; each package's `test:shape` runs its test by path, the root's runs both |
 | `check:packed` | `tools/check-packed.js`: both packages packed and installed into an empty directory; `mcp-auth` runs with `--version`, `help` and every subcommand's `--help`, and no `mcp-sso` is installed; needs the network |
 | `check:publish` | `tools/test-publish-changed.js`: the release tool against fixture repositories |
-| `check` | all of the above but Jest |
+| `check` | all of the above but `test` (Jest runs in it only through `test:shape`) |
 | `test:live` | the library's live suite against real systems — not in `test` or `check`; each case skips, printing why, where its variables, platform or RFC SDK are missing ([`TESTING.md`](docs/development/TESTING.md#live-checks-getprovider-against-real-systems)) |
 | `test:stand` | the library's token-grant suites and the CLI's (the built `mcp-auth` bin as a child process, a fake browser) against UAA and Keycloak in Docker (`packages/auth-broker/tests/stand`): starts the stand, builds the CLI, runs both, stops what it started; CI runs it as its own job. `stand:up` / `stand:down` keep it running between runs ([`TESTING.md`](docs/development/TESTING.md#the-stand-uaa-and-keycloak-in-docker)) |
 | `release:publish` | `tools/publish-changed.js` |
 | `chrono` | `tools/version-stats.sh` |
 
-`npm run check` does not run Jest: the library's integration suite reads real
-session files when `packages/auth-broker/tests/test-config.yaml` exists, and a
-release gate must not reach a real system unasked. Where the suites live and
+`npm run check` runs no Jest suite but the two shape-check tests (`test:shape`),
+which read only this repository's sources: the library's integration suite reads
+real session files when `packages/auth-broker/tests/test-config.yaml` exists, and
+a release gate must not reach a real system unasked. Where the suites live and
 what each needs: [`docs/development/TESTING.md`](docs/development/TESTING.md).
 
 ## Releasing

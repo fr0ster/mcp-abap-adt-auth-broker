@@ -22,8 +22,10 @@ packages/auth-broker/      @mcp-abap-adt/auth-broker — the library (src/, its 
                            tests/test-config.yaml.template, tests/stand/: UAA and Keycloak
                            in Docker; tests/live/x509/: the x509 live check's scripts)
 packages/auth-broker-cli/  @mcp-abap-adt/auth-broker-cli — the mcp-auth command (src/, its tests)
-tools/                     check-graph.js, check-provider-shape.mjs, check-packed.js,
-                           publish-changed.js, test-publish-changed.js, version-stats.sh
+packages/*/tools/__fixtures__/  each package's shape-check fixtures (rule4.ts, rule5.ts, rule6.ts):
+                           test data of its shape-check test, outside the build and Biome
+tools/                     check-graph.js, check-packed.js, publish-changed.js,
+                           test-publish-changed.js, version-stats.sh
 ```
 
 - The `workspaces` array lists the library first: it is the dependency order and the publish
