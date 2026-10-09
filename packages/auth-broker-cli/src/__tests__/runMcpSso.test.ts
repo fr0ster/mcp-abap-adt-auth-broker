@@ -1409,6 +1409,19 @@ describe('D25: a session file’s client authentication, in every subcommand', (
     return file;
   }
 
+  /**
+   * The run's arguments. A login must never wait in a test: a refresh that
+   * fails falls through to the grant's login, so each run is handed one that
+   * answers at once and fails — the password grant asks no one, and a
+   * saml2-bearer run gets an `--assertion` (the secret, no means flag) that
+   * no validator accepts — so a regression fails the test, never hangs it.
+   */
+  function sessionArgs(grant: 'password' | 'saml2_bearer', file: string) {
+    return grant === 'saml2_bearer'
+      ? ['--env', file, '--assertion', 'not-a-saml-response']
+      : ['--env', file];
+  }
+
   const SUBCOMMAND = {
     password: 'oidc',
     saml2_bearer: 'saml2-bearer',
@@ -1419,7 +1432,10 @@ describe('D25: a session file’s client authentication, in every subcommand', (
     async (grant) => {
       certServer.answer('/oauth/token', tokenAnswer('x509'));
       const file = await sessionFile(grant, 'certificate');
-      const parsed = parseSubcommandArgs(SUBCOMMAND[grant], ['--env', file]);
+      const parsed = parseSubcommandArgs(
+        SUBCOMMAND[grant],
+        sessionArgs(grant, file),
+      );
       if (parsed.kind !== 'sso') throw new Error('not a run');
       await expect(run(parsed.options)).resolves.toBe(0);
       expect(server.requests).toHaveLength(0);
@@ -1436,7 +1452,10 @@ describe('D25: a session file’s client authentication, in every subcommand', (
     async (grant) => {
       server.answer('/oauth/token', tokenAnswer('basic'));
       const file = await sessionFile(grant, 'form');
-      const parsed = parseSubcommandArgs(SUBCOMMAND[grant], ['--env', file]);
+      const parsed = parseSubcommandArgs(
+        SUBCOMMAND[grant],
+        sessionArgs(grant, file),
+      );
       if (parsed.kind !== 'sso') throw new Error('not a run');
       await expect(run(parsed.options)).resolves.toBe(0);
       expect(server.requests.map((r) => r.form.grant_type)).toEqual([
