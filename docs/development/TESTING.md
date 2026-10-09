@@ -199,7 +199,12 @@ test's directory. No real browser starts: a browser login is given the suite's *
 by absolute path (`--browser-program`), a node script the suite writes at run time; it hands the
 URL to the test over a loopback inbox and exits, and the test plays the user with `formLogin`,
 then brings the redirect to the CLI's callback — or holds the URL without answering. Every case
-asserts stdout empty and no token or refresh token on either stream.
+asserts stdout empty and no token or refresh token on either stream; every run given the fake
+browser also asserts that neither stream holds the authorization URL, its `state` or the code
+that came back (the provider prompts the URL only when a launch fails). Each run of the UAA suite
+has a `TMPDIR` of its own, so the interrupt cases see the CLI's private work directory while the
+login waits and gone after exit 130 / 143. Skipped, each suite prints
+`skipped: <title> — <reason>` on stderr, as the library's do.
 
 - **UAA** (`authorizationCode.test.ts`): the service key names a recording proxy in front of UAA
   (it forwards everything, records each token request's grant and whether it carried a

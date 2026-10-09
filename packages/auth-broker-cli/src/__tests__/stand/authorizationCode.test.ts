@@ -33,6 +33,7 @@ import {
   type CliRun,
   describeWhere,
   envKeys,
+  expectNoLoginOnStreams,
   expectQuietStreams,
   type Inbox,
   playLogin,
@@ -64,6 +65,8 @@ describeWhere(
     let inbox: Inbox;
     let proxy: UaaProxy;
     let runs: CliRun[];
+    /** Each run's own TMPDIR, where its private work directory lives. */
+    let tmpDirs: Map<CliRun, string>;
 
     beforeAll(() => {
       requireBuiltBin();
@@ -77,6 +80,7 @@ describeWhere(
       inbox = await startInbox();
       proxy = await startUaaProxy(UAA_URL as string);
       runs = [];
+      tmpDirs = new Map();
     });
 
     afterEach(async () => {
@@ -106,14 +110,21 @@ describeWhere(
     }
 
     function mcpAuth(args: string[]): CliRun {
+      const tmpDir = fs.mkdtempSync(path.join(root, 'tmp-'));
       const run = runCli(['--type', 'xsuaa', ...args], {
         cwd: root,
         emptyPath,
+        tmpDir,
         env: { FAKE_BROWSER_INBOX: inbox.url },
       });
       runs.push(run);
+      tmpDirs.set(run, tmpDir);
       return run;
     }
+
+    /** What the run's TMPDIR holds: its work directory while it lives. */
+    const tmpOf = (run: CliRun): string[] =>
+      fs.readdirSync(tmpDirs.get(run) as string);
 
     /** A fresh login through the fake browser, written to `output`. */
     async function login(
@@ -128,8 +139,10 @@ describeWhere(
         '--browser-program',
         fakeBrowser,
       ]);
-      await playLogin(await whileRunning(run, inbox.next()));
+      const url = await whileRunning(run, inbox.next());
+      const back = await playLogin(url);
       expect(await run.ended).toEqual({ code: 0, signal: null });
+      expectNoLoginOnStreams(run, { url, ...back });
       const keys = envKeys(output);
       return {
         run,
@@ -161,8 +174,9 @@ describeWhere(
       );
       expect(shown.searchParams.get('redirect_uri')).toBe(REDIRECT_URI);
 
-      await playLogin(url);
+      const back = await playLogin(url);
       expect(await run.ended).toEqual({ code: 0, signal: null });
+      expectNoLoginOnStreams(run, { url, ...back });
 
       const keys = envKeys(output);
       const token = keys[TOKEN] ?? '';
@@ -194,10 +208,18 @@ describeWhere(
           fakeBrowser,
         ]);
         // The URL is built once the callback listens: the login now waits.
-        await whileRunning(run, inbox.next());
+        const url = await whileRunning(run, inbox.next());
+        // The run's private work directory exists while the login waits …
+        expect(tmpOf(run)).toEqual([expect.stringMatching(/^mcp-auth-/)]);
         run.child.kill(signal);
 
         expect(await run.ended).toEqual({ code, signal: null });
+        // … and is gone once the interrupted run has ended (§10.8).
+        expect(tmpOf(run)).toEqual([]);
+        expectNoLoginOnStreams(run, {
+          url,
+          state: new URL(url).searchParams.get('state') ?? '',
+        });
         expect(run.stderr()).toContain('the authorization was aborted');
         expect(run.stderr()).not.toContain('    at ');
         await bindsPort(CALLBACK_PORT);
@@ -249,8 +271,10 @@ describeWhere(
       const before = proxy.tokenRequests.length;
 
       const run = mcpAuth(['--env', output, '--browser-program', fakeBrowser]);
-      await playLogin(await whileRunning(run, inbox.next()));
+      const url = await whileRunning(run, inbox.next());
+      const back = await playLogin(url);
       expect(await run.ended).toEqual({ code: 0, signal: null });
+      expectNoLoginOnStreams(run, { url, ...back });
 
       // The stand saw the refresh, refused, then the code exchange.
       expect(proxy.tokenRequests.slice(before)).toEqual([

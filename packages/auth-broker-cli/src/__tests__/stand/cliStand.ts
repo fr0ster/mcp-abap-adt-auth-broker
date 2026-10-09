@@ -42,9 +42,11 @@ const PACKAGE_ROOT = path.resolve(__dirname, '..', '..', '..');
 export const BIN = path.join(PACKAGE_ROOT, 'dist', 'mcp-auth.js');
 
 /**
- * Run `body`, or skip it with the reason in its title: the suites say where
- * they run (the stand's URLs set, on Linux — `--browser-program` runs a
- * program by path only there).
+ * Run `body`, or skip it with the reason in its title and printed on stderr
+ * — Jest lists no test of a file skipped whole, so the title alone is never
+ * seen. The suites say where they run (the stand's URLs set, on Linux —
+ * `--browser-program` runs a program by path only there). The line is the
+ * library's `describeWhere`'s, written without a logger dependency.
  */
 export function describeWhere(
   title: string,
@@ -52,6 +54,7 @@ export function describeWhere(
   body: () => void,
 ): void {
   if (unavailable) {
+    process.stderr.write(`skipped: ${title} — ${unavailable}\n`);
     describe.skip(`${title} — skipped: ${unavailable}`, body);
   } else {
     describe(title, body);
@@ -172,26 +175,30 @@ export interface CliRun {
 
 /**
  * Runs the built bin with `args` in `cwd`. `PATH` is `emptyPath` — a
- * directory holding nothing — `HOME` and `TMPDIR` the test's own; `env` adds
- * to that. stdin is a pipe only when `stdin` is asked for.
+ * directory holding nothing — `HOME` the test's own, `TMPDIR` `tmpDir` (a
+ * directory of the run's own, so its private work directory can be seen to
+ * come and go), else `cwd`; `env` adds to that. stdin is a pipe only when
+ * `stdin` is asked for.
  */
 export function runCli(
   args: string[],
   {
     cwd,
     emptyPath,
+    tmpDir = cwd,
     env = {},
     stdin = false,
   }: {
     cwd: string;
     emptyPath: string;
+    tmpDir?: string;
     env?: Record<string, string>;
     stdin?: boolean;
   },
 ): CliRun {
   const child = spawn(process.execPath, [BIN, ...args], {
     cwd,
-    env: { PATH: emptyPath, HOME: cwd, TMPDIR: cwd, ...env },
+    env: { PATH: emptyPath, HOME: cwd, TMPDIR: tmpDir, ...env },
     stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
   let stdout = '';
@@ -262,9 +269,12 @@ export function whileRunning<T>(run: CliRun, waited: Promise<T>): Promise<T> {
 /**
  * Plays the user on an authorization URL the CLI built: logs in on the
  * stand's form (formLogin), then brings the redirect — code and `state` — to
- * the CLI's callback, as the browser would.
+ * the CLI's callback, as the browser would. Resolves the `state` and the
+ * code that went back, for a case to look for on the run's streams.
  */
-export async function playLogin(authorizationUrl: string): Promise<void> {
+export async function playLogin(
+  authorizationUrl: string,
+): Promise<{ state: string; code: string }> {
   const redirectUri = new URL(authorizationUrl).searchParams.get(
     'redirect_uri',
   );
@@ -273,6 +283,10 @@ export async function playLogin(authorizationUrl: string): Promise<void> {
   const back = await authorizeByForm(authorizationUrl, redirectUri, USER);
   const response = await fetch(back);
   await response.text();
+  return {
+    state: back.searchParams.get('state') ?? '',
+    code: back.searchParams.get('code') ?? '',
+  };
 }
 
 /** A token request the proxy forwarded: its grant, never a value. */
@@ -384,6 +398,32 @@ export function envKeys(file: string): Record<string, string> {
     keys[line.slice(0, eq)] = value;
   }
   return keys;
+}
+
+/**
+ * What a run given the fake browser never prints (§10.8, D19): the
+ * authorization URL, its `state` and the code that came back. The provider
+ * prompts the URL only when the browser cannot be launched
+ * (auth-providers' `openInBrowser`), and the fake always launches. Says
+ * which stream held one, never the value.
+ */
+export function expectNoLoginOnStreams(
+  run: CliRun,
+  login: { url: string; state: string; code?: string | undefined },
+): void {
+  const values: Array<[string, string]> = [
+    ['url', login.url],
+    ['state', login.state],
+  ];
+  if (login.code !== undefined) values.push(['code', login.code]);
+  for (const [name, value] of values) {
+    expect(value.length).toBeGreaterThan(0);
+    const where = [
+      run.stdout().includes(value) ? 'stdout' : '',
+      run.stderr().includes(value) ? 'stderr' : '',
+    ].filter(Boolean);
+    expect({ [name]: where }).toEqual({ [name]: [] });
+  }
 }
 
 /**
