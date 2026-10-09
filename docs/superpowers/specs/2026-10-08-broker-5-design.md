@@ -1054,7 +1054,14 @@ Every command builds its broker with explicit choices, in its own code (H1):
 - `renewal: () => refreshThenLogin()` for every grant — a user at a terminal
   can log in. **(D20)**
 - **Three sources, one per run (D25, ruled by the user, 2026-10-09).** Exactly
-  one of them is given; two together are a usage error naming both.
+  one of them is given; two together are a usage error naming both. The
+  exception is `oidc`, `saml2-pure` and `saml2-bearer` run with none of them:
+  their means come from flags or `--config`, and the run is like
+  `--service-key` — a fresh login, a new pair written to `--output`, no
+  session read even when `--output` names an existing file. `--env` (and a
+  session `--destination` finds) is used as it is: any flag that states
+  means, or `--config`, beside it is a usage error naming both, in every
+  subcommand.
   - **`--service-key <path>`: always a new pair.** The means come from the key;
     the CLI reads no session — stored files can be anywhere and it knows
     nothing about earlier runs — so every run logs in and writes a new token
@@ -2079,5 +2086,8 @@ works on the session file at that path (it holds the means): reuse a valid
 bound token, refresh an expired one, else log in, written back. `--destination
 <name>` takes the named destination from the standard folder (the session file
 if present, else the service key; folder stated per platform,
-`--destination-dir`, then `AUTH_BROKER_PATH`, then the standard folder). One source per run. This replaces the Task 9
+`--destination-dir`, then `AUTH_BROKER_PATH`, then the standard folder). One source per run. The
+SSO subcommands with means from flags or `--config` and no source act as
+`--service-key` (a fresh login, no session read); a means flag or `--config`
+beside `--env` is refused in every subcommand — the file is used as it is. This replaces the Task 9
 ruling and the earlier drafts of D25.
