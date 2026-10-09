@@ -21,7 +21,8 @@
     "stand:up": "npm run stand:up -w @mcp-abap-adt/auth-broker",
     "stand:down": "npm run stand:down -w @mcp-abap-adt/auth-broker",
     "check:graph": "node tools/check-graph.js",
-    "check": "npm run build && npm run test:check && npm run lint:check && npm run check:graph && npm run check:packed && npm run check:publish",
+    "check:shape": "node tools/check-provider-shape.mjs --rules 4,5,6 --root packages/auth-broker && node tools/check-provider-shape.mjs --rules 4,5,6 --root packages/auth-broker-cli",
+    "check": "npm run build && npm run test:check && npm run lint:check && npm run check:graph && npm run check:shape && npm run check:packed && npm run check:publish",
     "check:packed": "node tools/check-packed.js",
     "check:publish": "node tools/test-publish-changed.js",
     "release:publish": "node tools/publish-changed.js"

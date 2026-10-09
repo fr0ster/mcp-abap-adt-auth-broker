@@ -5,20 +5,121 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.0] - 2026-10-09
+
+The commands on `@mcp-abap-adt/auth-broker` 5.0.0 (`^5.0.0`, released together) and the 6.0
+auth chain. A major: one command, three sources, no login time limit, stdout for help and
+version only. What a 2.x user must do, row by row: the README's *Migrating to 3.0.0*.
+
+### Breaking
+
+- **One command: `mcp-auth`.** The `mcp-sso` bin is removed. Every `mcp-sso` form is an
+  `mcp-auth` subcommand with the same flags: `mcp-auth oidc --flow <…>` (`mcp-sso oidc`,
+  `mcp-sso --protocol oidc`), `mcp-auth saml2-pure` (`mcp-sso saml2 --flow pure`),
+  `mcp-auth saml2-bearer` (`mcp-sso bearer`, `mcp-sso saml2 --flow bearer`). The subcommands run
+  in `mcp-auth`'s own process (2.x spawned `mcp-sso`). `--protocol` is refused: the subcommand
+  is the protocol and flow. `--config` belongs to the subcommand its `protocol` and `flow` name;
+  a file naming another subcommand, or none, is refused naming `--config`.
+- **`--dev` is removed**: `saml2-bearer` no longer requires it, and it is refused as an unknown
+  option.
+- **Three sources, exactly one per run.** `--service-key <path>`: always a new login and a new
+  token pair written to `--output`; no session is read. `--env <path>`: the session file at that
+  exact path (it holds the means): a valid bound token reused with no request, an expired one
+  refreshed, else a login, written back to the file (or `--output`). New `--destination <name>`:
+  `<dir>/sessions/<name>.env` (as `--env`), else `<dir>/service-keys/<name>.json` (as
+  `--service-key`), `<dir>` being `--destination-dir`, else `AUTH_BROKER_PATH` (read as the
+  server reads it), else `~/.config/mcp-abap-adt` (Unix) / `<home>\Documents\mcp-abap-adt`
+  (Windows). Two sources together are a usage error naming both. `oidc`, `saml2-pure` and
+  `saml2-bearer` with no source take their means from flags or `--config`, as `--service-key`.
+  Beside a session file every means flag and `--config` is refused, in every subcommand; the
+  file's client authentication (certificate paths, or the recorded Basic encoding) is used.
+  `--cookie` is accepted beside a cookie session (`saml/none`, `saml/saml2_pure`) only, changing
+  nothing but its row.
+- **No login time limit.** `INTERACTIVE_LOGIN_TIMEOUT_MS` (five minutes) is gone; no `timeoutMs`
+  is passed anywhere. `SIGINT` / `SIGTERM` end a login: "the authorization was aborted" on
+  stderr, the callback port released, the work directory removed, no output, exit 130 / 143, no
+  stack trace; a second signal exits at once; `SIGHUP` exits 129.
+- **stdout carries only `help` and `--version`.** Progress, prompts (readline included), log
+  lines and failures go to stderr. `mcp-auth`'s "🔗 Authorization URL" preview is removed: the
+  URL, `state` included, appears only in the provider's login prompt on stderr.
+- **Failures are printed in fixed words** (`printFailure`): an auth failure as `❌ <reason>` or
+  `❌ <reason> — <hint>`, then its diagnostics; a `DestinationConfigError` as its message, then
+  the carried failure's hint and diagnostics; the CLI's own usage and I/O errors in its own words
+  naming the flag (an allowlisted system code at most); anything else in auth-errors' generic
+  words. No stack trace, never a foreign value's message. A session not stored prints each
+  `SessionWriteFailure`'s words.
+- **Logging**: the CLI's own logger writes every level to stderr, from `info` (from `debug` with
+  `--verbose`); `@mcp-abap-adt/logger` is no longer a dependency. No environment variable is read
+  for logging — `DEBUG_SSO`, `DEBUG_AUTH_SSO`, `DEBUG` and the rest change nothing.
+- **A pasted SAML login always declares its ACS**: `--acs-url`, the SP metadata
+  (`--saml-metadata`, or `<uaa.url>/saml/metadata` with `--service-key`), or `acsUrl` in
+  `--config`; with none, a usage error naming `--acs-url`. The `http://localhost:<port>/callback`
+  fallback is gone.
+- **`--browser` is mapped per platform** to auth-providers 6's launchers (`auto` / `system` the
+  platform's default browser; `chrome`, `edge`, `firefox` by name per `linux`, `darwin`,
+  `win32`; `none` / `headless` no browser), in every flow that opens one, the `--config`
+  `browser` field and `generate-env` (2.x hard-coded the system browser there). On any other
+  platform a named browser is a usage error. Linux no longer gets `DISPLAY=:0` or a list of
+  candidate Chrome executables.
+- **The output's binding is auth-broker 5's record** (`SAP_ISSUED_BY` versioned): sessions
+  written by 2.x read as unbound once; a 2.x `--cookie` session is refused naming `issuedBy`.
+
+### Added
+
+- `--browser-program <program>` (excludes `--browser`); `--verbose`; `--auth-debug` (the
+  broker's `authDebug: true`, implies `--verbose`); `--destination`, `--destination-dir`.
+- `mcp-auth <subcommand> --help` for every subcommand.
+- `--basic-encoding` is recorded in the destination as `SAP_UAA_BASIC_ENCODING`
+  (`XSUAA_UAA_BASIC_ENCODING`) — a line only this CLI reads — so an `--env` run reuses it;
+  `--format json` adds `uaaBasicEncoding`, and the certificate client's paths and `certurl` for
+  every subcommand.
 
 ### Changed
 
-- **Built under a stricter compiler**, as `@mcp-abap-adt/auth-broker`:
-  `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noImplicitOverride`,
-  `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`, sources and
-  tests. No behaviour changes: every flag, message, exit code and written file
-  is as before. Argument parsing reads each value once and tests it instead of
-  the index bound; a destination's stated means, a strategy's options and a
-  provider's configuration keep the keys they had (`redirectUri: undefined`,
-  `port: undefined` included).
-- Lint: `noExplicitAny` is an error outside the tests, and `lint:check` fails
-  on any warning.
+- **`mcp-auth` logs in through the broker's UAA row** (`getToken` with no provider of its own,
+  no placeholder URL): an authorization code login carries `state` and an S256 PKCE challenge.
+  Every run states `renewal: () => refreshThenLogin()` and `onWriteFailure: 'fail'`.
+- The interactive strategies are auth-providers 6's compositions, each ended by the run's
+  signal; the device code is always shown on stderr; the IdP-initiated paste returns the
+  declared ACS.
+- SAML metadata is read by an XML parser (`@xmldom/xmldom`), not regular expressions; a
+  metadata URL's redirects are followed by hand, each hop checked (https, or http on loopback),
+  under the run's signal. No regular expression runs over a UAA URL, an `--idp-cert` file or
+  `--scopes`.
+- A session file is read as auth-stores reads it (`dotenv`): `export`, quoting, comments,
+  duplicates.
+- `--cookie` writes `refreshToken: ''` and both binding fields.
+- A file a flag names that cannot be read is refused as `<flag>: <the path as given> cannot be
+  read (CODE)` — `--service-key`, `--config`, `--idp-cert`, and `generate-env`'s
+  `service-key-path` (2.x: "Service key file not found: <absolute path>" and its kin).
+- `generate-env` takes `--browser` / `--browser-program`, `--verbose`, `--auth-debug`, runs under
+  the same interrupt, and always logs in.
+- **Built under a stricter compiler**, as `@mcp-abap-adt/auth-broker`: `noImplicitReturns`,
+  `noFallthroughCasesInSwitch`, `noImplicitOverride`, `noUncheckedIndexedAccess` and
+  `exactOptionalPropertyTypes`, sources and tests. Lint: `noExplicitAny` is an error outside the
+  tests, and `lint:check` fails on any warning.
+
+### Removed
+
+- The `mcp-sso` bin; `--protocol`; `--dev`; the authorization URL preview; the five-minute login
+  bound; the localhost ACS fallback; `@mcp-abap-adt/logger`.
+- The hand-run stands `tests/keycloak` (Keycloak for `mcp-sso`) and `tests/sso-demo` (a CAP app
+  on BTP), and their five npm scripts (`test:mcp-auth`, `test:mcp-sso`, `test:device-code`,
+  `test:saml-pure`, `test:sso`). The library's stand (`npm run test:stand`) covers the token
+  grants.
+
+### Dependencies
+
+- `@mcp-abap-adt/auth-broker` `^4.1.0` → `^5.0.0`; `@mcp-abap-adt/auth-providers` `^5.3.0` →
+  `^6.0.0`; `@mcp-abap-adt/auth-stores` `^3.3.0` → `^4.0.0`; `@mcp-abap-adt/interfaces-auth`
+  `^3.2.0` → `^7.5.0`; new `@mcp-abap-adt/auth-errors` `^2.1.1`, `@xmldom/xmldom` `^0.9.12`,
+  `dotenv` `^18.0.4`; `@mcp-abap-adt/logger` removed.
+
+### Measured, and not
+
+- Not yet measured on 3.0.0: the interactive logins in a real browser per platform, Ctrl+C at a
+  real terminal, `--browser none` over SSH, manual SAML with a declared ACS against a real
+  identity provider, the device code at a real terminal.
 
 ## [2.1.0] - 2026-10-05
 

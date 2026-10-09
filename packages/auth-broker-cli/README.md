@@ -1,23 +1,21 @@
 # @mcp-abap-adt/auth-broker-cli
 [![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/StandWithUkraine.svg)](https://stand-with-ukraine.pp.ua)
 
-The `mcp-auth` and `mcp-sso` commands: log in to a SAP BTP or ABAP destination
-and write it — the destination's means and the session's secret — to one
-`.env` file, through [`@mcp-abap-adt/auth-broker`](../auth-broker/README.md).
+The `mcp-auth` command: log in to a SAP BTP or ABAP destination and write it — the destination's
+means and the secret the login obtained — to one `.env` (or JSON) file, through
+[`@mcp-abap-adt/auth-broker`](../auth-broker/README.md).
 
-- `mcp-auth` — service key → destination: authorization code or client
-  credentials; `saml2-pure` / `saml2-bearer` are handed to `mcp-sso`.
-- `mcp-sso` — OIDC (browser, device, password, token exchange), the UAA
-  passcode, and SAML (bearer, pure) single sign-on.
+```
+mcp-auth [auth-code]     UAA authorization code, or --credential client credentials (a service key)
+mcp-auth oidc            the OIDC grants (browser, device, password, token exchange) and the UAA passcode
+mcp-auth saml2-pure      SAML → the system's session cookies; --cookie hands cookies over
+mcp-auth saml2-bearer    a SAML assertion exchanged for an OAuth token
+```
 
-Up to `@mcp-abap-adt/auth-broker` 3.0.4 these commands shipped in the library
-package; its CHANGELOG holds their history. This package carries them from
-1.0.0 on. 2.0.0, released with `@mcp-abap-adt/auth-broker` 4.0.0, writes a
-complete 4.0 destination — see *What each command writes, and where* and, if
-you used 1.0.0, *Migrating from 1.0.0*. 2.1.0, on `@mcp-abap-adt/auth-broker`
-4.1.0, adds x509 service keys: `--client-auth certificate|secret` for
-`mcp-auth` and `generate-env` — see *Client authentication* and *Migrating
-from 2.0.0*.
+**Upgrading from 2.x?** 3.0.0 is a major: it is **one command** — the `mcp-sso` command is gone,
+and every form of it is an `mcp-auth` subcommand with the same flags — a run takes exactly one
+source (`--service-key`, `--env` or `--destination`), a login waits until you end it, and only
+`help` and `--version` go to stdout. See [*Migrating to 3.0.0*](#migrating-to-300).
 
 ## Installation
 
@@ -25,184 +23,207 @@ from 2.0.0*.
 npm install -g @mcp-abap-adt/auth-broker-cli
 ```
 
-2.1.0 depends on `@mcp-abap-adt/auth-broker` `^4.1.0`,
-`@mcp-abap-adt/auth-stores` `^3.3.0`, `@mcp-abap-adt/auth-providers`
-`^5.3.0` and `@mcp-abap-adt/interfaces-auth` `^3.2.0` (2.0.0 on the library
-`^4.0.0`; 1.0.0 on `^3.1.0`, the first version without the commands). If you installed the library globally to
-get the commands (3.0.4 or earlier), swap it for this package:
+3.0.0 depends on `@mcp-abap-adt/auth-broker` `^5.0.0`, `@mcp-abap-adt/auth-providers`
+`^6.0.0`, `@mcp-abap-adt/auth-stores` `^4.0.0`, `@mcp-abap-adt/auth-errors` `^2.1.1`,
+`@mcp-abap-adt/interfaces-auth` `^7.5.0`, `@mcp-abap-adt/interfaces-utils` `^1.1.0`,
+`@xmldom/xmldom` (SAML metadata) and `dotenv` (reading a session file as auth-stores does). Its
+only bin is `mcp-auth`. Requires Node.js 22, 24 or 26 (`engines: "^22 || ^24 || ^26"`).
 
-```bash
-npm uninstall -g @mcp-abap-adt/auth-broker && npm i -g @mcp-abap-adt/auth-broker-cli
-```
+From a clone: `npm ci` and `npm run build` at the repository root; the command is then
+`node packages/auth-broker-cli/dist/mcp-auth.js`.
 
-Requires Node.js 22, 24 or 26 (`engines: "^22 || ^24 || ^26"`).
+## Where a Run's Destination Comes From
 
-## What each command writes, and where
+Every subcommand takes **exactly one source**; two together are a usage error naming both.
 
-Every command writes one destination, `<destination>.env`, in two roles that
-two stores of `@mcp-abap-adt/auth-stores` own — the same file layout the server
-and the broker read:
-
-- **The means** — how the secret is obtained: `SAP_AUTH_TYPE`, `SAP_GRANT_TYPE`,
-  the grant's data (`SAP_OIDC_*`, `SAP_SAML_*`, `SAP_USERNAME` /
-  `SAP_PASSWORD`), the client (`SAP_UAA_URL`, `SAP_UAA_CLIENT_ID`,
-  `SAP_UAA_CLIENT_SECRET` — or, with `--client-auth certificate`,
-  `SAP_UAA_CLIENT_CERT_PATH`, `SAP_UAA_CLIENT_KEY_PATH`, `SAP_UAA_CERT_URL` in
-  its place) and `SAP_URL`. Written first, through
-  `EnvDestinationStore.setDestination`, before the login.
-- **The secret** — what the login obtained: `SAP_JWT_TOKEN` or
-  `SAP_SESSION_COOKIES_B64`, `SAP_EXPIRES_AT`, `SAP_REFRESH_TOKEN`, and what it
-  is bound to, `SAP_ISSUED_FOR` / `SAP_ISSUED_BY`. Written only by the broker's
-  persistence, as it stores what a provider obtains — never by the command
-  itself (the one exception: `--cookie`, below). The session store refuses
-  means, so the client secret never reaches it.
-
-With `--type xsuaa` the keys are `XSUAA_*` (the URL is `XSUAA_MCP_URL`). Each
-store touches only its own keys, so a file passed with `--env` keeps every other
-line; the grant-specific means a run does not state (an old password, an old
-subject token, an old trust) are removed, the URL, `SAP_CLIENT` and
-`SAP_LANGUAGE` stay unless the run states them.
-
-| Command | `SAP_AUTH_TYPE` / `SAP_GRANT_TYPE` | Means written | Secret (from the login) |
-|---|---|---|---|
-| `mcp-auth` | `jwt` / `authorization_code` | the service key's client, `SAP_URL` (`--service-url` or the key) | token, refresh token, expiry, binding |
-| `mcp-auth --credential` | `jwt` / `client_credentials` | the same | token, expiry, binding |
-| `mcp-sso oidc --flow browser` | `jwt` / `oidc_authorization_code` | `SAP_OIDC_ISSUER_URL`, `…_AUTHORIZATION_ENDPOINT`, `…_TOKEN_ENDPOINT`, `…_SCOPES`, the client | token, refresh token, expiry, binding |
-| `mcp-sso oidc --flow device` | `jwt` / `device_code` | `SAP_OIDC_ISSUER_URL`, `…_DEVICE_AUTHORIZATION_ENDPOINT`, `…_TOKEN_ENDPOINT`, `…_SCOPES`, the client | the same |
-| `mcp-sso oidc --flow password` | `jwt` / `password` | `SAP_USERNAME`, `SAP_PASSWORD`, `SAP_OIDC_ISSUER_URL`, `…_TOKEN_ENDPOINT`, `…_SCOPES`, the client | the same |
-| `mcp-sso oidc --flow password --passcode` (or neither `--password` nor `--username`) | `jwt` / `passcode` | the client: `--uaa-url` (or `--service-key`), `--client-id` — never the one-time code | the same |
-| `mcp-sso oidc --flow token_exchange` | `jwt` / `token_exchange` | `SAP_OIDC_SUBJECT_TOKEN`, `…_SUBJECT_TOKEN_TYPE`, `…_AUDIENCE`, `…_ACTOR_TOKEN(_TYPE)`, `…_TOKEN_ENDPOINT`, `…_SCOPES` (`--scope`), the client | the same |
-| `mcp-sso saml2 --flow pure` | `saml` / `saml2_pure` | `SAP_SAML_IDP_SSO_URL`, `…_IDP_ENTITY_ID`, `…_IDP_CERTIFICATES_B64`, `…_SP_ENTITY_ID`, `…_ACS_URL`, `…_RELAY_STATE`, `…_IDP_INITIATED` | cookies, expiry, binding |
-| `mcp-sso saml2 --flow pure --cookie …` | `saml` / `none` | `SAP_URL` only | the cookies you handed over, bound to the resource (`SAP_URL` with `SAP_CLIENT` when the file states one) by the broker's `bindingOf` — stored by the command, since no login obtains them |
-| `mcp-sso bearer` | `saml` / `saml2_bearer` | the `SAP_SAML_*` fields above, `SAP_SAML_TOKEN_URL`, the client (`--uaa-url`, `--client-id`, or `--service-key`) | token, refresh token, expiry, binding |
-
-The client secret you give (a service key's, or `--client-id` with
-`--client-secret`), a password, a subject or actor token are means: they are
-written because you asked for a destination that can renew. A public client
-(no `--client-secret`) is written as `SAP_UAA_CLIENT_SECRET=` — the secret
-`''` — and read back as one. A client that authenticates with its certificate
-(`--client-auth certificate`) is written as the two PEM files' absolute paths
-and `certurl`, and no client secret: the certificate and its key stay in your
-own files, never copied into the destination or anywhere else.
-
-**When the output is written, and the exit code.** A command works in a private
-temporary directory (mode `0700`, removed however the run ends) and copies the
-destination to `--output` only once the broker's `flush()` reports the secret
-stored. A failed login, or a secret the store did not take, exits `1` and leaves
-`--output` as it was. `--format json` writes, from the same stores, the 1.x
-fields (`accessToken` or `sessionCookies`, `refreshToken`, `serviceUrl`,
-`uaaUrl`, `uaaClientId`, `uaaClientSecret`; `mcp-sso` adds `tokenType`).
-
-**What reads it.** A server composes `new EnvDestinationStore(dir)` and
-`new AbapSessionStore(dir)` (or the `XSUAA_*` pair) over the same directory and
-calls `broker.getProvider(destination)`: the provider is seeded with the stored
-secret when its binding matches the means, and logs in afresh otherwise. An
-OIDC destination stated with endpoints alone (no `--issuer`, no `--uaa-url`)
-binds its secret to no issuer, so `getProvider` never reuses it; pass
-`--issuer` to make the token reusable.
-
-## Commands
-
-### CLI: mcp-auth
-
-Generate or refresh `.env`/JSON output using AuthBroker + stores:
-
-```bash
-mcp-auth <auth-code|oidc|saml2-pure|saml2-bearer> [options]
-mcp-auth --service-key <path> --output <path> [--env <path>] [--type abap|xsuaa] [--credential] [--browser auto|none|system|chrome|edge|firefox] [--format json|env]
-         [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]
-```
-
-**Note**: The CLI is compiled to `dist/` and does not require `tsx` at runtime. From a clone, run `npm install` and `npm run build` at the repository root; the commands are then `packages/auth-broker-cli/dist/mcp-auth.js` and `…/mcp-sso.js`.
-
-**Authentication Flow:**
-- Default: `authorization_code` (browser-based OAuth2)
-- `--credential`: `client_credentials` (clientId/clientSecret, no browser)
-
-The grant is the command's, written as `SAP_GRANT_TYPE`; it is never read from
-the service key. `mcp-auth` keeps its own provider and logs in through the
-broker's token API (`getToken`), which stores the secret alone; the service
-key's client and URL are copied into the destination, so the file is read later
-without the key beside it. With `--env`, the file's refresh token is used first.
-
-**Browser Options (for authorization_code):**
-- `auto` (default): Try to open browser, fallback to showing URL
-- `none`: Show URL in console and wait for callback (no browser)
-- `system/chrome/edge/firefox`: Open specific browser
-
-`--browser` and `--redirect-port` are routed into `browserCallbackStrategy`. This CLI has no
-default of its own for the callback port: `--redirect-port` overrides it when given; omitted,
-the port comes from `auth-providers` (currently `61001`, chosen to sit above the ephemeral range
-and clear of the `3001`/`3333` range servers and proxies typically use). If you registered a
-redirect URI with a specific port at your identity provider, pass `--redirect-port` to match it.
-A login is given 5 minutes to complete (this is a person switching to a browser and signing in
-by hand, not an unattended caller).
-
-**SAML options (`saml2-pure`, `saml2-bearer`):**
-`mcp-auth` hands these subcommands to `mcp-sso` with every argument unchanged, so the SAML options
-are `mcp-sso`'s (see *CLI: mcp-sso* and *SAML assertion validation* below) and its exit code is
-`mcp-auth`'s. The ones a run needs:
-
-| Option | What it is |
+| Source | What the run does |
 |---|---|
-| `--idp-metadata <url\|path>` | The identity provider's SAML metadata; fills `--idp-cert`, `--idp-entity-id` and `--idp-sso-url`. For SAP Cloud Identity Services: `https://<tenant>.accounts.ondemand.com/saml2/metadata`. |
-| `--idp-cert <path>`, `--idp-entity-id <id>` | The same trust, stated instead of read. |
-| `--idp-initiated` | The identity provider starts the login. `saml2-bearer` against XSUAA needs it. |
-| `--sp-entity-id`, `--acs-url` | The `Audience` and `Recipient`. For `saml2-bearer` with `--service-key`, read from `<uaa.url>/saml/metadata`. |
-| `--assertion <base64>`, `--assertion-flow <flow>` | A `SAMLResponse` obtained elsewhere, or how to obtain one. |
+| `--service-key <path>` | A SAP service key: the means come from the key, and **every run logs in** and writes a new token and refresh token to `--output` (required). No stored session is read — not even an existing `--output` file. |
+| `--env <path>` | A session file, anywhere, holding both the means (`SAP_AUTH_TYPE`, `SAP_GRANT_TYPE`, `SAP_UAA_*`, `SAP_URL`, …) and the session. The broker decides: a valid token bound to the file's means is reused with **no request**, an expired one is refreshed, and a refused refresh — or none, or a session not bound to these means — logs in. The result is written back to that file, or to `--output` when given. The file is read exactly as named (`.env`, `session.backup`), never a `<name>.env` beside it. |
+| `--destination <name>` | A destination of the destination folder: `<dir>/sessions/<name>.env` when it exists (handled as `--env`), else `<dir>/service-keys/<name>.json` (handled as `--service-key`, the session written to `<dir>/sessions/<name>.env`). |
+| none (`oidc`, `saml2-pure`, `saml2-bearer` only) | The means come from flags or `--config`: like `--service-key` — a fresh login, a new pair written to `--output`, no session read even when `--output` names an existing file. |
 
-`saml2-bearer` still requires `--dev`: it has not been run against a live XSUAA with a SAML trust.
+**The destination folder `<dir>`**, the first that is given:
 
-**Examples:**
+1. `--destination-dir <dir>`;
+2. the environment variable `AUTH_BROKER_PATH` — the variable the server `mcp-abap-adt` reads
+   for the same folder, so the CLI and the server see the same destinations. Like the server's,
+   it may list several base folders, separated by `;` (on Unix also `:`); an entry ending in the
+   subfolder looked for (`sessions`, `service-keys`) is read as its parent; a session in any
+   folder is used before a service key in any folder, and a new session is written to the first
+   sessions folder;
+3. the standard folder: `~/.config/mcp-abap-adt` on Unix, `<home>\Documents\mcp-abap-adt` on
+   Windows.
+
+`AUTH_BROKER_PATH` is the one environment variable the CLI reads, and only for `--destination`
+without `--destination-dir`.
+
+**A session file is used as it is.** Beside `--env` (or a session `--destination` finds), any
+flag that states means — `--credential`, `--service-url`, `--client-auth`, `--basic-encoding`,
+`--cert-path`, `--key-path`, `--config`, and every OIDC and SAML means flag (`--issuer`,
+`--client-id`, `--idp-cert`, `--acs-url`, …) — is a usage error naming both: the means are the
+file's, client authentication included (its certificate paths, or the Basic encoding it
+records). To log in anew, run with `--service-key`. **`--cookie` is the one exception**: it hands
+over the secret, not means, so `saml2-pure --cookie` is accepted beside a session file whose
+grant is `saml/none` or `saml/saml2_pure` (or that states none); the run changes only the row to
+`saml/none`, keeps every other means field, binds the cookies to them and writes them back. Beside
+any other grant it is a usage error naming `--cookie` and the grant.
+
 ```bash
-# Auth code (default via service key)
-mcp-auth auth-code --service-key ./abap.json --output ./abap.env --type abap
+# A fresh login from a service key, written to ./mcp.env
+mcp-auth --service-key ./service-key.json --output ./mcp.env --type xsuaa
 
-# OIDC SSO (device flow example)
-mcp-auth oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
+# The same file later: its token reused, refreshed, or a login — only as needed
+mcp-auth --env ./mcp.env --type xsuaa
 
-# SAML2 pure (cookie); the SAML flags are mcp-sso's, see "SAML assertion validation" below
-mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --output ./saml.env --type abap
+# The destination TRIAL of the destination folder: its session, else its service key
+mcp-auth --destination TRIAL --type xsuaa
+mcp-auth --destination TRIAL --destination-dir ~/work/destinations --type abap
+```
 
-# SAML2 bearer (in progress, requires --dev)
-mcp-auth saml2-bearer --dev --service-key ./mcp.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa
+## What Each Run Writes, and Where
 
-# ABAP: authorization_code (default, opens browser)
+**Files.** A run writes one destination in two roles that two stores of
+`@mcp-abap-adt/auth-stores` own — the same file layout the server and the broker read:
+
+- **The means** — how the secret is obtained: `SAP_AUTH_TYPE`, `SAP_GRANT_TYPE`, the grant's data
+  (`SAP_OIDC_*`, `SAP_SAML_*`, `SAP_USERNAME` / `SAP_PASSWORD`), the client (`SAP_UAA_URL`,
+  `SAP_UAA_CLIENT_ID`, `SAP_UAA_CLIENT_SECRET` — or, with `--client-auth certificate`,
+  `SAP_UAA_CLIENT_CERT_PATH`, `SAP_UAA_CLIENT_KEY_PATH`, `SAP_UAA_CERT_URL` in its place) and
+  `SAP_URL`. Written first, through `EnvDestinationStore.setDestination`, before the login; a run
+  from a session file keeps the file's.
+- **The secret** — what the login obtained: `SAP_JWT_TOKEN` or `SAP_SESSION_COOKIES_B64`,
+  `SAP_EXPIRES_AT`, `SAP_REFRESH_TOKEN`, and what it is bound to, `SAP_ISSUED_FOR` /
+  `SAP_ISSUED_BY` (auth-broker 5's binding record). Written only by the broker's persistence, as
+  it stores what a provider obtains — never by the command itself (the one exception:
+  `--cookie`). The session store refuses means, so the client secret never reaches it.
+
+With `--type xsuaa` the keys are `XSUAA_*` (the URL is `XSUAA_MCP_URL`); `--type` (default
+`abap`) must match the keys of a file given with `--env`. Each store touches only its own keys,
+so every other line of the file stays.
+
+| Run | `SAP_AUTH_TYPE` / `SAP_GRANT_TYPE` | Means written | Secret (from the login) |
+|---|---|---|---|
+| `mcp-auth` / `mcp-auth auth-code` | `jwt` / `authorization_code` | the service key's client, `SAP_URL` (`--service-url` or the key) | token, refresh token, expiry, binding |
+| `mcp-auth --credential` | `jwt` / `client_credentials` | the same | token, expiry, binding |
+| `mcp-auth oidc --flow browser` | `jwt` / `oidc_authorization_code` | `SAP_OIDC_ISSUER_URL`, `…_AUTHORIZATION_ENDPOINT`, `…_TOKEN_ENDPOINT`, `…_SCOPES`, the client | token, refresh token, expiry, binding |
+| `mcp-auth oidc --flow device` | `jwt` / `device_code` | `SAP_OIDC_ISSUER_URL`, `…_DEVICE_AUTHORIZATION_ENDPOINT`, `…_TOKEN_ENDPOINT`, `…_SCOPES`, the client | the same |
+| `mcp-auth oidc --flow password` | `jwt` / `password` | `SAP_USERNAME`, `SAP_PASSWORD`, `SAP_OIDC_ISSUER_URL`, `…_TOKEN_ENDPOINT`, `…_SCOPES`, the client | the same |
+| `mcp-auth oidc --flow password --passcode <p>` (or neither `--password` nor `--username`) | `jwt` / `passcode` | the client: `--uaa-url` (or `--service-key`), `--client-id` — never the one-time code | the same |
+| `mcp-auth oidc --flow token_exchange` | `jwt` / `token_exchange` | `SAP_OIDC_SUBJECT_TOKEN`, `…_SUBJECT_TOKEN_TYPE`, `…_AUDIENCE`, `…_ACTOR_TOKEN(_TYPE)`, `…_TOKEN_ENDPOINT`, `…_SCOPES` (`--scope`), the client | the same |
+| `mcp-auth saml2-pure` | `saml` / `saml2_pure` | `SAP_SAML_IDP_SSO_URL`, `…_IDP_ENTITY_ID`, `…_IDP_CERTIFICATES_B64`, `…_SP_ENTITY_ID`, `…_ACS_URL`, `…_RELAY_STATE`, `…_IDP_INITIATED` | cookies, expiry, binding |
+| `mcp-auth saml2-pure --cookie …` | `saml` / `none` | `SAP_URL` (beside a session file: its means, kept) | the cookies you handed over, bound with the broker's `bindingOf` and `SAP_REFRESH_TOKEN` cleared — stored by the command, since no login obtains them |
+| `mcp-auth saml2-bearer` | `saml` / `saml2_bearer` | the `SAP_SAML_*` fields above, `SAP_SAML_TOKEN_URL`, the client (`--uaa-url`, `--client-id`, or `--service-key`) | token, refresh token, expiry, binding |
+
+`saml2-pure` writes ABAP sessions (`--type abap`) only. The client secret you give (a service
+key's, or `--client-id` with `--client-secret`), a password, a subject or actor token are means:
+they are written because you asked for a destination that can renew. A public client (no
+`--client-secret`) is written as `SAP_UAA_CLIENT_SECRET=` — the secret `''`. A client that
+authenticates with its certificate is written as the two PEM files' absolute paths and
+`certurl`, and no client secret. `--basic-encoding` is recorded as `SAP_UAA_BASIC_ENCODING`
+(`XSUAA_UAA_BASIC_ENCODING`) — **a line only this CLI reads**: auth-stores and the server do
+not; a server reading the destination composes its own client authentication.
+
+**When the output is written, and the exit code.** A run works on a copy in a private temporary
+directory (mode `0700`, removed however the run ends, signals included) and copies the
+destination to its output only once the broker's `flush()` reports the secret stored. A failed
+login, a secret the store did not take, or an interrupted run leaves the output as it was.
+`--format json` writes, from the same stores, the fields `accessToken` or `sessionCookies`,
+`refreshToken`, `serviceUrl`, `uaaUrl`, `uaaClientId`, `uaaClientSecret` (`oidc` / `saml2-*` add
+`tokenType`); a certificate client adds `uaaClientCertPath`, `uaaClientKeyPath`, `uaaCertUrl`,
+and `--client-auth secret` adds `uaaBasicEncoding` — never PEM.
+
+| Exit code | When |
+|---|---|
+| `0` | the secret is stored and the output written; `help`, `--version` |
+| `1` | a usage error, a failed login, a secret not stored |
+| `130` / `143` | `SIGINT` (Ctrl+C) / `SIGTERM` ended the login |
+| `129` | `SIGHUP` |
+
+**stdout** carries only what was asked for: `help` and `--version`. **stderr** carries everything
+else: progress lines (the destination's name, the flow, the paths of your own files), the
+providers' prompts (the authorization URL you must open, the passcode page, the device code),
+the questions of a pasted login, log lines and failures. A run never prints a token, a refresh
+token, a client secret, a store's or a server's text, or an authorization URL of its own: the
+one place the URL appears, `state` included, is the provider's prompt that sends you there, on
+stderr — the login itself.
+
+**What reads the output.** A server composes `new EnvDestinationStore(dir)` and
+`new AbapSessionStore(dir)` (or the `XSUAA_*` pair) over the same directory and calls
+`broker.getProvider(destination)` (auth-broker 5): the provider is seeded with the stored secret
+when its binding matches the means exactly, and logs in afresh otherwise.
+
+## The Subcommands
+
+Every subcommand has its own help: `mcp-auth --help`, `mcp-auth oidc --help`, `mcp-auth
+saml2-pure --help`, `mcp-auth saml2-bearer --help`. Every login runs on the broker's
+`getProvider` / `getToken` with the choices the CLI states, in its own code: `renewal: () =>
+refreshThenLogin()` (a person at a terminal can log in), `onWriteFailure: 'fail'` (no output
+unless the secret landed), `authDebug: true` only with `--auth-debug`, and every collaborator the
+grant needs, each ending with the run's interrupt.
+
+### `mcp-auth` (`auth-code`): Authorization Code or Client Credentials
+
+```bash
+mcp-auth [auth-code] (--service-key <path> --output <path> | --env <path> [--output <path>] | --destination <name> [--destination-dir <dir>])
+         [--type abap|xsuaa] [--credential] [--format env|json] [--service-url <url>]
+         [--browser <name> | --browser-program <program>] [--redirect-port <port>]
+         [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]
+         [--verbose] [--auth-debug]
+```
+
+- **The grant** is the command's — `authorization_code`, or `client_credentials` with
+  `--credential` — written as `SAP_GRANT_TYPE`; it is never read from the service key.
+- **The login** is the broker's UAA row (`getToken` with no provider of the CLI's own): an
+  authorization code login carries `state` and an S256 PKCE challenge, and a callback without the
+  `state` is refused.
+- **`--redirect-port`** overrides the callback port; omitted, it is auth-providers' default
+  (`61001`). If your redirect URI is registered with a specific port at the identity provider,
+  pass it. The callback listens on loopback only: a remote user tunnels the port (`ssh -L`).
+- **`--service-url`** is required for ABAP (the key's URL, else the flag) and optional for
+  XSUAA. An XSUAA destination without a service URL is not reused by an `--env` rerun — it logs
+  in again — except with `--client-auth`, on whose path the client identity alone decides.
+
+```bash
+# ABAP: authorization_code (default, opens the platform's default browser)
 mcp-auth --service-key ./abap.json --output ./abap.env --type abap
 
-# ABAP: authorization_code (show URL in console, no browser)
+# ABAP: the URL shown on stderr, no browser
 mcp-auth --service-key ./abap.json --output ./abap.env --type abap --browser none
 
-# XSUAA: authorization_code (default)
-mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa
+# XSUAA: authorization_code
+mcp-auth auth-code --service-key ./mcp.json --output ./mcp.env --type xsuaa
 
-# XSUAA: client_credentials (special cases)
+# XSUAA: client_credentials
 mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --credential
 
-# Using existing .env for refresh token
-mcp-auth --env ./mcp.env --service-key ./mcp.json --output ./mcp.env --type xsuaa
+# XSUAA: a custom redirect port
+mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --redirect-port 8080
+
+# Reuse the session of an existing file, refreshed or logged in again only when needed
+mcp-auth --env ./mcp.env --type xsuaa
 ```
 
-#### Client authentication: `--client-auth`
+### Client Authentication: `--client-auth`
 
-How the service key's client authenticates to the authorization server is
-yours to state — `mcp-auth` and `generate-env` read the same flags under the
-same rules, and neither infers it from the key:
+How the service key's client authenticates to the authorization server is yours to state —
+`mcp-auth` and `generate-env` read the same flags under the same rules, and neither infers it
+from the key:
 
 | Flags | The client authenticates with | Written to the destination |
 |---|---|---|
-| none | its client secret in the token request, as 2.0.0 | `SAP_UAA_CLIENT_SECRET` |
-| `--client-auth secret --basic-encoding raw\|form` | its client secret in an `Authorization: Basic` header (the broker's `fromServiceKeySecret`). `--basic-encoding` is required: `raw` for XSUAA (measured: it does not form-decode), `form` for UAA and Keycloak | `SAP_UAA_CLIENT_SECRET` |
+| none | its client secret in the token request | `SAP_UAA_CLIENT_SECRET` |
+| `--client-auth secret --basic-encoding raw\|form` | its client secret in an `Authorization: Basic` header (the broker's `fromServiceKeySecret`). `--basic-encoding` is required: `raw` for XSUAA (measured: it does not form-decode), `form` for UAA and Keycloak | `SAP_UAA_CLIENT_SECRET`, `SAP_UAA_BASIC_ENCODING` (this CLI's own line) |
 | `--client-auth certificate --cert-path <path> --key-path <path>` | the key's x509 client: its certificate and private key, from **your** PEM files, presented at the key's `certurl` (`<certurl>/oauth/token`, the broker's `fromServiceKeyCertificate`) | `SAP_UAA_CLIENT_CERT_PATH`, `SAP_UAA_CLIENT_KEY_PATH` (absolute paths), `SAP_UAA_CERT_URL`; no client secret |
 
-With `--type xsuaa` the names are `XSUAA_UAA_CLIENT_CERT_PATH`, … . The flag
-becomes the broker's `clientAuthentication` strategy; the grant stays the
-command's (`--credential` → `client_credentials`, else `authorization_code`).
+With `--type xsuaa` the names are `XSUAA_UAA_*`. The flag becomes the broker's
+`clientAuthentication` strategy; the grant stays the command's. An `--env` run takes the file's
+client authentication — its certificate paths, or the encoding it records — and refuses these
+flags beside it.
 
 ```bash
-# An x509 XSUAA key (created with {"credential-type": "x509"}): client_credentials
-# with its certificate. client.crt / client.key are the key's `certificate` and
-# `key`, saved by you to files only you can read.
+# An x509 XSUAA key (created with {"credential-type": "x509"}): client_credentials with its
+# certificate. client.crt / client.key are the key's certificate and key, saved by you.
 mcp-auth --service-key ./x509-key.json --output ./mcp.env --type xsuaa --credential \
   --client-auth certificate --cert-path ./client.crt --key-path ./client.key
 
@@ -211,207 +232,142 @@ mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --credential \
   --client-auth secret --basic-encoding raw
 ```
 
-- **The PEM files are yours and stay where they are.** `--cert-path` and
-  `--key-path` must name existing files; they are resolved to absolute paths
-  before anything is written, so the destination works from wherever it is
-  copied. The command never creates, copies or prints a certificate or a
-  key — not in the destination, not in its work directory, not in `--format
-  json` (which adds `uaaUrl`, `uaaClientId`, `uaaClientCertPath`,
-  `uaaClientKeyPath`, `uaaCertUrl`), not on a failed run.
-- **A service key carrying a certificate or a private key is never copied**,
-  whatever the flags: a `credentials`-wrapped key with a `certificate` or
-  `key` field is read in place by `XsuaaServiceKeyStore` (one without keeps
-  the temporary unwrapped copy, as before), and an ABAP-format (`uaa`-nested)
-  key carrying one is read by `XsuaaServiceKeyStore` too — the one store that
-  answers a certificate client.
-- **Refusals name the flag.** An x509 key (a certificate, no secret) without
-  `--client-auth` is refused: `… carries a client certificate and no client
-  secret: state how the client authenticates with --client-auth certificate
-  --cert-path <path> --key-path <path>`. `--client-auth certificate` for a key
-  without a certificate client is refused, naming `url, clientid,
-  certificate, key, certurl`. A flag given without its choice
-  (`--basic-encoding` without `secret`, `--cert-path` without `certificate`),
-  a choice without its flags, or a path with no file is refused before
-  anything is read or written. A key with both a secret and a certificate
-  works with either choice.
-- **The output is a destination a fresh broker uses**: `EnvDestinationStore`
-  answers the certificate client from the three variables, and a broker given
-  `clientAuthentication: fromServiceKeyCertificate()` gets a token with it
-  (measured, below).
-- **A rerun reuses the session.** On the strategy path the session is bound to
-  the client's identity; an XSUAA destination written without
-  `--service-url` (its URL is the command's placeholder) reuses its stored
-  refresh token (`authorization_code`) on a rerun with `--env` instead of
-  logging in again. Without
-  `--client-auth`, 2.0.0's rule stands (such a destination logs in again).
-- **Measured:** `mcp-auth --credential --client-auth certificate` and
-  `generate-env --grant client_credentials --client-auth certificate` against
-  XSUAA on a BTP trial, 2026-10-05 — a token of the key's client, and a fresh
-  broker over the written destination got one too
-  ([the live check](../auth-broker/README.md#the-x509-live-check)). **Not
-  measured:** `authorization_code` over x509 (`mcp-auth --client-auth
-  certificate` without `--credential` is accepted and builds, but has not run
-  against XSUAA), and ABAP environment service keys with x509.
+- **The PEM files are yours and stay where they are.** `--cert-path` and `--key-path` must name
+  existing files; they are resolved to absolute paths before anything is written. The command
+  never creates, copies or prints a certificate or a key — not in the destination, its work
+  directory, `--format json`, or a failed run's output.
+- **A service key carrying a certificate or a private key is never copied**, whatever the flags:
+  it is read in place by `XsuaaServiceKeyStore`, the one store that answers a certificate client.
+- **Refusals name the flag.** An x509 key (a certificate, no secret) without `--client-auth` is
+  refused, naming the flags it needs; `--client-auth certificate` for a key without a certificate
+  client is refused, naming `url, clientid, certificate, key, certurl`. A flag given without its
+  choice, a choice without its flags, or a path with no file is refused before anything is read
+  or written.
+- **Measured:** `mcp-auth --credential --client-auth certificate` and `generate-env --grant
+  client_credentials --client-auth certificate` against XSUAA on a BTP trial (2026-10-05, CLI
+  2.1.0) — a token of the key's client, and a fresh broker over the written destination got one
+  too. **Not measured:** `authorization_code` over x509, and ABAP environment service keys with
+  x509.
 
-`mcp-sso` has no `--client-auth`: its flows keep the client secret.
-
-### CLI: mcp-sso
-
-Get tokens via SSO providers (OIDC/SAML) and generate `.env`/JSON output:
+### `mcp-auth oidc`: the OIDC Grants and the UAA Passcode
 
 ```bash
-mcp-sso <oidc|saml2|bearer> [options]
-mcp-sso --protocol <oidc|saml2> --flow <flow> --output <path> [--type abap|xsuaa] [--format env|json] [--env <path>] [--config <path>]
+mcp-auth oidc --flow <browser|device|password|token_exchange> --output <path> [options]
 ```
 
-**Supported flows:**
-- OIDC: `browser`, `device`, `password`, `token_exchange`
-- UAA passcode: `--flow password --passcode <code>`, or `--flow password` with
-  neither `--password` nor `--username` (the code is asked for, with the
-  `<uaa>/passcode` URL to fetch it from)
-- SAML2: `bearer`, `pure`
+- `--flow browser` — the OIDC authorization code grant with `state` and PKCE, through the
+  loopback callback (`--browser`, `--redirect-port`). `--code <value>` hands over a code obtained
+  elsewhere: no URL is built, so it carries neither `state` nor PKCE.
+- `--flow device` — the device code: the verification URL and the code are always shown on
+  stderr, whatever the log level.
+- `--flow password` — `--username` and `--password`.
+- `--flow password --passcode <code>` (or `--flow password` with neither `--password` nor
+  `--username`, which asks for the code and shows the `<uaa>/passcode` page to fetch it from) —
+  the UAA passcode grant, what `cf login --sso` does; it needs `--uaa-url` or `--service-key`.
+- `--flow token_exchange` — `--subject-token` (and `--subject-token-type`, `--audience`,
+  `--actor-token`, `--actor-token-type`, `--scope`).
 
-`mcp-sso` writes the destination's means, then asks the broker for the
-provider that destination states (`getProvider`), handing it every collaborator
-explicitly — the broker supplies none: the OIDC browser strategy, the passcode
-and SAML strategies, the device-code presenter (writing where to go and the code
-to this CLI's logger), the SAML cookie function and the process-wide replay
-store. The provider's login stores the secret through the broker.
+The endpoints come from `--issuer` (discovered) or the explicit `--authorization-endpoint`,
+`--device-authorization-endpoint`, `--token-endpoint`; the client from `--client-id` and
+`--client-secret` (none: a public client). An OIDC destination stated with explicit endpoints and
+a client is reused by auth-broker 5 after a restart as one stated with `--issuer` is.
 
-Only the flows that actually open a browser (OIDC `browser`; SAML2 `bearer`/`pure` with the
-default `--assertion-flow browser`) use `--browser` and `--redirect-port` — they are routed
-into `browserCallbackStrategy`/`oidcCallbackStrategy`/`samlCallbackStrategy`. This CLI has no
-default of its own for the callback port: `--redirect-port` overrides it when given; omitted,
-the port comes from `auth-providers` (currently `61001`). A login is given 5 minutes to
-complete. `device`, `password`, and `token_exchange` never open a browser from this process, so
-`--browser`/`--redirect-port` have no effect for them. This applies the same way whether
-`--protocol`/`--flow` come from CLI flags or from `--config` (below) — a field's origin doesn't
-change how it's handled, and CLI flags always take precedence over the same field in a file.
-
-**Examples:**
 ```bash
-# OIDC browser flow
-mcp-sso oidc --flow browser --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
+mcp-auth oidc --flow browser --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
+mcp-auth oidc --flow browser --token-endpoint https://issuer/token --client-id my-client --code <auth_code> --redirect-uri urn:ietf:wg:oauth:2.0:oob --output ./sso.env --type xsuaa
+mcp-auth oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
+mcp-auth oidc --flow password --token-endpoint https://issuer/oauth/token --client-id my-client --username user --password pass --output ./sso.env --type xsuaa
+mcp-auth oidc --flow password --uaa-url https://<subdomain>.authentication.<region>.hana.ondemand.com --client-id cf --passcode <code> --output ./sso.env --type xsuaa
+mcp-auth oidc --flow token_exchange --issuer https://issuer --client-id my-client --subject-token <token> --output ./sso.env --type xsuaa
 
-# OIDC browser flow (manual code / OOB — no callback server is opened for this combination)
-mcp-sso oidc --flow browser --token-endpoint https://issuer/token --client-id my-client --code <auth_code> --redirect-uri urn:ietf:wg:oauth:2.0:oob --output ./sso.env --type xsuaa
-
-# OIDC device flow
-mcp-sso oidc --flow device --issuer https://issuer --client-id my-client --output ./sso.env --type xsuaa
-
-# OIDC password flow
-mcp-sso oidc --flow password --token-endpoint https://issuer/oauth/token --client-id my-client --username user --password pass --output ./sso.env --type xsuaa
-
-# UAA passcode (what `cf login --sso` does): the code from <uaa>/passcode
-mcp-sso oidc --flow password --uaa-url https://<subdomain>.authentication.<region>.hana.ondemand.com --client-id cf --passcode <code> --output ./sso.env --type xsuaa
-
-# OIDC token exchange
-mcp-sso oidc --flow token_exchange --issuer https://issuer --client-id my-client --subject-token <token> --output ./sso.env --type xsuaa
-
-# SAML bearer flow against XSUAA with a service key: the Audience, Recipient and token alias
-# come from <uaa.url>/saml/metadata, the IdP's trust from its own metadata
-mcp-sso bearer --service-key ./service-key.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa
-
-# The same, every value stated (IdP-initiated assertion -> token)
-mcp-sso bearer --idp-sso-url https://idp/sso --sp-entity-id <uaa-entity-id> --acs-url <uaa-bearer-acs> --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --idp-initiated --uaa-url https://uaa.example --client-id <client> --token-endpoint https://uaa.example/oauth/token/alias/<alias> --assertion <base64> --output ./sso.env --type xsuaa
-
-# SAML pure flow (cookies; SP-initiated browser login, the request is sent by mcp-sso;
-# the cookies the system sets are pasted)
-mcp-sso saml2 --flow pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --service-url https://my-abap.example --output ./sso.env --type abap
-
-# Session cookies you already hold: stored as they are (saml / none), no login
-mcp-sso saml2 --flow pure --cookie "SAP_SESSIONID_XYZ_100=..." --service-url https://my-abap.example --output ./sso.env --type abap
+# A session file: its flow is the file's grant (--flow may be omitted, or must match)
+mcp-auth oidc --env ./sso.env --type xsuaa
 ```
 
-**SAML assertion validation:**
-Both SAML flows validate every assertion before using it — signature, issuer, audience,
-recipient, time window, request ID and replay (done by `@mcp-abap-adt/auth-providers` 5; see its
-README, *SAML assertion validation*). `mcp-sso` writes the trust below into the destination
-(`SAP_SAML_IDP_CERTIFICATES_B64`, `SAP_SAML_IDP_ENTITY_ID`), and the broker builds the validator
-from it: `bearer` gets the one that requires the `Assertion` signed — the token endpoint is sent
-the Assertion alone — and `pure` the one that requires the `Response` signed; both refuse an
-assertion seen before in the same process (`mcp-sso` hands the broker the process-wide replay
-store). Without the trust nothing is written, and `mcp-sso` invents none of it — it is stated,
-or read from SAML metadata:
+### `mcp-auth saml2-pure` and `mcp-auth saml2-bearer`: SAML
+
+```bash
+mcp-auth saml2-pure --idp-sso-url <url> --sp-entity-id <id> (--idp-metadata <url|path> | --idp-cert <path> --idp-entity-id <id>) --output <path> [options]
+mcp-auth saml2-bearer (--service-key <path> | --uaa-url <url> --client-id <id>) (--idp-metadata <url|path> | --idp-cert <path> --idp-entity-id <id>) --output <path> [options]
+```
+
+**Every assertion is validated before it is used** — signature, issuer, audience, recipient, time
+window, request ID and replay — by `@mcp-abap-adt/auth-providers` 6. The run writes the trust
+into the destination (`SAP_SAML_IDP_CERTIFICATES_B64`, `SAP_SAML_IDP_ENTITY_ID`), and the broker
+builds the validator from it: `saml2-bearer` gets the one that requires the `Assertion` signed
+(the token endpoint is sent the Assertion alone), `saml2-pure` the one that requires the
+`Response` signed; both refuse an assertion seen before in the same process. Without the trust
+nothing is written, and the CLI invents none of it:
 
 | Option | `--config` field | What it is |
 |---|---|---|
-| `--idp-cert <path>` (repeatable) | `idpCertificates` (string or list, inline PEM or base64 DER) | The identity provider's signing certificate(s). A file may be PEM (one or several certificates) or binary DER. Repeat the flag, or list several, to trust both keys during a rotation. |
+| `--idp-cert <path>` (repeatable) | `idpCertificates` (string or list, inline PEM or base64 DER) | The identity provider's signing certificate(s), PEM (one or several) or binary DER. Repeat it to trust both keys during a rotation; on the command line it replaces the file's `idpCertificates`. |
 | `--idp-entity-id <id>` | `idpEntityId` | The identity provider's `entityID` — the `Issuer` its assertions carry. |
-| `--idp-metadata <url\|path>` | `idpMetadata` | The identity provider's SAML metadata (for SAP Cloud Identity Services `https://<tenant>.accounts.ondemand.com/saml2/metadata`). Fills the two rows above and `--idp-sso-url` where not given: signing keys and keys without `use`, never encryption keys. An https URL or a file; plain http only for loopback. Federation metadata (an `EntitiesDescriptor` of several entities) works too: entity ID, keys and SSO URL all come from the same identity provider, which `--idp-entity-id` names when there are several — without it such a run stops and lists them. |
-| `--sp-entity-id <id>` | `spEntityId` | Already required; it is now also the `Audience` the assertion must name. For bearer against UAA/XSUAA, the `entityID` in their SAML metadata. |
-| `--acs-url <url>` | `acsUrl` | The `Recipient` the assertion must name. For bearer against UAA/XSUAA, the token endpoint's bearer ACS; the default `http://localhost:<port>/callback` fits only a login delivered to this CLI. |
-| `--idp-initiated` | `idpInitiated` (`true`/`false`) | The identity provider starts the login and no AuthnRequest is sent, so the assertion must carry no `InResponseTo`. |
-| `--authn-request-id <id>` | `authnRequestId` | **Refused since 2.0.0.** The broker builds the SAML provider from the destination alone, and a destination has no field for a request ID, so an `--assertion` answering a request sent elsewhere cannot be validated. Use `--idp-initiated`, or let `mcp-sso` send the request. |
+| `--idp-metadata <url\|path>` | `idpMetadata` | The identity provider's SAML metadata (SAP Cloud Identity Services: `https://<tenant>.accounts.ondemand.com/saml2/metadata`), read by an XML parser. Fills the two rows above and `--idp-sso-url` where not given: signing keys and keys without `use`, never encryption keys. An https URL or a file; plain http only for loopback; every redirect checked hop by hop (at most five). Federation metadata works too: `--idp-entity-id` names the identity provider when there are several. |
+| `--sp-entity-id <id>` | `spEntityId` | The `Audience` the assertion must name. For bearer against UAA/XSUAA, the `entityID` of their SAML metadata. |
+| `--acs-url <url>` | `acsUrl` | The `Recipient` the assertion must name — the ACS the identity provider posts to. |
+| `--idp-initiated` | `idpInitiated` | The identity provider starts the login: no AuthnRequest is sent, and the assertion must carry no `InResponseTo`. |
+| `--authn-request-id <id>` | `authnRequestId` | **Refused**: a destination has no field for a request ID. Use `--idp-initiated`, or let the run send the request. |
 
-A `--idp-cert` on the command line replaces the file's `idpCertificates` rather than adding to
-them, so a certificate retired on the command line is not still trusted from the file.
+**How the assertion is obtained** (`--assertion-flow`):
 
-Which request setting a run needs:
+- **`browser`** (the default): the run sends the AuthnRequest and receives the SAMLResponse on a
+  loopback ACS (`--browser`, `--redirect-port`).
+- **`manual`**: you lift the `SAMLResponse` from the POST body and paste it. **A pasted login
+  always declares its ACS** — from `--acs-url`, the SP metadata (`--saml-metadata`, or
+  `<uaa.url>/saml/metadata` with `--service-key`), or `acsUrl` in `--config`; with none of them
+  the run is a usage error naming `--acs-url`, before the destination is written or a login
+  starts. There is no `localhost` fallback.
+- **`--assertion <base64>`**: a SAMLResponse obtained elsewhere; it needs `--idp-initiated`.
+- **`--idp-initiated`** — required for `saml2-bearer` against UAA or XSUAA, whose bearer grant
+  refuses an assertion carrying `InResponseTo`: with `--assertion`, or with `--assertion-flow
+  manual` (its default here), which asks you to start the login at the identity provider and
+  paste the `SAMLResponse` it posts. `--idp-initiated` with `--assertion-flow browser` is
+  refused: there is no request URL to open.
 
-- **Browser or manual login, SP-initiated** (`--assertion-flow browser`, the default, or
-  `manual`): nothing — `mcp-sso` builds the AuthnRequest and knows its ID.
-- **`--assertion <base64>`** from an SP-initiated login sent elsewhere: not supported since
-  2.0.0 (see `--authn-request-id` above).
-- **IdP-initiated** — required for `bearer` against UAA or XSUAA, whose saml2-bearer grant refuses
-  an assertion carrying `InResponseTo`: `--idp-initiated`, with `--assertion`, or with
-  `--assertion-flow manual` (the default under `--idp-initiated`), which asks you to start the
-  login at the identity provider and paste the `SAMLResponse` it posts. `--idp-initiated` with
-  `--assertion-flow browser` is refused, since there is no request URL to open.
+`saml2-pure` turns the validated SAMLResponse into the system's session cookies: you paste the
+cookies the system set (or, with `--assertion-flow assertion`, the response itself is presented).
+`--cookie "<cookies>"` hands over cookies you already hold: no login, stored as `saml` / `none`.
 
-A missing certificate or entity ID is refused by `mcp-sso` before anything starts, with a
-`ValidationError` naming each missing field (`idpCertificates`, `idpEntityId`). An assertion that
-fails a check is reported by `auth-providers` itself (`AssertionValidationError`), with the check
-it refused; a destination that lacks what its grant needs, by the broker
-(`DestinationConfigError`, naming the fields).
-
-**XSUAA's side of a bearer run:**
-None of `--sp-entity-id`, `--acs-url` and the bearer token endpoint is in an XSUAA service key, but
-XSUAA publishes all three in its SAML metadata: its `entityID` is the `Audience`, and its
-`/oauth/token/alias/<alias>` endpoint is both the `Recipient` and where the assertion is exchanged.
-With `--service-key`, `bearer` reads `<uaa.url>/saml/metadata` and fills whichever of them was not
-given. Without network access to it, pass the file (from *Security > Trust Configuration >
-Download SAML Metadata* in the subaccount):
-
-```bash
-mcp-sso bearer --saml-metadata ./saml-sp.xml --idp-sso-url https://idp/sso --sp-entity-id <uaa-entity-id> --acs-url <uaa-bearer-acs> --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --idp-initiated --assertion <base64> --service-key ./service-key.json --output ./sso.env --type xsuaa
-```
-
-### Local Keycloak (OIDC + SAML Tests)
-
-For local testing of `mcp-sso`, a ready-to-run Keycloak setup is included
-(OIDC browser/password/device + SAML assertion capture).
-
-From `packages/auth-broker-cli`, after `npm run build` at the repository root:
+**XSUAA's side of a bearer run.** `--sp-entity-id`, `--acs-url` and the bearer token endpoint are
+not in an XSUAA service key, but XSUAA publishes all three in its SAML metadata: its `entityID`
+is the `Audience`, and its `/oauth/token/alias/<alias>` endpoint is both the `Recipient` and
+where the assertion is exchanged. With `--service-key`, `saml2-bearer` reads
+`<uaa.url>/saml/metadata` and fills whichever was not given; without network access to it, pass
+the file (*Security > Trust Configuration > Download SAML Metadata* in the subaccount) as
+`--saml-metadata`.
 
 ```bash
-cd tests/keycloak
-docker compose up -d
+# Bearer against XSUAA with a service key: XSUAA's side from its metadata, the IdP's from its own
+mcp-auth saml2-bearer --service-key ./service-key.json --idp-metadata https://<ias-tenant>.accounts.ondemand.com/saml2/metadata --idp-initiated --output ./sso.env --type xsuaa
+
+# The same, every value stated, the assertion obtained elsewhere
+mcp-auth saml2-bearer --idp-sso-url https://idp/sso --sp-entity-id <uaa-entity-id> --acs-url <uaa-bearer-acs> --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --idp-initiated --uaa-url https://uaa.example --client-id <client> --token-endpoint https://uaa.example/oauth/token/alias/<alias> --assertion <base64> --output ./sso.env --type xsuaa
+
+# Pure SAML: SP-initiated browser login, the cookies the system sets pasted
+mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --service-url https://my-abap.example --output ./saml.env --type abap
+
+# Pure SAML, pasted: the ACS declared
+mcp-auth saml2-pure --idp-sso-url https://idp/sso --sp-entity-id my-sp --idp-cert ./idp-signing.pem --idp-entity-id https://idp.example/metadata --acs-url https://my-abap.example/sap/saml2/sp/acs/100 --assertion-flow manual --service-url https://my-abap.example --output ./saml.env --type abap
+
+# Session cookies you already hold: stored as they are (saml / none), no login
+mcp-auth saml2-pure --cookie "SAP_SESSIONID_XYZ_100=..." --service-url https://my-abap.example --output ./saml.env --type abap
+
+# New cookies for the destination of an existing cookie session file
+mcp-auth saml2-pure --env ./saml.env --cookie "SAP_SESSIONID_XYZ_100=..." --type abap
 ```
 
-Then use:
-```bash
-node dist/mcp-sso.js \
-  oidc \
-  --flow browser \
-  --issuer http://localhost:8080/realms/mcp-sso \
-  --client-id mcp-sso-cli \
-  --scopes openid,profile,email \
-  --output /tmp/keycloak.env \
-  --type xsuaa
-```
+### A `--config` File
 
-See [`tests/keycloak/README.md`](tests/keycloak/README.md) for device flow and SAML examples.
-
-### XSUAA Demo (CAP)
-
-A minimal CAP app for testing XSUAA flows is included at `packages/auth-broker-cli/tests/sso-demo`.
-It enables `authorization_code` and `saml2-bearer` grant types and provides a
-simple `CatalogService`. See [`tests/sso-demo/readme.md`](tests/sso-demo/readme.md) for deploy steps.
-
-**Config file:**
-You can pass a JSON file with provider config instead of (or alongside) `--protocol`/`--flow`
-and the OIDC/SAML flags — `--config` alone is enough to run a flow, with no other flags required:
+`oidc`, `saml2-pure` and `saml2-bearer` take `--config <file>`: a JSON file with the run's
+provider config instead of (or beside) the flags. Its `protocol` and `flow` must name the
+subcommand it is given to — `oidc` with any OIDC flow for `mcp-auth oidc`, `saml2` with `pure`
+for `saml2-pure`, `saml2` with `bearer` for `saml2-bearer`; a file naming another subcommand, or
+naming none, is a usage error naming `--config`. A flag overrides the same field in the file; a
+`browser` field is mapped like `--browser` (an unknown value refused naming `browser`). A file
+that sets a function-valued field (`authorizationCodeProvider`, `assertionProvider`,
+`manualInput`) is refused naming the flag to use instead. A file that does not parse as JSON is
+refused in fixed words, never quoting its bytes.
 
 ```json
 {
@@ -422,16 +378,6 @@ and the OIDC/SAML flags — `--config` alone is enough to run a flow, with no ot
   "scopes": ["openid", "profile"]
 }
 ```
-
-Any CLI flag given alongside `--config` overrides the same field in the file; a field the file
-sets and no flag overrides is used as-is. A file written for a pre-2.0.0 config still works:
-`browser` and `redirectPort` are routed into the strategy exactly as the equivalent CLI flags
-are, and `authorizationCode`/`assertionFlow` are honored the same way `--code`/`--assertion-flow`
-are. A file that sets `authorizationCodeProvider`, `assertionProvider`, or `manualInput` — all
-functions, which JSON cannot express — is refused with an error naming the CLI flag to use
-instead, rather than having the field silently dropped.
-
-A SAML config file carries the trust inline:
 
 ```json
 {
@@ -447,155 +393,165 @@ A SAML config file carries the trust inline:
 }
 ```
 
-#### Migrating `mcp-sso` SAML runs from 2.2.0
+```bash
+mcp-auth oidc --config ./device.json --output ./sso.env --type xsuaa
+mcp-auth saml2-bearer --config ./bearer.json --uaa-url https://uaa.example --client-id <client> --output ./sso.env --type xsuaa
+```
 
-2.2.0 used `@mcp-abap-adt/auth-providers` 2.x, which trusted any SAML payload it was handed.
-From auth-providers 4 on every `mcp-sso` SAML run (`bearer`, `saml2 --flow pure`, and `mcp-auth saml2-pure` /
-`saml2-bearer`, which call it) fails before login until you add:
+## Browsers: `--browser` and `--browser-program`
 
-1. `--idp-metadata <url|path>`, or `--idp-cert <path>` and `--idp-entity-id <id>` (or
-   `idpCertificates` and `idpEntityId` in `--config`) — without them the provider refuses to
-   construct.
-2. The real `--sp-entity-id` (the `Audience`) and, unless the assertion is delivered to this CLI's
-   own callback, the `--acs-url` it names as `Recipient`. For `bearer` with `--service-key` both
-   are read from XSUAA's metadata.
-3. For `bearer` against UAA or XSUAA: `--idp-initiated`, with `--assertion` or
-   `--assertion-flow manual`.
+Every flow that opens a browser — `mcp-auth` (authorization code), `mcp-auth oidc --flow
+browser`, `saml2-pure` and `saml2-bearer` with `--assertion-flow browser`, a `--config` file's
+`browser` field, and `generate-env` — maps `--browser` to a launcher of
+`@mcp-abap-adt/auth-providers` by `process.platform`, in one table of the CLI's own:
 
-Node.js 22, 24 or 26 is required.
+| `--browser` | `linux` | `darwin` | `win32` |
+|---|---|---|---|
+| `auto` (default), `system` | `linuxDefaultBrowser()` (`xdg-open`) | `macDefaultBrowser()` | `windowsDefaultBrowser()` |
+| `chrome` | `linuxBrowser('google-chrome')` | `macBrowser('Google Chrome')` | `windowsBrowser('chrome')` |
+| `edge` | `linuxBrowser('microsoft-edge')` | `macBrowser('Microsoft Edge')` | `windowsBrowser('msedge')` |
+| `firefox` | `linuxBrowser('firefox')` | `macBrowser('Firefox')` | `windowsBrowser('firefox')` |
+| `none`, `headless` | no browser: the URL is shown on stderr | the same | the same |
 
-### Utility Script
+- **`--browser-program <program>`** runs the program you name, as given — on Linux an executable
+  on `PATH` or an absolute path (`google-chrome-stable`, `chromium`), on macOS an application
+  name, on Windows a program name or path. It excludes `--browser`.
+- **Any other platform** (`freebsd`, `aix`, …): a named browser or `--browser-program` is a
+  usage error naming the flag (`--browser <name> has no launcher on this platform; use --browser
+  none`), before anything is read or written. `none` / `headless` work everywhere. Nothing is
+  guessed.
+- **A launch that fails does not end the login**: the URL is shown on stderr and the callback
+  keeps waiting.
 
-Generate `.env` files from service keys — a development script run with `tsx`,
-not one of the package's commands (it is not compiled into `dist/`). From the
-repository root, after `npm run build`:
+```bash
+mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --browser firefox
+mcp-auth --service-key ./mcp.json --output ./mcp.env --type xsuaa --browser-program chromium
+```
+
+## A Login Ends Only When You End It
+
+There is no login time limit. A login waits until it finishes, an explicit error ends it, or you
+end it:
+
+- **Ctrl+C (`SIGINT`) or `SIGTERM`** aborts the run's one signal, which every wait of the run
+  takes — the broker's calls, the strategies, the pasted input, `flush()`. The login ends
+  `aborted`; the callback port is released before the run settles; the command prints `❌ the
+  authorization was aborted` on stderr, removes its work directory, writes no output and exits
+  `130` (`SIGINT`) or `143` (`SIGTERM`), with no stack trace.
+- **A second signal** exits at once with its code, the work directory removed — your own bound,
+  should a strategy not settle. **`SIGHUP`** exits `129` at once.
+- The subcommands run in `mcp-auth`'s own process, so a signal to it ends whatever login it runs.
+- A pasted value read from a closed stdin is a refusal, not a silent success.
+
+## Logging, `--verbose` and `--auth-debug`
+
+The CLI's logger writes every level to **stderr**, from `info` by default — so the providers'
+prompt lines that go through a logger (where the callback waits, the SSH-tunnel hint, a URL that
+cannot be shown) are seen. **`--verbose`** starts it from `debug`. **`--auth-debug`** sets the
+broker's `authDebug: true` — the providers' one debug line for a refused token request then names
+the request's secrets in their prepared form (never the server's text) — and implies
+`--verbose`. **Nothing from the environment**: no variable (`DEBUG_SSO`, `DEBUG_AUTH_PROVIDERS`,
+…) turns either on or changes the level. Without `--auth-debug` no line the CLI or a provider
+writes carries a secret or server text.
+
+**Failures, as printed.** One way for every run, never the `message` of a foreign value and never
+a stack: an auth failure prints `❌ <reason>` or `❌ <reason> — <hint>`, then its diagnostics on a
+line of their own; a broker `DestinationConfigError` prints its message (names only), then the
+carried failure's hint and diagnostics; the CLI's own usage errors print their fixed words (an
+I/O failure of its own names the flag and the path you gave, with a system code such as
+`ENOENT`); anything else prints auth-errors' generic words for an unfamiliar error. A session
+write that did not land prints `❌ The session was not stored: "<destination>": <reason>`.
+
+## The `generate-env` Script
+
+Generate a session file from a service key — a development script run with `tsx`, not one of the
+package's commands (it is not compiled into `dist/`). From the repository root, after `npm run
+build`:
 
 ```bash
 npm run generate-env -w @mcp-abap-adt/auth-broker-cli -- <destination> [service-key-path] [session-path] --grant <authorization_code|client_credentials> \
+  [--browser <name> | --browser-program <program>] [--verbose] [--auth-debug] \
   [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]
 ```
 
-`--client-auth`, `--basic-encoding`, `--cert-path` and `--key-path` are
-`mcp-auth`'s, under the same rules (see *Client authentication*): with
-`certificate`, the session file states the PEM files' absolute paths and the
-key's `certurl` (`SAP_UAA_*`, or `XSUAA_UAA_*` for an XSUAA key) and no client
-secret, and a fresh broker over it — from its final location — gets a token
-(measured with `--grant client_credentials`).
+- **Every run logs in** and reads no session, not even the file it writes — `--service-key`'s
+  semantics.
+- **`--grant` is required**: a service key holds a client, and a client may serve several grants,
+  so the script never reads the grant from the key.
+- `--browser` (default `auto`) and `--browser-program` are `mcp-auth`'s; `--client-auth`,
+  `--basic-encoding`, `--cert-path` and `--key-path` too, under the same rules.
+- It writes the means (`jwt`, the grant, the key's client and URL) through the destination store
+  and the secret through the broker, on a copy in a private temporary directory: the session
+  file is replaced only once the secret is stored. A refused or interrupted login exits non-zero
+  and leaves the file byte for byte as it was. `SIGINT` / `SIGTERM` end it as they end `mcp-auth`.
+- npm runs a workspace's script in that workspace's directory, so relative paths and the default
+  `<destination>.json` / `<destination>.env` resolve against `packages/auth-broker-cli`; pass
+  absolute paths to write elsewhere.
 
-`--grant` is required: a service key holds a client, and a client may serve
-several grants, so the script never reads the grant from the key (up to 1.0.0
-it chose `client_credentials` for a key whose URL named `authentication`). It
-writes the destination to the session path — the means (`jwt`, the grant, the
-key's client and URL) through the destination store, the secret through the
-broker — working on a copy in a private temporary directory, as the commands
-do: the session file is replaced only once the secret is stored. A refused or
-cancelled login, or a secret the store does not take, exits `1` and leaves the
-file byte for byte as it was.
-`authorization_code` opens the system browser.
+## Migrating to 3.0.0
 
-npm runs a workspace's script in that workspace's directory, so relative paths
-and the default `<destination>.json` / `<destination>.env` resolve against
-`packages/auth-broker-cli`; pass absolute paths to write elsewhere.
+What a CLI 2.x user must now do, row by row. The full list of changes is the
+[CHANGELOG](CHANGELOG.md)'s 3.0.0 entry.
+
+| 2.x | 3.0.0 — what to do |
+|---|---|
+| a login ended after five minutes | it waits until it finishes; end it with Ctrl+C (exit 130) or `SIGTERM` (exit 143); the port is released |
+| `--browser chrome\|edge\|firefox\|system\|auto` | the same names, mapped to the platform's launcher (table above); on an unlisted platform use `none`; `--browser-program` names another program. Linux no longer gets `DISPLAY=:0` or a list of candidate Chrome executables — pass `--browser-program google-chrome-stable` (or `chromium`) where `google-chrome` is not installed |
+| manual SAML without `--acs-url` used `http://localhost:<port>/callback` | state the ACS: `--acs-url`, `--saml-metadata`, `--service-key`'s metadata, or `acsUrl` in `--config` |
+| progress and prompts on stdout | on stderr; stdout carries only `help` and `--version` |
+| "🔗 Authorization URL: …" preview of `mcp-auth` | gone; the URL is shown by the login's own prompt (stderr) |
+| `DEBUG_SSO=true` etc. for the `mcp-sso` log | `--verbose`; `--auth-debug` for the providers' debug line, with prepared secrets |
+| error output: a message and a stack trace | `reason — hint`, then the diagnostics line; no stack trace |
+| `--env <path>` beside `--service-key`: the refresh token tried first, else a login | `--env <path>` alone: the session file (it holds the means too) — a valid token reused, an expired one refreshed, else a login, written back to the file. `--service-key` alone now always logs in and writes a new pair. New: `--destination <name>` for the destination folder. Two sources together are a usage error |
+| a means flag (`--credential`, `--service-url`, `--client-auth`, …) beside `--env` restated the means | refused: the file is used as it is, its client authentication included; run with `--service-key` to state new means |
+| `mcp-sso … --cookie` sessions written by 2.x | refused naming `issuedBy` by auth-broker 5: run `mcp-auth saml2-pure … --cookie` again |
+| sessions written by 2.x (any grant) | read as unbound once by auth-broker 5: the first run (or the server's first use) of each token destination logs in once |
+| the `mcp-sso` command | **gone in 3.0.0**: every form is an `mcp-auth` subcommand with the same flags (table below) |
+| `mcp-auth oidc` / `saml2-pure` / `saml2-bearer` started a second process (`mcp-sso`) | they run in `mcp-auth`'s process; a signal to it ends the login, frees the port and removes the work directory |
+| `mcp-auth saml2-bearer` required `--dev` | it does not, and `--dev` is removed: drop it from the command line (it is refused as an unknown option) |
+| `generate-env` opened the system browser | `--browser` (default `auto`) and `--browser-program`, as `mcp-auth` |
+
+**`mcp-sso` → `mcp-auth`:**
+
+| 2.x | 3.0.0 |
+|---|---|
+| `mcp-sso oidc --flow <browser\|device\|password\|token_exchange> …` | `mcp-auth oidc --flow <…> …` |
+| `mcp-sso --protocol oidc --flow <flow> …` | `mcp-auth oidc --flow <flow> …` |
+| `mcp-sso oidc … --passcode <p>` (the UAA passcode grant) | `mcp-auth oidc … --passcode <p>` |
+| `mcp-sso oidc --flow browser … --code <c>` | `mcp-auth oidc --flow browser … --code <c>` |
+| `mcp-sso saml2 --flow pure …` / `--protocol saml2 --flow pure …` | `mcp-auth saml2-pure …` |
+| `mcp-sso saml2 --flow pure … --cookie "<cookies>"` | `mcp-auth saml2-pure … --cookie "<cookies>"` |
+| `mcp-sso bearer …` / `saml2 --flow bearer …` / `--protocol saml2 --flow bearer …` | `mcp-auth saml2-bearer …` |
+| `mcp-sso --config <file> …` (protocol and flow in the file) | `mcp-auth <the subcommand the file names> --config <file> …` |
+| `mcp-sso --version`, `help` | `mcp-auth --version`, `mcp-auth <subcommand> --help` |
+| a callback reachable from another machine | loopback only (auth-providers 6): tunnel the port (`ssh -L`) |
+
+`--protocol` is not accepted: the subcommand is the protocol and flow. Migrations from earlier
+majors (1.0.0 → 2.0.0, 2.0.0 → 2.1.0, the SAML trust needed since auth-providers 4) are in the
+[CHANGELOG](CHANGELOG.md).
 
 ## Testing
 
-The unit tests are in `src/__tests__/` (Jest). From the repository root:
+The unit tests are in `src/__tests__/` (Jest). From the repository root — never `npx jest`
+directly:
 
 ```bash
 npm test -w @mcp-abap-adt/auth-broker-cli
 ```
 
-They need no system and no configuration: each command runs in-process against
-a local token endpoint, with a temporary directory, and every interactive step
-is a test double — no browser opens. They read back what each command wrote
-through the two stores, check that no session write carries means or the client
-secret, and build a provider from the output with `getProvider`. The stands above (`test:mcp-auth`,
-`test:mcp-sso`, `test:device-code`, `test:saml-pure`, `test:sso`) are
-interactive and run only by hand:
-`npm run <script> -w @mcp-abap-adt/auth-broker-cli`.
+They need no system and no configuration: each run goes in-process against a local token
+endpoint, in a temporary directory, with a test double for every interactive step — no browser
+opens. They read back what each run wrote through the two stores, check that no session write
+carries means or the client secret, build a provider from the output with `getProvider`, deliver
+`SIGINT` / `SIGTERM` during each kind of login and bind the callback port afterwards, and run the
+built bin to check what reaches stdout and stderr.
 
-The x509 live check — `mcp-auth` and `generate-env` with `--client-auth
-certificate` against XSUAA on a BTP subaccount, `npm run test:live:x509`, not
-in CI — is described in the library's README,
-[*The x509 Live Check*](../auth-broker/README.md#the-x509-live-check).
-
-The bin smoke check — pack both packages, install the tarballs into an empty
-directory, run each command with `--version` and `help` — is
-`npm run check:packed` at the root, part of `npm run check`.
-
-## Migrating from 2.0.0
-
-2.1.0 is a minor: every 2.0.0 invocation runs as before. What a 2.0.0 user
-may notice:
-
-- **A service key that is not valid JSON is refused in fixed words:** `The
-  service key <path> cannot be read as JSON` (`mcp-auth`, `generate-env`),
-  `The config file <path> cannot be read as JSON` (`mcp-sso --config`) — the
-  parser's message quoted the file's bytes, which hold a client secret or a
-  private key. Exit code `1`, as before.
-- **A key without a client secret says why:** `mcp-auth`'s `Authorization
-  config not found for <destination>. Service key must contain clientid,
-  clientsecret, and url fields` now ends `; a client certificate needs
-  --client-auth certificate.`; `generate-env`'s `Missing authorization config
-  for <destination>` adds the same hint when the key carries a certificate;
-  an x509 key without `--client-auth` gets the refusal under *Client
-  authentication*. Match on the exit code, not the message.
-- **A key carrying a certificate or a private key is not copied** into the
-  work directory any more (a `credentials`-wrapped one is read in place), and
-  an ABAP-format key carrying one is read by `XsuaaServiceKeyStore`.
-- **Dependencies:** `@mcp-abap-adt/auth-broker` `^4.1.0`,
-  `@mcp-abap-adt/auth-stores` `^3.3.0`, `@mcp-abap-adt/auth-providers`
-  `^5.3.0`, and `@mcp-abap-adt/interfaces-auth` `^3.2.0` (new, for types).
-- **New:** `--client-auth`, `--basic-encoding`, `--cert-path`, `--key-path`
-  (see *Client authentication*). A server reading a certificate destination
-  needs `@mcp-abap-adt/auth-broker` 4.1.0 with
-  `clientAuthentication: fromServiceKeyCertificate()` and auth-stores 3.3.0;
-  an older reader (auth-broker 4.0.0, or auth-stores 3.2.0) finds a client
-  without a secret, and the broker refuses the destination's
-  `authorization_code` / `client_credentials` naming `uaaClientSecret`.
-
-**Known limitations** (unchanged since 2.0.0):
-
-- The output (`--output`, the `generate-env` session file) is replaced by a
-  copy (`copyFileSync`), not an atomic rename: a process killed during that
-  copy can leave it partly written.
-- `generate-env` takes the key names from the key's top level: a
-  `credentials`-wrapped ABAP key (`{ "credentials": { "uaa": … } }`) is
-  written with `XSUAA_*` names.
-- `generate-env` takes an option it does not know (`--foo`) as a positional
-  argument.
-
-## Migrating from 1.0.0
-
-What a 1.0.0 user sees in 2.0.0:
-
-- **The output file carries more keys, under the same names.** Beside the token,
-  refresh token, URL and client, it now states `SAP_AUTH_TYPE`, `SAP_GRANT_TYPE`,
-  `SAP_EXPIRES_AT`, `SAP_ISSUED_FOR` / `SAP_ISSUED_BY`, and for `mcp-sso` the
-  grant's `SAP_OIDC_*` / `SAP_SAML_*` means (`XSUAA_*` alike). It is a 4.0
-  destination: `@mcp-abap-adt/auth-broker` 4's `getProvider` builds from it. The
-  client is still in the file, as means written by the destination store — no
-  session write carries it.
-- **A public client** is `SAP_UAA_CLIENT_SECRET=` (empty) instead of no line.
-- **`mcp-sso` OIDC without `--uaa-url`** no longer writes the token endpoint or
-  the issuer as `SAP_UAA_URL`; the endpoints are under `SAP_OIDC_*`.
-- **`--flow password --passcode`** is the UAA passcode grant (`SAP_GRANT_TYPE=passcode`):
-  it needs `--uaa-url` (or `--service-key`), and the one-time code is no longer
-  stored as a password. A run that gave only `--token-endpoint` now fails naming
-  `--uaa-url`.
-- **`mcp-sso bearer`** needs the client: `--uaa-url` and `--client-id` (or
-  `--service-key`).
-- **`--cookie`** stores the cookies you hand over as a `saml` / `none`
-  destination: no SAML login runs, and no trust flag is needed.
-- **`--authn-request-id`** is refused (see *SAML assertion validation*).
-- **`generate-env`** needs `--grant`.
-- **The output is written only once the secret is stored**, with mode `0600`; a
-  secret the store does not take exits `1`.
-- Exit codes are otherwise unchanged: `0` success, `1` failure.
-
-A 1.0.0 file passed with `--env` is read where it is: its means by the
-destination store, its secret by the session store; the run restates the
-means and the broker writes the new secret.
+The x509 live check — `mcp-auth` and `generate-env` with `--client-auth certificate` against
+XSUAA on a BTP subaccount, `npm run test:live:x509`, not in CI — is described in the library's
+README, [*The x509 Live Check*](../auth-broker/README.md#the-x509-live-check). The bin smoke
+check — pack both packages, install the tarballs into an empty directory, run `mcp-auth` with
+`--version` and every subcommand's `--help`, and check no `mcp-sso` is installed — is `npm run
+check:packed` at the root, part of `npm run check`.
 
 ## License
 

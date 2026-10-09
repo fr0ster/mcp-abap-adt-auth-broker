@@ -4,8 +4,18 @@
  * Two fields choose the provider — `authType` and, for `jwt` and `saml`,
  * `grantType` — and nothing else: no field's presence or absence is ever
  * read to pick a row. Both come from the key store's means.
+ *
+ * Every token row takes the consumer's `renewal` (called once per build, with
+ * the destination and its grant) and persists through auth-providers'
+ * `refreshStatePersistence` over the broker's write, governed by the
+ * consumer's `onWriteFailure`; a row built without either is refused naming
+ * it, beside every other missing field, in one error. A failure the broker
+ * reads — the SNC provider's, a validator's, a provider constructor's — is
+ * read through auth-errors (`readFailure`) and carried by the
+ * `DestinationConfigError`, never matched by class.
  */
 
+import { readFailure } from '@mcp-abap-adt/auth-errors';
 import {
   AuthorizationCodeProvider,
   type AuthorizationCodeProviderConfig,
@@ -23,6 +33,8 @@ import {
   type OidcPasswordProviderConfig,
   OidcTokenExchangeProvider,
   type OidcTokenExchangeProviderConfig,
+  type PersistedTokens,
+  refreshStatePersistence,
   Saml2BearerProvider,
   type Saml2BearerProviderConfig,
   Saml2PureProvider,
@@ -33,15 +45,16 @@ import {
   TokenAuthProvider,
   UaaPasscodeProvider,
   type UaaPasscodeProviderConfig,
-  ValidationError,
 } from '@mcp-abap-adt/auth-providers';
 import type {
   IAssertionReplayStore,
   IAssertionValidator,
   IAuthorizationStrategy,
   IAuthProvider,
+  IAuthProviderError,
   IClientAuthentication,
-  ITokenResult,
+  IRenewalStrategy,
+  ITokenPersistence,
 } from '@mcp-abap-adt/interfaces-auth';
 import type {
   DestinationGrant,
@@ -50,7 +63,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
-import { type Binding, sameIssuer, sameResource } from './binding';
+import { type Binding, sameRecord, sameResource } from './binding';
 import type { ClientIdentity } from './clientAuthentication';
 import { asContract } from './contractShape';
 import { DestinationConfigError } from './DestinationConfigError';
@@ -74,9 +87,45 @@ const GRANTS: Readonly<Record<'jwt' | 'saml', readonly DestinationGrant[]>> = {
 
 const AUTH_TYPES: readonly StatedAuthType[] = ['basic', 'jwt', 'saml', 'snc'];
 
+/**
+ * `authType` and `grantType` are a `jwt` / `saml` pair of the closed list —
+ * so neither holds `;` or `/`. Never throws.
+ */
+export function isStatedRow(
+  authType: unknown,
+  grant: unknown,
+): grant is DestinationGrant & string {
+  if (authType !== 'jwt' && authType !== 'saml') return false;
+  return (GRANTS[authType] as readonly unknown[]).includes(grant);
+}
+
 /** A stored string that counts as present: `''` is missing. */
 function present(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
+}
+
+/** Not stated: absent or `null`. */
+function unstated(value: unknown): boolean {
+  return value === undefined || value === null;
+}
+
+/**
+ * Whether a trust input the binding hashes has its expected shape —
+ * or is not stated. One of another shape is refused naming it, never hashed
+ * as if it were absent: two different malformed values would otherwise give
+ * one digest.
+ */
+function trustShaped(
+  value: unknown,
+  shape: 'strings' | 'string' | 'boolean',
+): boolean {
+  if (unstated(value)) return true;
+  if (shape === 'string') return typeof value === 'string';
+  if (shape === 'boolean') return typeof value === 'boolean';
+  return (
+    Array.isArray(value) &&
+    value.every((element) => typeof element === 'string')
+  );
 }
 
 /** The stated `authType`, or the error naming it. */
@@ -154,10 +203,10 @@ const CERTIFICATE_HINT =
  * asking the store about a certificate.
  */
 function noClientHint(
-  clientAuthentication: IClientAuthentication | undefined,
-  client: RowClient | null,
+  clientAuthenticated: boolean,
+  client: RowClient | null | undefined,
 ): boolean {
-  return !clientAuthentication && !present(client?.uaaClientId);
+  return !clientAuthenticated && !present(client?.uaaClientId);
 }
 
 /** A client row's refusal: 4.0.0's words, and the hint when `hinted`. */
@@ -226,7 +275,7 @@ export function sncProvider(
   destination: string,
   means: IConnectionConfig,
   logger: ILogger,
-): IAuthProvider {
+): IAuthProvider & Attachable {
   if (!present(means.sncPartnerName)) {
     throw new DestinationConfigError(
       destination,
@@ -244,16 +293,46 @@ export function sncProvider(
         logger,
       }),
     );
-  } catch (error) {
-    if (error instanceof ValidationError) {
-      throw new DestinationConfigError(
-        destination,
-        (error.missingFields ?? []).map((field) => SNC_FIELDS[field] ?? field),
-        'the SNC provider refused the destination’s SNC settings',
-      );
-    }
-    throw error;
+  } catch (thrown) {
+    // Decided by kind, read through auth-errors — never by class: a failure
+    // of another installed copy of auth-errors reads the same.
+    const error = readFailure(thrown, 'resolving-snc-library');
+    const fields =
+      error.kind === 'configuration'
+        ? mappedFields(error.facts.fields, SNC_FIELDS)
+        : SNC_STORE_FIELDS.filter((field) => present(means[field]));
+    throw new DestinationConfigError(
+      destination,
+      fields,
+      'the SNC provider refused the destination’s SNC settings',
+      error,
+    );
   }
+}
+
+/** The four SNC fields of the means, in the order a refusal names them. */
+const SNC_STORE_FIELDS = [
+  'sncPartnerName',
+  'sncQop',
+  'sncLib',
+  'sncMyName',
+] as const;
+
+/**
+ * A provider's configuration field names as the store's (or the broker's
+ * option names), through a row's map; a name the map does not hold is kept —
+ * it is one of interfaces-auth's `CONFIG_FIELDS`, a name, never a value.
+ */
+function mappedFields(
+  fields: readonly string[],
+  map: Readonly<Record<string, string>>,
+): string[] {
+  const names: string[] = [];
+  for (const field of fields) {
+    const name = map[field] ?? field;
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
 }
 
 /**
@@ -261,10 +340,11 @@ export function sncProvider(
  * required. Read from the secret alone — the means are not a seed.
  *
  * The broker did not obtain it and cannot obtain it again, so a binding that
- * does not match is refused, never discarded: `issuedFor`
- * must always equal the destination's resource — it is what stops the
- * credential going to another one; `issuedBy` is compared only when the means
- * state an issuer.
+ * does not match is refused, never discarded: `issuedFor` must equal the
+ * destination's resource — it is what stops the credential going to another
+ * one — and `issuedBy` must be exactly the row's record: a credential
+ * handed over with a 4.x binding, or none, is refused until it is written
+ * again with 5.0.0's `bindingOf`.
  */
 export function handedOverProvider(
   destination: string,
@@ -285,9 +365,7 @@ export function handedOverProvider(
   }
   const unbound: string[] = [];
   if (!sameResource(secret, binding)) unbound.push('issuedFor');
-  if (binding.issuerStated && !sameIssuer(secret, binding)) {
-    unbound.push('issuedBy');
-  }
+  if (!sameRecord(secret, binding)) unbound.push('issuedBy');
   if (unbound.length > 0) {
     throw new DestinationConfigError(
       destination,
@@ -300,6 +378,190 @@ export function handedOverProvider(
     : new SamlAuthProvider(credential);
 }
 
+/** Every grant that obtains a secret: `DestinationGrant` without `'none'`. */
+export type TokenGrant = Exclude<DestinationGrant, 'none'>;
+
+/**
+ * A provider that has parties: every token provider
+ * (`BaseTokenProvider.attach`) and the SNC one (`SncLogonProvider.attach`).
+ */
+export interface Attachable {
+  attach(signal: AbortSignal): () => void;
+}
+
+/**
+ * A token row's provider, and the refresh token the builder handed it from
+ * the session — the very value in the provider's config, so what the broker
+ * takes as the refresh token the build owns at its start is what the
+ * provider was given, for every grant, and cannot drift from it:
+ * `client_credentials` is handed none (its row takes no seed), `saml2_pure`
+ * none (it holds cookies), and a build that started with nothing none.
+ */
+export interface RowBuild {
+  /** A token provider: it has parties. */
+  readonly provider: IAuthProvider & Attachable;
+  readonly seededRefreshToken: string | undefined;
+}
+
+/** How the consumer's `renewal` option is shaped. */
+export type RenewalOption = (
+  destination: string,
+  grant: TokenGrant,
+) => IRenewalStrategy;
+
+/**
+ * What every token row takes from the broker beside its own data: the
+ * consumer's `renewal` and `onWriteFailure` (each refused by name when
+ * absent) and the broker's one write of the destination's session.
+ */
+export interface TokenRowOptions {
+  renewal: RenewalOption | undefined;
+  onWriteFailure: 'fail' | 'continue' | undefined;
+  /**
+   * One session write for the destination: resolves when it landed, rejects
+   * with the store's error when it did not.
+   */
+  write: (tokens: PersistedTokens) => Promise<void>;
+  logger: ILogger;
+  /**
+   * The consumer's `authDebug === true`, decided once by the broker: every
+   * token provider a row builds is given it.
+   */
+  authDebug: boolean;
+}
+
+/** `onWriteFailure` as given: `'fail'` or `'continue'`, nothing else. */
+export function isWriteFailurePolicy(
+  value: unknown,
+): value is 'fail' | 'continue' {
+  return value === 'fail' || value === 'continue';
+}
+
+/**
+ * The consumer options a token row lacks, by name: `renewal` when it is no
+ * function, `onWriteFailure` when it is neither `'fail'` nor `'continue'`.
+ * There is no default for either.
+ */
+export function optionsLacking(
+  options: Pick<TokenRowOptions, 'renewal' | 'onWriteFailure'>,
+): string[] {
+  const lacking: string[] = [];
+  if (typeof options.renewal !== 'function') lacking.push('renewal');
+  if (!isWriteFailurePolicy(options.onWriteFailure)) {
+    lacking.push('onWriteFailure');
+  }
+  return lacking;
+}
+
+/**
+ * The row's renewal strategy: `renewal(destination, grant)`, called once per
+ * build after every other check has passed. A throw is refused naming
+ * `renewal`, carrying what it threw as auth-errors reads it.
+ */
+function renewalFor(
+  destination: string,
+  grant: TokenGrant,
+  renewal: RenewalOption | undefined,
+): IRenewalStrategy {
+  try {
+    // Checked by optionsLacking before any row gets here.
+    return (renewal as RenewalOption)(destination, grant);
+  } catch (thrown) {
+    throw new DestinationConfigError(
+      destination,
+      ['renewal'],
+      'the renewal option failed',
+      readFailure(thrown, 'renewal-strategy'),
+    );
+  }
+}
+
+/**
+ * The row's persistence: auth-providers' `refreshStatePersistence` over the
+ * broker's write, with the consumer's `onWriteFailure` as given.
+ */
+function persistenceFor(options: TokenRowOptions): ITokenPersistence {
+  return refreshStatePersistence(
+    options.write,
+    asContract<Parameters<typeof refreshStatePersistence>[1]>({
+      // Checked by optionsLacking before any row gets here.
+      onWriteFailure: options.onWriteFailure as 'fail' | 'continue',
+      // No logger: the broker's writer logs every failed write once, naming
+      // the destination; the persistence's own line would repeat it.
+    }),
+  );
+}
+
+/**
+ * Builds the provider — the persistence strategy and the constructor —
+ * inside one guard: a refusal of the configuration the row gave it is a
+ * `DestinationConfigError` naming the store fields (or broker options) its
+ * facts name, through the row's field map, carrying the provider's error.
+ */
+function constructed<P>(
+  destination: string,
+  fieldMap: Readonly<Record<string, string>>,
+  build: () => P,
+): P {
+  try {
+    return build();
+  } catch (thrown) {
+    const error: IAuthProviderError = readFailure(thrown, 'unfamiliar-error');
+    throw new DestinationConfigError(
+      destination,
+      error.kind === 'configuration'
+        ? mappedFields(error.facts.fields, fieldMap)
+        : [],
+      'the provider refused the configuration the destination states',
+      error,
+    );
+  }
+}
+
+/** The fields every token row's provider shares, as the store and the broker name them. */
+const COMMON_FIELDS: Readonly<Record<string, string>> = {
+  clientId: 'uaaClientId',
+  clientSecret: 'uaaClientSecret',
+  uaaUrl: 'uaaUrl',
+  renewal: 'renewal',
+  persistence: 'onWriteFailure',
+  onWriteFailure: 'onWriteFailure',
+  authorization: 'authorization',
+  clientAuthentication: 'clientAuthentication',
+};
+
+const OIDC_FIELDS: Readonly<Record<string, string>> = {
+  ...COMMON_FIELDS,
+  issuerUrl: 'oidcIssuerUrl',
+  tokenEndpoint: 'oidcTokenEndpoint',
+  authorizationEndpoint: 'oidcAuthorizationEndpoint',
+  deviceAuthorizationEndpoint: 'oidcDeviceAuthorizationEndpoint',
+  scopes: 'oidcScopes',
+  scope: 'oidcScopes',
+  audience: 'oidcAudience',
+  subjectToken: 'oidcSubjectToken',
+  subjectTokenType: 'oidcSubjectTokenType',
+  actorToken: 'oidcActorToken',
+  actorTokenType: 'oidcActorTokenType',
+  authorization: 'oidcAuthorization',
+  presenter: 'deviceCodePresenter',
+};
+
+const SAML_FIELDS: Readonly<Record<string, string>> = {
+  ...COMMON_FIELDS,
+  idpSsoUrl: 'samlIdpSsoUrl',
+  spEntityId: 'samlSpEntityId',
+  acsUrl: 'samlAcsUrl',
+  relayState: 'samlRelayState',
+  idpEntityId: 'samlIdpEntityId',
+  idpInitiated: 'samlIdpInitiated',
+  idpCertificates: 'samlIdpCertificates',
+  assertionValidator: 'samlIdpCertificates',
+  clockSkewMs: 'samlClockSkewMs',
+  tokenUrl: 'samlTokenUrl',
+  cookieProvider: 'samlCookies',
+};
+
 /** The UAA grants: one client, one token endpoint (`<uaaUrl>/oauth/token`). */
 export type UaaGrant = 'authorization_code' | 'client_credentials' | 'passcode';
 
@@ -311,10 +573,36 @@ export function isUaaGrant(grant: DestinationGrant): grant is UaaGrant {
   );
 }
 
-/** What a UAA row is built from. */
-export interface UaaRow {
+/**
+ * What a token row's check reads of its client and options. `client`
+ * `undefined` means "not known yet": the consumer's `clientAuthentication`
+ * strategy will tell the client identity, so its fields are not judged.
+ */
+interface ClientCheck {
   destination: string;
+  client: RowClient | null | undefined;
+  /** Whether the client authenticates through the consumer's strategy. */
+  clientAuthenticated: boolean;
+  renewal: RenewalOption | undefined;
+  onWriteFailure: 'fail' | 'continue' | undefined;
+}
+
+/** What a UAA row's check reads. */
+export interface UaaCheck extends ClientCheck {
   grant: UaaGrant;
+  /** The consumer's `authorization` option. */
+  authorization:
+    | ((
+        destination: string,
+        grant: 'authorization_code' | 'passcode',
+      ) => IAuthorizationStrategy<string>)
+    | undefined;
+}
+
+/** What a UAA row is built from. */
+export interface UaaRow
+  extends Omit<UaaCheck, 'client' | 'clientAuthenticated'>,
+    TokenRowOptions {
   /**
    * The client: the key store's `getAuthorizationConfig` — or, with a
    * strategy and no secret client, the certificate client's identity.
@@ -327,76 +615,101 @@ export interface UaaRow {
    * client with it and gets no `clientSecret`; absent, 4.0.0's secret.
    */
   clientAuthentication?: IClientAuthentication;
-  /** The consumer's `authorization` option. */
-  authorization:
-    | ((
-        destination: string,
-        grant: 'authorization_code' | 'passcode',
-      ) => IAuthorizationStrategy<string>)
-    | undefined;
-  logger: ILogger;
-  onTokens: (result: ITokenResult) => Promise<void>;
+}
+
+/**
+ * Every field and option a UAA row lacks, named in one error — or nothing.
+ * `serviceUrl` is not among them: the providers read the client and `uaaUrl`
+ * only. Without a strategy, `uaaClientSecret: ''` is a public client:
+ * `passcode` takes it as no secret; the other two rows' providers require a
+ * secret, so for them `''` is missing.
+ */
+export function uaaRefusal(
+  check: UaaCheck,
+): DestinationConfigError | undefined {
+  const { destination, grant, client, clientAuthenticated } = check;
+  const lacking: string[] = [];
+  if (client !== undefined) {
+    if (!present(client?.uaaUrl)) lacking.push('uaaUrl');
+    if (!present(client?.uaaClientId)) lacking.push('uaaClientId');
+  }
+  if (
+    !clientAuthenticated &&
+    grant !== 'passcode' &&
+    !present(secretOf(client ?? null))
+  ) {
+    lacking.push('uaaClientSecret');
+  }
+  if (grant !== 'client_credentials' && !check.authorization) {
+    lacking.push('authorization');
+  }
+  lacking.push(...optionsLacking(check));
+  if (lacking.length === 0) return undefined;
+  return clientRowError(
+    destination,
+    lacking,
+    `a jwt destination with grantType ${grant} lacks what its grant needs`,
+    noClientHint(clientAuthenticated, client),
+  );
 }
 
 /**
  * `jwt` / `authorization_code` → `AuthorizationCodeProvider`,
  * `client_credentials` → `ClientCredentialsProvider`, `passcode` →
  * `UaaPasscodeProvider`: the client from the key store, the seed from the
- * session (not for `client_credentials`, whose row takes the client alone).
+ * session (not for `client_credentials`, whose row takes the client alone),
+ * the consumer's renewal for this grant, and the broker's persistence.
  *
- * Every field and option the row lacks is named in one error, before the
- * consumer's `authorization` is called. `serviceUrl` is not among them: the
- * providers read the client and `uaaUrl` only. Without a strategy,
- * `uaaClientSecret: ''` is a public client: `passcode` takes it as no secret;
- * the other two rows' providers require a secret, so for them `''` is
- * missing. On the strategy path the client may be a certificate client's
- * identity, which holds no secret field at all (`RowClient`).
- *
- * With the strategy's answer (`clientAuthentication`) no secret is required
- * and none is passed: the provider authenticates its client with the answer.
+ * Every field and option the row lacks is named in one error
+ * (`uaaRefusal`), before the consumer's `authorization` or `renewal` is
+ * called. On the strategy path the client may be a certificate client's
+ * identity, which holds no secret field at all (`RowClient`). With the
+ * strategy's answer (`clientAuthentication`) no secret is required and none
+ * is passed: the provider authenticates its client with the answer.
  */
-export function uaaProvider(row: UaaRow): IAuthProvider {
+export function uaaProvider(row: UaaRow): RowBuild {
   const { destination, grant, client, secret, clientAuthentication } = row;
-  const lacking: string[] = [];
-  if (!present(client?.uaaUrl)) lacking.push('uaaUrl');
-  if (!present(client?.uaaClientId)) lacking.push('uaaClientId');
-  if (
-    !clientAuthentication &&
-    grant !== 'passcode' &&
-    !present(secretOf(client))
-  ) {
-    lacking.push('uaaClientSecret');
-  }
-  if (grant !== 'client_credentials' && !row.authorization) {
-    lacking.push('authorization');
-  }
-  if (lacking.length > 0) {
-    throw clientRowError(
-      destination,
-      lacking,
-      `a jwt destination with grantType ${grant} lacks what its grant needs`,
-      noClientHint(clientAuthentication, client),
-    );
-  }
+  const refusal = uaaRefusal({
+    ...row,
+    clientAuthenticated: !!clientAuthentication,
+  });
+  if (refusal) throw refusal;
   const uaaUrl = client?.uaaUrl as string;
   const clientId = client?.uaaClientId as string;
   const clientSecret =
     !clientAuthentication && present(secretOf(client))
       ? secretOf(client)
       : undefined;
-  const hooks = {
-    onTokens: row.onTokens,
+  const renewal = renewalFor(destination, grant, row.renewal);
+  const hooks = (): {
+    renewal: IRenewalStrategy;
+    persistence: ITokenPersistence;
+    clientAuthentication?: IClientAuthentication;
+    authDebug: boolean;
+  } => ({
+    renewal,
+    persistence: persistenceFor(row),
     ...authenticatedBy(clientAuthentication),
-  };
+    authDebug: row.authDebug,
+  });
 
   if (grant === 'client_credentials') {
-    return new ClientCredentialsProvider({
-      uaaUrl,
-      clientId,
-      ...(clientSecret === undefined ? {} : { clientSecret }),
-      logger: row.logger,
-      ...hooks,
-    });
+    // The client alone: no seed.
+    return {
+      provider: constructed(
+        destination,
+        COMMON_FIELDS,
+        () =>
+          new ClientCredentialsProvider({
+            uaaUrl,
+            clientId,
+            ...(clientSecret === undefined ? {} : { clientSecret }),
+            logger: row.logger,
+            ...hooks(),
+          }),
+      ),
+      seededRefreshToken: undefined,
+    };
   }
 
   const seed = tokenSeed(secret);
@@ -405,29 +718,45 @@ export function uaaProvider(row: UaaRow): IAuthProvider {
     row.authorization as NonNullable<UaaRow['authorization']>
   )(destination, grant);
   if (grant === 'authorization_code') {
-    return new AuthorizationCodeProvider(
-      asContract<AuthorizationCodeProviderConfig>({
-        uaaUrl,
-        clientId,
-        ...(clientSecret === undefined ? {} : { clientSecret }),
-        authorization,
-        ...seed,
-        logger: row.logger,
-        ...hooks,
-      }),
-    );
+    return {
+      provider: constructed(
+        destination,
+        COMMON_FIELDS,
+        () =>
+          new AuthorizationCodeProvider(
+            asContract<AuthorizationCodeProviderConfig>({
+              uaaUrl,
+              clientId,
+              ...(clientSecret === undefined ? {} : { clientSecret }),
+              authorization,
+              ...seed,
+              logger: row.logger,
+              ...hooks(),
+            }),
+          ),
+      ),
+      seededRefreshToken: seed.refreshToken,
+    };
   }
-  return new UaaPasscodeProvider(
-    asContract<UaaPasscodeProviderConfig>({
-      uaaUrl,
-      clientId,
-      clientSecret,
-      authorization,
-      ...seed,
-      logger: row.logger,
-      ...hooks,
-    }),
-  );
+  return {
+    provider: constructed(
+      destination,
+      COMMON_FIELDS,
+      () =>
+        new UaaPasscodeProvider(
+          asContract<UaaPasscodeProviderConfig>({
+            uaaUrl,
+            clientId,
+            clientSecret,
+            authorization,
+            ...seed,
+            logger: row.logger,
+            ...hooks(),
+          }),
+        ),
+    ),
+    seededRefreshToken: seed.refreshToken,
+  };
 }
 
 /** The seed of a token provider: the stored token, its refresh token and expiry. */
@@ -482,50 +811,51 @@ const OIDC_ENDPOINTS: Readonly<
   token_exchange: ['oidcTokenEndpoint'],
 };
 
-/** What an OIDC row is built from. */
-export interface OidcRow {
-  destination: string;
+/** What an OIDC row's check reads. */
+export interface OidcCheck extends ClientCheck {
   grant: OidcGrant;
   means: IConnectionConfig;
-  /** The client, from the key store's `getAuthorizationConfig`. */
-  client: RowClient | null;
-  /** The session secret — the seed; `null` when there is none, or it is not bound here. */
-  secret: IConfig | null;
-  /** The consumer strategy's answer: given, it replaces the secret. */
-  clientAuthentication?: IClientAuthentication;
   oidcAuthorization:
     | ((destination: string) => IAuthorizationStrategy<OidcCallbackResult>)
     | undefined;
   deviceCodePresenter:
     | ((destination: string) => IDeviceCodePresenter)
     | undefined;
-  logger: ILogger;
-  onTokens: (result: ITokenResult) => Promise<void>;
+}
+
+/** What an OIDC row is built from. */
+export interface OidcRow
+  extends Omit<OidcCheck, 'client' | 'clientAuthenticated'>,
+    TokenRowOptions {
+  /** The client, from the key store's `getAuthorizationConfig`. */
+  client: RowClient | null;
+  /** The session secret — the seed; `null` when there is none, or it is not bound here. */
+  secret: IConfig | null;
+  /** The consumer strategy's answer: given, it replaces the secret. */
+  clientAuthentication?: IClientAuthentication;
 }
 
 /**
- * `jwt` / `oidc_authorization_code` → `OidcBrowserProvider`, `device_code` →
- * `OidcDeviceFlowProvider`, `password` → `OidcPasswordProvider`,
- * `token_exchange` → `OidcTokenExchangeProvider`: the client id (and secret,
- * `''` being a public client) from the key store's client, the grant's data
- * from its `oidc*` fields, the seed from the session.
- *
+ * Every field and option an OIDC row lacks, named in one error — or nothing.
  * The endpoints: `oidcIssuerUrl`, from which the provider discovers them, or
  * every explicit endpoint the row uses — without either the error names the
- * issuer and the endpoints missing. Every field and option the row lacks is
- * named in one error, before any collaborator is called. `token_exchange`
- * takes one scope string: the stored scopes joined by a space.
+ * issuer and the endpoints missing.
  */
-export function oidcProvider(row: OidcRow): IAuthProvider {
-  const { destination, grant, means, client } = row;
+export function oidcRefusal(
+  check: OidcCheck,
+): DestinationConfigError | undefined {
+  const { destination, grant, means, client } = check;
   const lacking: string[] = [];
-  if (!present(client?.uaaClientId)) lacking.push('uaaClientId');
+  if (client !== undefined && !present(client?.uaaClientId)) {
+    lacking.push('uaaClientId');
+  }
   if (!present(means.oidcIssuerUrl)) {
     const endpoints = OIDC_ENDPOINTS[grant].filter(
       (name) => !present(means[name]),
     );
     if (endpoints.length > 0) lacking.push('oidcIssuerUrl', ...endpoints);
   }
+  if (!trustShaped(means.oidcScopes, 'strings')) lacking.push('oidcScopes');
   if (grant === 'password') {
     lacking.push(...missing(means, ['username', 'password']));
   }
@@ -533,26 +863,56 @@ export function oidcProvider(row: OidcRow): IAuthProvider {
     lacking.push(
       ...missing(means, ['oidcSubjectToken', 'oidcSubjectTokenType']),
     );
+    if (!trustShaped(means.oidcActorTokenType, 'string')) {
+      lacking.push('oidcActorTokenType');
+    }
   }
-  if (grant === 'oidc_authorization_code' && !row.oidcAuthorization) {
+  if (grant === 'oidc_authorization_code' && !check.oidcAuthorization) {
     lacking.push('oidcAuthorization');
   }
-  if (grant === 'device_code' && !row.deviceCodePresenter) {
+  if (grant === 'device_code' && !check.deviceCodePresenter) {
     lacking.push('deviceCodePresenter');
   }
-  if (lacking.length > 0) {
-    throw clientRowError(
-      destination,
-      lacking,
-      `a jwt destination with grantType ${grant} lacks what its grant needs`,
-      noClientHint(row.clientAuthentication, client),
-    );
-  }
+  lacking.push(...optionsLacking(check));
+  if (lacking.length === 0) return undefined;
+  return clientRowError(
+    destination,
+    lacking,
+    `a jwt destination with grantType ${grant} lacks what its grant needs`,
+    noClientHint(check.clientAuthenticated, client),
+  );
+}
+
+/**
+ * `jwt` / `oidc_authorization_code` → `OidcBrowserProvider`, `device_code` →
+ * `OidcDeviceFlowProvider`, `password` → `OidcPasswordProvider`,
+ * `token_exchange` → `OidcTokenExchangeProvider`: the client id (and secret,
+ * `''` being a public client) from the key store's client, the grant's data
+ * from its `oidc*` fields, the seed from the session, the consumer's renewal
+ * for this grant, and the broker's persistence.
+ *
+ * Every field and option the row lacks is named in one error
+ * (`oidcRefusal`), before any collaborator is called. `token_exchange` takes
+ * one scope string: the stored scopes joined by a space.
+ */
+export function oidcProvider(row: OidcRow): RowBuild {
+  const { destination, grant, means, client } = row;
+  const refusal = oidcRefusal({
+    ...row,
+    clientAuthenticated: !!row.clientAuthentication,
+  });
+  if (refusal) throw refusal;
   const scopes =
     Array.isArray(means.oidcScopes) && means.oidcScopes.length > 0
       ? means.oidcScopes
       : undefined;
-  const common = {
+  const renewal = renewalFor(destination, grant, row.renewal);
+  const seed = tokenSeed(row.secret);
+  const built = (provider: IAuthProvider & Attachable): RowBuild => ({
+    provider,
+    seededRefreshToken: seed.refreshToken,
+  });
+  const common = () => ({
     issuerUrl: stated(means.oidcIssuerUrl),
     clientId: client?.uaaClientId as string,
     clientSecret: row.clientAuthentication
@@ -560,59 +920,91 @@ export function oidcProvider(row: OidcRow): IAuthProvider {
       : stated(secretOf(client)),
     ...authenticatedBy(row.clientAuthentication),
     tokenEndpoint: stated(means.oidcTokenEndpoint),
-    ...tokenSeed(row.secret),
+    ...seed,
     logger: row.logger,
-    onTokens: row.onTokens,
-  };
+    authDebug: row.authDebug,
+    renewal,
+    persistence: persistenceFor(row),
+  });
 
   switch (grant) {
-    case 'oidc_authorization_code':
-      return new OidcBrowserProvider(
-        asContract<OidcBrowserProviderConfig>({
-          ...common,
-          scopes,
-          authorizationEndpoint: stated(means.oidcAuthorizationEndpoint),
-          // Checked above.
-          authorization: (
-            row.oidcAuthorization as NonNullable<OidcRow['oidcAuthorization']>
-          )(destination),
-        }),
+    case 'oidc_authorization_code': {
+      // Checked above.
+      const authorization = (
+        row.oidcAuthorization as NonNullable<OidcRow['oidcAuthorization']>
+      )(destination);
+      return built(
+        constructed(
+          destination,
+          OIDC_FIELDS,
+          () =>
+            new OidcBrowserProvider(
+              asContract<OidcBrowserProviderConfig>({
+                ...common(),
+                scopes,
+                authorizationEndpoint: stated(means.oidcAuthorizationEndpoint),
+                authorization,
+              }),
+            ),
+        ),
       );
-    case 'device_code':
-      return new OidcDeviceFlowProvider(
-        asContract<OidcDeviceFlowProviderConfig>({
-          ...common,
-          scopes,
-          deviceAuthorizationEndpoint: stated(
-            means.oidcDeviceAuthorizationEndpoint,
-          ),
-          presenter: (
-            row.deviceCodePresenter as NonNullable<
-              OidcRow['deviceCodePresenter']
-            >
-          )(destination),
-        }),
+    }
+    case 'device_code': {
+      const presenter = (
+        row.deviceCodePresenter as NonNullable<OidcRow['deviceCodePresenter']>
+      )(destination);
+      return built(
+        constructed(
+          destination,
+          OIDC_FIELDS,
+          () =>
+            new OidcDeviceFlowProvider(
+              asContract<OidcDeviceFlowProviderConfig>({
+                ...common(),
+                scopes,
+                deviceAuthorizationEndpoint: stated(
+                  means.oidcDeviceAuthorizationEndpoint,
+                ),
+                presenter,
+              }),
+            ),
+        ),
       );
+    }
     case 'password':
-      return new OidcPasswordProvider(
-        asContract<OidcPasswordProviderConfig>({
-          ...common,
-          scopes,
-          username: means.username as string,
-          password: means.password as string,
-        }),
+      return built(
+        constructed(
+          destination,
+          OIDC_FIELDS,
+          () =>
+            new OidcPasswordProvider(
+              asContract<OidcPasswordProviderConfig>({
+                ...common(),
+                scopes,
+                username: means.username as string,
+                password: means.password as string,
+              }),
+            ),
+        ),
       );
     case 'token_exchange':
-      return new OidcTokenExchangeProvider(
-        asContract<OidcTokenExchangeProviderConfig>({
-          ...common,
-          scope: scopes?.join(' '),
-          subjectToken: means.oidcSubjectToken as string,
-          subjectTokenType: means.oidcSubjectTokenType as string,
-          audience: stated(means.oidcAudience),
-          actorToken: stated(means.oidcActorToken),
-          actorTokenType: stated(means.oidcActorTokenType),
-        }),
+      return built(
+        constructed(
+          destination,
+          OIDC_FIELDS,
+          () =>
+            new OidcTokenExchangeProvider(
+              asContract<OidcTokenExchangeProviderConfig>({
+                ...common(),
+                scope: scopes?.join(' '),
+                subjectToken: means.oidcSubjectToken as string,
+                subjectTokenType: means.oidcSubjectTokenType as string,
+                audience: stated(means.oidcAudience),
+                actorToken: stated(means.oidcActorToken),
+                actorTokenType: stated(means.oidcActorTokenType),
+              }),
+            ),
+        ),
       );
   }
 }
@@ -624,17 +1016,10 @@ export function isSamlGrant(grant: DestinationGrant): grant is SamlGrant {
   return grant === 'saml2_pure' || grant === 'saml2_bearer';
 }
 
-/** What a SAML row is built from. */
-export interface SamlRow {
-  destination: string;
+/** What a SAML row's check reads. */
+export interface SamlCheck extends ClientCheck {
   grant: SamlGrant;
   means: IConnectionConfig;
-  /** `saml2_bearer`'s client, from the key store; `null` for `saml2_pure`. */
-  client: RowClient | null;
-  /** The session secret — the seed; `null` when there is none, or it is not bound here. */
-  secret: IConfig | null;
-  /** `saml2_bearer`: the consumer strategy's answer; given, it replaces the secret. */
-  clientAuthentication?: IClientAuthentication;
   authorization:
     | ((
         destination: string,
@@ -647,8 +1032,57 @@ export interface SamlRow {
   assertionReplayStore:
     | ((destination: string) => IAssertionReplayStore)
     | undefined;
-  logger: ILogger;
-  onTokens: (result: ITokenResult) => Promise<void>;
+}
+
+/** What a SAML row is built from. */
+export interface SamlRow
+  extends Omit<SamlCheck, 'client' | 'clientAuthenticated'>,
+    TokenRowOptions {
+  /** `saml2_bearer`'s client, from the key store; `null` for `saml2_pure`. */
+  client: RowClient | null;
+  /** The session secret — the seed; `null` when there is none, or it is not bound here. */
+  secret: IConfig | null;
+  /** `saml2_bearer`: the consumer strategy's answer; given, it replaces the secret. */
+  clientAuthentication?: IClientAuthentication;
+}
+
+/** Every field and option a SAML row lacks, named in one error — or nothing. */
+export function samlRefusal(
+  check: SamlCheck,
+): DestinationConfigError | undefined {
+  const { destination, grant, means, client } = check;
+  const lacking: string[] = missing(means, [
+    'samlIdpSsoUrl',
+    'samlSpEntityId',
+    'samlIdpEntityId',
+  ]);
+  const certificates = means.samlIdpCertificates;
+  if (
+    !Array.isArray(certificates) ||
+    certificates.length === 0 ||
+    !certificates.every(present)
+  ) {
+    lacking.push('samlIdpCertificates');
+  }
+  if (!trustShaped(means.samlIdpInitiated, 'boolean')) {
+    lacking.push('samlIdpInitiated');
+  }
+  if (grant === 'saml2_bearer' && client !== undefined) {
+    lacking.push(...missing(client, ['uaaUrl', 'uaaClientId']));
+  }
+  if (!check.authorization) lacking.push('authorization');
+  if (grant === 'saml2_pure' && !check.samlCookies) {
+    lacking.push('samlCookies');
+  }
+  if (!check.assertionReplayStore) lacking.push('assertionReplayStore');
+  lacking.push(...optionsLacking(check));
+  if (lacking.length === 0) return undefined;
+  return clientRowError(
+    destination,
+    lacking,
+    `a saml destination with grantType ${grant} lacks what its grant needs`,
+    grant === 'saml2_bearer' && noClientHint(check.clientAuthenticated, client),
+  );
 }
 
 /**
@@ -665,43 +1099,23 @@ export interface SamlRow {
  * `saml2_bearer` with the stored token, its refresh token and expiry, and
  * takes the client (`uaaUrl`, `uaaClientId`; without a strategy,
  * `uaaClientSecret` `''` a public client; on the strategy path the identity
- * alone, no secret) and `samlTokenUrl` when stated.
+ * alone, no secret) and `samlTokenUrl` when stated. Both take the consumer's
+ * renewal for their grant and the broker's persistence.
  *
- * Every field and option the row lacks is named in one error, before any
- * collaborator is called; so is a `samlClockSkewMs` that is not a whole number
- * of milliseconds, and a certificate the validator cannot read — by name, never
- * the value.
+ * Every field and option the row lacks is named in one error
+ * (`samlRefusal`), before any collaborator is called; so is a
+ * `samlClockSkewMs` that is not a whole number of milliseconds, and a
+ * certificate the validator cannot read — by name, never the value, the
+ * validator's error carried.
  */
-export function samlProvider(row: SamlRow): IAuthProvider {
+export function samlProvider(row: SamlRow): RowBuild {
   const { destination, grant, means, client } = row;
-  const lacking: string[] = missing(means, [
-    'samlIdpSsoUrl',
-    'samlSpEntityId',
-    'samlIdpEntityId',
-  ]);
+  const refusal = samlRefusal({
+    ...row,
+    clientAuthenticated: !!row.clientAuthentication,
+  });
+  if (refusal) throw refusal;
   const certificates = means.samlIdpCertificates;
-  if (
-    !Array.isArray(certificates) ||
-    certificates.length === 0 ||
-    !certificates.every(present)
-  ) {
-    lacking.push('samlIdpCertificates');
-  }
-  if (grant === 'saml2_bearer') {
-    lacking.push(...missing(client, ['uaaUrl', 'uaaClientId']));
-  }
-  if (!row.authorization) lacking.push('authorization');
-  if (grant === 'saml2_pure' && !row.samlCookies) lacking.push('samlCookies');
-  if (!row.assertionReplayStore) lacking.push('assertionReplayStore');
-  if (lacking.length > 0) {
-    throw clientRowError(
-      destination,
-      lacking,
-      `a saml destination with grantType ${grant} lacks what its grant needs`,
-      grant === 'saml2_bearer' &&
-        noClientHint(row.clientAuthentication, client),
-    );
-  }
   const skew = means.samlClockSkewMs;
   if (skew !== undefined && !(Number.isInteger(skew) && skew >= 0)) {
     throw new DestinationConfigError(
@@ -727,16 +1141,21 @@ export function samlProvider(row: SamlRow): IAuthProvider {
         replayStore,
       }),
     );
-  } catch {
-    // The validator's own message may quote what it could not read; the
-    // error names the field only.
+  } catch (thrown) {
+    // The field is named, never its value; the validator's error is carried
+    // as auth-errors reads it.
     throw new DestinationConfigError(
       destination,
       ['samlIdpCertificates'],
       'a SAML signing certificate the destination states is not a valid X.509 certificate',
+      readFailure(thrown, 'validating-assertion'),
     );
   }
-  const common = {
+  const renewal = renewalFor(destination, grant, row.renewal);
+  const authorization = (
+    row.authorization as NonNullable<SamlRow['authorization']>
+  )(destination, grant);
+  const common = () => ({
     idpSsoUrl: means.samlIdpSsoUrl as string,
     spEntityId: means.samlSpEntityId as string,
     acsUrl: stated(means.samlAcsUrl),
@@ -744,39 +1163,59 @@ export function samlProvider(row: SamlRow): IAuthProvider {
     idpEntityId: means.samlIdpEntityId as string,
     idpInitiated: means.samlIdpInitiated === true,
     assertionValidator,
-    authorization: (row.authorization as NonNullable<SamlRow['authorization']>)(
-      destination,
-      grant,
-    ),
+    authorization,
     logger: row.logger,
-    onTokens: row.onTokens,
-  };
+    authDebug: row.authDebug,
+    renewal,
+    persistence: persistenceFor(row),
+  });
 
   if (grant === 'saml2_pure') {
     const secret = row.secret;
-    return new Saml2PureProvider(
-      asContract<Saml2PureProviderConfig>({
-        ...common,
-        cookieProvider: (
-          row.samlCookies as NonNullable<SamlRow['samlCookies']>
-        )(destination),
-        accessToken: stated(secret?.sessionCookies),
-        expiresAt:
-          typeof secret?.expiresAt === 'number' ? secret.expiresAt : undefined,
-      }),
-    );
+    const cookieProvider = (
+      row.samlCookies as NonNullable<SamlRow['samlCookies']>
+    )(destination);
+    // The cookies and their expiry: no refresh token.
+    return {
+      provider: constructed(
+        destination,
+        SAML_FIELDS,
+        () =>
+          new Saml2PureProvider(
+            asContract<Saml2PureProviderConfig>({
+              ...common(),
+              cookieProvider,
+              accessToken: stated(secret?.sessionCookies),
+              expiresAt:
+                typeof secret?.expiresAt === 'number'
+                  ? secret.expiresAt
+                  : undefined,
+            }),
+          ),
+      ),
+      seededRefreshToken: undefined,
+    };
   }
-  return new Saml2BearerProvider(
-    asContract<Saml2BearerProviderConfig>({
-      ...common,
-      tokenUrl: stated(means.samlTokenUrl),
-      uaaUrl: client?.uaaUrl as string,
-      clientId: client?.uaaClientId as string,
-      clientSecret: row.clientAuthentication
-        ? undefined
-        : stated(secretOf(client)),
-      ...authenticatedBy(row.clientAuthentication),
-      ...tokenSeed(row.secret),
-    }),
-  );
+  const seed = tokenSeed(row.secret);
+  return {
+    provider: constructed(
+      destination,
+      SAML_FIELDS,
+      () =>
+        new Saml2BearerProvider(
+          asContract<Saml2BearerProviderConfig>({
+            ...common(),
+            tokenUrl: stated(means.samlTokenUrl),
+            uaaUrl: client?.uaaUrl as string,
+            clientId: client?.uaaClientId as string,
+            clientSecret: row.clientAuthentication
+              ? undefined
+              : stated(secretOf(client)),
+            ...authenticatedBy(row.clientAuthentication),
+            ...seed,
+          }),
+        ),
+    ),
+    seededRefreshToken: seed.refreshToken,
+  };
 }

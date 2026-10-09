@@ -9,29 +9,144 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
 
-## [Unreleased]
+## [5.0.0] - 2026-10-09
+
+The broker on the auth chain's 6.0 contracts (auth-providers 6, interfaces-auth 7, auth-errors
+2). A major: what every failure is changes class, two options become required for token
+destinations, the session binding gains a versioned record, and every wait can be cancelled.
+Released with `@mcp-abap-adt/auth-broker-cli` 3.0.0. What a 4.x consumer must do, row by row:
+the README's *Migrating to 5.0.0*.
+
+### Breaking
+
+- **`renewal` is required for every token row.** `AuthBrokerConfig.renewal` — `(destination,
+  grant: TokenGrant) => IRenewalStrategy` — is called once per build of every UAA, OIDC and
+  SAML row, after every other check and before the provider's constructor; its answer is the
+  provider's `renewal`, unchanged. No default: a token row without it is a
+  `DestinationConfigError` naming `renewal`, beside every other missing field. A `renewal` that
+  throws is `DestinationConfigError(['renewal'])`, "the renewal option failed", carrying what it
+  threw. Not called for `basic`, `snc`, `none`, nor for the token API's `provider`.
+  `() => refreshThenLogin()` is 4.x's behaviour.
+- **`onWriteFailure: 'fail' | 'continue'` is required** for every destination that writes a
+  secret — a token row `getProvider` builds, and every call of the token API with a `provider`.
+  Without it: `DestinationConfigError` naming `onWriteFailure`. `'fail'`: the call whose write
+  did not land fails (`unknown`, `persisting-tokens`), and while the destination's last write is
+  pending (failed, queued or in flight) `getProvider`, `getToken` and `refreshToken` retry it on
+  entry and once more before success, and are refused while it fails. `'continue'`: logged, the
+  call goes on. A moment of a provider already handed out that commits nothing is not refused.
+- **Failures are `AuthProviderFailure`s, read through `@mcp-abap-adt/auth-errors`.** A
+  provider's failure reaches `getToken()` / `refreshToken()` as the same object. The broker reads
+  a caught value only through `readFailure` / `isAuthProviderFailure` — no `instanceof`,
+  `message` or `name` of an error is read in `src`. The broker's own failures are minted by
+  auth-errors: an aborted wait (`interactive-login`, `aborted`), a write that did not land under
+  `'fail'` (`unknown`, `persisting-tokens`, an allowlisted `code`), a provider that answered no
+  token (`request-failed`, `token-source`, `no-access-token` — replacing "Token provider did not
+  return authorization token …").
+- **`DestinationConfigError` carries the provider's failure.** New `error?: IAuthProviderError`
+  (kind, facts, rendered words, admitted diagnostics; no `cause`) when a provider's or a
+  strategy's failure caused the refusal; the message then ends `: <error.reason>`. New
+  `isDestinationConfigError(value)` — structural, no `instanceof`; true for a JSON copy. A
+  provider constructor that throws inside a build — any row, not only SNC — is a
+  `DestinationConfigError` naming the store fields its configuration facts name. The SNC row
+  decides by kind (`configuration` → its fields), not by `instanceof ValidationError`. The
+  broker's own copy of the three certificate phrases is gone: `clientAuthentication`'s refusal
+  reads `the clientAuthentication strategy failed: <reason>` with auth-providers'
+  `client-certificate` failure carried. New rows: `renewal`, `onWriteFailure`, `provider` (an
+  instance after the destination's identity changed), a store field of a shape the broker
+  cannot take, `samlIdpInitiated`, `oidcScopes` and `oidcActorTokenType` of the wrong shape.
+- **`issuedBy` is a versioned binding record**: `mcp-abap-adt-binding/2;<row>;<eleven address
+  fields>;<trust>` — the row (`authType/grantType`, or `provider/…` for the token API's consumer
+  provider), the exact string of every server address the row hands its provider
+  (`encodeURIComponent`-encoded, never canonicalised: `clientId`, `uaaUrl`, `oidcIssuerUrl`, the
+  three OIDC endpoints, `oidcAudience`, `samlIdpSsoUrl`, `samlAcsUrl`, `samlTokenUrl`, the
+  certificate client's `certUrl`) and the SHA-256 of the row's non-secret trust input (SAML
+  trust, OIDC scopes, the password grant's user, the token-exchange token types, the certificate
+  client's public certificate). Compared by exact equality, never parsed; no secret and no hash
+  of one in it. `issuedFor` keeps 4.x's canonical form. **Every session written before 5.0.0
+  reads as unbound**: its stored token and refresh token are not used, and the provider's first
+  renewal is a login (or a token request). A `none` row compares `issuedBy` always and refuses a
+  4.x binding naming `issuedBy`. `bindingOf(means, client)` keeps its signature and returns the
+  version-2 record.
+- **A stored secret seeds only a fully stated binding**: one whose record holds the client the
+  row authenticates and every address its provider sends a credential to — so an issuer-less
+  OIDC row with explicit endpoints and a client is now seeded, and `token_exchange` and the
+  token API's consumer provider never are.
+- **A provider is never changed.** Every call of `getProvider` and the token API re-reads what
+  the destination's provider was built from (the means, the client, the certificate client when
+  read) and compares everything the build read, secrets included (in memory only); anything
+  changed builds a new provider that starts with nothing. 4.x cached a destination's provider
+  for the broker's life. An instance `provider` whose destination's identity changed is refused
+  until a new broker.
+- **Two paths, resolved and cached apart.** The row path (`getProvider`, and the token API
+  without `provider`) and the consumer path (the token API with `provider`) each have their own
+  resolution, cache, identity and binding; only the destination's write queue is shared.
+- **The token API's factory is handed no stored secret**: `authConfig` is the client
+  (`refreshToken` a key, never a value), `connConfig` the allowlisted connection means
+  (`serviceUrl`, `sapClient`, `language`, `authType`, `grantType`), the fourth argument the
+  strategy's answer and the client identity (`refreshToken` never set). The consumer path is
+  never seeded. A consumer provider's result without a refresh token writes `refreshToken: ''`
+  (the stored one is no longer carried).
+- **Session writes state every field** (auth-stores 4 merges): a credential write states the
+  token or cookies, `expiresAt` (the provider's report), the refresh token the provider owns or
+  `''`, `issuedFor` (`''` when the means state no `serviceUrl`) and `issuedBy`; `saml2_pure`'s
+  cookies write `refreshToken: ''`; a refresh token discarded before any credential writes only
+  `refreshToken: ''`. A refresh token is written only by the provider that obtained it or was
+  seeded with it and has not discarded it since — never read from the store at write time.
+- **The write queue has no retry timer.** One queue per destination: one write at a time, in
+  order; a replaced provider's late write is dropped once the new one has written; a failed
+  write stays pending until the destination's next write or `flush()`. The 1 s → 60 s retry
+  timer is gone. The store's contract, documented: `saveSession` settles.
+- **`flush()` rejects with an `AggregateError` of `SessionWriteFailure`s** (`destination`,
+  `error`: the store's error classified `persisting-tokens`) instead of
+  `Error("<dest>": <class>)`; the message keeps 4.x's lead.
+- **The built providers persist through auth-providers' `refreshStatePersistence`** (`onTokens`
+  is gone from every row), with the consumer's `onWriteFailure`.
+- **`AuthBrokerConfig`'s optional fields are declared `?: T | undefined`.**
+
+### Added
+
+- **Cancellation.** `BrokerCallOptions { signal? }` on `getProvider`, `getToken`,
+  `refreshToken`, `flush` and `createTokenRefresher`. Every wait is a waiter of auth-errors'
+  `sharedAttempt`: an abort releases that caller alone (`aborted`), the work runs on; when every
+  caller of a build aborted, the build is not cached and writes nothing. `getProvider`'s signal
+  is attached to the token or SNC provider it answers, so a login that provider starts later is
+  aborted once every holder's signal aborted; the token API never attaches and passes its signal
+  to `getTokens({ signal })` / `refreshTokens({ signal })`. `ClientAuthenticationContext.signal`:
+  the build's attempt. The broker sets no timeout and has no timer.
+- **`authDebug?: boolean`** — passed to every token provider the broker builds, on only for
+  `true`, never read from the environment.
+- Exports: `isDestinationConfigError`, `DestinationConfigErrorLike`, `SessionWriteFailure`,
+  `BrokerCallOptions`, `TokenGrant`, and the re-exported `IRenewalStrategy`.
 
 ### Changed
 
-- **Built under a stricter compiler.** Both packages, sources and tests,
-  compile with `noImplicitReturns`, `noFallthroughCasesInSwitch`,
-  `noImplicitOverride`, `noUncheckedIndexedAccess` and
-  `exactOptionalPropertyTypes`. No behaviour changes: every object the broker
-  hands a consumer factory or strategy, builds a provider from, or writes to a
-  session keeps exactly its own keys and values, `refreshToken: undefined`
-  included — pinned by a new test of the factory's `authConfig`, its
-  `connConfig` seed, its fourth argument, the strategy context and the written
-  secret. The contract packages declare their optional fields `?: T`; where the
-  broker builds one with an explicit `undefined`, one internal helper
-  (`src/contractShape.ts`) states the shape instead of dropping the key.
-- **`AuthBrokerConfig`'s optional fields are declared `?: T | undefined`**
-  (`serviceKeyStore`, `provider`, `authorization`, `oidcAuthorization`,
-  `deviceCodePresenter`, `samlCookies`, `assertionReplayStore`,
-  `clientAuthentication`). A consumer compiling with
-  `exactOptionalPropertyTypes` may now pass `undefined` for one, which the
-  constructor has always read as absent; for anyone else the type is the same.
-- Lint: `noExplicitAny` is an error outside the tests, and `lint:check` fails
-  on any warning.
+- **Logging**: every line goes through a guard — a logger that throws or rejects changes no
+  outcome. A failed write is one `warn` line with auth-errors' `logFields`, never a class name or
+  message. A stored secret not used is a `warn` only where a stored secret could ever be seeded,
+  a `debug` line otherwise.
+- **The certificate client is re-read on every call** when the build read it: a rotated
+  certificate builds a new provider at the next call (4.x pinned it for the broker's life).
+- **Built under a stricter compiler.** Both packages, sources and tests, compile with
+  `noImplicitReturns`, `noFallthroughCasesInSwitch`, `noImplicitOverride`,
+  `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`; objects handed to a consumer keep
+  exactly their own keys (`src/contractShape.ts`). Lint: `noExplicitAny` is an error outside the
+  tests, and `lint:check` fails on any warning.
+- **The broker stand and the live suites** run on the 6.0 chain and on
+  `@mcp-abap-adt/connection` 14; each states `renewal` and `onWriteFailure`.
+- `tools/check-provider-shape.mjs`, copied byte for byte from auth-errors 2.1.1, runs with
+  rules 4, 5, 6 over both packages (`npm run check:shape`).
+
+### Dependencies
+
+- `@mcp-abap-adt/auth-providers` `^5.3.0` → `^6.0.0`; `@mcp-abap-adt/interfaces-auth` `^3.2.0`
+  → `^7.5.0`; `@mcp-abap-adt/interfaces-auth-sap` `^2.0.0` → `^3.3.0`;
+  `@mcp-abap-adt/interfaces-auth-broker` `^1.2.0` → `^1.3.0`; new `@mcp-abap-adt/auth-errors`
+  `^2.1.1`. Dev: `@mcp-abap-adt/auth-stores` `^4.0.0`, `@mcp-abap-adt/connection` `^14.0.0`.
+
+### Measured, and not
+
+- Not yet re-run on 5.0.0: the x509 live check (`npm run test:live:x509`, last run 2026-10-05 on
+  4.1.0) and the live suite (`npm run test:live`).
 
 ## [4.1.0] - 2026-10-05
 

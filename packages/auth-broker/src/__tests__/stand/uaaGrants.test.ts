@@ -17,7 +17,12 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { externalCodeStrategy } from '@mcp-abap-adt/auth-providers';
+import {
+  composeAuthorization,
+  consumerHandoff,
+  externalCodeStrategy,
+  passcode,
+} from '@mcp-abap-adt/auth-providers';
 import {
   ABAP_SESSION_VARS,
   AbapSessionStore,
@@ -29,9 +34,11 @@ import type {
   IAuthProvider,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
+import { authorizeByForm, FormBrowser } from '../../../tests/stand/formLogin';
 import { AuthBroker, type StrategyGrant } from '../../index';
+import { uaaRecord } from '../helpers/bindingRecord';
 import { describeWhere } from '../helpers/describeWhere';
-import { authorizeByForm, FormBrowser } from './formLogin';
+import { STATED } from '../helpers/stated';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
 
@@ -40,8 +47,11 @@ const CALLBACK = 'http://localhost/callback';
 const SERVICE_URL = 'https://abap.stand.invalid';
 /** SERVICE_URL's canonical URI — what the session's `issuedFor` must hold. */
 const ISSUED_FOR = 'https://abap.stand.invalid:443';
-/** UAA_URL (`http://localhost:<port>/uaa`, already canonical) with the client. */
-const issuedBy = (clientId: string) => `${UAA_URL}?client_id=${clientId}`;
+/** The `issuedBy` record of the UAA row for UAA_URL and the client. */
+const issuedBy = (
+  grant: 'authorization_code' | 'client_credentials' | 'passcode',
+  clientId: string,
+) => uaaRecord(grant, UAA_URL as string, clientId);
 const UNAUTHORIZED = { at: 'request', status: 401, error: null } as const;
 
 const claims = (jwt: string): Record<string, unknown> =>
@@ -58,8 +68,11 @@ const loginThroughUaa = () =>
   });
 
 /** What the user does at /passcode: log in, and read the code off the page. */
-const passcodeFromUaa = (seen: string[]) =>
-  externalCodeStrategy({
+const passcodeFromUaa = (seen: string[]) => {
+  // A passcode read off a page by the consumer's code: handed over
+  // (consumerHandoff + passcode()), not a redirect — externalCodeStrategy
+  // takes OAuth codes only in 6.0.0.
+  const { presentation, transport } = consumerHandoff({
     provide: async (url) => {
       seen.push(url);
       const browser = new FormBrowser();
@@ -71,6 +84,13 @@ const passcodeFromUaa = (seen: string[]) =>
       return code;
     },
   });
+  return composeAuthorization({
+    presentation,
+    transport,
+    protocol: passcode(),
+    endpoint: '/callback',
+  });
+};
 
 /** A strategy that must not be reached: a renewal here is a refresh, never a login. */
 const noLogin: IAuthorizationStrategy<string> = {
@@ -168,6 +188,7 @@ describeWhere(
       const sessions = new AbapSessionStore(sessionsDir);
       const broker = () =>
         new AuthBroker({
+          ...STATED,
           serviceKeyStore: keys,
           sessionStore: sessions,
           authorization,
@@ -211,7 +232,7 @@ describeWhere(
         ISSUED_FOR,
       );
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        issuedBy('cc_client'),
+        issuedBy('client_credentials', 'cc_client'),
       );
       expect(fs.readFileSync(sessionFile, 'utf8')).not.toContain('secret');
     });
@@ -253,7 +274,7 @@ describeWhere(
         ISSUED_FOR,
       );
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        issuedBy('authcode'),
+        issuedBy('authorization_code', 'authcode'),
       );
 
       // The server refuses the token: the provider renews in rejected().
@@ -314,7 +335,7 @@ describeWhere(
       await b.flush();
       expect(keysOf(sessionFile).sort()).toEqual([...SECRET_KEYS].sort());
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        issuedBy('passcode_client'),
+        issuedBy('passcode', 'passcode_client'),
       );
       expect(fs.readFileSync(sessionFile, 'utf8')).not.toContain('secret');
     }, 60_000);
@@ -367,7 +388,7 @@ describeWhere(
         'https://moved.stand.invalid:443/sap?sap-client=200',
       );
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        issuedBy('authcode'),
+        issuedBy('authorization_code', 'authcode'),
       );
     }, 60_000);
   },

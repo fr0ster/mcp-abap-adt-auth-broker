@@ -6,12 +6,13 @@
  * certificate the key store holds, one the secret. Neither falls back to the
  * other; a consumer that wants a fallback composes it, and its order is the
  * consumer's statement. Whatever a strategy throws, the broker turns into a
- * `DestinationConfigError` in fixed words (`resolveClientAuthentication`) —
- * nothing of the thrown value, no `cause`.
+ * `DestinationConfigError` in fixed words (`resolveClientAuthentication`),
+ * carrying the thrown value as auth-errors reads it — never its message, no
+ * `cause`.
  */
 
+import { readFailure } from '@mcp-abap-adt/auth-errors';
 import {
-  CertificateMaterialError,
   clientSecretBasic,
   tlsClientCertificate,
 } from '@mcp-abap-adt/auth-providers';
@@ -52,6 +53,13 @@ export interface ClientAuthenticationContext {
    * `getClientCertificate`.
    */
   readCertificate(): Promise<IClientCertificate | null>;
+  /**
+   * The build's attempt: aborts when every caller waiting on the build has
+   * gone. A strategy that waits on the network — a loader's
+   * `tlsMaterial()` — ends its wait on it; the broker sets no bound of its
+   * own.
+   */
+  readonly signal: AbortSignal;
 }
 
 /** The strategy `AuthBrokerConfig.clientAuthentication` takes. */
@@ -63,28 +71,40 @@ const NO_CERTIFICATE = 'the destination has no client certificate';
 const NO_SECRET = 'the destination has no client secret';
 
 /**
- * A shipped factory's refusal. Module-private, so nothing outside this file
- * can make one — but a consumer composing a factory can catch and alter it,
- * so the guard reads only `missing` and picks the words itself.
+ * The shipped factories' refusals, and what each lacks: recognised by
+ * identity in this module-private map — never by `instanceof` or a property
+ * of the thrown value — so nothing outside this file can make one, and a
+ * consumer that catches and alters one changes nothing the guard reads.
  */
-class ClientUnavailableError extends Error {
-  constructor(readonly missing: 'certificate' | 'secret') {
-    super(missing === 'certificate' ? NO_CERTIFICATE : NO_SECRET);
-    this.name = 'ClientUnavailableError';
-  }
+const unavailable = new WeakMap<object, 'certificate' | 'secret'>();
+
+function clientUnavailable(missing: 'certificate' | 'secret'): Error {
+  const error = new Error(
+    missing === 'certificate' ? NO_CERTIFICATE : NO_SECRET,
+  );
+  unavailable.set(error, missing);
+  return error;
 }
 
-/** The broker's words for auth-providers' CertificateMaterialError, by its flags. */
-const CERTIFICATE_INCOMPLETE = 'the client certificate is incomplete';
-const CERTIFICATE_EXPIRED = 'the client certificate has expired';
-const CERTIFICATE_UNUSABLE = 'the client certificate could not be used';
+/**
+ * `value` without the slashes it ends with, in one backwards pass: linear in
+ * the length, whatever the store answered — no regular expression on a
+ * stored value.
+ */
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x2f) end -= 1;
+  return value.slice(0, end);
+}
 
 /**
  * `tls_client_auth` with the certificate and key the key store holds, against
  * `${certUrl}/oauth/token`. The material is handed over as given and checked
  * before the factory answers — auth-providers checks it only on first use, so
  * a malformed, incomplete or expired PEM would otherwise surface only at the
- * first token request, in a provider already built and cached.
+ * first token request, in a provider already built and cached. What
+ * `tlsMaterial()` throws — auth-providers' `client-certificate` failure — is
+ * carried by the guard as auth-errors reads it.
  *
  * Throws "the destination has no client certificate" when the store answers
  * `null` or implements no `getClientCertificate`.
@@ -93,14 +113,14 @@ export function fromServiceKeyCertificate(): ClientAuthenticationStrategy {
   return async (context) => {
     const certificate = await context.readCertificate();
     if (!certificate) {
-      throw new ClientUnavailableError('certificate');
+      throw clientUnavailable('certificate');
     }
     const authentication = tlsClientCertificate({
       material: { cert: certificate.certificate, key: certificate.key },
-      endpoint: `${certificate.certUrl.replace(/\/+$/, '')}/oauth/token`,
+      endpoint: `${withoutTrailingSlashes(certificate.certUrl)}/oauth/token`,
     });
     if (typeof authentication.tlsMaterial !== 'function') {
-      throw new ClientUnavailableError('certificate');
+      throw clientUnavailable('certificate');
     }
     await authentication.tlsMaterial();
     return authentication;
@@ -136,7 +156,7 @@ export function fromServiceKeySecret(
   return async (context) => {
     const secret = context.client?.uaaClientSecret;
     if (typeof secret !== 'string' || secret.length === 0) {
-      throw new ClientUnavailableError('secret');
+      throw clientUnavailable('secret');
     }
     return clientSecretBasic(secret, { encoding });
   };
@@ -179,13 +199,14 @@ function certificateOf(
 /**
  * The context for one build: the client through `contextClient`;
  * `readCertificate` lazy and memoised — the first call reads, every later one
- * gets the same answer.
+ * gets the same answer; `signal`, the build's attempt.
  */
 export function clientAuthenticationContext(
   destination: string,
   grant: ClientAuthenticationGrant,
   client: IAuthorizationConfig | null,
   read: () => Promise<IClientCertificate | null>,
+  signal: AbortSignal,
 ): ClientAuthenticationContext {
   let certificate: Promise<IClientCertificate | null> | undefined;
   return {
@@ -196,45 +217,32 @@ export function clientAuthenticationContext(
       certificate ??= read().then(certificateOf);
       return certificate;
     },
+    signal,
   };
 }
 
 const FAILED = 'the clientAuthentication strategy failed';
 const REFUSED = 'the clientAuthentication strategy refused';
 
-/**
- * The fixed words for what a strategy threw. Every word is this module's own:
- * the thrown value only selects among them, through `instanceof` and flags
- * compared with `===` — never a message, never its `words`. Classifying may
- * itself throw (a Proxy, a getter), so it runs in its own try and falls back
- * to the generic words.
- */
-function refusalWords(error: unknown): string {
-  try {
-    if (error instanceof ClientUnavailableError) {
-      const missing = error.missing;
-      if (missing === 'certificate') return `${REFUSED}: ${NO_CERTIFICATE}`;
-      if (missing === 'secret') return `${REFUSED}: ${NO_SECRET}`;
-      return FAILED;
-    }
-    if (error instanceof CertificateMaterialError) {
-      if (error.incomplete === true) {
-        return `${REFUSED}: ${CERTIFICATE_INCOMPLETE}`;
-      }
-      if (error.expired === true) return `${REFUSED}: ${CERTIFICATE_EXPIRED}`;
-      return `${REFUSED}: ${CERTIFICATE_UNUSABLE}`;
-    }
-  } catch {
-    // Fall through: the thrown value could not even be classified.
-  }
-  return FAILED;
+/** A shipped factory's refusal: the broker's own words, by what it lacks. */
+function unavailableWords(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const missing = unavailable.get(error);
+  if (missing === 'certificate') return `${REFUSED}: ${NO_CERTIFICATE}`;
+  if (missing === 'secret') return `${REFUSED}: ${NO_SECRET}`;
+  return undefined;
 }
 
 /**
  * Runs the strategy inside the guard. Any throw — the strategy's own, a
  * store's, a malformed PEM — and any answer that is no client authentication
  * becomes a `DestinationConfigError` naming `clientAuthentication`, in fixed
- * words: no `cause`, nothing of the thrown value.
+ * words. A shipped factory's own refusal keeps the broker's words; anything
+ * else is "the clientAuthentication strategy failed", carrying
+ * `readFailure(thrown, 'client-authentication-strategy')` — a provider's
+ * failure (an unusable certificate) as the provider made it, a strategy's own
+ * error only as its classification. No `cause`, no message of the thrown
+ * value.
  */
 export async function resolveClientAuthentication(
   strategy: ClientAuthenticationStrategy,
@@ -250,10 +258,19 @@ export async function resolveClientAuthentication(
       answer !== null &&
       typeof (answer as IClientAuthentication).authenticate === 'function';
   } catch (error) {
+    const words = unavailableWords(error);
+    if (words !== undefined) {
+      throw new DestinationConfigError(
+        context.destination,
+        ['clientAuthentication'],
+        words,
+      );
+    }
     throw new DestinationConfigError(
       context.destination,
       ['clientAuthentication'],
-      refusalWords(error),
+      FAILED,
+      readFailure(error, 'client-authentication-strategy'),
     );
   }
   if (!usable) {

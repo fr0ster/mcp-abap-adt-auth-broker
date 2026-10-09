@@ -2,10 +2,11 @@ import { inspect } from 'node:util';
 /**
  * getProvider for the UAA grants — `jwt` / `authorization_code`,
  * `client_credentials`, `passcode` — and the persistence every token provider
- * the broker builds gets through `onTokens`.
+ * the broker builds gets through its persistence (`refreshStatePersistence`
+ * over the broker's write).
  *
  * The stores are in-memory fakes of the contract; the providers are real
- * (auth-providers 5.1) against a local token endpoint, and are only ever driven
+ * (auth-providers 6) against a local token endpoint, and are only ever driven
  * through `IAuthProvider`. The interactive part of a grant is a recording
  * strategy — nothing here opens a browser.
  */
@@ -28,8 +29,11 @@ import {
   AuthBroker,
   type AuthBrokerConfig,
   DestinationConfigError,
+  SessionWriteFailure,
   type StrategyGrant,
 } from '../../index';
+import { uaaRecord } from '../helpers/bindingRecord';
+import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
   startTokenEndpoint,
@@ -86,11 +90,20 @@ function client(
  * out literally, never computed by the broker's function.
  */
 const FOR = 'https://abap.example.com:443?sap-client=100';
-const by = () => `${endpoint.url}?client_id=broker-client`;
+/** The `issuedBy` record of a UAA row with this endpoint and client. */
+const by = (
+  grant:
+    | 'authorization_code'
+    | 'client_credentials'
+    | 'passcode' = 'authorization_code',
+) => uaaRecord(grant, endpoint.url, 'broker-client');
 
 /** A stored session bound to this destination's resource and issuer. */
-function bound(secret: IConfig): IConfig {
-  return { ...secret, issuedFor: FOR, issuedBy: by() };
+function bound(
+  secret: IConfig,
+  grant: Parameters<typeof by>[0] = 'authorization_code',
+): IConfig {
+  return { ...secret, issuedFor: FOR, issuedBy: by(grant) };
 }
 
 /** A key store holding means only: three getters, no way to write. */
@@ -201,6 +214,13 @@ function everythingIn(error: unknown): string {
   return parts.join('\n');
 }
 
+/**
+ * What a failed write means for the brokers `brokerFor` builds: `'fail'`, as
+ * `STATED`, except where a suite is about a write that fails and the call
+ * that goes on (`'continue'`, 4.x's behaviour for the providers it built).
+ */
+let writePolicy: 'fail' | 'continue' = 'fail';
+
 /** A broker over the fakes, with an `authorization` option recording its calls. */
 function brokerFor(
   grant: UaaGrant,
@@ -228,7 +248,10 @@ function brokerFor(
   if (options.withAuthorization !== false) {
     config.authorization = authorization;
   }
-  const broker = new AuthBroker(config, options.logger);
+  const broker = new AuthBroker(
+    { ...STATED, onWriteFailure: writePolicy, ...config },
+    options.logger,
+  );
   return { broker, keys, authorization, urls: recorded.urls, ...sessions };
 }
 
@@ -255,6 +278,8 @@ describe('getProvider — the UAA grants', () => {
           params: {
             grant_type: 'authorization_code',
             code: 'the-code',
+            // 6.0.0: every UAA authorization URL carries a PKCE challenge.
+            code_verifier: expect.any(String),
             redirect_uri: REDIRECT,
           },
           authorization: basicAuth('broker-client', CLIENT_SECRET),
@@ -330,7 +355,7 @@ describe('getProvider — the UAA grants', () => {
         expiresAt: expect.any(Number),
         refreshToken: 'refresh-1',
         issuedFor: FOR,
-        issuedBy: by(),
+        issuedBy: by('passcode'),
       });
     });
 
@@ -384,7 +409,7 @@ describe('getProvider — the UAA grants', () => {
       const redacted = `<redacted, ${token.length} chars>`;
       expect(logger.info.mock.calls).toEqual(
         expect.arrayContaining([
-          ['[BaseTokenProvider] No usable refresh token, performing login'],
+          ['[BaseTokenProvider] Performing login'],
           [
             '[BaseTokenProvider] Login completed',
             { newToken: redacted, newRefreshToken: undefined },
@@ -422,11 +447,14 @@ describe('getProvider — the UAA grants', () => {
     (grant) => {
       it('reuses an opaque stored token until the stored expiresAt', async () => {
         const { broker } = brokerFor(grant, {
-          session: bound({
-            authorizationToken: 'opaque-stored-token',
-            expiresAt: Date.now() + 3_600_000,
-            refreshToken: 'stored-rt',
-          }),
+          session: bound(
+            {
+              authorizationToken: 'opaque-stored-token',
+              expiresAt: Date.now() + 3_600_000,
+              refreshToken: 'stored-rt',
+            },
+            grant,
+          ),
         });
 
         const provider = await broker.getProvider(D);
@@ -438,10 +466,13 @@ describe('getProvider — the UAA grants', () => {
 
       it('renews an opaque stored token with no expiresAt, by its stored refresh token', async () => {
         const { broker } = brokerFor(grant, {
-          session: bound({
-            authorizationToken: 'opaque-stored-token',
-            refreshToken: 'stored-rt',
-          }),
+          session: bound(
+            {
+              authorizationToken: 'opaque-stored-token',
+              refreshToken: 'stored-rt',
+            },
+            grant,
+          ),
         });
 
         const provider = await broker.getProvider(D);
@@ -543,6 +574,7 @@ describe('getProvider — the UAA grants', () => {
       const sessions = sessionStore({ authorizationToken: 't' });
       sessions.store.getAuthorizationConfig.mockResolvedValue(client());
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: sessions.store,
         serviceKeyStore: keyStore(means('client_credentials'), null),
       });
@@ -557,7 +589,7 @@ describe('getProvider — the UAA grants', () => {
   });
 });
 
-describe('persistence through onTokens', () => {
+describe('persistence through the provider’s refreshStatePersistence', () => {
   /** A destination seeded with a token the server will refuse, and a refresh token. */
   function seeded(grant: UaaGrant = 'authorization_code', logger?: ILogger) {
     const refused = jwtExpiringIn(3600, { jti: 'refused' });
@@ -636,9 +668,9 @@ describe('persistence through onTokens', () => {
     expect(store.deleteSession).not.toHaveBeenCalled();
   });
 
-  it('carries the stored refresh token forward when the result has none', async () => {
+  it('a build that owns no refresh token writes "" — a stored one, even bound here, is not carried', async () => {
     const { broker, held } = brokerFor('client_credentials', {
-      session: bound({ refreshToken: 'kept-rt' }),
+      session: bound({ refreshToken: 'kept-rt' }, 'client_credentials'),
     });
 
     await (await broker.getProvider(D)).prepare();
@@ -646,13 +678,13 @@ describe('persistence through onTokens', () => {
     expect(held()).toEqual({
       authorizationToken: endpoint.issued[0],
       expiresAt: expect.any(Number),
-      refreshToken: 'kept-rt',
+      refreshToken: '',
       issuedFor: FOR,
-      issuedBy: by(),
+      issuedBy: by('client_credentials'),
     });
   });
 
-  it('takes an empty refresh token in a result as none, and keeps the stored one', async () => {
+  it('a refused refresh token is cleared; a login answering an empty one writes none', async () => {
     const { broker, held } = brokerFor('authorization_code', {
       session: bound({ refreshToken: 'kept-rt' }),
     });
@@ -672,7 +704,9 @@ describe('persistence through onTokens', () => {
       'refresh_token',
       'authorization_code',
     ]);
-    expect(held()?.refreshToken).toBe('kept-rt');
+    // 6.0.0, refreshThenLogin(): the refresh token sent and refused is
+    // discarded, and its discard written — it never comes back.
+    expect(held()?.refreshToken).toBe('');
   });
 
   it.each(['basic', 'snc'] as const)(
@@ -696,16 +730,18 @@ describe('persistence through onTokens', () => {
     },
   );
 
-  describe('a write that fails', () => {
+  describe('a write that fails (onWriteFailure: continue)', () => {
     class StoreDiskError extends Error {}
 
     beforeEach(() => {
-      jest.useFakeTimers({
-        doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'],
-      });
+      writePolicy = 'continue';
     });
 
-    it('does not fail the authentication, and is retried by the broker with no further call to the provider', async () => {
+    afterEach(() => {
+      writePolicy = 'fail';
+    });
+
+    it('does not fail the authentication; the write stays pending, and flush() writes it with no further call to the provider', async () => {
       const { broker, store, held } = seeded();
       store.saveSession.mockRejectedValueOnce(new StoreDiskError('disk full'));
       const provider = await broker.getProvider(D);
@@ -713,8 +749,9 @@ describe('persistence through onTokens', () => {
       expect(await provider.rejected(UNAUTHORIZED)).toEqual({ ok: true });
       expect(await bearer(provider)).toBe(endpoint.issued[0]);
       expect(held()?.authorizationToken).not.toBe(endpoint.issued[0]);
+      expect(store.saveSession).toHaveBeenCalledTimes(1);
 
-      await jest.advanceTimersByTimeAsync(1_000);
+      await expect(broker.flush()).resolves.toBeUndefined();
 
       expect(store.saveSession).toHaveBeenCalledTimes(2);
       expect(store.saveSession.mock.calls[1]).toEqual(
@@ -722,30 +759,9 @@ describe('persistence through onTokens', () => {
       );
       expect(held()?.authorizationToken).toBe(endpoint.issued[0]);
       expect(endpoint.requests).toHaveLength(1);
-      await jest.advanceTimersByTimeAsync(600_000);
-      expect(store.saveSession).toHaveBeenCalledTimes(2);
     });
 
-    it('retries with a growing delay: one second, doubling, capped at one minute', async () => {
-      const { broker, store } = seeded();
-      store.saveSession.mockRejectedValue(new StoreDiskError('disk full'));
-      const provider = await broker.getProvider(D);
-      await provider.rejected(UNAUTHORIZED);
-
-      const attemptsAt: number[] = [];
-      const start = Date.now();
-      store.saveSession.mockImplementation(async () => {
-        attemptsAt.push(Date.now() - start);
-        throw new StoreDiskError('disk full');
-      });
-      await jest.advanceTimersByTimeAsync(300_000);
-
-      expect(attemptsAt.slice(0, 9)).toEqual([
-        1_000, 3_000, 7_000, 15_000, 31_000, 63_000, 123_000, 183_000, 243_000,
-      ]);
-    });
-
-    it('logs the failure by its class name, never its message', async () => {
+    it('logs the failure with logFields, never its message', async () => {
       const logger = silentLogger();
       const { broker, store } = seeded('authorization_code', logger);
       store.saveSession.mockRejectedValueOnce(
@@ -760,19 +776,19 @@ describe('persistence through onTokens', () => {
         logger.info.mock.calls,
         logger.debug.mock.calls,
       ]);
-      expect(logged).toContain('StoreDiskError');
+      expect(logged).toContain('persisting the tokens failed (unknown error)');
       expect(logged).not.toContain('disk full');
       expect(logged).not.toContain(CLIENT_SECRET);
     });
 
-    it('a newer result replaces the pending one: only the latest is ever written', async () => {
+    it('a newer write that lands replaces the pending one: the older is never written again', async () => {
       const { broker, store, held } = seeded();
       store.saveSession.mockRejectedValueOnce(new StoreDiskError('disk full'));
       const provider = await broker.getProvider(D);
 
       await provider.rejected(UNAUTHORIZED); // token-1: its write fails
       await provider.rejected(UNAUTHORIZED); // token-2: written
-      await jest.advanceTimersByTimeAsync(600_000);
+      await expect(broker.flush()).resolves.toBeUndefined();
 
       const written = store.saveSession.mock.calls.map(
         ([, c]) => (c as IConfig).authorizationToken,
@@ -797,7 +813,7 @@ describe('persistence through onTokens', () => {
           }
           if (sessions.length === 1) {
             sessions.push(c as IConfig);
-            // The timer's retry hangs until released.
+            // flush()'s retry hangs until released.
             await new Promise<void>((resolve) => {
               release = resolve;
             });
@@ -810,13 +826,22 @@ describe('persistence through onTokens', () => {
       });
       const provider = await broker.getProvider(D);
       await provider.rejected(UNAUTHORIZED); // token-1 fails
-      await jest.advanceTimersByTimeAsync(1_000); // retry of token-1 hangs
+      const flushed = broker.flush(); // the retry of token-1 hangs
+      while (sessions.length < 2) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
 
       const second = provider.rejected(UNAUTHORIZED); // token-2 waits its turn
-      await jest.advanceTimersByTimeAsync(10);
+      while (endpoint.issued.length < 2) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      for (let i = 0; i < 10; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
       expect(sessions).toHaveLength(2);
       release();
       expect(await second).toEqual({ ok: true });
+      await flushed;
 
       expect(most).toBe(1);
       expect(sessions.map((s) => s.authorizationToken)).toEqual([
@@ -829,6 +854,14 @@ describe('persistence through onTokens', () => {
 
   describe('flush()', () => {
     class StoreDiskError extends Error {}
+
+    beforeEach(() => {
+      writePolicy = 'continue';
+    });
+
+    afterEach(() => {
+      writePolicy = 'fail';
+    });
 
     it('resolves at once with nothing pending', async () => {
       const { broker } = seeded();
@@ -861,7 +894,7 @@ describe('persistence through onTokens', () => {
       await expect(broker.flush()).resolves.toBeUndefined();
     });
 
-    it("carries no store message: each failure is the destination and the error's class", async () => {
+    it('carries no store message: each failure is a SessionWriteFailure naming the destination', async () => {
       const { broker, store } = seeded();
       store.saveSession.mockRejectedValue(
         new StoreDiskError('cannot save TOKEN_SENTINEL'),
@@ -875,35 +908,12 @@ describe('persistence through onTokens', () => {
       expect(flushed).toBeInstanceOf(AggregateError);
       expect(inspect(flushed, { depth: 10 })).not.toContain('TOKEN_SENTINEL');
       expect(flushed?.errors.map((e: Error) => e.message)).toEqual([
-        `"${D}": StoreDiskError`,
+        `"${D}": persisting the tokens failed (unknown error)`,
       ]);
-    });
-
-    it('the retry timer does not keep the process alive', async () => {
-      const { broker, store } = seeded();
-      const provider = await broker.getProvider(D);
-      store.saveSession.mockRejectedValueOnce(new StoreDiskError('disk full'));
-      // Only the timers started while the failed write is handled.
-      const timers: { timer: NodeJS.Timeout; ms?: number | undefined }[] = [];
-      const realSetTimeout = global.setTimeout;
-      const spy = jest.spyOn(global, 'setTimeout').mockImplementation(((
-        fn: () => void,
-        ms?: number,
-      ) => {
-        const timer = realSetTimeout(fn, ms);
-        timers.push({ timer, ms });
-        return timer;
-      }) as typeof setTimeout);
-      try {
-        await provider.rejected(UNAUTHORIZED);
-      } finally {
-        spy.mockRestore();
-      }
-
-      const retry = timers.filter(({ ms }) => ms === 1_000);
-      expect(retry).toHaveLength(1);
-      expect(retry[0]!.timer.hasRef()).toBe(false);
-      await broker.flush();
+      expect(flushed?.errors[0]).toBeInstanceOf(SessionWriteFailure);
+      expect(
+        (flushed?.errors[0] as SessionWriteFailure | undefined)?.destination,
+      ).toBe(D);
     });
   });
 });

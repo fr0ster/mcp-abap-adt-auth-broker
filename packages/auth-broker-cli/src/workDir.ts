@@ -9,40 +9,32 @@
  * at once shared one directory that each removed on exit.
  *
  * Now each run gets its own directory under the OS temp dir, readable by the
- * user alone, and it is removed on any exit: success, error, or a signal.
+ * user alone. Its owner — the run's interrupt (`interrupt.ts`) — removes it
+ * on every exit: success, error, `process.exit()` or a signal.
  */
 
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const SIGNAL_EXIT_CODES: Record<'SIGINT' | 'SIGTERM' | 'SIGHUP', number> = {
-  SIGINT: 130,
-  SIGTERM: 143,
-  SIGHUP: 129,
-};
+export interface WorkDir {
+  /** The directory: mode 0700, the user's alone. */
+  readonly path: string;
+  /** Removes it and everything in it; never throws. */
+  remove(): void;
+}
 
-export function createWorkDir(prefix: string): string {
+export function createWorkDir(prefix: string): WorkDir {
   // mkdtemp creates the directory with mode 0700: the secret is the user's alone.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
-
-  const remove = () => {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // Nothing left to do on the way out.
-    }
+  return {
+    path: dir,
+    remove: () => {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Nothing left to do on the way out.
+      }
+    },
   };
-
-  // `exit` covers process.exit() and a normal end; it does not fire for a
-  // signal, so each is handled too, and exits with the conventional code.
-  process.once('exit', remove);
-  for (const [signal, code] of Object.entries(SIGNAL_EXIT_CODES)) {
-    process.once(signal as NodeJS.Signals, () => {
-      remove();
-      process.exit(code);
-    });
-  }
-
-  return dir;
 }

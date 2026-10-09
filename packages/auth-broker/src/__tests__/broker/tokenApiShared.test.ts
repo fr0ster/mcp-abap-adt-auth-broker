@@ -3,14 +3,15 @@
  * `refreshToken` and `createTokenRefresher` ask the very provider
  * `getProvider` hands out for the destination — one per destination, one token,
  * one refresh token, one renewal in flight — and write nothing themselves: the
- * provider's `onTokens` does. A failure of that write still reaches
- * the token API's caller, as in 3.x.
+ * provider's persistence does. Under `onWriteFailure: 'fail'` a failure of that
+ * write still reaches the token API's caller.
  *
  * The stores are in-memory fakes of the contract; the providers are real
- * (auth-providers 5) against a local token endpoint, driven through
+ * (auth-providers 6) against a local token endpoint, driven through
  * `IAuthProvider` and the token API only.
  */
 
+import { isAuthProviderFailure, readFailure } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
@@ -25,6 +26,8 @@ import type {
 } from '@mcp-abap-adt/interfaces-auth-broker';
 import type { IAuthorizationConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { AuthBroker, DestinationConfigError } from '../../index';
+import { uaaRecord } from '../helpers/bindingRecord';
+import { STATED } from '../helpers/stated';
 import {
   jwtExpiringIn,
   startTokenEndpoint,
@@ -56,7 +59,13 @@ function client(): IAuthorizationConfig {
 
 /** What a secret obtained for the means below is bound to. */
 const FOR = 'https://abap.example.com:443';
-const by = () => `${endpoint.url}?client_id=broker-client`;
+/** The `issuedBy` record of a UAA row with this endpoint and client. */
+const by = (
+  grant:
+    | 'authorization_code'
+    | 'client_credentials'
+    | 'passcode' = 'authorization_code',
+) => uaaRecord(grant, endpoint.url, 'broker-client');
 
 function keyStore(
   conn: IConnectionConfig | null,
@@ -133,6 +142,7 @@ async function refusal(promise: Promise<unknown>) {
 function clientCredentials() {
   const { store, held } = sessionStore();
   const broker = new AuthBroker({
+    ...STATED,
     sessionStore: store,
     serviceKeyStore: keyStore({
       authType: 'jwt',
@@ -153,6 +163,7 @@ function seededAuthorizationCode() {
     issuedBy: by(),
   });
   const broker = new AuthBroker({
+    ...STATED,
     sessionStore: store,
     serviceKeyStore: keyStore({
       authType: 'jwt',
@@ -210,7 +221,7 @@ describe('the token API on the getProvider cache (no consumer provider)', () => 
     expect(held()?.authorizationToken).toBe(token);
   });
 
-  it('writes nothing itself: a cache hit writes nothing, a renewal is written once by onTokens', async () => {
+  it('writes nothing itself: a cache hit writes nothing, a renewal is written once by the provider’s persistence', async () => {
     const { broker, store, held, stored } = seededAuthorizationCode();
 
     await expect(broker.getToken(D)).resolves.toBe(stored);
@@ -243,36 +254,49 @@ describe('the token API on the getProvider cache (no consumer provider)', () => 
   describe('a write that fails', () => {
     class StoreDiskError extends Error {}
 
-    beforeEach(() => {
-      jest.useFakeTimers({
-        doNotFake: ['nextTick', 'setImmediate', 'queueMicrotask'],
-      });
-    });
+    /**
+     * The provider's awaited report failed: `unknown`, `persisting-tokens`,
+     * relayed as the provider made it — never the store's error itself.
+     */
+    function expectPersistingFailed(thrown: unknown, storeError: unknown) {
+      expect(thrown).not.toBe(storeError);
+      expect(isAuthProviderFailure(thrown)).toBe(true);
+      const error = readFailure(thrown, 'unfamiliar-error');
+      expect(error.kind).toBe('unknown');
+      expect(error.facts).toEqual(
+        expect.objectContaining({ operation: 'persisting-tokens' }),
+      );
+    }
 
-    it("surfaces from getToken as the store raised it, while the provider keeps the token and the broker's retry writes it", async () => {
+    it('fails getToken with persisting-tokens (onWriteFailure: fail), while the provider keeps the token, and the next call retries the write first', async () => {
       const { broker, store, held } = clientCredentials();
       const disk = new StoreDiskError('disk full');
       store.saveSession.mockRejectedValueOnce(disk);
 
-      await expect(broker.getToken(D)).rejects.toBe(disk);
+      expectPersistingFailed(
+        await broker.getToken(D).catch((e: unknown) => e),
+        disk,
+      );
       expect(endpoint.requests).toHaveLength(1);
-      // The token stands: the provider holds it and presents it.
-      const provider = await broker.getProvider(D);
-      await expect(bearer(provider)).resolves.toBe(endpoint.issued[0]);
       expect(held()).toBeUndefined();
-
-      await jest.advanceTimersByTimeAsync(1_000);
-
+      // The next call retries the pending write first; it lands. The token
+      // stands: the provider holds it and presents it.
+      const provider = await broker.getProvider(D);
+      expect(store.saveSession).toHaveBeenCalledTimes(2);
       expect(held()?.authorizationToken).toBe(endpoint.issued[0]);
+      await expect(bearer(provider)).resolves.toBe(endpoint.issued[0]);
       expect(endpoint.requests).toHaveLength(1);
     });
 
-    it('refreshToken surfaces it too; a cache hit afterwards is not a failure', async () => {
+    it('refreshToken fails the same; a cache hit afterwards is not a failure', async () => {
       const { broker, store } = seededAuthorizationCode();
       const disk = new StoreDiskError('disk full');
       store.saveSession.mockRejectedValueOnce(disk);
 
-      await expect(broker.refreshToken(D)).rejects.toBe(disk);
+      expectPersistingFailed(
+        await broker.refreshToken(D).catch((e: unknown) => e),
+        disk,
+      );
       await expect(broker.getToken(D)).resolves.toBe(endpoint.issued[0]);
     });
   });
@@ -293,6 +317,7 @@ describe('the token API on the getProvider cache (no consumer provider)', () => 
       async (authType, fields) => {
         const { store } = sessionStore({ authorizationToken: 'never-read' });
         const broker = new AuthBroker({
+          ...STATED,
           sessionStore: store,
           serviceKeyStore: keyStore({
             authType,
@@ -328,6 +353,7 @@ describe('the token API on the getProvider cache (no consumer provider)', () => 
           issuedFor: FOR,
         });
         const broker = new AuthBroker({
+          ...STATED,
           sessionStore: store,
           serviceKeyStore: keyStore({
             authType,
@@ -348,6 +374,7 @@ describe('the token API on the getProvider cache (no consumer provider)', () => 
     it('a destination getProvider refuses is refused by the token API the same way', async () => {
       const { store } = sessionStore();
       const broker = new AuthBroker({
+        ...STATED,
         sessionStore: store,
         serviceKeyStore: keyStore({ authType: 'jwt', serviceUrl: SERVICE_URL }),
       });

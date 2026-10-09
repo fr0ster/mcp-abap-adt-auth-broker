@@ -6,12 +6,13 @@
  */
 
 import * as fs from 'node:fs';
+import { UsageError } from './subcommandArgs';
 
 /** The file's JSON; refused as "<what> <file> cannot be read as JSON". */
 export function readJsonFile(file: string, what: string): unknown {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
-    throw new Error(`${what} ${file} cannot be read as JSON`);
+    throw new UsageError(`${what} ${file} cannot be read as JSON`);
   }
 }

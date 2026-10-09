@@ -55,26 +55,11 @@ packages/auth-broker/tests/test-config.yaml
 
 # Allow JSON for local test tooling
 !packages/auth-broker/tests/stand/keycloak/*.json
-!packages/auth-broker-cli/tests/keycloak/*.json
-!packages/auth-broker-cli/tests/sso-demo/**/*.json
 !packages/auth-broker/tests/live/x509/xs-security.json
 
 # The x509 live check's local state: the trial's x509 service key, its PEM
 # certificate and private key, and the ledger of what setup.sh created.
 packages/auth-broker/tests/live/x509/.local/
-
-# CAP demo build artifacts
-packages/auth-broker-cli/tests/sso-demo/node_modules/
-packages/auth-broker-cli/tests/sso-demo/gen/
-packages/auth-broker-cli/tests/sso-demo/mta_archives/
-packages/auth-broker-cli/tests/sso-demo/.cds-gen/
-packages/auth-broker-cli/tests/sso-demo/.cds-services.json
-packages/auth-broker-cli/tests/sso-demo/*.sqlite
-packages/auth-broker-cli/tests/sso-demo/*.db
-packages/auth-broker-cli/tests/sso-demo/.env
-packages/auth-broker-cli/tests/sso-demo/*.xsuaa.json
-packages/auth-broker-cli/tests/sso-demo/sso-demo-key.json
-packages/auth-broker-cli/tests/sso-demo/*.xml
 
 # Git worktrees
 .worktrees/

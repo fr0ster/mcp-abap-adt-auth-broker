@@ -1,8 +1,11 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "rootDir": "./src",
+    "tsBuildInfoFile": "./tsconfig.build.tsbuildinfo",
     "types": ["node"]
   },
+  "include": ["src/**/*"],
   // generate-env-from-service-key.ts is a development script run with tsx
   // (`npm run generate-env`), never a bin, so it is type-checked by
   // tsconfig.json but not compiled into the package.

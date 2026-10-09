@@ -46,6 +46,7 @@ import {
 } from '@mcp-abap-adt/auth-stores';
 import { AuthBroker, fromServiceKeyCertificate } from '../../index';
 import { describeWhere, runLog as log } from '../helpers/describeWhere';
+import { STATED } from '../helpers/stated';
 
 const LOCAL = process.env.AUTH_BROKER_LIVE_X509_LOCAL;
 const DESTINATION = 'x509';
@@ -220,7 +221,8 @@ describeWhere(
   'x509 XSUAA service key — a BTP trial (broker fromServiceKeyCertificate, mcp-auth and generate-env with --client-auth certificate)',
   unavailable(),
   () => {
-    const local = LOCAL as string;
+    // Jest collects a skipped block too: no path may be built from an unset LOCAL.
+    const local = LOCAL ?? '';
     const keysDir = path.join(local, 'keys');
     const keyFile = path.join(keysDir, `${DESTINATION}.json`);
     const certPath = path.join(local, 'client.crt');
@@ -290,6 +292,7 @@ describeWhere(
     /** A broker over a written destination, from where it now lives. */
     const freshBroker = (dir: string): AuthBroker =>
       new AuthBroker({
+        ...STATED,
         serviceKeyStore: new EnvDestinationStore(dir, {
           variables: XSUAA_DESTINATION_VARS,
         }),
@@ -352,6 +355,7 @@ describeWhere(
 
     it('(a) AuthBroker + XsuaaServiceKeyStore + fromServiceKeyCertificate(): prepare() is Ok, and the token API returns a token of the key’s client', async () => {
       const broker = new AuthBroker({
+        ...STATED,
         serviceKeyStore: new XsuaaServiceKeyStore(keysDir, {
           grantType: 'client_credentials',
         }),

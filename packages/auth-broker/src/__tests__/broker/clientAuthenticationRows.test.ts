@@ -41,6 +41,7 @@ import {
   type ClientAuthenticationStrategy,
   DestinationConfigError,
 } from '../../index';
+import { STATED } from '../helpers/stated';
 import {
   startTokenEndpoint,
   type TokenEndpoint,
@@ -258,7 +259,7 @@ function brokerFor(
     ...collaborators(),
   };
   if (clientAuthentication) config.clientAuthentication = clientAuthentication;
-  return new AuthBroker(config);
+  return new AuthBroker({ ...STATED, ...config });
 }
 
 async function refusal(
@@ -379,6 +380,7 @@ describe('with a strategy, every client row', () => {
         destination: D,
         grant: 'client_credentials',
         client: client(),
+        signal: new AbortController().signal,
         readCertificate: async () => certificateClient(),
       });
       expect(identity).toEqual({ uaaUrl: endpoint.url, uaaClientId: id });
@@ -465,6 +467,7 @@ describe('without a strategy — 4.0.0', () => {
   it('a destination lacking something else than its client gets no hint', async () => {
     const keys = keyStore('authorization_code', secretClient());
     const broker = new AuthBroker({
+      ...STATED,
       sessionStore: sessionStore(),
       serviceKeyStore: keys,
     });

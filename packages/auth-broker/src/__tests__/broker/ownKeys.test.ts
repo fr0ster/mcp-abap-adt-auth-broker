@@ -25,6 +25,7 @@ import {
   type ClientAuthenticationContext,
   type TokenProviderFactory,
 } from '../../index';
+import { STATED } from '../helpers/stated';
 
 const D = 'KEYS';
 
@@ -99,6 +100,7 @@ async function run(withStrategy: boolean) {
     Parameters<TokenProviderFactory>
   >(() => provider());
   const broker = new AuthBroker({
+    ...STATED,
     sessionStore: store,
     serviceKeyStore: keyStore(),
     provider: factory,
@@ -137,7 +139,8 @@ describe('own keys of what the token API hands out and writes', () => {
       'expiresAt',
       'issuedBy',
       'issuedFor',
-      'refreshToken=undefined',
+      // Always stated: the result's refresh token, or ''.
+      'refreshToken',
     ]);
   });
 
@@ -162,6 +165,8 @@ describe('own keys of what the token API hands out and writes', () => {
       'destination',
       'grant',
       'readCertificate',
+      // The build's attempt signal.
+      'signal',
     ]);
     expect(shape(contexts[0]!.client)).toEqual([
       'uaaClientId',
@@ -174,7 +179,8 @@ describe('own keys of what the token API hands out and writes', () => {
       'expiresAt',
       'issuedBy',
       'issuedFor',
-      'refreshToken=undefined',
+      // Always stated: the result's refresh token, or ''.
+      'refreshToken',
     ]);
   });
 });

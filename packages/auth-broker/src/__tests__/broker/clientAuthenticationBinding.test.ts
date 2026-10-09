@@ -1,9 +1,12 @@
 /**
  * The session binding of a destination whose client authenticates through the
- * consumer's strategy: `issuedBy` names the issuer and the client identity —
- * the secret client when the key store has one, else the certificate client's
- * `uaaUrl` and `clientId` — never PEM. A token stored for one client identity
- * seeds a broker built later for the same one, and no other (Review Focus 2).
+ * consumer's strategy: `issuedBy` is the row's record, naming the client
+ * identity — the secret client when the key store has one, else the
+ * certificate client's `uaaUrl` and `clientId` — and, when the build read the
+ * certificate client, its `certUrl`, with its public certificate in the trust
+ * digest; never the PEM itself, never the key. A token stored for one client
+ * identity seeds a broker built later for the same one, and no other (Review
+ * Focus 2).
  *
  * The providers are real (auth-providers 5.3.0) against local token endpoints;
  * the strategy's answer authenticates with a header of its own.
@@ -29,6 +32,8 @@ import {
   type ClientAuthenticationContext,
   type ClientAuthenticationStrategy,
 } from '../../index';
+import { uaaRecord } from '../helpers/bindingRecord';
+import { STATED } from '../helpers/stated';
 import {
   startTokenEndpoint,
   type TokenEndpoint,
@@ -38,6 +43,10 @@ const D = 'X509';
 const REDIRECT = 'http://localhost/callback';
 const FOR = 'https://abap.example.com:443?sap-client=100';
 const CLIENT_SECRET = 'S3CRET-client-must-not-leak';
+const CERTIFICATE_PEM =
+  '-----BEGIN CERTIFICATE-----\nnot-read\n-----END CERTIFICATE-----';
+const KEY_PEM =
+  '-----BEGIN PRIVATE KEY-----\nnot-read\n-----END PRIVATE KEY-----';
 
 let endpoint: TokenEndpoint;
 let other: TokenEndpoint;
@@ -66,9 +75,8 @@ function certificate(
   return {
     uaaUrl: endpoint.url,
     clientId: 'cert-client',
-    certificate:
-      '-----BEGIN CERTIFICATE-----\nnot-read\n-----END CERTIFICATE-----',
-    key: '-----BEGIN PRIVATE KEY-----\nnot-read\n-----END PRIVATE KEY-----',
+    certificate: CERTIFICATE_PEM,
+    key: KEY_PEM,
     certUrl: 'https://cert.example.com',
     ...extra,
   };
@@ -82,6 +90,21 @@ const secretClient = (
   uaaClientSecret: CLIENT_SECRET,
   ...extra,
 });
+
+/** The record of the `authorization_code` row for the certificate client. */
+const certRecord = (
+  uaaUrl: string,
+  clientId = 'cert-client',
+  certUrl = 'https://cert.example.com',
+) =>
+  uaaRecord('authorization_code', uaaUrl, clientId, {
+    certUrl,
+    certificate: CERTIFICATE_PEM,
+  });
+
+/** The record of the `authorization_code` row for the secret client. */
+const secretRecord = () =>
+  uaaRecord('authorization_code', endpoint.url, 'secret-client');
 
 /** One session store over a map, shared by every broker a test builds. */
 function sessions(): {
@@ -158,6 +181,7 @@ function broker(
   clientAuthentication?: ClientAuthenticationStrategy,
 ): AuthBroker {
   return new AuthBroker({
+    ...STATED,
     sessionStore: store,
     serviceKeyStore: keys,
     authorization: () => login.strategy,
@@ -194,7 +218,7 @@ async function loggedIn(store: ISessionStore) {
 }
 
 describe('the binding of a certificate client', () => {
-  it('stores its tokens with issuedBy = its issuer and client — never PEM', async () => {
+  it('stores its tokens with the record of its issuer, client and certUrl — never the PEM, never the key', async () => {
     const { store, held } = sessions();
     await loggedIn(store);
 
@@ -203,9 +227,10 @@ describe('the binding of a certificate client', () => {
       refreshToken: 'refresh-1',
       expiresAt: expect.any(Number),
       issuedFor: FOR,
-      issuedBy: `${endpoint.url}?client_id=cert-client`,
+      issuedBy: certRecord(endpoint.url),
     });
     expect(JSON.stringify(held())).not.toContain('BEGIN');
+    expect(JSON.stringify(held())).not.toContain('not-read');
   });
 
   it('is reused by a broker recreated for the same certificate client: no login, no request', async () => {
@@ -247,7 +272,7 @@ describe('the binding of a certificate client', () => {
     expect(login.asked).toBe(1);
     expect(endpoint.requests.at(-1)?.grantType).toBe('authorization_code');
     expect(held()?.issuedBy).toBe(
-      `${endpoint.url}?client_id=another-cert-client`,
+      certRecord(endpoint.url, 'another-cert-client'),
     );
   });
 
@@ -270,8 +295,38 @@ describe('the binding of a certificate client', () => {
     expect(other.requests.map((r) => r.grantType)).toEqual([
       'authorization_code',
     ]);
-    expect(held()?.issuedBy).toBe(`${other.url}?client_id=cert-client`);
+    expect(held()?.issuedBy).toBe(certRecord(other.url));
   });
+
+  it.each([
+    ['certUrl', { certUrl: 'https://cert.example.com/' }],
+    [
+      'the certificate',
+      {
+        certificate:
+          '-----BEGIN CERTIFICATE-----\nanother\n-----END CERTIFICATE-----',
+      },
+    ],
+  ] as [string, Partial<IClientCertificate>][])(
+    'is refused after %s changes, the client unchanged: a fresh login, the old refresh token not spent',
+    async (_label, change) => {
+      const { store } = sessions();
+      await loggedIn(store);
+
+      const login = user();
+      const again = broker(
+        store,
+        keyStore(null, certificate(change)),
+        login,
+        certificateStrategy,
+      );
+      const provider = await again.getProvider(D);
+      expect(await provider.prepare()).toEqual({ ok: true });
+
+      expect(login.asked).toBe(1);
+      expect(JSON.stringify(endpoint.requests)).not.toContain('refresh-1');
+    },
+  );
 });
 
 describe('a certificate destination stating no resource (Ruling 14)', () => {
@@ -311,7 +366,8 @@ describe('a certificate destination stating no resource (Ruling 14)', () => {
   it('the same client: the stored token is reused — no login, no request', async () => {
     const { store, held } = sessions();
     await storedFor(store, unstated);
-    expect(held()).not.toHaveProperty('issuedFor');
+    // Written as '' — no resource — never left to the merge.
+    expect(held()?.issuedFor).toBe('');
     const stored = held()?.authorizationToken;
     const requests = endpoint.requests.length;
 
@@ -352,8 +408,8 @@ describe('a certificate destination stating no resource (Ruling 14)', () => {
     const first = broker(store, keys(), user());
     expect(await (await first.getProvider(D)).prepare()).toEqual({ ok: true });
     await first.flush();
-    expect(held()).not.toHaveProperty('issuedFor');
-    expect(held()?.issuedBy).toBe(`${endpoint.url}?client_id=secret-client`);
+    expect(held()?.issuedFor).toBe('');
+    expect(held()?.issuedBy).toBe(secretRecord());
 
     const login = user();
     const again = broker(store, keys(), login);
@@ -361,11 +417,83 @@ describe('a certificate destination stating no resource (Ruling 14)', () => {
     expect(login.asked).toBe(1);
   });
 
+  describe('what the broker logs of a stored secret it does not take', () => {
+    const DISCARDED = `[AuthBroker] ${D}: the stored session secret is not recorded as issued under the destination's current means; not used, the provider obtains a new one`;
+    const NEVER_SEEDED = `[AuthBroker] ${D}: the destination's means do not state everything a session secret is bound to; a stored one is never used`;
+
+    function logged() {
+      const lines: [string, string][] = [];
+      const at = (level: string) => (message: string) => {
+        lines.push([level, message]);
+      };
+      return {
+        lines,
+        logger: {
+          debug: at('debug'),
+          info: at('info'),
+          warn: at('warn'),
+          error: at('error'),
+        },
+      };
+    }
+    const about = (lines: [string, string][]) =>
+      lines.filter(([, m]) => m === DISCARDED || m === NEVER_SEEDED);
+
+    it('with a strategy, another client: the binding can be seeded — one warn', async () => {
+      const { store } = sessions();
+      await storedFor(store, unstated);
+      const { lines, logger } = logged();
+      const again = new AuthBroker(
+        {
+          ...STATED,
+          sessionStore: store,
+          serviceKeyStore: keyStore(
+            null,
+            certificate({ clientId: 'another-cert-client' }),
+            unstated,
+          ),
+          authorization: () => user().strategy,
+          clientAuthentication: certificateStrategy,
+        },
+        logger,
+      );
+      expect(await (await again.getProvider(D)).prepare()).toEqual({
+        ok: true,
+      });
+      expect(about(lines)).toEqual([['warn', DISCARDED]]);
+    });
+
+    it('without a strategy, no resource: never seeded — the debug line, no warn', async () => {
+      const { store } = sessions();
+      const keys = () => keyStore(secretClient(), null, unstated);
+      const first = broker(store, keys(), user());
+      expect(await (await first.getProvider(D)).prepare()).toEqual({
+        ok: true,
+      });
+      await first.flush();
+      const { lines, logger } = logged();
+      const again = new AuthBroker(
+        {
+          ...STATED,
+          sessionStore: store,
+          serviceKeyStore: keys(),
+          authorization: () => user().strategy,
+        },
+        logger,
+      );
+      expect(await (await again.getProvider(D)).prepare()).toEqual({
+        ok: true,
+      });
+      expect(about(lines)).toEqual([['debug', NEVER_SEEDED]]);
+      expect(lines.filter(([level]) => level === 'warn')).toEqual([]);
+    });
+  });
+
   it('a none row stays 4.0.0: a handed-over token stored without a resource is refused', async () => {
     const { store } = sessions();
     await store.saveSession(D, {
       authorizationToken: 'handed-over',
-      issuedBy: `${endpoint.url}?client_id=secret-client`,
+      issuedBy: `mcp-abap-adt-binding/2;jwt/none;secret-client;${encodeURIComponent(endpoint.url)}${';'.repeat(10)}`,
     } as IConfig);
     const keys = keyStore(secretClient(), null, {
       ...unstated,
@@ -386,7 +514,7 @@ describe('a destination switched between a secret and a certificate (Review Focu
       ok: true,
     });
     await before.flush();
-    expect(held()?.issuedBy).toBe(`${endpoint.url}?client_id=secret-client`);
+    expect(held()?.issuedBy).toBe(secretRecord());
     const secretToken = held()?.authorizationToken;
 
     const login = user();
@@ -402,7 +530,7 @@ describe('a destination switched between a secret and a certificate (Review Focu
 
     expect(login.asked).toBe(1);
     expect(await bearer(provider)).not.toBe(secretToken);
-    expect(held()?.issuedBy).toBe(`${endpoint.url}?client_id=cert-client`);
+    expect(held()?.issuedBy).toBe(certRecord(endpoint.url));
   });
 
   it('certificate → secret: the session the certificate client obtained is not reused', async () => {
@@ -418,7 +546,7 @@ describe('a destination switched between a secret and a certificate (Review Focu
 
     expect(login.asked).toBe(1);
     expect(await bearer(provider)).not.toBe(certToken);
-    expect(held()?.issuedBy).toBe(`${endpoint.url}?client_id=secret-client`);
+    expect(held()?.issuedBy).toBe(secretRecord());
   });
 });
 
@@ -433,7 +561,7 @@ describe('with a strategy and a secret client', () => {
     expect(await (await b.getProvider(D)).prepare()).toEqual({ ok: true });
     await b.flush();
 
-    expect(held()?.issuedBy).toBe(`${endpoint.url}?client_id=secret-client`);
+    expect(held()?.issuedBy).toBe(secretRecord());
     expect(keys.getClientCertificate).not.toHaveBeenCalled();
   });
 });

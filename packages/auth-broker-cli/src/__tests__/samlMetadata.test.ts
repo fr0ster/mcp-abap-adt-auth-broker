@@ -7,15 +7,26 @@
  * IDs and certificates are substituted; the structure is as served.
  */
 import * as fs from 'node:fs';
+import * as http from 'node:http';
+import * as https from 'node:https';
+import type { AddressInfo } from 'node:net';
+import * as os from 'node:os';
 import * as path from 'node:path';
+import { generateKeyMaterial } from '@mcp-abap-adt/auth-mocks';
+import * as ts from 'typescript';
 import { parseSamlTrustArg } from '../mcpSsoConfig';
+import { failureLines } from '../output';
 import {
   applySamlMetadata,
   loadMetadata,
+  MAX_METADATA_BYTES,
   readIdpMetadata,
   readSpMetadata,
   type SamlMetadataTarget,
 } from '../samlMetadata';
+import { isUsageError } from '../subcommandArgs';
+import { withoutTrailingSlashes } from '../urlText';
+import { trustCertServer } from './helpers/certificates';
 
 const fixture = (name: string) =>
   fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
@@ -25,6 +36,32 @@ const XSUAA = fixture('xsuaa-sp-metadata.xml');
 const IAS_URL = 'https://ias-tenant.accounts.example.com/saml2/metadata';
 const UAA_URL = 'https://subaccount.authentication.example.com';
 const BEARER_ALIAS = `${UAA_URL}/oauth/token/alias/subaccount.aws-live`;
+
+const MD = 'urn:oasis:names:tc:SAML:2.0:metadata';
+const DS = 'http://www.w3.org/2000/09/xmldsig#';
+/** A real certificate per name, base64 DER as metadata carries it. */
+const certificates = new Map<string, string>();
+function cert(name: string): string {
+  let base64 = certificates.get(name);
+  if (base64 === undefined) {
+    base64 = generateKeyMaterial()
+      .certificatePem.split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '' && !line.startsWith('-----'))
+      .join('');
+    certificates.set(name, base64);
+  }
+  return base64;
+}
+/** A name of upper-case letters stands for its real certificate. */
+const isName = (text: string) =>
+  text !== '' && [...text].every((c) => (c >= 'A' && c <= 'Z') || c === '-');
+/**
+ * A `ds:KeyInfo` holding one certificate, as metadata carries it: a name's
+ * real certificate, or the text as given.
+ */
+const keyInfo = (certificate: string) =>
+  `<ds:KeyInfo><ds:X509Data><ds:X509Certificate>${isName(certificate) ? cert(certificate) : certificate}</ds:X509Certificate></ds:X509Data></ds:KeyInfo>`;
 
 const loaderFor =
   (documents: Record<string, string>) => async (source: string) => {
@@ -47,32 +84,32 @@ describe('readIdpMetadata', () => {
 
   it('trusts signing keys and keys without `use`, never an encryption key', () => {
     const idp = readIdpMetadata(`
-      <md:EntityDescriptor xmlns:md="m" entityID="https://idp.example">
+      <md:EntityDescriptor xmlns:md="${MD}" xmlns:ds="${DS}" entityID="https://idp.example">
         <md:IDPSSODescriptor>
-          <md:KeyDescriptor use="signing"><ds:X509Certificate>SIGN</ds:X509Certificate></md:KeyDescriptor>
-          <md:KeyDescriptor><ds:X509Certificate>BOTH</ds:X509Certificate></md:KeyDescriptor>
-          <md:KeyDescriptor use="encryption"><ds:X509Certificate>ENCRYPT</ds:X509Certificate></md:KeyDescriptor>
+          <md:KeyDescriptor use="signing">${keyInfo('SIGN')}</md:KeyDescriptor>
+          <md:KeyDescriptor>${keyInfo('BOTH')}</md:KeyDescriptor>
+          <md:KeyDescriptor use="encryption">${keyInfo('ENCRYPT')}</md:KeyDescriptor>
           <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://idp.example/post"/>
         </md:IDPSSODescriptor>
       </md:EntityDescriptor>`);
 
-    expect(idp.certificates).toEqual(['SIGN', 'BOTH']);
+    expect(idp.certificates).toEqual([cert('SIGN'), cert('BOTH')]);
     // No redirect binding: the POST one stands in.
     expect(idp.ssoUrl).toBe('https://idp.example/post');
   });
 
   it('ignores keys of the SP role an IAS document also describes', () => {
     const idp = readIdpMetadata(`
-      <EntityDescriptor entityID="https://idp.example">
+      <EntityDescriptor xmlns="${MD}" xmlns:ds="${DS}" entityID="https://idp.example">
         <SPSSODescriptor>
-          <KeyDescriptor use="signing"><X509Certificate>SP-KEY</X509Certificate></KeyDescriptor>
+          <KeyDescriptor use="signing">${keyInfo('SP-KEY')}</KeyDescriptor>
         </SPSSODescriptor>
         <IDPSSODescriptor>
-          <KeyDescriptor use="signing"><X509Certificate>IDP-KEY</X509Certificate></KeyDescriptor>
+          <KeyDescriptor use="signing">${keyInfo('IDP-KEY')}</KeyDescriptor>
         </IDPSSODescriptor>
       </EntityDescriptor>`);
 
-    expect(idp.certificates).toEqual(['IDP-KEY']);
+    expect(idp.certificates).toEqual([cert('IDP-KEY')]);
   });
 
   it('refuses a document that is not an identity provider', () => {
@@ -91,9 +128,111 @@ describe('readSpMetadata', () => {
 
 describe('loadMetadata', () => {
   it('refuses plain http to anything but loopback: it carries trust', async () => {
-    await expect(loadMetadata('http://idp.example/metadata')).rejects.toThrow(
-      /must come over https/,
+    await expect(
+      loadMetadata('http://idp.example/metadata', '--idp-metadata'),
+    ).rejects.toThrow(/must come over https/);
+  });
+
+  /** What a load rejects with, and that it is the CLI's own words. */
+  async function refusal(load: Promise<string>): Promise<string> {
+    const thrown = await load.then(
+      () => undefined,
+      (error: unknown) => error,
     );
+    expect(isUsageError(thrown)).toBe(true);
+    return failureLines(thrown).join('\n');
+  }
+
+  it("a file that is not there: the flag, the path and ENOENT — never the reader's message", async () => {
+    const missing = path.resolve('no-such-metadata.xml');
+    const words = await refusal(loadMetadata(missing, '--idp-metadata'));
+    expect(words).toBe(`❌ --idp-metadata: ${missing} cannot be read (ENOENT)`);
+  });
+
+  it('a directory: the flag, the path and its code', async () => {
+    const words = await refusal(loadMetadata(__dirname, '--saml-metadata'));
+    expect(words).toBe(
+      `❌ --saml-metadata: ${__dirname} cannot be read (EISDIR)`,
+    );
+  });
+
+  it('an unreachable URL: the flag and the code, never the URL (it may carry a query or userinfo)', async () => {
+    const probe = http.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const { port } = probe.address() as AddressInfo;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const url = `http://127.0.0.1:${port}/meta?sig=SIG-MARKER`;
+    const words = await refusal(loadMetadata(url, '--idp-metadata'));
+    expect(words).toBe(
+      '❌ --idp-metadata: the metadata could not be fetched (ECONNREFUSED)',
+    );
+    // A URL with userinfo, which fetch refuses outright: still no URL.
+    const withUser = await refusal(
+      loadMetadata(
+        `http://user:PASS-MARKER@127.0.0.1:${port}/meta`,
+        '--idp-metadata',
+      ),
+    );
+    expect(withUser).toBe(
+      '❌ --idp-metadata: the metadata could not be fetched',
+    );
+  });
+
+  it('a server that answers an error status: the flag and the status, never the URL', async () => {
+    const server = http.createServer((_request, response) => {
+      response.writeHead(500);
+      response.end('SERVER-TEXT-MARKER');
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const { port } = server.address() as AddressInfo;
+    try {
+      const words = await refusal(
+        loadMetadata(
+          `http://127.0.0.1:${port}/meta?sig=SIG-MARKER`,
+          '--idp-metadata',
+        ),
+      );
+      expect(words).toBe('❌ --idp-metadata: the metadata server answered 500');
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('applySamlMetadata names the flag that stated each source', async () => {
+    const asked: string[] = [];
+    const load = async (source: string, flag: string) => {
+      asked.push(flag);
+      return source === IAS_URL ? IAS : XSUAA;
+    };
+    await applySamlMetadata(
+      {
+        protocol: 'saml2',
+        flow: 'bearer',
+        idpMetadata: IAS_URL,
+        uaaUrl: UAA_URL,
+      },
+      undefined,
+      load,
+    );
+    await applySamlMetadata(
+      {
+        protocol: 'saml2',
+        flow: 'bearer',
+        idpMetadata: IAS_URL,
+        samlMetadataPath: './sp.xml',
+      },
+      undefined,
+      load,
+    );
+    expect(asked).toEqual([
+      '--idp-metadata',
+      '--service-key',
+      '--idp-metadata',
+      '--saml-metadata',
+    ]);
   });
 });
 
@@ -230,11 +369,11 @@ describe('--idp-metadata', () => {
 
 describe('federation metadata (an EntitiesDescriptor of several entities)', () => {
   const idp = (id: string, cert: string) =>
-    `<md:EntityDescriptor entityID="${id}"><md:IDPSSODescriptor><md:KeyDescriptor use="signing"><ds:X509Certificate>${cert}</ds:X509Certificate></md:KeyDescriptor><md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://${cert}.example/sso"/></md:IDPSSODescriptor></md:EntityDescriptor>`;
+    `<md:EntityDescriptor entityID="${id}"><md:IDPSSODescriptor><md:KeyDescriptor use="signing">${keyInfo(cert)}</md:KeyDescriptor><md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://${cert}.example/sso"/></md:IDPSSODescriptor></md:EntityDescriptor>`;
   const sp = (id: string) =>
     `<md:EntityDescriptor entityID="${id}"><md:SPSSODescriptor><md:AssertionConsumerService Location="https://sp.example/acs"/></md:SPSSODescriptor></md:EntityDescriptor>`;
   const aggregate = (...entities: string[]) =>
-    `<md:EntitiesDescriptor xmlns:md="m" Name="federation">${entities.join('')}</md:EntitiesDescriptor>`;
+    `<md:EntitiesDescriptor xmlns:md="${MD}" xmlns:ds="${DS}" Name="federation">${entities.join('')}</md:EntitiesDescriptor>`;
 
   it('takes the entityID of the entity whose keys it takes, not the first in the document', () => {
     // The first entity is a service provider: its entityID used to be paired
@@ -244,17 +383,24 @@ describe('federation metadata (an EntitiesDescriptor of several entities)', () =
     );
     expect(read).toEqual({
       entityId: 'https://idp-a',
-      certificates: ['CERTA'],
+      certificates: [cert('CERTA')],
       ssoUrl: 'https://CERTA.example/sso',
     });
   });
 
   it('refuses to choose between identity providers nobody named', () => {
-    expect(() =>
+    let thrown: unknown;
+    try {
       readIdpMetadata(
         aggregate(idp('https://idp-a', 'CERTA'), idp('https://idp-b', 'CERTB')),
-      ),
-    ).toThrow(/2 identity providers.*--idp-entity-id.*idp-a.*idp-b/);
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(String(thrown)).toMatch(/2 identity providers.*--idp-entity-id/);
+    // The document's entityIDs are the server's text: never in the words.
+    expect(String(thrown)).not.toContain('idp-a');
+    expect(String(thrown)).not.toContain('idp-b');
   });
 
   it('reads the identity provider --idp-entity-id names', () => {
@@ -263,7 +409,7 @@ describe('federation metadata (an EntitiesDescriptor of several entities)', () =
       'https://idp-b',
     );
     expect(read.entityId).toBe('https://idp-b');
-    expect(read.certificates).toEqual(['CERTB']);
+    expect(read.certificates).toEqual([cert('CERTB')]);
   });
 
   it('refuses an entityID the metadata does not describe', () => {
@@ -293,7 +439,559 @@ describe('federation metadata (an EntitiesDescriptor of several entities)', () =
         ),
       }),
     );
-    expect(options.idpCertificates).toEqual(['CERTB']);
+    expect(options.idpCertificates).toEqual([cert('CERTB')]);
     expect(options.idpSsoUrl).toBe('https://CERTB.example/sso');
+  });
+});
+
+/** The CLI's words for what `run` throws: a usage error, its one line. */
+function wordsOf(run: () => unknown): string {
+  let thrown: unknown;
+  try {
+    run();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(isUsageError(thrown)).toBe(true);
+  return failureLines(thrown).join('\n');
+}
+
+describe('hostile metadata: refused in the CLI’s own words, naming the flag', () => {
+  const MARKER = 'SERVER-TEXT-MARKER';
+  const idpDocument = (
+    inner: string,
+    entity = 'entityID="https://idp.example"',
+  ) =>
+    `<md:EntityDescriptor xmlns:md="${MD}" xmlns:ds="${DS}" ${entity}><md:IDPSSODescriptor>${inner}</md:IDPSSODescriptor></md:EntityDescriptor>`;
+  const signing = (certificate: string) =>
+    `<md:KeyDescriptor use="signing">${keyInfo(certificate)}</md:KeyDescriptor>`;
+
+  it.each([
+    [
+      'a DOCTYPE (an entity expansion)',
+      `<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "${MARKER}"><!ENTITY lol2 "&lol;&lol;&lol;&lol;">]>${idpDocument(signing('&lol2;'))}`,
+    ],
+    ['a DOCTYPE in lower case', `<!doctype x>${idpDocument(signing('CERT'))}`],
+    [
+      'a DOCTYPE naming an external entity',
+      `<!DOCTYPE x SYSTEM "file:///etc/passwd">${idpDocument(signing('CERT'))}`,
+    ],
+  ])('%s: refused before parsing', (_case, xml) => {
+    expect(
+      wordsOf(() => readIdpMetadata(xml, undefined, '--idp-metadata')),
+    ).toBe(
+      '❌ --idp-metadata: the metadata carries a DOCTYPE, which SAML metadata never needs: refused before it is parsed',
+    );
+  });
+
+  it.each([
+    ['an entity never declared', idpDocument(signing(`&xxe;${MARKER}`))],
+    [
+      'an unclosed element',
+      `${idpDocument(signing('CERT'))}<md:Extra>${MARKER}`,
+    ],
+    [
+      'an undeclared prefix',
+      `<x:EntityDescriptor>${MARKER}</x:EntityDescriptor>`,
+    ],
+    ['no document at all', ''],
+    ['text that is not XML', `${MARKER} {"json": true}`],
+  ])('%s: not well-formed, nothing of it quoted', (_case, xml) => {
+    expect(
+      wordsOf(() => readIdpMetadata(xml, undefined, '--idp-metadata')),
+    ).toBe('❌ --idp-metadata: the metadata is not well-formed XML');
+  });
+
+  it('a document larger than the limit: refused before it is parsed', () => {
+    const huge = idpDocument(
+      `<md:Extensions>${'x'.repeat(MAX_METADATA_BYTES)}</md:Extensions>${signing('CERT')}`,
+    );
+    expect(
+      wordsOf(() => readIdpMetadata(huge, undefined, '--idp-metadata')),
+    ).toBe('❌ --idp-metadata: the metadata is larger than 1 MiB');
+  });
+
+  it('a KeyDescriptor nested inside another: refused, neither key trusted', () => {
+    const xml = idpDocument(
+      `<md:KeyDescriptor use="encryption">${keyInfo('OUTER')}${signing('INNER')}</md:KeyDescriptor>`,
+    );
+    expect(
+      wordsOf(() => readIdpMetadata(xml, undefined, '--idp-metadata')),
+    ).toBe(
+      '❌ --idp-metadata: a KeyDescriptor is nested inside another element: refused',
+    );
+  });
+
+  it('a KeyDescriptor hidden in an extension of the IDPSSODescriptor: refused', () => {
+    const xml = idpDocument(
+      `<md:Extensions>${signing('HIDDEN')}</md:Extensions>${signing('CERT')}`,
+    );
+    expect(
+      wordsOf(() => readIdpMetadata(xml, undefined, '--idp-metadata')),
+    ).toBe(
+      '❌ --idp-metadata: a KeyDescriptor is nested inside another element: refused',
+    );
+  });
+
+  it('an EntityDescriptor nested inside another: refused', () => {
+    const xml = `<md:EntityDescriptor xmlns:md="${MD}" xmlns:ds="${DS}" entityID="https://outer"><md:Extensions>${idpDocument(signing('CERT')).replace(` xmlns:md="${MD}" xmlns:ds="${DS}"`, '')}</md:Extensions></md:EntityDescriptor>`;
+    expect(
+      wordsOf(() => readIdpMetadata(xml, undefined, '--idp-metadata')),
+    ).toBe(
+      '❌ --idp-metadata: an EntityDescriptor is nested inside another element: refused',
+    );
+  });
+
+  it('federation metadata nested 15,000 EntitiesDescriptors deep: read, no stack overflow', () => {
+    const depth = 15_000;
+    const xml = `<md:EntitiesDescriptor xmlns:md="${MD}" xmlns:ds="${DS}">${'<md:EntitiesDescriptor>'.repeat(depth)}${idpDocument(signing('DEEP')).replace(` xmlns:md="${MD}" xmlns:ds="${DS}"`, '')}${'</md:EntitiesDescriptor>'.repeat(depth)}</md:EntitiesDescriptor>`;
+    expect(Buffer.byteLength(xml)).toBeLessThan(MAX_METADATA_BYTES);
+    expect(readIdpMetadata(xml, undefined, '--idp-metadata')).toEqual({
+      entityId: 'https://idp.example',
+      certificates: [cert('DEEP')],
+      ssoUrl: undefined,
+    });
+  });
+
+  it.each([
+    ['malformed base64', 'MII*not+base64'],
+    [
+      'a no-break space inside',
+      `${cert('NBSP').slice(0, 40)}\u00a0${cert('NBSP').slice(40)}`,
+    ],
+    [
+      'base64 that is no certificate',
+      Buffer.from('not a certificate').toString('base64'),
+    ],
+    ['padding inside the text', 'MIIB=AAA'],
+  ])(
+    'a signing certificate that is %s: refused naming the flag',
+    (_case, text) => {
+      const xml = idpDocument(signing(text));
+      expect(
+        wordsOf(() => readIdpMetadata(xml, undefined, '--idp-metadata')),
+      ).toBe(
+        '❌ --idp-metadata: a signing key states a certificate that is not an X.509 certificate',
+      );
+    },
+  );
+
+  it('an identity provider that states no entityID: refused', () => {
+    const xml = idpDocument(signing('CERT'), '');
+    expect(
+      wordsOf(() => readIdpMetadata(xml, undefined, '--idp-metadata')),
+    ).toBe('❌ --idp-metadata: the identity provider states no entityID');
+  });
+
+  it('a signing key with an empty certificate: refused', () => {
+    const xml = idpDocument(signing('  \n  '));
+    expect(
+      wordsOf(() => readIdpMetadata(xml, undefined, '--idp-metadata')),
+    ).toBe('❌ --idp-metadata: a signing key states no certificate');
+  });
+
+  it('elements of another namespace are not metadata: no identity provider', () => {
+    const xml = `<EntityDescriptor entityID="https://idp.example"><IDPSSODescriptor><KeyDescriptor use="signing"><X509Certificate>CERT</X509Certificate></KeyDescriptor></IDPSSODescriptor></EntityDescriptor>`;
+    expect(
+      wordsOf(() => readIdpMetadata(xml, undefined, '--idp-metadata')),
+    ).toBe(
+      '❌ --idp-metadata: the metadata has no IDPSSODescriptor: not an identity provider',
+    );
+  });
+
+  it('a certificate outside KeyInfo/X509Data is not read', () => {
+    const xml = idpDocument(
+      `<md:KeyDescriptor use="signing"><ds:X509Certificate>LOOSE</ds:X509Certificate>${keyInfo('CERT')}</md:KeyDescriptor>`,
+    );
+    expect(
+      readIdpMetadata(xml, undefined, '--idp-metadata').certificates,
+    ).toEqual([cert('CERT')]);
+  });
+
+  it('an identity provider with no signing certificate, and none stated: refused naming the flag', async () => {
+    const xml = idpDocument(
+      `<md:KeyDescriptor use="encryption">${keyInfo('ENCRYPT')}</md:KeyDescriptor>`,
+    );
+    const thrown = await applySamlMetadata(
+      { protocol: 'saml2', flow: 'pure', idpMetadata: 'idp.xml' },
+      undefined,
+      loaderFor({ 'idp.xml': xml }),
+    ).catch((error: unknown) => error);
+    expect(isUsageError(thrown)).toBe(true);
+    expect(failureLines(thrown).join('\n')).toBe(
+      '❌ --idp-metadata: the identity provider states no signing certificate',
+    );
+  });
+
+  it('service-provider metadata names its own flag: --service-key', async () => {
+    const thrown = await applySamlMetadata(
+      { protocol: 'saml2', flow: 'bearer', uaaUrl: UAA_URL },
+      undefined,
+      loaderFor({ [`${UAA_URL}/saml/metadata`]: `<!DOCTYPE x>${XSUAA}` }),
+    ).catch((error: unknown) => error);
+    expect(failureLines(thrown).join('\n')).toBe(
+      '❌ --service-key: the metadata carries a DOCTYPE, which SAML metadata never needs: refused before it is parsed',
+    );
+  });
+
+  it('service-provider metadata names its own flag: --saml-metadata', async () => {
+    const thrown = await applySamlMetadata(
+      { protocol: 'saml2', flow: 'bearer', samlMetadataPath: './sp.xml' },
+      undefined,
+      loaderFor({ './sp.xml': `${XSUAA}<trailing>` }),
+    ).catch((error: unknown) => error);
+    expect(failureLines(thrown).join('\n')).toBe(
+      '❌ --saml-metadata: the metadata is not well-formed XML',
+    );
+  });
+
+  it('a server that answers more than the limit: refused, the rest never read', async () => {
+    const server = http.createServer((_request, response) => {
+      response.writeHead(200);
+      response.write(`<md:EntityDescriptor xmlns:md="${MD}">`);
+      response.end('x'.repeat(MAX_METADATA_BYTES + 1));
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const { port } = server.address() as AddressInfo;
+    try {
+      const thrown = await loadMetadata(
+        `http://127.0.0.1:${port}/meta`,
+        '--idp-metadata',
+      ).catch((error: unknown) => error);
+      expect(failureLines(thrown).join('\n')).toBe(
+        '❌ --idp-metadata: the metadata is larger than 1 MiB',
+      );
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('a file larger than the limit: refused, never read', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'meta-'));
+    const file = path.join(dir, 'huge.xml');
+    try {
+      fs.writeFileSync(file, 'x'.repeat(MAX_METADATA_BYTES + 1));
+      const thrown = await loadMetadata(file, '--saml-metadata').catch(
+        (error: unknown) => error,
+      );
+      expect(failureLines(thrown).join('\n')).toBe(
+        '❌ --saml-metadata: the metadata is larger than 1 MiB',
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('trailing slashes of a UAA URL: plain code, no regular expression', () => {
+  it.each([
+    ['https://uaa.example', 'https://uaa.example'],
+    ['https://uaa.example/', 'https://uaa.example'],
+    ['https://uaa.example///', 'https://uaa.example'],
+    ['////', ''],
+    ['', ''],
+    ['https://uaa.example/a/', 'https://uaa.example/a'],
+  ])('%p → %p (as /\\/+$/ gave)', (url, expected) => {
+    expect(withoutTrailingSlashes(url)).toBe(expected);
+  });
+
+  it('a long run of slashes, at the end and before the end, in linear time', () => {
+    const slashes = '/'.repeat(200_000);
+    expect(withoutTrailingSlashes(`https://uaa.example${slashes}`)).toBe(
+      'https://uaa.example',
+    );
+    // A run that is not at the end: kept whole — the input a backtracking
+    // `/\/+$/` scans once per slash.
+    const inside = `https://uaa.example${slashes}x`;
+    expect(withoutTrailingSlashes(inside)).toBe(inside);
+  });
+
+  it('applySamlMetadata reads <uaa.url>/saml/metadata from a URL ending in many slashes', async () => {
+    const options: SamlMetadataTarget = {
+      protocol: 'saml2',
+      flow: 'bearer',
+      uaaUrl: `${UAA_URL}${'/'.repeat(100_000)}`,
+    };
+    await applySamlMetadata(
+      options,
+      undefined,
+      loaderFor({ [`${UAA_URL}/saml/metadata`]: XSUAA }),
+    );
+    expect(options.acsUrl).toBe(BEARER_ALIAS);
+  });
+});
+
+describe('sources: no regular expression over untrusted input', () => {
+  /** Every regular-expression literal and every `RegExp` named in `file`. */
+  function regularExpressionsIn(file: string): string[] {
+    const text = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+    const source = ts.createSourceFile(
+      file,
+      text,
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const found: string[] = [];
+    const visit = (node: ts.Node): void => {
+      if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) {
+        found.push(node.getText(source));
+      }
+      if (ts.isIdentifier(node) && node.text === 'RegExp') {
+        found.push('RegExp');
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return found;
+  }
+
+  it.each([
+    ['samlMetadata.ts'],
+    ['runMcpSso.ts'],
+    ['urlText.ts'],
+    ['mcpSsoConfig.ts'],
+    ['certificateText.ts'],
+  ])('%s holds none', (file) => {
+    expect([file, regularExpressionsIn(file)]).toEqual([file, []]);
+  });
+
+  it('the reader sees one in a file that has them', () => {
+    expect(
+      regularExpressionsIn('__tests__/helpers/destinationFiles.ts').length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+/** A local server answering every request with `handler`; closed after the test. */
+async function serve(
+  handler: http.RequestListener,
+  tlsOptions?: { cert: string; key: string },
+): Promise<{ url: string; requests: string[]; close: () => Promise<void> }> {
+  const requests: string[] = [];
+  const listener: http.RequestListener = (request, response) => {
+    requests.push(request.url ?? '');
+    handler(request, response);
+  };
+  const server = tlsOptions
+    ? https.createServer(tlsOptions, listener)
+    : http.createServer(listener);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `${tlsOptions ? 'https' : 'http'}://127.0.0.1:${port}`,
+    requests,
+    close: async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+/** What `load` rejects with, in the CLI's words. */
+async function refusalWords(load: Promise<string>): Promise<string> {
+  const thrown = await load.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  expect(isUsageError(thrown)).toBe(true);
+  return failureLines(thrown).join('\n');
+}
+
+const OVER_HTTP =
+  'refusing SAML metadata over http: it carries the certificates assertions are verified against, so it must come over https';
+
+describe('loadMetadata: every redirect is checked as the first URL is', () => {
+  const redirectTo =
+    (location: string): http.RequestListener =>
+    (_request, response) => {
+      response.writeHead(302, { location });
+      response.end();
+    };
+
+  it('loopback http redirected to a public http host: refused, the host never asked', async () => {
+    const server = await serve(redirectTo('http://idp.example.invalid/meta'));
+    try {
+      expect(
+        await refusalWords(
+          loadMetadata(`${server.url}/meta`, '--idp-metadata'),
+        ),
+      ).toBe(`❌ --idp-metadata: ${OVER_HTTP}`);
+      expect(server.requests).toEqual(['/meta']);
+    } finally {
+      await server.close();
+    }
+  });
+
+  describe('over https', () => {
+    trustCertServer();
+
+    it('https redirected to a public http host: refused naming the flag', async () => {
+      const server = await serve(
+        redirectTo('http://idp.example.invalid/meta'),
+        {
+          cert: fs.readFileSync(
+            path.join(__dirname, 'fixtures', 'certificates', 'server.crt'),
+            'utf8',
+          ),
+          key: fs.readFileSync(
+            path.join(__dirname, 'fixtures', 'certificates', 'server.key'),
+            'utf8',
+          ),
+        },
+      );
+      try {
+        expect(
+          await refusalWords(
+            loadMetadata(`${server.url}/meta`, '--saml-metadata'),
+          ),
+        ).toBe(`❌ --saml-metadata: ${OVER_HTTP}`);
+        expect(server.requests).toEqual(['/meta']);
+      } finally {
+        await server.close();
+      }
+    });
+  });
+
+  it('a redirect within loopback is followed, relative Location included', async () => {
+    const server = await serve((request, response) => {
+      if (request.url === '/first') {
+        response.writeHead(301, { location: '/second' });
+        response.end();
+        return;
+      }
+      response.writeHead(200);
+      response.end('THE-DOCUMENT');
+    });
+    try {
+      await expect(
+        loadMetadata(`${server.url}/first`, '--idp-metadata'),
+      ).resolves.toBe('THE-DOCUMENT');
+      expect(server.requests).toEqual(['/first', '/second']);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('more than five redirects: refused, a count and not a clock', async () => {
+    const server = await serve((request, response) => {
+      response.writeHead(302, { location: `${request.url}x` });
+      response.end();
+    });
+    try {
+      expect(
+        await refusalWords(loadMetadata(`${server.url}/r`, '--idp-metadata')),
+      ).toBe(
+        '❌ --idp-metadata: the metadata server redirected more than 5 times',
+      );
+      expect(server.requests).toHaveLength(6);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('a redirect with no Location: refused with its status', async () => {
+    const server = await serve((_request, response) => {
+      response.writeHead(302);
+      response.end();
+    });
+    try {
+      expect(
+        await refusalWords(loadMetadata(`${server.url}/r`, '--idp-metadata')),
+      ).toBe('❌ --idp-metadata: the metadata server answered 302');
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("loadMetadata: the run's signal ends the fetch", () => {
+  it('a server that never answers: the abort ends the load', async () => {
+    let asked: () => void = () => {};
+    const askedPromise = new Promise<void>((resolve) => {
+      asked = resolve;
+    });
+    const server = await serve(() => {
+      asked();
+    });
+    try {
+      const controller = new AbortController();
+      const loading = loadMetadata(
+        `${server.url}/meta`,
+        '--idp-metadata',
+        controller.signal,
+      );
+      const rejected = expect(loading).rejects.toBeDefined();
+      await askedPromise;
+      controller.abort();
+      await rejected;
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('a server that stalls in the body: the abort ends the read', async () => {
+    let started: () => void = () => {};
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const server = await serve((_request, response) => {
+      response.writeHead(200);
+      response.write('<md:EntityDescriptor');
+      started();
+    });
+    try {
+      const controller = new AbortController();
+      const loading = loadMetadata(
+        `${server.url}/meta`,
+        '--idp-metadata',
+        controller.signal,
+      );
+      const rejected = expect(loading).rejects.toBeDefined();
+      await startedPromise;
+      controller.abort();
+      await rejected;
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('a signal aborted before the load: nothing is asked', async () => {
+    const server = await serve((_request, response) => {
+      response.writeHead(200);
+      response.end('doc');
+    });
+    try {
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        loadMetadata(`${server.url}/meta`, '--idp-metadata', controller.signal),
+      ).rejects.toBeDefined();
+      expect(server.requests).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('applySamlMetadata hands the signal to every load', async () => {
+    const signals: Array<AbortSignal | undefined> = [];
+    const controller = new AbortController();
+    await applySamlMetadata(
+      {
+        protocol: 'saml2',
+        flow: 'bearer',
+        idpMetadata: IAS_URL,
+        uaaUrl: UAA_URL,
+      },
+      undefined,
+      async (source, _flag, signal) => {
+        signals.push(signal);
+        return source === IAS_URL ? IAS : XSUAA;
+      },
+      controller.signal,
+    );
+    expect(signals).toEqual([controller.signal, controller.signal]);
   });
 });

@@ -181,3 +181,26 @@ oauth:
       authorities: uaa.none
       autoapprove: 'true'
       allowedproviders: [test-idp]
+    # The CLI's stand suites (auth-broker-cli, src/__tests__/stand): `mcp-auth`'s
+    # authorization-code login on the callback it listens on by default,
+    # auth-providers' DEFAULT_CALLBACK_PORT.
+    cli_authcode:
+      id: cli_authcode
+      secret: secret
+      authorized-grant-types: 'authorization_code,refresh_token'
+      scope: 'openid,uaa.user'
+      authorities: uaa.none
+      autoapprove: 'true'
+      redirect-uri: 'http://localhost:61001/callback'
+    # The same login, its access tokens valid 30 s — inside the one-minute
+    # margin a token provider keeps, so the next `--env` run counts the stored
+    # token expired and renews it: the refresh-token case.
+    cli_short:
+      id: cli_short
+      secret: secret
+      authorized-grant-types: 'authorization_code,refresh_token'
+      scope: 'openid,uaa.user'
+      authorities: uaa.none
+      autoapprove: 'true'
+      access-token-validity: 30
+      redirect-uri: 'http://localhost:61001/callback'

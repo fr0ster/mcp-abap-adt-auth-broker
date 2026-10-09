@@ -1,12 +1,9 @@
 /**
- * Pure config-building logic for `mcp-sso`, split out from mcp-sso.ts so
- * it can be imported by tests directly.
- *
- * mcp-sso.ts itself cannot be `import`ed safely: it calls `main()` at the
- * bottom of the file, which parses the test runner's argv and exits. So
- * anything that needs unit coverage — the destination a run states (its
- * means, written to the key store), the collaborators it hands the broker,
- * and merging CLI options with an optional `--config` file — lives here.
+ * Pure config-building logic for `mcp-auth oidc | saml2-pure | saml2-bearer`
+ * (2.x's `mcp-sso`; the module keeps its name), importable by tests: the
+ * destination a run states (its means, written to the key store), the
+ * collaborators it hands the broker, and merging the parsed options with an
+ * optional `--config` file. The command line itself is `subcommandArgs.ts`'s.
  */
 
 import { readFileSync } from 'node:fs';
@@ -16,7 +13,6 @@ import type { AuthBrokerConfig } from '@mcp-abap-adt/auth-broker';
 import {
   asOidcResult,
   consoleDeviceCodePresenter,
-  DEFAULT_CALLBACK_PORT,
   defaultReplayStore,
   manualPasscodeStrategy,
   manualSamlResponseStrategy,
@@ -25,24 +21,63 @@ import {
   type SsoProviderConfig,
   samlCallbackStrategy,
   staticCodeStrategy,
-  ValidationError,
 } from '@mcp-abap-adt/auth-providers';
 import type { DestinationMeans } from '@mcp-abap-adt/auth-stores';
-import type { IAuthorizationStrategy } from '@mcp-abap-adt/interfaces-auth';
-import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import type {
+  AuthorizationRequest,
+  IAuthorizationStrategy,
+  IBrowser,
+} from '@mcp-abap-adt/interfaces-auth';
+import {
+  BROWSER_NAMES,
+  type BrowserFactories,
+  BrowserUsageError,
+  browserFor,
+  browserProgramFor,
+  isBrowserName,
+  SHIPPED_BROWSERS,
+} from './browser';
+import {
+  isBase64Text,
+  isDerCertificate,
+  isWhitespace,
+  isX509Certificate,
+  pemCertificateBlocks,
+  withoutWhitespace,
+} from './certificateText';
 import { asContract } from './contractShape';
 import type { StatedMeans } from './destination';
+import { systemCodeOf } from './output';
+import { UsageError } from './subcommandArgs';
+import { withoutTrailingSlashes } from './urlText';
 
 /**
- * A person completes these logins at a browser; the library's own default
- * (30s) is sized for an unattended caller instead.
+ * The identity provider to trust is missing: the fields, by name — refused
+ * before anything is written.
  */
-export const INTERACTIVE_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+export class SamlTrustMissingError extends UsageError {
+  readonly missingFields: string[];
+
+  constructor(message: string, missingFields: string[]) {
+    super(message);
+    this.name = 'SamlTrustMissingError';
+    this.missingFields = [...missingFields];
+  }
+}
 
 export interface McpSsoOptions {
+  /** `--verbose`: the CLI's logger from `debug`. */
+  verbose?: true | undefined;
+  /** `--auth-debug`: the broker's `authDebug: true`; implies `--verbose`. */
+  authDebug?: true | undefined;
   outputFile?: string | undefined;
+  /** `--env`: the session file — one of the three sources. */
   envFilePath?: string | undefined;
+  /** `--destination`: a destination of the standard folder. */
   destination?: string | undefined;
+  /** `--destination-dir`: the folder `--destination` reads. */
+  destinationDir?: string | undefined;
+  /** `--service-key`: always a new login. */
   serviceKeyPath?: string | undefined;
   authType: 'abap' | 'xsuaa';
   format: 'json' | 'env';
@@ -57,7 +92,12 @@ export interface McpSsoOptions {
     | undefined;
   configPath?: string | undefined;
   serviceUrl?: string | undefined;
+  /** `--browser`, or a `--config` file's `browser`: one of `BROWSER_NAMES`. */
   browser?: string | undefined;
+  /** `--browser-program`: the platform's named-browser factory, the program as given. */
+  browserProgram?: string | undefined;
+  /** Set by `applyFileConfig` when `browser` came from the `--config` file. */
+  browserFromConfig?: boolean | undefined;
   // Overrides the strategy's own callback port (auth-providers'
   // DEFAULT_CALLBACK_PORT) when set; otherwise the strategy decides.
   redirectPort?: number | undefined;
@@ -113,22 +153,34 @@ export interface McpSsoOptions {
 }
 
 /**
- * Reads one line from this CLI's stdin. `signal` is a manual strategy's: when
- * its deadline passes or it is disposed, the read is abandoned and its
- * `readline` closed — an open one holds stdin and keeps the process alive.
+ * Reads one line from this CLI's stdin, the question on stderr. `signal` is
+ * the login's: when it aborts, the read is abandoned and its `readline`
+ * closed — an open one holds stdin and keeps the process alive.
  */
-export function readManualInput(
+export async function readManualInput(
   prompt: string,
   signal?: AbortSignal,
 ): Promise<string> {
   const abandoned = () =>
-    new Error(`input abandoned at "${prompt.trim()}": the read was aborted`);
+    new UsageError(
+      `input abandoned at "${prompt.trim()}": the read was aborted`,
+    );
   if (signal?.aborted) {
-    return Promise.reject(abandoned());
+    throw abandoned();
+  }
+  // auth-providers' terminal compositions arm their paste — this read —
+  // before they present the URL, in the same turn. Asked one turn later, the
+  // question follows the URL prompt on a line of its own instead of having
+  // the URL's lead appended to it. A deferral, not a bound: nothing waits on
+  // a clock.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  if (signal?.aborted) {
+    throw abandoned();
   }
   const rl = createInterface({
     input: process.stdin,
-    output: process.stdout,
+    // The prompt on stderr: stdout carries only help and --version.
+    output: process.stderr,
   });
   // A closed stdin never answers the question, and a promise that never
   // settles lets the event loop drain: the process exited 0 with nothing
@@ -146,7 +198,7 @@ export function readManualInput(
       signal?.removeEventListener('abort', onAbort);
       if (settled) return;
       settled = true;
-      reject(new Error(`no input: stdin closed at "${prompt.trim()}"`));
+      reject(new UsageError(`no input: stdin closed at "${prompt.trim()}"`));
     });
     rl.question(prompt, (answer) => {
       if (settled) return;
@@ -157,26 +209,30 @@ export function readManualInput(
   });
 }
 
+/**
+ * A `--config` file's provider config: its `provider` object, or the file's
+ * own `protocol`, `flow` and fields (under `config`, else the rest of the
+ * file). A missing `protocol` or `flow` is kept missing — `applyFileConfig`
+ * refuses a file that does not name the run's subcommand, naming what it
+ * lacks. `null` only for a file that is not a JSON object.
+ */
 export function normalizeProviderConfig(
   input: unknown,
 ): SsoProviderConfig | null {
-  if (!input || typeof input !== 'object') {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return null;
   }
   // A parsed JSON file: read as a record, its shape checked field by field.
   const raw = input as Record<string, unknown>;
-  if (raw.provider) {
+  if (raw.provider && typeof raw.provider === 'object') {
     return raw.provider as SsoProviderConfig;
   }
-  if (raw.protocol && raw.flow) {
-    const { protocol, flow, config, ...rest } = raw;
-    return {
-      protocol,
-      flow,
-      config: config ?? rest,
-    } as SsoProviderConfig;
-  }
-  return null;
+  const { protocol, flow, config, ...rest } = raw;
+  return {
+    protocol,
+    flow,
+    config: config ?? rest,
+  } as SsoProviderConfig;
 }
 
 /**
@@ -238,7 +294,7 @@ const CONFIG_BACKFILL_FIELDS: (keyof McpSsoOptions)[] = [
  * CLI flags always win — a field already set on `options` is left alone; the
  * file only fills gaps.
  *
- * This is what makes a config-file-only run (no --protocol/--flow on the
+ * This is what makes a config-file run (no --flow, or no flag at all, on the
  * CLI) reach the same strategy-building code as a CLI-flag run: without it,
  * the file's fields — including a `browser`/`redirectPort` a 2.0.0 provider
  * no longer accepts directly — would reach `SsoProviderFactory.create()`
@@ -250,14 +306,20 @@ const CONFIG_BACKFILL_FIELDS: (keyof McpSsoOptions)[] = [
  * write instead. Nothing may reach the provider without one of those two
  * happening.
  *
- * Also backfills `options.protocol`/`options.flow` from the file when the
- * CLI didn't set them — a `--config`-only run (no `--protocol`/`--flow`
- * flags at all) must still resolve to a real flow, or nothing downstream
- * ever calls a builder at all.
+ * Also backfills `options.flow` from the file when the command line didn't
+ * set it — `mcp-auth oidc --config f` must still resolve to a real flow, or
+ * nothing downstream ever calls a builder at all. A file naming another
+ * subcommand than the run's is refused naming `--config`.
  *
  * A no-op when `fileConfig` is `null` (no `--config` was given), so callers
  * can invoke this unconditionally.
  */
+/** The `mcp-auth` subcommand a run's protocol and flow are. */
+function subcommandOf(options: Pick<McpSsoOptions, 'protocol' | 'flow'>) {
+  if (options.protocol === 'oidc') return 'oidc';
+  return options.flow === 'bearer' ? 'saml2-bearer' : 'saml2-pure';
+}
+
 export function applyFileConfig(
   options: McpSsoOptions,
   fileConfig: SsoProviderConfig | null,
@@ -266,6 +328,30 @@ export function applyFileConfig(
     return;
   }
 
+  // The file belongs to the subcommand its protocol and flow name: a
+  // run's protocol — and a SAML run's flow — is the subcommand's. A file
+  // that names no protocol, a SAML file that names no flow, and a file naming
+  // another subcommand are refused, never merged. An OIDC file names `oidc`
+  // by its protocol; its flow fills a flow the command line left out, as 2.x.
+  if (options.protocol !== undefined) {
+    const own = subcommandOf(options);
+    const refuse = (why: string) => {
+      console.error(
+        `❌ --config: the file ${why}; mcp-auth ${own} takes a file whose protocol and flow name it (oidc, saml2-pure, saml2-bearer).`,
+      );
+      process.exit(1);
+    };
+    if (fileConfig.protocol === undefined || fileConfig.protocol === null) {
+      refuse('states no protocol');
+    } else if (options.protocol === 'saml2' && !fileConfig.flow) {
+      refuse('states no flow');
+    } else if (
+      fileConfig.protocol !== options.protocol ||
+      (options.protocol === 'saml2' && fileConfig.flow !== options.flow)
+    ) {
+      refuse(`names another subcommand than mcp-auth ${own}`);
+    }
+  }
   options.protocol = options.protocol ?? fileConfig.protocol;
   options.flow = options.flow ?? (fileConfig.flow as McpSsoOptions['flow']);
 
@@ -298,6 +384,7 @@ export function applyFileConfig(
       // since 2.0.0; typing it per field would mean validating it — a change
       // of behaviour, not of types.
       (options as unknown as Record<string, unknown>)[field] = fields[field];
+      if (field === 'browser') options.browserFromConfig = true;
     }
   }
 
@@ -334,38 +421,58 @@ export function applyFileConfig(
   }
 }
 
-const PEM_CERTIFICATE_BLOCK =
-  /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
-const BASE64_TEXT = /^[A-Za-z0-9+/]+={0,2}$/;
+/**
+ * The entries `idpCertificates` takes from one `--idp-cert` file's content,
+ * as 2.x read them, in linear code. A PEM file may hold several certificates
+ * (a rotation bundle); each becomes its own entry, since a single string is
+ * read as one certificate and the rest would be ignored. Other text with a
+ * `-----BEGIN`, or bare base64, is kept trimmed; anything else — a binary DER
+ * file (`.cer`, `.der`) — is base64-encoded.
+ */
+export function certificatesInFile(content: Buffer): string[] {
+  return readCertificateFile(content).entries;
+}
+
+/** The file's entries, and whether they are the file itself as binary DER. */
+function readCertificateFile(content: Buffer): {
+  entries: string[];
+  binary: boolean;
+} {
+  const text = content.toString('utf8');
+  const blocks = pemCertificateBlocks(text);
+  if (blocks.length > 0) {
+    return { entries: blocks, binary: false };
+  }
+  if (text.includes('-----BEGIN') || isBase64Text(withoutWhitespace(text))) {
+    return { entries: [text.trim()], binary: false };
+  }
+  return { entries: [content.toString('base64')], binary: true };
+}
 
 /**
- * Reads one `--idp-cert` file into the entries `idpCertificates` takes. A
- * PEM file may hold several certificates (a rotation bundle); each becomes
- * its own entry, since a single string is read as one certificate and the
- * rest would be ignored. A binary DER file (`.cer`, `.der`) is base64-encoded.
- * Whether the result is a certificate at all is the provider's check.
+ * Reads one `--idp-cert` file into the entries `idpCertificates` takes
+ * (`certificatesInFile`), each checked to be an X.509 certificate: a file
+ * that holds none is refused naming `--idp-cert` and the path the user gave.
  */
 export function readIdpCertificateFile(filePath: string): string[] {
   const resolved = resolvePath(filePath);
   let content: Buffer;
   try {
     content = readFileSync(resolved);
-  } catch {
-    console.error(`❌ IdP certificate file not found: ${resolved}`);
-    process.exit(1);
+  } catch (error) {
+    // The flag and the path as the user gave it, with the system code.
+    throw new UsageError(
+      `--idp-cert: ${filePath} cannot be read${systemCodeOf(error)}`,
+    );
   }
-  const text = content.toString('utf8');
-  const blocks = text.match(PEM_CERTIFICATE_BLOCK);
-  if (blocks) {
-    return blocks;
+  const { entries, binary } = readCertificateFile(content);
+  const readable = binary
+    ? isDerCertificate(content)
+    : entries.every(isX509Certificate);
+  if (!readable) {
+    throw new UsageError(`--idp-cert: ${resolved} holds no X.509 certificate`);
   }
-  if (
-    text.includes('-----BEGIN') ||
-    BASE64_TEXT.test(text.replace(/\s+/g, ''))
-  ) {
-    return [text.trim()];
-  }
-  return [content.toString('base64')];
+  return entries;
 }
 
 /**
@@ -386,7 +493,7 @@ export function resolveIdpCertificates(
 /**
  * Parses the SAML trust flags into `target`, returning how many values after
  * `arg` were consumed (0 for a flag with no value, or an argument that is not
- * one of these). Kept here rather than in mcp-sso.ts so it can be tested.
+ * one of these).
  */
 export function parseSamlTrustArg(
   target: Partial<McpSsoOptions>,
@@ -440,7 +547,7 @@ function resolveOidcTokenEndpoint(options: McpSsoOptions): string | undefined {
   return (
     options.tokenEndpoint ||
     (options.uaaUrl
-      ? `${options.uaaUrl.replace(/\/+$/, '')}/oauth/token`
+      ? `${withoutTrailingSlashes(options.uaaUrl)}/oauth/token`
       : undefined)
   );
 }
@@ -487,7 +594,7 @@ export function ssoRow(options: McpSsoOptions): SsoRow {
       case 'token_exchange':
         return { authType: 'jwt', grantType: 'token_exchange' };
       default:
-        throw new Error(`Unsupported OIDC flow: ${options.flow}`);
+        throw new UsageError(`Unsupported OIDC flow: ${options.flow}`);
     }
   }
   if (options.protocol === 'saml2') {
@@ -502,13 +609,13 @@ export function ssoRow(options: McpSsoOptions): SsoRow {
           grantType: options.cookie ? 'none' : 'saml2_pure',
         };
       default:
-        throw new Error(`Unsupported SAML flow: ${options.flow}`);
+        throw new UsageError(`Unsupported SAML flow: ${options.flow}`);
     }
   }
-  throw new Error(
+  throw new UsageError(
     options.protocol
       ? `Unsupported protocol: ${options.protocol}`
-      : 'Provider config is missing. Use --config or --protocol/--flow options.',
+      : 'Provider config is missing: run mcp-auth oidc, saml2-pure or saml2-bearer.',
   );
 }
 
@@ -519,10 +626,24 @@ function scopeList(scopes: unknown): string[] | undefined {
     : typeof scopes === 'string'
       ? [scopes]
       : [];
-  const split = list
-    .flatMap((entry) => String(entry).split(/[,\s]+/))
-    .filter(Boolean);
+  const split = list.flatMap((entry) => splitScopes(String(entry)));
   return split.length > 0 ? split : undefined;
+}
+
+/** `text` split on commas and whitespace, empty parts dropped, in one pass. */
+function splitScopes(text: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  for (const character of text) {
+    if (character === ',' || isWhitespace(character)) {
+      if (current !== '') parts.push(current);
+      current = '';
+    } else {
+      current += character;
+    }
+  }
+  if (current !== '') parts.push(current);
+  return parts;
 }
 
 /** The client of an OIDC row: an id, a secret (`''` a public client), a UAA URL when given. */
@@ -547,7 +668,7 @@ function buildSamlTrust(options: McpSsoOptions): StatedMeans {
   if (!idpCertificates) missing.push('idpCertificates');
   if (!options.idpEntityId) missing.push('idpEntityId');
   if (missing.length > 0) {
-    throw new ValidationError(
+    throw new SamlTrustMissingError(
       `The assertion validator needs the identity provider to trust: missing ${missing.join(', ')}. ` +
         'Supply --idp-cert and --idp-entity-id, or --idp-metadata.',
       missing,
@@ -558,7 +679,7 @@ function buildSamlTrust(options: McpSsoOptions): StatedMeans {
     // provider from the destination alone.
     console.error(
       '❌ --authn-request-id cannot be stated in a destination: the broker builds the SAML provider ' +
-        'out of the destination alone, which holds no request ID. Use --idp-initiated, or let mcp-sso send the request ' +
+        'out of the destination alone, which holds no request ID. Use --idp-initiated, or let mcp-auth send the request ' +
         '(--assertion-flow browser or manual).',
     );
     process.exit(1);
@@ -667,8 +788,65 @@ export function buildDestinationMeans(options: McpSsoOptions): StatedMeans {
       // states only where they are presented.
       return base;
     default:
-      throw new Error(`unreachable grant ${row.grantType}`);
+      throw new UsageError(`unreachable grant ${row.grantType}`);
   }
+}
+
+/**
+ * The browser a run states — `--browser` or a `--config` file's `browser`,
+ * mapped by the same table (`browserFor`), or `--browser-program` — on this
+ * platform; nothing stated is `auto`, the default of every flow that opens a
+ * browser; `undefined` for `none` / `headless`. Throws
+ * `BrowserUsageError` for an unknown name (naming `browser`), for both flags
+ * together, and for a launcher this platform has none of. Reads and launches
+ * nothing.
+ */
+export function ssoBrowser(
+  options: Pick<
+    McpSsoOptions,
+    'browser' | 'browserProgram' | 'browserFromConfig'
+  >,
+  platform: string = process.platform,
+  factories: BrowserFactories = SHIPPED_BROWSERS,
+): IBrowser | undefined {
+  if (options.browserProgram !== undefined) {
+    if (options.browser !== undefined) {
+      // Name what the user stated: the flag, or the --config file's field.
+      throw new BrowserUsageError(
+        options.browserFromConfig === true
+          ? "--browser-program excludes the --config file's browser"
+          : '--browser-program excludes --browser',
+      );
+    }
+    return browserProgramFor(options.browserProgram, platform, factories);
+  }
+  const name = options.browser ?? 'auto';
+  if (!isBrowserName(name)) {
+    throw new BrowserUsageError(
+      `browser must be one of: ${BROWSER_NAMES.join(', ')}`,
+    );
+  }
+  return browserFor(name, platform, factories);
+}
+
+/**
+ * Whether the run's login opens a browser: the OIDC browser flow without a
+ * `--code`, and a SAML login whose assertion is neither given, nor pasted, nor
+ * started at the identity provider. The handed-over cookies log in nowhere.
+ */
+export function opensBrowser(options: McpSsoOptions): boolean {
+  if (options.protocol === 'oidc') {
+    return options.flow === 'browser' && !options.code;
+  }
+  if (options.protocol === 'saml2') {
+    return (
+      !options.cookie &&
+      !options.assertion &&
+      !options.idpInitiated &&
+      (options.assertionFlow ?? 'browser') === 'browser'
+    );
+  }
+  return false;
 }
 
 /**
@@ -678,6 +856,7 @@ export function buildDestinationMeans(options: McpSsoOptions): StatedMeans {
  */
 export function buildOidcBrowserAuthorization(
   options: McpSsoOptions,
+  signal?: AbortSignal | undefined,
 ): IAuthorizationStrategy<OidcCallbackResult> {
   if (options.code) {
     // The consumer already holds the code (manual paste / OOB redirect
@@ -693,11 +872,12 @@ export function buildOidcBrowserAuthorization(
   }
   // No fallback: an omitted --redirect-port lets the strategy bind its own
   // default port rather than this CLI pinning a number it doesn't own.
+  // The run's signal ends the login: no bound of its own.
   return oidcCallbackStrategy(
     asContract<Parameters<typeof oidcCallbackStrategy>[0]>({
       port: options.redirectPort,
-      browser: options.browser,
-      timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+      browser: ssoBrowser(options),
+      signal,
     }),
   );
 }
@@ -708,14 +888,46 @@ export function buildOidcBrowserAuthorization(
  */
 export function buildPasscodeAuthorization(
   options: McpSsoOptions,
+  signal?: AbortSignal | undefined,
 ): IAuthorizationStrategy<string> {
   if (options.passcode) {
     return staticCodeStrategy({ payload: options.passcode });
   }
+  // The run's signal ends the login; the read takes the login's own.
   return manualPasscodeStrategy({
-    read: (prompt, signal) => readManualInput(prompt, signal),
-    timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+    read: (prompt, loginSignal) => readManualInput(prompt, loginSignal),
+    signal,
   });
+}
+
+/**
+ * Whether the run's SAML login is a paste — `--assertion-flow manual` (or an
+ * `assertion` flow given no value), or the IdP-initiated paste: the user
+ * lifts the SAMLResponse the identity provider posted to the ACS, so the ACS
+ * must be declared. Handed-over cookies and an `--assertion` paste nothing;
+ * an IdP-initiated browser flow is refused on its own.
+ */
+export function pastesSamlResponse(options: McpSsoOptions): boolean {
+  if (options.protocol !== 'saml2') return false;
+  if (options.cookie || options.assertion) return false;
+  if (options.idpInitiated) return options.assertionFlow !== 'browser';
+  return (options.assertionFlow ?? 'browser') !== 'browser';
+}
+
+/**
+ * The ACS a SAML paste declares — `--acs-url`, else the SP metadata's
+ * (`--saml-metadata`, `<uaa.url>/saml/metadata`), else the `--config` file's
+ * `acsUrl`, each already merged into `options` — or a usage error naming
+ * `--acs-url`. There is no fallback: a localhost callback is not where any
+ * identity provider posts.
+ */
+export function declaredAcs(options: McpSsoOptions): string {
+  if (options.acsUrl) return options.acsUrl;
+  throw new UsageError(
+    options.flow === 'bearer'
+      ? '--acs-url: a pasted SAML login needs the ACS the identity provider posts to; give --acs-url, the XSUAA metadata (--saml-metadata or --service-key), or acsUrl in the --config file'
+      : '--acs-url: a pasted SAML login needs the ACS the identity provider posts to; give --acs-url, or acsUrl in the --config file',
+  );
 }
 
 /**
@@ -725,6 +937,7 @@ export function buildPasscodeAuthorization(
  */
 export function buildSamlAuthorization(
   options: McpSsoOptions,
+  signal?: AbortSignal | undefined,
 ): IAuthorizationStrategy<string> {
   if (options.assertion) {
     // The consumer already holds the assertion; nothing is opened or asked.
@@ -736,26 +949,26 @@ export function buildSamlAuthorization(
     );
   }
   if (options.idpInitiated) {
-    return buildIdpInitiatedAuthorization(options);
+    return buildIdpInitiatedAuthorization(options, signal);
   }
   const assertionFlow = options.assertionFlow || 'browser';
   if (assertionFlow !== 'browser') {
     // 'manual', and an 'assertion' flow given no value, both need a human to
-    // lift the SAMLResponse out of the POST body by hand.
-    return manualSamlResponseStrategy(
-      asContract<Parameters<typeof manualSamlResponseStrategy>[0]>({
-        redirectUri: options.acsUrl,
-        read: (prompt, signal) => readManualInput(prompt, signal),
-      }),
-    );
+    // lift the SAMLResponse out of the POST body by hand, at the ACS the
+    // identity provider posts to: declared, never a localhost guess.
+    return manualSamlResponseStrategy({
+      redirectUri: declaredAcs(options),
+      read: (prompt, loginSignal) => readManualInput(prompt, loginSignal),
+      signal,
+    });
   }
   // No fallback: an omitted --redirect-port lets the strategy bind its own
   // default port rather than this CLI pinning a number it doesn't own.
   return samlCallbackStrategy(
     asContract<Parameters<typeof samlCallbackStrategy>[0]>({
       port: options.redirectPort,
-      browser: options.browser,
-      timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+      browser: ssoBrowser(options),
+      signal,
     }),
   );
 }
@@ -769,7 +982,10 @@ export function buildSamlAuthorization(
  * exists to open that URL, is refused rather than left to fail after the
  * provider is built.
  */
-function buildIdpInitiatedAuthorization(options: McpSsoOptions) {
+function buildIdpInitiatedAuthorization(
+  options: McpSsoOptions,
+  signal: AbortSignal | undefined,
+) {
   if (options.assertionFlow === 'browser') {
     console.error(
       '❌ --idp-initiated cannot use --assertion-flow browser: there is no request URL to open. ' +
@@ -777,21 +993,32 @@ function buildIdpInitiatedAuthorization(options: McpSsoOptions) {
     );
     process.exit(1);
   }
-  // The ACS the assertion names as its Recipient; the same fallback the
-  // auth-providers strategies use when none is declared.
-  const redirectUri =
-    options.acsUrl ?? `http://localhost:${DEFAULT_CALLBACK_PORT}/callback`;
+  // The ACS the assertion names as its Recipient: declared, never guessed.
+  const redirectUri = declaredAcs(options);
   return {
-    async authorize() {
+    async authorize(request: AuthorizationRequest) {
+      // The login's signal ends the paste — every waiter gone — and so does
+      // the run's: the read is abandoned and its readline closed.
       const payload = await readManualInput(
         'Start the login at your identity provider, then paste the SAMLResponse (from the POST body): ',
+        eitherSignal(request.signal, signal),
       );
       if (!payload) {
-        throw new Error('No SAMLResponse was provided');
+        throw new UsageError('No SAMLResponse was provided');
       }
       return { payload, redirectUri };
     },
   };
+}
+
+/** A signal that aborts when either given one does; `undefined` for neither. */
+function eitherSignal(
+  ...signals: Array<AbortSignal | undefined>
+): AbortSignal | undefined {
+  const given = signals.filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  return given.length > 1 ? AbortSignal.any(given) : given[0];
 }
 
 /**
@@ -801,6 +1028,7 @@ function buildIdpInitiatedAuthorization(options: McpSsoOptions) {
  */
 export function buildSamlCookieProvider(
   options: McpSsoOptions,
+  signal?: AbortSignal | undefined,
 ): (samlResponse: string) => Promise<string> {
   const assertionFlow =
     options.assertionFlow || (options.assertion ? 'assertion' : 'browser');
@@ -808,7 +1036,8 @@ export function buildSamlCookieProvider(
     if (assertionFlow === 'assertion') {
       return `SAMLResponse=${samlResponse}`;
     }
-    return readManualInput('Paste session cookies: ');
+    // The run's signal abandons the paste.
+    return readManualInput('Paste session cookies: ', signal);
   };
 }
 
@@ -825,31 +1054,34 @@ export type SsoCollaborators = {
 /**
  * Every collaborator a provider the broker builds may need, stated by this CLI
  * — the broker supplies none: the interactive strategy of the passcode and
- * SAML grants, the OIDC browser strategy, the device-code presenter writing to
- * this CLI's logger, the SAML cookie function and the process-wide replay
+ * SAML grants, the OIDC browser strategy, the device-code presenter — given no
+ * logger, so the code is always shown on stderr, whatever the log level — the
+ * SAML cookie function and the process-wide replay
  * store the assertion validators share. The broker calls only the ones the
  * destination's grant uses, once, when it builds the provider.
  */
 export function buildCollaborators(
   options: McpSsoOptions,
-  logger: ILogger,
+  signal?: AbortSignal | undefined,
 ): SsoCollaborators {
   return {
     authorization: (_destination, grant) => {
       switch (grant) {
         case 'passcode':
-          return buildPasscodeAuthorization(options);
+          return buildPasscodeAuthorization(options, signal);
         case 'saml2_pure':
         case 'saml2_bearer':
-          return buildSamlAuthorization(options);
+          return buildSamlAuthorization(options, signal);
         default:
-          // mcp-sso states no authorization_code destination: that is mcp-auth's.
-          throw new Error(`mcp-sso has no interactive strategy for ${grant}`);
+          // These subcommands state no authorization_code destination: that is auth-code's.
+          throw new UsageError(
+            `mcp-auth ${subcommandOf(options)} has no interactive strategy for ${grant}`,
+          );
       }
     },
-    oidcAuthorization: () => buildOidcBrowserAuthorization(options),
-    deviceCodePresenter: () => consoleDeviceCodePresenter(logger),
-    samlCookies: () => buildSamlCookieProvider(options),
+    oidcAuthorization: () => buildOidcBrowserAuthorization(options, signal),
+    deviceCodePresenter: () => consoleDeviceCodePresenter(),
+    samlCookies: () => buildSamlCookieProvider(options, signal),
     assertionReplayStore: () => defaultReplayStore,
   };
 }

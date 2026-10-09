@@ -28,6 +28,14 @@ export interface TokenAnswer {
   body: Record<string, unknown>;
 }
 
+/** A token request whose response is withheld until `release()`. */
+export interface HeldRequest {
+  /** Resolves once the held request has reached the endpoint. */
+  arrived: Promise<void>;
+  /** Answer it now — with what is queued or a fresh token, as any request. */
+  release(): void;
+}
+
 export interface TokenEndpoint {
   /** The base URL, as a key store states `uaaUrl`. */
   url: string;
@@ -40,6 +48,11 @@ export interface TokenEndpoint {
   issued: string[];
   /** Answer the next request with this instead of a fresh token. */
   answerNext(answer: TokenAnswer): void;
+  /**
+   * Withhold the response to the next token request until `release()`: the
+   * request is recorded on arrival, and answered — as any other — only then.
+   */
+  holdNext(): HeldRequest;
   close(): Promise<void>;
 }
 
@@ -62,13 +75,18 @@ export function jwtExpiringIn(
   });
 }
 
-export async function startTokenEndpoint(): Promise<TokenEndpoint> {
+/**
+ * @param prefix Put before every token's `jti` and every refresh token, so
+ *   two endpoints of one test never issue equal values.
+ */
+export async function startTokenEndpoint(prefix = ''): Promise<TokenEndpoint> {
   const requests: TokenRequest[] = [];
   const paths: string[] = [];
   const deviceRequests: Record<string, string>[] = [];
   const issued: string[] = [];
   let base = '';
   const queued: TokenAnswer[] = [];
+  const holds: { arrive: () => void; released: Promise<void> }[] = [];
 
   const server = http.createServer((req, res) => {
     let raw = '';
@@ -123,16 +141,25 @@ export async function startTokenEndpoint(): Promise<TokenEndpoint> {
         params,
         authorization: req.headers.authorization,
       });
-      const answer = queued.shift() ?? fresh(params.grant_type);
-      res.writeHead(answer.status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(answer.body));
+      const respond = () => {
+        const answer = queued.shift() ?? fresh(params.grant_type);
+        res.writeHead(answer.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(answer.body));
+      };
+      const hold = holds.shift();
+      if (!hold) {
+        respond();
+        return;
+      }
+      hold.arrive();
+      void hold.released.then(respond);
     });
   });
 
   function fresh(grantType: string | undefined): TokenAnswer {
     const n = issued.length + 1;
     const token = jwtExpiringIn(3600, {
-      jti: `token-${n}`,
+      jti: `${prefix}token-${n}`,
       grant_type: grantType,
     });
     issued.push(token);
@@ -144,7 +171,7 @@ export async function startTokenEndpoint(): Promise<TokenEndpoint> {
         expires_in: 3600,
         ...(grantType === 'client_credentials'
           ? {}
-          : { refresh_token: `refresh-${n}` }),
+          : { refresh_token: `${prefix}refresh-${n}` }),
       },
     };
   }
@@ -161,6 +188,18 @@ export async function startTokenEndpoint(): Promise<TokenEndpoint> {
     issued,
     answerNext: (answer) => {
       queued.push(answer);
+    },
+    holdNext: () => {
+      let arrive = () => {};
+      let release = () => {};
+      const arrived = new Promise<void>((resolve) => {
+        arrive = resolve;
+      });
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      holds.push({ arrive, released });
+      return { arrived, release };
     },
     close: () =>
       new Promise<void>((resolve, reject) => {

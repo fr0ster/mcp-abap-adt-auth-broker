@@ -22,10 +22,22 @@
  * beside `certurl`, never holds their PEM.
  */
 
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-import { XsuaaServiceKeyStore } from '@mcp-abap-adt/auth-stores';
+import {
+  browserCallbackStrategy,
+  refreshThenLogin,
+} from '@mcp-abap-adt/auth-providers';
+import type { XsuaaServiceKeyStore } from '@mcp-abap-adt/auth-stores';
+import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
+import {
+  BROWSER_NAMES,
+  type BrowserFactories,
+  browserFor,
+  browserProgramFor,
+  isBrowserName,
+  SHIPPED_BROWSERS,
+} from './browser';
 import {
   type ClientAuthFlags,
   carriesCertificate,
@@ -33,23 +45,36 @@ import {
   clientAuthenticationStrategy,
   clientAuthFlags,
   noCertificateClient,
+  readCertificateClient,
   serviceKeyStoreFor,
 } from './clientAuthentication';
+import { asContract } from './contractShape';
 import {
+  basicEncodingVariable,
   completeMeans,
   flushed,
   openDestination,
+  setFileVariable,
   writeOutputFile,
 } from './destination';
 import { readJsonFile } from './jsonFile';
+import {
+  cannotReadFile,
+  createCliLogger,
+  printFailure,
+  progress,
+  toStderr,
+  unreadableFile,
+} from './output';
 import type { AuthorizationStrategy } from './runMcpAuth';
+import { UsageError } from './subcommandArgs';
 
 /** The grants a SAP service key's client alone serves. */
 const GRANTS = ['authorization_code', 'client_credentials'] as const;
 export type GenerateEnvGrant = (typeof GRANTS)[number];
 
 export const GENERATE_ENV_USAGE =
-  'Usage: generate-env-from-service-key <destination> [service-key-path] [session-path] --grant <authorization_code|client_credentials> [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]';
+  'Usage: generate-env-from-service-key <destination> [service-key-path] [session-path] --grant <authorization_code|client_credentials> [--verbose] [--auth-debug] [--browser auto|system|chrome|edge|firefox|none|headless | --browser-program <program>] [--client-auth certificate --cert-path <path> --key-path <path> | --client-auth secret --basic-encoding raw|form]';
 
 /** The client authentication flags and the field each one fills. */
 const CLIENT_AUTH_FLAGS: Record<string, keyof ClientAuthFlags> = {
@@ -60,19 +85,64 @@ const CLIENT_AUTH_FLAGS: Record<string, keyof ClientAuthFlags> = {
 };
 
 export interface GenerateEnvContext {
-  /** The interactive strategy of the authorization code grant, stated by the caller. */
-  authorization: () => AuthorizationStrategy;
+  /**
+   * The interactive strategy of the authorization code grant, stated by the
+   * caller, given the browser the run states for this platform (`undefined`:
+   * none — the URL is shown on stderr) and the run's signal, which ends its
+   * login.
+   */
+  authorization: (
+    browser: IBrowser | undefined,
+    signal: AbortSignal | undefined,
+  ) => AuthorizationStrategy;
   /** The run's private directory (`createWorkDir`), removed by its creator. */
   workDir: string;
+  /** The platform the browser is mapped for; `process.platform` when absent. */
+  platform?: string | undefined;
+  /** The browser factories; auth-providers' own when absent. */
+  browsers?: BrowserFactories | undefined;
+  /**
+   * The run's signal (`underInterrupt`): every wait of the run takes it.
+   * Absent: nothing ends the login but its result.
+   */
+  signal?: AbortSignal | undefined;
+}
+
+/**
+ * The script's authorization code strategy: the browser callback on the
+ * strategy's own default port (the script has no `--redirect-port`), the
+ * browser the run states, ended by `signal` — the run's — and by nothing
+ * else: no bound.
+ */
+export function generateEnvStrategy(
+  browser: IBrowser | undefined,
+  signal: AbortSignal | undefined,
+): AuthorizationStrategy {
+  return browserCallbackStrategy(
+    asContract<Parameters<typeof browserCallbackStrategy>[0]>({
+      browser,
+      signal,
+    }),
+  );
 }
 
 /** Runs the script; resolves the exit code. */
 export async function runGenerateEnv(
   args: string[],
-  { authorization, workDir }: GenerateEnvContext,
+  {
+    authorization,
+    workDir,
+    platform = process.platform,
+    browsers = SHIPPED_BROWSERS,
+    signal,
+  }: GenerateEnvContext,
 ): Promise<number> {
   const positional: string[] = [];
   let grant: string | undefined;
+  let browserName: string | undefined;
+  let browserProgram: string | undefined;
+  let verbose = false;
+  let authDebug = false;
   const flags: ClientAuthFlags = {};
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -80,8 +150,18 @@ export async function runGenerateEnv(
     const flag = Object.hasOwn(CLIENT_AUTH_FLAGS, arg)
       ? CLIENT_AUTH_FLAGS[arg]
       : undefined;
-    if (arg === '--grant') {
+    if (arg === '--verbose') {
+      verbose = true;
+    } else if (arg === '--auth-debug') {
+      authDebug = true;
+    } else if (arg === '--grant') {
       grant = args[i + 1];
+      i++;
+    } else if (arg === '--browser') {
+      browserName = args[i + 1];
+      i++;
+    } else if (arg === '--browser-program') {
+      browserProgram = args[i + 1];
       i++;
     } else if (flag !== undefined) {
       const value = args[i + 1];
@@ -112,14 +192,38 @@ export async function runGenerateEnv(
     return 1;
   }
 
+  // The browser for this platform (2.x: always the system browser; now
+  // --browser, default auto), checked before anything is read or written.
+  let browser: IBrowser | undefined;
+  try {
+    if (browserProgram !== undefined) {
+      if (browserName !== undefined) {
+        throw new UsageError('--browser-program excludes --browser');
+      }
+      browser = browserProgramFor(browserProgram, platform, browsers);
+    } else {
+      const name = browserName ?? 'auto';
+      if (!isBrowserName(name)) {
+        throw new UsageError(
+          `--browser must be one of: ${BROWSER_NAMES.join(', ')}`,
+        );
+      }
+      browser = browserFor(name, platform, browsers);
+    }
+  } catch (error) {
+    printFailure(error);
+    toStderr(GENERATE_ENV_USAGE);
+    return 1;
+  }
+
   // Checked before anything is read or written; the certificate files are
   // resolved to absolute paths, so the destination works from its final place.
   let certificateFiles: ReturnType<typeof clientAuthFlags>;
   try {
     certificateFiles = clientAuthFlags(flags);
   } catch (error) {
-    console.error(`❌ ${(error as Error).message}`);
-    console.error(GENERATE_ENV_USAGE);
+    printFailure(error);
+    toStderr(GENERATE_ENV_USAGE);
     return 1;
   }
 
@@ -131,13 +235,22 @@ export async function runGenerateEnv(
   );
   const serviceKeyDir = path.dirname(resolvedServiceKeyPath);
 
-  if (!fs.existsSync(resolvedServiceKeyPath)) {
-    console.error(`❌ Service key file not found: ${resolvedServiceKeyPath}`);
+  // The positional service-key-path names it (or the default
+  // <destination>.json): the path as given, with the system code.
+  const unreadable = unreadableFile(resolvedServiceKeyPath);
+  if (unreadable !== undefined) {
+    printFailure(
+      cannotReadFile(
+        'service-key-path',
+        serviceKeyPath ?? resolvedServiceKeyPath,
+        unreadable,
+      ),
+    );
     return 1;
   }
 
-  console.log(`📁 Service key: ${resolvedServiceKeyPath}`);
-  console.log(`📁 Session file: ${resolvedSessionPath}`);
+  progress(`📁 Service key: ${resolvedServiceKeyPath}`);
+  progress(`📁 Session file: ${resolvedSessionPath}`);
 
   // The key's format decides its parser and the file's key names: an ABAP
   // key nests the client under `uaa`, an XSUAA key holds it flat.
@@ -147,7 +260,7 @@ export async function runGenerateEnv(
     rawServiceKey = (readJsonFile(resolvedServiceKeyPath, 'The service key') ??
       {}) as Record<string, unknown>;
   } catch (error) {
-    console.error(`❌ ${(error as Error).message}`);
+    printFailure(error);
     return 1;
   }
   const isXsuaa = !rawServiceKey.uaa;
@@ -172,14 +285,17 @@ export async function runGenerateEnv(
       ReturnType<XsuaaServiceKeyStore['getClientCertificate']>
     > = null;
     try {
-      // A key the ABAP store reads carries no certificate client.
-      if (serviceKeyStore instanceof XsuaaServiceKeyStore) {
-        certificateClient =
-          await serviceKeyStore.getClientCertificate(destination);
+      // A key the ABAP store reads carries no certificate client: which
+      // store was built is recorded, never asked of the object.
+      if (serviceKeyStore.kind === 'xsuaa') {
+        certificateClient = await readCertificateClient(
+          serviceKeyStore.store,
+          destination,
+        );
       }
     } catch (error) {
-      // The store's refusal names the key's fields, never a value.
-      console.error(`❌ ${(error as Error).message}`);
+      // The fields the store's refusal names, in this CLI's words.
+      printFailure(error);
       return 1;
     }
     if (!certificateClient) {
@@ -193,7 +309,7 @@ export async function runGenerateEnv(
     };
   } else {
     const secretClient =
-      await serviceKeyStore.getAuthorizationConfig(destination);
+      await serviceKeyStore.store.getAuthorizationConfig(destination);
     if (!secretClient) {
       const certificateKey = carriesCertificate(unwrappedKey);
       console.error(
@@ -207,18 +323,19 @@ export async function runGenerateEnv(
   }
   let serviceUrl: string | undefined;
   try {
-    serviceUrl = (await serviceKeyStore.getConnectionConfig(destination))
+    serviceUrl = (await serviceKeyStore.store.getConnectionConfig(destination))
       ?.serviceUrl;
   } catch {
     // An XSUAA key may carry no URL.
   }
 
-  // A copy of the session file, if there is one: it is replaced only below.
+  // A service key always obtains a new pair: the run starts from no
+  // file, so no session is read — not even the one at the session path,
+  // which is replaced only below, once the secret is stored.
   const files = openDestination(
     workDir,
     destination,
     isXsuaa ? 'xsuaa' : 'abap',
-    resolvedSessionPath,
   );
   // A certificate client is written as its paths and `certurl` — never PEM —
   // and the store removes the client secret it replaces (and the reverse).
@@ -239,39 +356,66 @@ export async function runGenerateEnv(
         : { uaaClientSecret: client.uaaClientSecret }),
     }),
   );
+  // The Basic encoding, beside the client it applies to (as mcp-auth).
+  setFileVariable(
+    files.file,
+    basicEncodingVariable(isXsuaa ? 'xsuaa' : 'abap'),
+    flags.clientAuth === 'secret' ? flags.basicEncoding : undefined,
+  );
 
   // The user's choice as the broker's strategy; none without `--client-auth`.
-  const broker = new AuthBroker({
-    sessionStore: files.sessionStore,
-    serviceKeyStore: files.keyStore,
-    clientAuthentication: clientAuthenticationStrategy(flags),
-    authorization: () => authorization(),
-  });
+  // This script's own choices, stated: a renewal refreshes, then logs in; a
+  // secret the store did not take fails the run.
+  const broker = new AuthBroker(
+    {
+      sessionStore: files.sessionStore,
+      serviceKeyStore: files.keyStore,
+      clientAuthentication: clientAuthenticationStrategy(flags),
+      authorization: () => authorization(browser, signal),
+      renewal: () => refreshThenLogin(),
+      onWriteFailure: 'fail',
+      // On only with --auth-debug: never from the environment.
+      authDebug,
+    },
+    // The script's logger: stderr, from debug with --verbose (or
+    // --auth-debug, which implies it), else from info.
+    createCliLogger({ verbose: verbose || authDebug }),
+  );
 
-  console.log(`🔐 Getting token for destination "${destination}" (${grant})`);
+  progress(`🔐 Getting token for destination "${destination}" (${grant})`);
   try {
     // Kept: getProvider is typed IAuthProvider, and both grants this script
     // states (authorization_code, client_credentials) build a token provider,
     // which also has getTokens. A runtime check would add a refusal for a
     // provider that cannot be built here.
-    const provider = (await broker.getProvider(destination)) as unknown as {
-      getTokens: () => Promise<unknown>;
+    const provider = (await broker.getProvider(destination, {
+      signal,
+    })) as unknown as {
+      getTokens: (options?: { signal?: AbortSignal }) => Promise<unknown>;
     };
-    await provider.getTokens();
+    await provider.getTokens(signal === undefined ? undefined : { signal });
   } catch (error) {
-    console.error(
-      `❌ Login failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    console.error(`   ${resolvedSessionPath} is unchanged.`);
+    // Ended by the user: the interrupt says so, not a failed login.
+    if (signal?.aborted) throw error;
+    // A provider's failure — of any installed copy of auth-errors — in the
+    // words auth-errors renders from its kind and facts; anything else in
+    // auth-errors' unfamiliar words, never its message.
+    printFailure(error, {
+      context: 'Login failed',
+      operation: 'token-request',
+    });
+    toStderr(`   ${resolvedSessionPath} is unchanged.`);
     return 1;
   }
-  console.log(`✅ Token obtained successfully`);
+  progress(`✅ Token obtained successfully`);
 
-  if (!(await flushed(broker, (line) => console.error(line)))) {
-    console.error(`   ${resolvedSessionPath} is unchanged.`);
+  if (!(await flushed(broker, signal))) {
+    toStderr(`   ${resolvedSessionPath} is unchanged.`);
     return 1;
   }
-  writeOutputFile(files, resolvedSessionPath);
-  console.log(`✅ Session file written: ${resolvedSessionPath}`);
+  // An interrupted run writes no session file.
+  signal?.throwIfAborted();
+  writeOutputFile(files, resolvedSessionPath, 'the session path');
+  progress(`✅ Session file written: ${resolvedSessionPath}`);
   return 0;
 }

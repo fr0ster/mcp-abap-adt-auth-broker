@@ -2,7 +2,8 @@
  * Coverage for the CLI/config merge in mcpSsoConfig.ts, and for what a run
  * states: the destination's means and the collaborators it hands the broker.
  *
- * This is the code `mcp-sso` uses to reconcile `--protocol`/`--flow`/flag
+ * This is the code `mcp-auth oidc | saml2-pure | saml2-bearer` (2.x's
+ * `mcp-sso`) uses to reconcile the subcommand's protocol and flow and its flag
  * options with an optional `--config <path.json>` file before building the
  * destination and the strategies the broker's provider will use. A
  * `browser`/`redirectPort`/`authorizationCode`/`assertionFlow` serialized in
@@ -58,8 +59,13 @@ jest.mock('@mcp-abap-adt/auth-providers', () => ({
   consoleDeviceCodePresenter: (...args: unknown[]) =>
     (consoleDeviceCodePresenter as any)(...args),
   defaultReplayStore,
-  ValidationError: jest.requireActual('@mcp-abap-adt/auth-providers')
-    .ValidationError,
+  // The six browser factories: descriptions only, nothing is launched.
+  linuxDefaultBrowser: () => ({ __kind: 'linuxDefaultBrowser' }),
+  linuxBrowser: (program: string) => ({ __kind: 'linuxBrowser', program }),
+  macDefaultBrowser: () => ({ __kind: 'macDefaultBrowser' }),
+  macBrowser: (program: string) => ({ __kind: 'macBrowser', program }),
+  windowsDefaultBrowser: () => ({ __kind: 'windowsDefaultBrowser' }),
+  windowsBrowser: (program: string) => ({ __kind: 'windowsBrowser', program }),
 }));
 
 // The IdP-initiated strategy reads the pasted SAMLResponse through
@@ -99,21 +105,26 @@ jest.mock('node:readline', () => ({
   },
 }));
 
+import { X509Certificate } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { ValidationError } from '@mcp-abap-adt/auth-providers';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import {
   applyFileConfig,
   buildCollaborators,
   buildDestinationMeans,
+  certificatesInFile,
   type McpSsoOptions,
   normalizeProviderConfig,
   parseSamlTrustArg,
   readIdpCertificateFile,
   readManualInput,
+  SamlTrustMissingError,
+  ssoBrowser,
 } from '../mcpSsoConfig';
+import { failureLines } from '../output';
+import { isUsageError } from '../subcommandArgs';
 
 // Trust for a SAML config whose test is about something else: since
 // auth-providers 5 the CLI builds the validator, and refuses without trust.
@@ -144,9 +155,9 @@ const silentLogger: ILogger = {
  * called for the grant the destination states — the destination's means are
  * built first, as `runMcpSso` does, so a required field still refuses.
  */
-function collaboratorsOf(options: McpSsoOptions, logger = silentLogger) {
+function collaboratorsOf(options: McpSsoOptions) {
   buildDestinationMeans(options);
-  return buildCollaborators(options, logger);
+  return buildCollaborators(options);
 }
 
 /** The interactive strategy the broker gets for this run's grant. */
@@ -161,7 +172,7 @@ function strategyOf(options: McpSsoOptions): unknown {
   );
 }
 
-describe('mcp-sso CLI/config merge', () => {
+describe('mcp-auth oidc / saml2-* CLI/config merge', () => {
   let exitSpy: jest.SpyInstance;
   let errorSpy: jest.SpyInstance;
 
@@ -206,7 +217,11 @@ describe('mcp-sso CLI/config merge', () => {
 
       expect(oidcCallbackStrategy).toHaveBeenCalledTimes(1);
       expect(oidcCallbackStrategy).toHaveBeenCalledWith(
-        expect.objectContaining({ port: 4001, browser: 'chrome' }),
+        // The file's name, mapped by the CLI's table for this platform.
+        expect.objectContaining({
+          port: 4001,
+          browser: ssoBrowser({ browser: 'chrome' }),
+        }),
       );
     });
   });
@@ -306,7 +321,9 @@ describe('mcp-sso CLI/config merge', () => {
       strategyOf(options);
 
       expect(samlCallbackStrategy).toHaveBeenCalledWith(
-        expect.objectContaining({ browser: 'firefox' }),
+        expect.objectContaining({
+          browser: ssoBrowser({ browser: 'firefox' }),
+        }),
       );
     });
 
@@ -361,6 +378,8 @@ describe('mcp-sso CLI/config merge', () => {
         flow: 'pure',
         idpSsoUrl: 'https://idp.example/sso',
         spEntityId: 'sp-entity',
+        // auth-providers 6.0.0: a manual SAML login needs the ACS stated.
+        acsUrl: 'https://abap.example/sap/saml2/sp/acs',
         assertionFlow: 'manual',
         ...FILE_TRUST,
       });
@@ -407,7 +426,7 @@ describe('mcp-sso CLI/config merge', () => {
       pastedInput.value = 'PASTED-SAML-RESPONSE';
     });
 
-    it('the device flow gets the console presenter, writing to the CLI logger', () => {
+    it('the device flow gets the console presenter with no logger: the code always on stderr', () => {
       const collaborators = collaboratorsOf(
         baseOptions({
           protocol: 'oidc',
@@ -415,13 +434,12 @@ describe('mcp-sso CLI/config merge', () => {
           clientId: 'cli-client',
           issuerUrl: 'https://issuer.example',
         }),
-        logger,
       );
       expect(collaborators.deviceCodePresenter('dest')).toEqual({
         __kind: 'consoleDeviceCodePresenter',
-        logger,
+        logger: undefined,
       });
-      expect(consoleDeviceCodePresenter).toHaveBeenCalledWith(logger);
+      expect(consoleDeviceCodePresenter).toHaveBeenCalledWith();
     });
 
     it('states every collaborator the broker may ask for; the broker supplies none', () => {
@@ -432,7 +450,6 @@ describe('mcp-sso CLI/config merge', () => {
           clientId: 'cli-client',
           issuerUrl: 'https://issuer.example',
         }),
-        logger,
       );
       expect(Object.keys(collaborators).sort()).toEqual([
         'assertionReplayStore',
@@ -446,7 +463,7 @@ describe('mcp-sso CLI/config merge', () => {
         defaultReplayStore,
       );
       expect(typeof collaborators.samlCookies('dest')).toBe('function');
-      // mcp-sso states no authorization_code destination: mcp-auth does.
+      // These subcommands state no authorization_code destination: auth-code does.
       expect(() =>
         collaborators.authorization('dest', 'authorization_code'),
       ).toThrow('no interactive strategy for authorization_code');
@@ -496,6 +513,7 @@ describe('mcp-sso CLI/config merge', () => {
           authType: 'abap',
           idpSsoUrl: 'https://idp.example/sso',
           spEntityId: 'sp-entity',
+          acsUrl: 'https://abap.example/sap/saml2/sp/acs',
           assertionFlow: 'manual',
           ...FILE_TRUST,
         }),
@@ -522,7 +540,7 @@ describe('mcp-sso CLI/config merge', () => {
     let tempDir: string;
 
     beforeEach(() => {
-      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-sso-trust-'));
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-auth-sso-trust-'));
     });
 
     afterEach(() => {
@@ -612,29 +630,129 @@ describe('mcp-sso CLI/config merge', () => {
       );
     });
 
-    describe('certificate files', () => {
+    describe('certificate files: what a file holds (as 2.x read it, no regular expression)', () => {
       it('splits a PEM bundle into one entry per certificate', () => {
-        const file = writeFile('bundle.pem', `${PEM_A}\n${PEM_B}\n`);
-        expect(readIdpCertificateFile(file)).toEqual([PEM_A, PEM_B]);
+        expect(certificatesInFile(Buffer.from(`${PEM_A}\n${PEM_B}\n`))).toEqual(
+          [PEM_A, PEM_B],
+        );
+      });
+
+      it('takes each BEGIN to the first END after it, text between blocks dropped', () => {
+        expect(
+          certificatesInFile(
+            Buffer.from(`junk\n${PEM_A}\nbetween\n${PEM_B}\ntrailer`),
+          ),
+        ).toEqual([PEM_A, PEM_B]);
       });
 
       it('passes bare base64 DER through, trimmed', () => {
-        const file = writeFile('cert.b64', '  MIIBAAAA\n  ');
-        expect(readIdpCertificateFile(file)).toEqual(['MIIBAAAA']);
+        expect(certificatesInFile(Buffer.from('  MIIBAAAA\n  '))).toEqual([
+          'MIIBAAAA',
+        ]);
+      });
+
+      it('passes bare base64 broken by any whitespace (a no-break space too), trimmed', () => {
+        expect(certificatesInFile(Buffer.from('MIIB\u00a0AA\tAA==\n'))).toEqual(
+          ['MIIB\u00a0AA\tAA=='],
+        );
       });
 
       it('base64-encodes a binary DER file', () => {
         const der = Buffer.from([0x30, 0x82, 0x01, 0xff, 0x00, 0xa0]);
+        expect(certificatesInFile(der)).toEqual([der.toString('base64')]);
+      });
+
+      it.each([
+        ['three = of padding', 'MIIBAAAA==='],
+        ['padding inside', 'MII=BAAAA'],
+      ])('base64 with %s is binary: base64-encoded', (_case, text) => {
+        expect(certificatesInFile(Buffer.from(text))).toEqual([
+          Buffer.from(text).toString('base64'),
+        ]);
+      });
+
+      it('a BEGIN without END is kept whole, trimmed', () => {
+        expect(
+          certificatesInFile(
+            Buffer.from(' -----BEGIN CERTIFICATE-----\nAAAA '),
+          ),
+        ).toEqual(['-----BEGIN CERTIFICATE-----\nAAAA']);
+      });
+
+      it('megabytes of BEGIN with no END: one pass, the whole text kept', () => {
+        const text = '-----BEGIN CERTIFICATE-----\n'.repeat(200_000);
+        expect(certificatesInFile(Buffer.from(text))).toEqual([text.trim()]);
+      });
+    });
+
+    describe('certificate files: read and checked', () => {
+      const REAL_A = fs.readFileSync(
+        path.join(__dirname, 'fixtures', 'certificates', 'client.crt'),
+        'utf8',
+      );
+      const REAL_B = fs.readFileSync(
+        path.join(__dirname, 'fixtures', 'certificates', 'server.crt'),
+        'utf8',
+      );
+
+      it('a PEM bundle of real certificates: one entry per certificate', () => {
+        const file = writeFile('bundle.pem', `${REAL_A}\n${REAL_B}`);
+        expect(readIdpCertificateFile(file)).toEqual([
+          REAL_A.trim(),
+          REAL_B.trim(),
+        ]);
+      });
+
+      it('a real DER file: base64-encoded', () => {
+        const der = new X509Certificate(REAL_A).raw;
         const file = writeFile('cert.der', der);
         expect(readIdpCertificateFile(file)).toEqual([der.toString('base64')]);
       });
 
-      it('refuses a certificate file that does not exist', () => {
-        expect(() =>
-          readIdpCertificateFile(path.join(tempDir, 'missing.pem')),
-        ).toThrow('process.exit(1)');
-        expect(errorSpy).toHaveBeenCalledWith(
-          expect.stringContaining('missing.pem'),
+      it('megabytes of BEGIN without END after a real certificate: the certificate, promptly', () => {
+        const file = writeFile(
+          'huge.pem',
+          `${REAL_A}\n${'-----BEGIN CERTIFICATE-----\n'.repeat(200_000)}`,
+        );
+        expect(readIdpCertificateFile(file)).toEqual([REAL_A.trim()]);
+      });
+
+      it.each([
+        ['a PEM block that is no certificate', `${PEM_A}\n`],
+        ['bare base64 that is no certificate', 'MIIBAAAA\n'],
+        [
+          'a binary file that is no certificate',
+          Buffer.from([0x30, 0x82, 0x01]),
+        ],
+        [
+          'megabytes of BEGIN with no END',
+          '-----BEGIN CERTIFICATE-----\n'.repeat(200_000),
+        ],
+      ])('%s: refused naming --idp-cert and the path', (_case, content) => {
+        const file = writeFile('bad.pem', content);
+        let thrown: unknown;
+        try {
+          readIdpCertificateFile(file);
+        } catch (error) {
+          thrown = error;
+        }
+        expect(isUsageError(thrown)).toBe(true);
+        expect(failureLines(thrown).join('\n')).toBe(
+          `❌ --idp-cert: ${file} holds no X.509 certificate`,
+        );
+      });
+
+      it('refuses a certificate file that does not exist: the flag, the path as given and ENOENT', () => {
+        const missing = path.join(tempDir, 'missing.pem');
+        let thrown: unknown;
+        try {
+          readIdpCertificateFile(missing);
+        } catch (error) {
+          thrown = error;
+        }
+        expect(isUsageError(thrown)).toBe(true);
+        expect(failureLines(thrown).join('\n')).toBe(
+          `❌ --idp-cert: ${missing} cannot be read (ENOENT)`,
         );
       });
     });
@@ -731,7 +849,13 @@ describe('mcp-sso CLI/config merge', () => {
       'into the %s destination',
       (flow) => {
         it('states every certificate — inline and from files — and the entity id; the broker builds the validator', () => {
-          const file = writeFile('rotated.pem', PEM_B);
+          const rotated = fs
+            .readFileSync(
+              path.join(__dirname, 'fixtures', 'certificates', 'client.crt'),
+              'utf8',
+            )
+            .trim();
+          const file = writeFile('rotated.pem', rotated);
           const means = samlMeansOf(
             samlOptions(flow, {
               idpCertificates: [PEM_A],
@@ -743,7 +867,7 @@ describe('mcp-sso CLI/config merge', () => {
             expect.objectContaining({
               authType: 'saml',
               grantType: flow === 'pure' ? 'saml2_pure' : 'saml2_bearer',
-              samlIdpCertificates: [PEM_A, PEM_B],
+              samlIdpCertificates: [PEM_A, rotated],
               samlIdpEntityId: 'https://idp/meta',
               samlIdpSsoUrl: 'https://idp.example/sso',
               samlSpEntityId: 'sp-entity',
@@ -764,8 +888,10 @@ describe('mcp-sso CLI/config merge', () => {
             } catch (error) {
               caught = error;
             }
-            expect(caught).toBeInstanceOf(ValidationError);
-            expect((caught as ValidationError).missingFields).toEqual(missing);
+            expect(caught).toBeInstanceOf(SamlTrustMissingError);
+            expect((caught as SamlTrustMissingError).missingFields).toEqual(
+              missing,
+            );
           },
         );
 
@@ -805,14 +931,50 @@ describe('mcp-sso CLI/config merge', () => {
           });
         });
 
-        it('with --idp-initiated and no --acs-url, names the default callback as the ACS', async () => {
+        it.each([
+          ['--idp-initiated', { idpInitiated: true }],
+          ['--assertion-flow manual', { assertionFlow: 'manual' as const }],
+          [
+            '--idp-initiated --assertion-flow manual',
+            { idpInitiated: true, assertionFlow: 'manual' as const },
+          ],
+        ])(
+          'with %s and no ACS: refused naming --acs-url, no localhost guess',
+          (_case, overrides) => {
+            let thrown: unknown;
+            try {
+              samlStrategyOf(
+                samlOptions(flow, { ...FILE_TRUST, ...overrides }),
+              );
+            } catch (error) {
+              thrown = error;
+            }
+            expect(isUsageError(thrown)).toBe(true);
+            expect(failureLines(thrown).join('\n')).toContain('--acs-url');
+            expect(exitSpy).not.toHaveBeenCalled();
+            expect(manualSamlResponseStrategy).not.toHaveBeenCalled();
+          },
+        );
+
+        it("with --idp-initiated, the paste stops at the request's signal", async () => {
           const strategy = samlStrategyOf(
-            samlOptions(flow, { ...FILE_TRUST, idpInitiated: true }),
+            samlOptions(flow, {
+              ...FILE_TRUST,
+              idpInitiated: true,
+              acsUrl: 'https://uaa.example/saml/SSO/alias/x',
+            }),
           );
-          const outcome = (await strategy.authorize({
+          pastedInput.value = undefined;
+          const controller = new AbortController();
+          const pasting = strategy.authorize({
             buildAuthorizationUrl: jest.fn(),
-          })) as { redirectUri: string };
-          expect(outcome.redirectUri).toBe('http://localhost:61001/callback');
+            signal: controller.signal,
+          });
+          const rejected = expect(pasting).rejects.toThrow('input abandoned');
+          controller.abort();
+          await rejected;
+          expect(interfaces.at(-1)?.closed).toBe(true);
+          pastedInput.value = 'PASTED-SAML-RESPONSE';
         });
 
         it('with --idp-initiated and --assertion, uses the static strategy', () => {
@@ -848,6 +1010,50 @@ describe('mcp-sso CLI/config merge', () => {
   });
 });
 
+describe('scopes as the store keeps them: split on commas and whitespace, no regular expression', () => {
+  const scopesOf = (scopes: unknown) =>
+    buildDestinationMeans({
+      authType: 'xsuaa',
+      format: 'env',
+      protocol: 'oidc',
+      flow: 'device',
+      clientId: 'c',
+      tokenEndpoint: 'https://uaa.example/oauth/token',
+      scopes: scopes as string[],
+    }).oidcScopes;
+
+  it.each([
+    ['openid, offline_access', ['openid', 'offline_access']],
+    [' a,,b\t c\u00a0d\n', ['a', 'b', 'c', 'd']],
+    [
+      ['x,y', 'z'],
+      ['x', 'y', 'z'],
+    ],
+    [[' , '], undefined],
+    ['', undefined],
+  ])('%p → %p', (scopes, expected) => {
+    expect(scopesOf(scopes)).toEqual(expected);
+  });
+
+  it('a long run of separators', () => {
+    expect(scopesOf(`a${', \t'.repeat(500_000)}b`)).toEqual(['a', 'b']);
+  });
+});
+
+describe('a UAA URL ending in a long run of slashes', () => {
+  it('the OIDC token endpoint is composed without them', () => {
+    const means = buildDestinationMeans({
+      authType: 'xsuaa',
+      format: 'env',
+      protocol: 'oidc',
+      flow: 'device',
+      clientId: 'c',
+      uaaUrl: `https://uaa.example${'/'.repeat(100_000)}`,
+    });
+    expect(means.oidcTokenEndpoint).toBe('https://uaa.example/oauth/token');
+  });
+});
+
 describe('readManualInput', () => {
   afterEach(() => {
     pastedInput.value = 'PASTED-SAML-RESPONSE';
@@ -872,6 +1078,22 @@ describe('readManualInput', () => {
   // left open holds stdin, and the process never exits.
   it('rejects when the signal aborts, and closes its readline', async () => {
     pastedInput.value = undefined;
+    const before = interfaces.length;
+    const controller = new AbortController();
+    const reading = readManualInput('Paste: ', controller.signal);
+    const rejected = expect(reading).rejects.toThrow(
+      'input abandoned at "Paste:"',
+    );
+    // The question is asked one turn later, after the URL prompt.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(interfaces.length).toBe(before + 1);
+    controller.abort();
+    await rejected;
+    expect(interfaces.at(-1)?.closed).toBe(true);
+  });
+
+  it('a signal aborted before the question is asked opens no readline', async () => {
+    const before = interfaces.length;
     const controller = new AbortController();
     const reading = readManualInput('Paste: ', controller.signal);
     const rejected = expect(reading).rejects.toThrow(
@@ -879,7 +1101,7 @@ describe('readManualInput', () => {
     );
     controller.abort();
     await rejected;
-    expect(interfaces.at(-1)?.closed).toBe(true);
+    expect(interfaces.length).toBe(before);
   });
 
   it('opens no readline for a signal already aborted', async () => {

@@ -13,7 +13,12 @@
 //     on the package's allowlist and in `dependencies`, and every dependency
 //     is imported by at least one of them;
 //   - test files (under __tests__): each import is declared, in
-//     `devDependencies` or `dependencies`; nothing undeclared.
+//     `devDependencies` or `dependencies`; nothing undeclared. The one
+//     relative import a test may make outside its package's src is one of
+//     the stand's shared helpers under `packages/auth-broker/tests/stand/`
+//     (STAND_HELPERS: `formLogin`, `standAdmin`): both packages' stand
+//     suites play the user and set up the servers with them, reused rather
+//     than copied; they ship in no package.
 //
 // "The library speaks only the store contracts, never a storage" — it never
 // imports auth-stores — is the allowlist below: the
@@ -31,16 +36,23 @@ const ALLOWED = {
     '@mcp-abap-adt/interfaces-auth-broker',
     '@mcp-abap-adt/interfaces-utils',
     '@mcp-abap-adt/auth-providers',
+    '@mcp-abap-adt/auth-errors',
   ],
   'auth-broker-cli': [
     '@mcp-abap-adt/auth-broker',
     '@mcp-abap-adt/auth-stores',
     '@mcp-abap-adt/auth-providers',
+    '@mcp-abap-adt/auth-errors',
     '@mcp-abap-adt/interfaces-auth',
     '@mcp-abap-adt/interfaces-auth-sap',
     '@mcp-abap-adt/interfaces-auth-broker',
     '@mcp-abap-adt/interfaces-utils',
-    '@mcp-abap-adt/logger',
+    // The SAML metadata the CLI reads (`samlMetadata.ts`): parsed, never
+    // matched with regular expressions — the parser auth-providers uses.
+    '@xmldom/xmldom',
+    // A session file's own lines (`readFileVariable`), read as auth-stores
+    // reads the same file: its `.env` parser, one deduplicated copy.
+    'dotenv',
   ],
 };
 
@@ -73,6 +85,11 @@ function specifiers(text) {
 
 const problems = [];
 const packagesDir = path.join(ROOT, 'packages');
+// The stand's test-only helpers, shared by both packages' stand suites.
+const STAND_HELPERS = [
+  path.join(packagesDir, 'auth-broker', 'tests', 'stand', 'formLogin'),
+  path.join(packagesDir, 'auth-broker', 'tests', 'stand', 'standAdmin'),
+];
 for (const dir of fs.readdirSync(packagesDir)) {
   if (!fs.existsSync(path.join(packagesDir, dir, 'package.json'))) continue;
   if (!(dir in ALLOWED)) {
@@ -101,6 +118,7 @@ for (const dir of fs.readdirSync(packagesDir)) {
     for (const spec of specifiers(fs.readFileSync(file, 'utf8'))) {
       if (spec.startsWith('.')) {
         const target = path.resolve(path.dirname(file), spec);
+        if (isTest && STAND_HELPERS.includes(target)) continue;
         if (!target.startsWith(src + path.sep))
           problems.push(`${rel}: relative import leaves the package: ${spec}`);
         continue;

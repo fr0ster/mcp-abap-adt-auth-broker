@@ -1,49 +1,46 @@
 # Installation Guide
 
-This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` package (4.1.0)
-and its commands, `@mcp-abap-adt/auth-broker-cli` (2.1.0). Upgrading from 4.0.0 or 3.x: see
-*Migrating from 4.0.0* and *Migrating from 3.x* in the [library README](../../packages/auth-broker/README.md#migrating-from-400).
+This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` package (5.0.0)
+and its command, `@mcp-abap-adt/auth-broker-cli` (3.0.0). Upgrading from 4.x: *Migrating to
+5.0.0* in the [library README](../../packages/auth-broker/README.md#migrating-to-500); from CLI
+2.x: *Migrating to 3.0.0* in the [CLI README](../../packages/auth-broker-cli/README.md#migrating-to-300).
 
 ## Prerequisites
 
-- **Node.js**: Version 22, 24 or 26 (`engines: "^22 || ^24 || ^26"`; 22 and 24 are the versions SAP BTP Cloud Foundry offers)
-- **npm**: Version 7.0.0 or higher (comes with Node.js)
-- **SAP BTP Account**: For obtaining service keys (if using browser authentication)
+- **Node.js**: 22, 24 or 26 (`engines: "^22 || ^24 || ^26"`; 22 and 24 are the versions SAP BTP
+  Cloud Foundry offers)
+- **npm**: comes with Node.js
+- **SAP BTP account**: for service keys (if you log in through UAA / XSUAA)
 
 ## Installation
 
-### NPM Installation
+### The library
 
 ```bash
-npm install @mcp-abap-adt/auth-broker @mcp-abap-adt/auth-stores @mcp-abap-adt/auth-providers
+npm install @mcp-abap-adt/auth-broker @mcp-abap-adt/auth-providers @mcp-abap-adt/auth-errors @mcp-abap-adt/auth-stores
 ```
 
-The library brings `@mcp-abap-adt/auth-providers` 5 as a dependency, but not
-the stores: install `@mcp-abap-adt/auth-stores` 3 or later (or bring stores of
-your own on the `@mcp-abap-adt/interfaces-auth-broker` contracts) — the
-session store must take a write of the secret alone, which auth-stores 1.x and
-2.x do not. Declare `@mcp-abap-adt/auth-providers` yourself when your code
-imports it (strategies, presenters, a provider of your own).
+The library depends on `@mcp-abap-adt/auth-providers` 6 and `@mcp-abap-adt/auth-errors` 2, but
+declare them yourself: your code imports the renewal strategies (`refreshThenLogin`,
+`refreshOnly`) and the interactive strategies from auth-providers, and reads failures with
+auth-errors. The stores are yours to choose: `@mcp-abap-adt/auth-stores` 4, or your own on the
+`@mcp-abap-adt/interfaces-auth-broker` contracts. Everything must be on the same contract majors
+(`@mcp-abap-adt/interfaces-auth` 7): check that one copy of each is installed —
 
-The `mcp-auth` and `mcp-sso` commands are not part of this package from 3.1.0
-on: they are `@mcp-abap-adt/auth-broker-cli`, in the same repository.
+```bash
+npm ls @mcp-abap-adt/interfaces-auth @mcp-abap-adt/auth-errors
+```
+
+### The command
 
 ```bash
 npm install -g @mcp-abap-adt/auth-broker-cli
+mcp-auth --version   # 3.0.0
 ```
 
-Its 2.1.0, on the library's 4.1.0 (2.0.0 on 4.0.0 alike), writes a complete 4.0 destination
-— the means through `EnvDestinationStore`, the secret through the broker — to
-the file it always wrote, and `flush()`es before it writes the output (exit 1
-when the secret is not stored); see its
-[README](../../packages/auth-broker-cli/README.md#what-each-command-writes-and-where)
-and *Migrating from 2.0.0* / *from 1.0.0* there. For an x509 service key
-(a client certificate, no secret) the library needs auth-stores 3.3.0 or
-later and the `clientAuthentication` strategy; the commands, `--client-auth
-certificate`.
-
-If you installed `@mcp-abap-adt/auth-broker` globally for the commands (3.0.4
-or earlier), swap it:
+Its only bin is `mcp-auth`; the `mcp-sso` command of 2.x is gone (every form of it is an
+`mcp-auth` subcommand). If you installed `@mcp-abap-adt/auth-broker` globally for the commands
+(3.0.4 or earlier), swap it:
 
 ```bash
 npm uninstall -g @mcp-abap-adt/auth-broker && npm i -g @mcp-abap-adt/auth-broker-cli
@@ -59,8 +56,8 @@ npm list @mcp-abap-adt/auth-broker
 
 ### Service Key Setup
 
-1. **Obtain Service Key**: Get service key from SAP BTP Cockpit for your ABAP system
-2. **Save Service Key**: Save as `{destination}.json` file
+1. **Obtain a service key** from the SAP BTP Cockpit for your ABAP system.
+2. **Save it** as `{destination}.json`.
 
 Example: `TRIAL.json`
 ```json
@@ -74,21 +71,20 @@ Example: `TRIAL.json`
 }
 ```
 
-A service key holds the client and the URL, never which grant the
-destination uses: whoever builds the key store states it —
-`new AbapServiceKeyStore(dir, { grantType: 'authorization_code' })`.
+A service key holds the client and the URL, never which grant the destination uses: whoever
+builds the key store states it — `new AbapServiceKeyStore(dir, { grantType:
+'authorization_code' })`.
 
 ### Environment File Setup
 
-A destination may also be stated in `{destination}.env` — what `mcp-auth` /
-`mcp-sso` write, or a file you write yourself. With auth-stores 3 the file has
-two roles: the means, read by `EnvDestinationStore`, and the secret, written
-by the broker through a session store (`AbapSessionStore`); each touches only
-its own keys.
+A destination may also be stated in `{destination}.env` — what `mcp-auth` writes, or a file you
+write yourself. With auth-stores 4 the file has two roles: the means, read by
+`EnvDestinationStore`, and the secret, written by the broker through a session store
+(`AbapSessionStore`); each touches only its own keys.
 
 Example: `TRIAL.env`
 ```env
-# the means — you (or the CLI) write these; the broker never does
+# the means — you (or mcp-auth) write these; the broker never does
 SAP_URL=https://your-system.abap.us10.hana.ondemand.com
 SAP_CLIENT=100
 SAP_AUTH_TYPE=jwt
@@ -101,14 +97,14 @@ SAP_JWT_TOKEN=...
 SAP_EXPIRES_AT=...
 SAP_REFRESH_TOKEN=...
 SAP_ISSUED_FOR=...
-SAP_ISSUED_BY=...
+SAP_ISSUED_BY=mcp-abap-adt-binding/2;jwt/authorization_code;...
 ```
 
 ## File Locations
 
-Where files live is the stores' concern (`@mcp-abap-adt/auth-stores`), not the
-broker's: each store takes its directory in its constructor, with no default,
-and the broker reads no environment variable for it.
+Where files live is the stores' concern (`@mcp-abap-adt/auth-stores`), not the broker's: each
+store takes its directory in its constructor, with no default, and the library reads no
+environment variable for it.
 
 ```typescript
 import {
@@ -125,62 +121,49 @@ const serviceKeyStore = new EnvDestinationStore('/path/to/destinations', {
 const sessionStore = new AbapSessionStore('/path/to/sessions');
 ```
 
+The `mcp-auth` command's `--destination <name>` looks in `<dir>/sessions/` and
+`<dir>/service-keys/`, `<dir>` being `--destination-dir`, else the folders of `AUTH_BROKER_PATH`
+(the server's variable), else `~/.config/mcp-abap-adt` on Unix and
+`<home>\Documents\mcp-abap-adt` on Windows.
+
 ## Quick Start
 
-1. **Install Packages**:
+1. **Install the packages**:
    ```bash
-   npm install @mcp-abap-adt/auth-broker @mcp-abap-adt/auth-stores @mcp-abap-adt/auth-providers
+   npm install @mcp-abap-adt/auth-broker @mcp-abap-adt/auth-providers @mcp-abap-adt/auth-errors @mcp-abap-adt/auth-stores
    ```
 
-2. **Create Service Key File**:
-   ```bash
-   # Save your service key as TRIAL.json
-   cp /path/to/service-key.json ./TRIAL.json
-   ```
+2. **Save the service key** as `TRIAL.json` in a directory of your choice.
 
-3. **Use in Code**:
+3. **Use it in code**:
    ```typescript
    import { AuthBroker } from '@mcp-abap-adt/auth-broker';
-   import { AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-stores';
    import {
-     AuthorizationCodeProvider,
      browserCallbackStrategy,
+     linuxDefaultBrowser,
+     refreshThenLogin,
    } from '@mcp-abap-adt/auth-providers';
+   import { AbapServiceKeyStore, AbapSessionStore } from '@mcp-abap-adt/auth-stores';
 
-   const broker = new AuthBroker({
-     serviceKeyStore: new AbapServiceKeyStore(process.cwd()),
-     sessionStore: new AbapSessionStore(process.cwd()),
-     provider: (destination, authConfig, connConfig) =>
-       new AuthorizationCodeProvider({
-         uaaUrl: authConfig!.uaaUrl,
-         clientId: authConfig!.uaaClientId,
-         clientSecret: authConfig!.uaaClientSecret,
-         refreshToken: authConfig!.refreshToken,
-         accessToken: connConfig.authorizationToken,
-         authorization: browserCallbackStrategy({ browser: 'system' }),
-       }),
-   });
-   const token = await broker.getToken('TRIAL');
-   ```
-
-   Or let the destination state its provider, and give the broker no
-   `provider`: the token API then asks the provider `getProvider` builds —
-   the one a `@mcp-abap-adt/connection` 10 connector takes — and the two share
-   one token:
-
-   ```typescript
    const broker = new AuthBroker({
      serviceKeyStore: new AbapServiceKeyStore(process.cwd(), {
        grantType: 'authorization_code',
      }),
      sessionStore: new AbapSessionStore(process.cwd()),
-     authorization: () => browserCallbackStrategy({ browser: 'system' }),
+     renewal: () => refreshThenLogin(),
+     onWriteFailure: 'fail',
+     authorization: () => browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
    });
-   const token = await broker.getToken('TRIAL');
-   const provider = await broker.getProvider('TRIAL'); // the same provider
+
+   const provider = await broker.getProvider('TRIAL'); // for a connection 14 connector
+   const token = await broker.getToken('TRIAL');       // the same provider's token
+   await broker.flush();                               // every token stored?
    ```
 
-4. **First Run**: On first run, the browser opens for the login. After it, the session store holds the secret — with `AbapSessionStore`, in `TRIAL.env` beside the key. Call `await broker.flush()` before the process exits to know it was stored.
+4. **First run**: the browser opens for the login (the URL is also shown on stderr). After it,
+   the session store holds the secret — with `AbapSessionStore`, in `TRIAL.env` beside the key.
+   The next run reuses it while it is valid and bound to the same means, refreshes it when it
+   expired, and logs in again only when it must.
 
 ## Security Considerations
 
@@ -197,13 +180,14 @@ icacls TRIAL.json /grant:r %USERNAME%:R
 icacls TRIAL.env /grant:r %USERNAME%:R
 ```
 
+`mcp-auth` works in a private temporary directory (`0700`) removed on every exit, and writes
+nothing else but the output you name.
+
 ### Version Control
 
-**Never commit** the following files to version control:
-- `*.env` files (contain tokens)
-- `*.json` service key files (contain credentials)
+**Never commit** `*.env` files (they hold tokens) or service key `*.json` files (they hold
+credentials):
 
-Add to `.gitignore`:
 ```
 *.env
 *.json
@@ -213,49 +197,55 @@ Add to `.gitignore`:
 
 ### Rotating Credentials
 
-Rotate service keys regularly. A changed URL, SAP client, UAA or client costs
-one fresh login: the stored secret is bound to the ones it was obtained for and
-is not reused elsewhere.
+Rotate service keys regularly. A changed URL, SAP client, client, grant, server address or
+trust value costs one fresh login: the stored secret is bound to exactly the means it was
+obtained under and is not reused under others — even a cosmetic change of an address (a trailing
+`/`) counts.
 
 ## Troubleshooting
 
 ### File Not Found Errors
 
-If you see "file not found" errors:
-
-1. **Check File Location**: Verify files are in the expected directory
-2. **Check Directories**: Review the directories given to each store's constructor
-3. **Check File Names**: Ensure files are named `{destination}.env` and `{destination}.json`
+1. **Check the directories** given to each store's constructor (or `--destination-dir` /
+   `AUTH_BROKER_PATH` for `mcp-auth --destination`).
+2. **Check the file names**: `{destination}.env` and `{destination}.json`.
 
 ### Browser Authentication Issues
 
-If browser doesn't open:
-
-1. **Check System Browser**: Verify default browser is configured
-2. **Check the callback port is available**: The OAuth callback port comes from
-   `@mcp-abap-adt/auth-providers` (currently `61001`) unless overridden — with the `mcp-auth`/
-   `mcp-sso` CLIs, via `--redirect-port`. Ensure whichever port is actually in use is free.
-3. **Check Firewall**: Ensure localhost connections are allowed
+1. **No browser opened**: the URL is shown on stderr; open it by hand. `mcp-auth --browser none`
+   never tries; `--browser-program <program>` names one.
+2. **The callback port is busy**: the callback port comes from `@mcp-abap-adt/auth-providers`
+   (currently `61001`) unless overridden — `browserCallbackStrategy({ port })`, or
+   `mcp-auth --redirect-port`.
+3. **The browser runs on another machine**: the callback listens on loopback only; tunnel the
+   port (`ssh -L 61001:localhost:61001 …`).
+4. **A login never ends**: there is no time limit; end it with Ctrl+C, or pass a signal
+   (`AbortSignal.timeout(ms)`) in your own code.
 
 ### `DestinationConfigError`
 
-`getProvider` (and the token API) name what a destination lacks in
-`missingFields` — a field of the key store (`authType`, `grantType`, `uaaUrl`,
-…), a session field (`issuedFor`, `authorizationToken` for a `none`
-destination), or a collaborator option (`authorization`, …). A 3.x `jwt` /
-`saml` file that states no `SAP_GRANT_TYPE` is refused naming `grantType`.
+`getProvider` (and the token API) name what a destination lacks in `missingFields` — a field of
+the key store (`authType`, `grantType`, `uaaUrl`, …), a session field (`issuedFor`, `issuedBy`,
+`authorizationToken` for a `none` destination), a collaborator option (`authorization`, …), or
+`renewal` / `onWriteFailure`, which have no default. A `jwt` / `saml` file that states no
+`SAP_GRANT_TYPE` is refused naming `grantType`.
+
+### A Login After Upgrading
+
+Every session written before auth-broker 5.0.0 reads as unbound once: each token destination
+logs in once (interactive grants) or requests a token once (`client_credentials`, `password`,
+`token_exchange`). Run `mcp-auth --env <file>` (or `--service-key`) once per destination for a
+headless consumer.
 
 ### Token Refresh Issues
 
-If token refresh fails:
-
-1. **Check Refresh Token**: Verify refresh token is valid and not expired
-2. **Check UAA Credentials**: Ensure service key has correct UAA configuration
-3. **Check Network**: Verify connectivity to UAA server
+1. **Check the refresh token**: valid and not expired (a refused refresh is discarded; the
+   renewal strategy then logs in, or with `refreshOnly()` stops).
+2. **Check the client**: the service key's UAA configuration.
+3. **Check the network**: connectivity to the UAA.
 
 ## Next Steps
 
 - See [Usage Guide](../using/USAGE.md) for API documentation and examples
 - See [Architecture](../architecture/ARCHITECTURE.md) for technical details
 - See [Testing](../development/TESTING.md) for development and testing guide
-

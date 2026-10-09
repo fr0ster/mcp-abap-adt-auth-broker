@@ -13,15 +13,21 @@
  */
 
 import * as dns from 'node:dns/promises';
+import { isAuthProviderFailure } from '@mcp-abap-adt/auth-errors';
 import {
   AuthorizationCodeProvider,
   type AuthorizationCodeProviderConfig,
   browserCallbackStrategy,
+  linuxDefaultBrowser,
+  macDefaultBrowser,
+  refreshThenLogin,
+  windowsDefaultBrowser,
 } from '@mcp-abap-adt/auth-providers';
 import {
   AbapServiceKeyStore,
   SafeAbapSessionStore,
 } from '@mcp-abap-adt/auth-stores';
+import type { IBrowser } from '@mcp-abap-adt/interfaces-auth';
 import { AuthBroker } from '../../AuthBroker';
 import { asContract, type WithUndefined } from '../../contractShape';
 import {
@@ -33,20 +39,34 @@ import {
   loadTestConfig,
 } from '../helpers/configHelpers';
 import { canListenOnLocalhost, getAvailablePort } from '../helpers/netHelpers';
+import { STATED } from '../helpers/stated';
 import { createTestLogger } from '../helpers/testLogger';
 
 // These tests drive a login a person completes by hand at a browser, not an
-// unattended caller — the provider's own default (30s) is sized for the
-// latter. 290s leaves headroom under each test's own 300_000ms Jest timeout,
-// so a real login timeout surfaces its own message instead of Jest's.
-const INTERACTIVE_LOGIN_TIMEOUT_MS = 290_000;
+// unattended caller. The test bounds its own wait — the packages have no
+// built-in one: 290s leaves headroom under each test's own 300_000ms Jest
+// timeout, so the login's own abort surfaces instead of Jest's.
+const INTERACTIVE_LOGIN_MS = 290_000;
 
-/** An AuthorizationCodeProvider: since auth-providers 4.2.0 it refreshes on request itself. */
+/** The system browser of this platform, as 5.x's `'system'` opened. */
+function systemBrowser(): IBrowser {
+  if (process.platform === 'darwin') return macDefaultBrowser();
+  if (process.platform === 'win32') return windowsDefaultBrowser();
+  return linuxDefaultBrowser();
+}
+
+/**
+ * An AuthorizationCodeProvider renewing as 5.x did (`refreshThenLogin()`);
+ * it refreshes on request itself.
+ */
 function authorizationCodeProvider(
-  config: WithUndefined<AuthorizationCodeProviderConfig>,
+  config: Omit<WithUndefined<AuthorizationCodeProviderConfig>, 'renewal'>,
 ) {
   return new AuthorizationCodeProvider(
-    asContract<AuthorizationCodeProviderConfig>(config),
+    asContract<AuthorizationCodeProviderConfig>({
+      ...config,
+      renewal: refreshThenLogin(),
+    }),
   );
 }
 
@@ -204,9 +224,9 @@ describe('AuthBroker Integration', () => {
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
         authorization: browserCallbackStrategy({
-          browser: 'system', // Use system browser for authentication
+          browser: systemBrowser(), // the system browser
           port: port1,
-          timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+          signal: AbortSignal.timeout(INTERACTIVE_LOGIN_MS),
         }),
         logger,
       });
@@ -214,8 +234,10 @@ describe('AuthBroker Integration', () => {
       // Create AuthBroker with real stores and provider
       const broker = new AuthBroker(
         {
+          ...STATED,
           serviceKeyStore,
           sessionStore,
+          onWriteFailure: 'fail',
           provider: tokenProvider,
         },
         logger,
@@ -266,9 +288,9 @@ describe('AuthBroker Integration', () => {
         refreshToken: sessionAuthConfig?.refreshToken,
         accessToken: token1, // Use token from Scenario 1
         authorization: browserCallbackStrategy({
-          browser: 'system', // Use system browser if token refresh/login needed
+          browser: systemBrowser(), // the system browser, if a login is needed
           port: port2,
-          timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+          signal: AbortSignal.timeout(INTERACTIVE_LOGIN_MS),
         }),
         logger,
       });
@@ -276,8 +298,10 @@ describe('AuthBroker Integration', () => {
       // Create new broker with updated provider
       const broker2 = new AuthBroker(
         {
+          ...STATED,
           serviceKeyStore,
           sessionStore,
+          onWriteFailure: 'fail',
           provider: tokenProvider2,
         },
         logger,
@@ -407,9 +431,9 @@ describe('AuthBroker Integration', () => {
         refreshToken: validRefreshToken || 'invalid-expired-refresh-token', // Use valid if available
         accessToken: expiredToken, // Expired/invalid token - this might cause issues
         authorization: browserCallbackStrategy({
-          browser: 'system', // Use system browser for authentication (login, not refresh)
+          browser: systemBrowser(), // the system browser: a login, not a refresh
           port: redirectPort,
-          timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+          signal: AbortSignal.timeout(INTERACTIVE_LOGIN_MS),
         }),
         logger,
       });
@@ -421,8 +445,10 @@ describe('AuthBroker Integration', () => {
       // Create AuthBroker
       const broker = new AuthBroker(
         {
+          ...STATED,
           serviceKeyStore,
           sessionStore,
+          onWriteFailure: 'fail',
           provider: tokenProvider,
         },
         logger,
@@ -549,8 +575,10 @@ describe('AuthBroker Integration', () => {
 
       const broker = new AuthBroker(
         {
+          ...STATED,
           serviceKeyStore,
           sessionStore,
+          onWriteFailure: 'fail',
           provider: tokenProvider,
         },
         logger,
@@ -631,16 +659,23 @@ describe('AuthBroker Integration', () => {
 
       const broker = new AuthBroker(
         {
+          ...STATED,
           serviceKeyStore,
           sessionStore,
+          onWriteFailure: 'fail',
           provider: tokenProvider,
         },
         logger,
       );
 
-      await expect(broker.getToken(destination)).rejects.toBeInstanceOf(
-        LoginRequiredError,
+      // 6.0.0: a strategy's own error reaches the caller classified, never
+      // as itself.
+      const thrown = await broker.getToken(destination).then(
+        () => undefined,
+        (error: unknown) => error,
       );
+      expect(isAuthProviderFailure(thrown)).toBe(true);
+      expect(thrown).not.toBeInstanceOf(LoginRequiredError);
     }, 30000);
 
     it('succeeds headless when the session holds a valid token', async () => {
@@ -689,17 +724,19 @@ describe('AuthBroker Integration', () => {
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
         authorization: browserCallbackStrategy({
-          browser: 'system',
+          browser: systemBrowser(),
           port: redirectPort,
-          timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+          signal: AbortSignal.timeout(INTERACTIVE_LOGIN_MS),
         }),
         logger,
       });
 
       const broker1 = new AuthBroker(
         {
+          ...STATED,
           serviceKeyStore,
           sessionStore,
+          onWriteFailure: 'fail',
           provider: tokenProvider1,
         },
         logger,
@@ -729,8 +766,10 @@ describe('AuthBroker Integration', () => {
 
       const broker2 = new AuthBroker(
         {
+          ...STATED,
           serviceKeyStore,
           sessionStore,
+          onWriteFailure: 'fail',
           provider: tokenProvider2,
         },
         logger,
@@ -795,17 +834,19 @@ describe('AuthBroker Integration', () => {
         clientId: authConfig.uaaClientId,
         clientSecret: authConfig.uaaClientSecret,
         authorization: browserCallbackStrategy({
-          browser: 'system',
+          browser: systemBrowser(),
           port: await getAvailablePort(),
-          timeoutMs: INTERACTIVE_LOGIN_TIMEOUT_MS,
+          signal: AbortSignal.timeout(INTERACTIVE_LOGIN_MS),
         }),
         logger,
       });
 
       const broker = new AuthBroker(
         {
+          ...STATED,
           serviceKeyStore,
           sessionStore,
+          onWriteFailure: 'fail',
           provider: tokenProvider,
         },
         logger,
@@ -851,14 +892,16 @@ describe('AuthBroker Integration', () => {
         clientId: serviceKeyAuthConfig.uaaClientId,
         clientSecret: serviceKeyAuthConfig.uaaClientSecret,
         refreshToken: serviceKeyAuthConfig.refreshToken,
-        authorization: browserCallbackStrategy({ browser: 'system' }),
+        authorization: browserCallbackStrategy({ browser: systemBrowser() }),
         logger,
       });
 
       const broker = new AuthBroker(
         {
+          ...STATED,
           serviceKeyStore,
           sessionStore,
+          onWriteFailure: 'fail',
           provider: tokenProvider,
         },
         logger,
@@ -898,14 +941,16 @@ describe('AuthBroker Integration', () => {
         clientId: serviceKeyAuthConfig.uaaClientId,
         clientSecret: serviceKeyAuthConfig.uaaClientSecret,
         refreshToken: serviceKeyAuthConfig.refreshToken,
-        authorization: browserCallbackStrategy({ browser: 'system' }),
+        authorization: browserCallbackStrategy({ browser: systemBrowser() }),
         logger,
       });
 
       const broker = new AuthBroker(
         {
+          ...STATED,
           serviceKeyStore,
           sessionStore,
+          onWriteFailure: 'fail',
           provider: tokenProvider,
         },
         logger,

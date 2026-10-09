@@ -34,9 +34,11 @@ import type {
   IAuthProvider,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
+import { approveDevice, authorizeByForm } from '../../../tests/stand/formLogin';
 import { AuthBroker } from '../../index';
+import { oidcRecord } from '../helpers/bindingRecord';
 import { describeWhere } from '../helpers/describeWhere';
-import { approveDevice, authorizeByForm } from './formLogin';
+import { STATED } from '../helpers/stated';
 
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL?.replace(/\/+$/, '');
 
@@ -45,8 +47,31 @@ const CALLBACK = 'http://localhost/callback';
 const SERVICE_URL = 'https://abap.stand.invalid';
 /** SERVICE_URL's canonical URI — what the session's `issuedFor` must hold. */
 const ISSUED_FOR = 'https://abap.stand.invalid:443';
-/** KEYCLOAK_URL (`http://localhost:<port>/realms/test`, already canonical) with the client. */
-const issuedBy = (clientId: string) => `${KEYCLOAK_URL}?client_id=${clientId}`;
+/**
+ * The `issuedBy` record of an OIDC row: the client, KEYCLOAK_URL as the
+ * issuer exactly as stated, and the trust — the scopes, the user for
+ * `password`, the token types for `token_exchange`.
+ */
+const issuedBy = (
+  grant:
+    | 'oidc_authorization_code'
+    | 'device_code'
+    | 'password'
+    | 'token_exchange',
+  clientId: string,
+  means: {
+    oidcScopes?: string[];
+    username?: string;
+    oidcSubjectTokenType?: string;
+  } = {
+    oidcScopes: ['openid'],
+  },
+) =>
+  oidcRecord(
+    grant,
+    { oidcIssuerUrl: KEYCLOAK_URL as string, ...means },
+    clientId,
+  );
 const UNAUTHORIZED = { at: 'request', status: 401, error: null } as const;
 
 const claims = (jwt: string): Record<string, unknown> =>
@@ -163,7 +188,7 @@ describeWhere(
 
     /**
      * The destination's means written as a consumer writes them — the issuer,
-     * and the client as `mcp-sso` writes it (`uaaUrl` the issuer); a broker
+     * and the client as `mcp-auth oidc` writes it (`uaaUrl` the issuer); a broker
      * over both stores with the collaborators given.
      */
     async function destination(
@@ -186,6 +211,7 @@ describeWhere(
       const sessions = new AbapSessionStore(sessionsDir);
       const broker = () =>
         new AuthBroker({
+          ...STATED,
           serviceKeyStore: keys,
           sessionStore: sessions,
           ...collaborators,
@@ -219,7 +245,10 @@ describeWhere(
         ISSUED_FOR,
       );
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        issuedBy('oidc-password'),
+        issuedBy('password', 'oidc-password', {
+          oidcScopes: ['openid'],
+          username: USER.username,
+        }),
       );
 
       expect(await provider.rejected(UNAUTHORIZED)).toEqual({ ok: true });
@@ -274,7 +303,7 @@ describeWhere(
       );
       expect(keysOf(sessionFile).sort()).toEqual(SECRET_KEYS);
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        issuedBy('oidc-browser'),
+        issuedBy('oidc_authorization_code', 'oidc-browser'),
       );
     }, 60_000);
 
@@ -303,7 +332,7 @@ describeWhere(
         token,
       );
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        issuedBy('oidc-device'),
+        issuedBy('device_code', 'oidc-device'),
       );
     }, 60_000);
 
@@ -333,7 +362,9 @@ describeWhere(
         again,
       );
       expect(envValue(sessionFile, ABAP_SESSION_VARS.ISSUED_BY)).toBe(
-        issuedBy('te-requester'),
+        issuedBy('token_exchange', 'te-requester', {
+          oidcSubjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
+        }),
       );
       // The subject token is means: sent to Keycloak, never written to the session.
       expect(fs.readFileSync(sessionFile, 'utf8')).not.toContain(subject);

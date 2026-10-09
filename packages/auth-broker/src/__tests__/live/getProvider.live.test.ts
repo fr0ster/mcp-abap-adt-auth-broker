@@ -1,6 +1,6 @@
 /**
  * getProvider against real systems: the provider a
- * destination states, handed to a `@mcp-abap-adt/connection` 10 connector,
+ * destination states, handed to a `@mcp-abap-adt/connection` 14 connector,
  * logs on and is answered.
  *
  * Not part of `npm test`. Run with `npm run test:live` (from the repository
@@ -21,32 +21,34 @@
  *                        AUTH_BROKER_LIVE_SESSIONS_DIR
  *
  * AUTH_BROKER_LIVE_KEYS_DIR is a directory of `<destination>.env` files read by
- * auth-stores 3's `EnvDestinationStore` — the means (`SAP_URL`,
+ * auth-stores 4's `EnvDestinationStore` — the means (`SAP_URL`,
  * `SAP_AUTH_TYPE`, `SAP_CLIENT`, `SAP_USERNAME` / `SAP_PASSWORD`, the
  * `SAP_SNC_*` keys). The address the connector dials is read from the same
  * means (`serviceUrl`, `sapClient`); the RFC system number is derived from the
- * URL's port by connection 10 unless `SAP_SYSNR` is set.
+ * URL's port by connection 14 unless `SAP_SYSNR` is set.
  *
  * The `jwt` case's means come from the destination's SAP service key,
  * `<destination>.json` in AUTH_BROKER_LIVE_SERVICE_KEYS_DIR, read by auth-stores
- * 3's `AbapServiceKeyStore`: the client (`uaa.*`), the ABAP URL and client. The
+ * 4's `AbapServiceKeyStore`: the client (`uaa.*`), the ABAP URL and client. The
  * grant is stated by whoever builds the store, never read from the key (a SAP
  * key cannot state one): `new AbapServiceKeyStore(dir, { grantType:
- * 'authorization_code' })` (auth-stores 3.1.0). The URL the
- * connector dials is the key's; `getProvider` needs none. Its session —
- * `<destination>.env` in AUTH_BROKER_LIVE_SESSIONS_DIR, read by auth-stores 3's
- * `AbapSessionStore`, which reads a 2.x/3.x file's secret keys only — must hold
- * a refresh token from an earlier login, and its binding must be the key's:
- * a file written before auth-stores 3.1.0 answers `issuedFor`
- * from its `SAP_URL` (+ `SAP_CLIENT`) and `issuedBy` from `SAP_UAA_URL` +
- * `SAP_UAA_CLIENT_ID`, which the 3.x CLI wrote from that same key. The case
- * copies that file to a temporary directory and never writes the original; it
- * seeds the copy with a well-formed JWT the system refuses (an `exp` an hour
- * ahead, so the provider trusts it) under the binding the file answered, and
- * the 401 is renewed by the stored refresh token in `rejected()` — no login,
- * no browser: the `authorization` strategy it passes refuses. A binding that
- * is not the key's is discarded by the broker, and the refused login then
- * fails the case — log in again with the CLI. Where the server rotates
+ * 'authorization_code' })`. The URL the connector dials is the key's;
+ * `getProvider` needs none. Its session — `<destination>.env` in
+ * AUTH_BROKER_LIVE_SESSIONS_DIR, read by auth-stores 4's `AbapSessionStore` —
+ * must hold a refresh token from an earlier login, and its binding must be the
+ * one auth-broker 5 computes for that key: `issuedFor` the key's URL (+ SAP
+ * client) and `issuedBy` the version-2 record of `jwt/authorization_code` with
+ * the key's client and UAA URL — what `mcp-auth --service-key <the key> --type
+ * abap` (CLI 3.0.0) writes. A session written before 5.0.0 (a bare-URI
+ * `issuedBy`, or one auth-stores composes from `SAP_UAA_URL` +
+ * `SAP_UAA_CLIENT_ID`) reads as unbound. The case copies that file to a
+ * temporary directory and never writes the original; it seeds the copy with a
+ * well-formed JWT the system refuses (an `exp` an hour ahead, so the provider
+ * trusts it) under the binding the file answered, and the 401 is renewed by the
+ * stored refresh token in `rejected()` — no login, no browser: the
+ * `authorization` strategy it passes refuses. A binding that is not the key's
+ * (a pre-5.0.0 session included) is not used by the broker, and the refused
+ * login then fails the case — log in again with CLI 3.0.0. Where the server rotates
  * refresh tokens, the run spends the original file's refresh token; log in
  * again afterwards (I have not measured whether XSUAA rotates them).
  *
@@ -58,45 +60,31 @@ import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
-  AbapServiceKeyStore,
-  AbapSessionStore,
   EnvDestinationStore,
   SafeAbapSessionStore,
 } from '@mcp-abap-adt/auth-stores';
-// connection 10 loads without the RFC addon: rfcConversationFrom requires it
+// connection 14 loads without the RFC addon: rfcConversationFrom requires it
 // only when a conversation is opened, so the HTTP case runs where it is absent.
 import {
-  AdtCloudConnector,
   AdtOnPremConnector,
-  CloudHttpTransport,
   OnPremHttpTransport,
   RfcTransport,
   rfcConversationFrom,
 } from '@mcp-abap-adt/connection';
-import type {
-  IAuthorizationStrategy,
-  IAuthProvider,
-  IAuthRejection,
-} from '@mcp-abap-adt/interfaces-auth';
 import type { IConnectionConfig } from '@mcp-abap-adt/interfaces-auth-broker';
 import { asContract } from '../../contractShape';
 import { AuthBroker } from '../../index';
 import { describeWhere, runLog as log } from '../helpers/describeWhere';
+import { STATED } from '../helpers/stated';
+import {
+  byteSize,
+  type ConnectorConfig,
+  expectRefusedTokenRenewed,
+  PROBE,
+  quiet,
+} from './adtProbe';
 
 const env = process.env;
-
-/** A silent logger for the connector: the case prints only what it asserts. */
-const quiet = {
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  debug: () => {},
-};
-
-/** The lightest ADT read connection 10's own live suite measures. */
-const PROBE = '/sap/bc/adt/compatibility/graph';
-
-type ConnectorConfig = ConstructorParameters<typeof AdtOnPremConnector>[0];
 
 /** The variables among `names` that are not set, or are set to ''. */
 function unset(names: string[]): string[] {
@@ -105,7 +93,7 @@ function unset(names: string[]): string[] {
 
 /**
  * Why the RFC wire cannot be taken here, or null when it can. The probe asks
- * from where connection 10 itself will `require` it (`rfcConversationFrom`):
+ * from where connection 14 itself will `require` it (`rfcConversationFrom`):
  * the addon is connection's optional dependency, built at install time only
  * when the NW RFC SDK is found (`SAPNWRFC_HOME`), and must also load — which
  * needs the SDK's libraries on the loader path.
@@ -185,6 +173,7 @@ function brokerAndMeans(): {
   const keys = new EnvDestinationStore(env.AUTH_BROKER_LIVE_KEYS_DIR as string);
   return {
     broker: new AuthBroker({
+      ...STATED,
       serviceKeyStore: keys,
       sessionStore: new SafeAbapSessionStore(),
     }),
@@ -211,14 +200,8 @@ async function addressOf(
   });
 }
 
-function byteSize(data: unknown): number {
-  return typeof data === 'string'
-    ? Buffer.byteLength(data)
-    : Buffer.byteLength(JSON.stringify(data ?? ''));
-}
-
 describeWhere(
-  'basic over HTTP — an on-premise system (getProvider → connection 10 OnPremHttpTransport)',
+  'basic over HTTP — an on-premise system (getProvider → connection 14 OnPremHttpTransport)',
   basicHttpUnavailable(),
   () => {
     it('logs on with the provider getProvider built and is answered 200', async () => {
@@ -322,48 +305,8 @@ describeWhere(
   },
 );
 
-/** A JWT the system did not issue: well-formed, unsigned, `exp` an hour ahead. */
-function refusedJwt(): string {
-  const part = (value: object) =>
-    Buffer.from(JSON.stringify(value)).toString('base64url');
-  return `${part({ alg: 'none', typ: 'JWT' })}.${part({
-    sub: 'auth-broker-live',
-    exp: Math.floor(Date.now() / 1000) + 3600,
-  })}.refused`;
-}
-
-/** The provider, with every rejection it is handed recorded. */
-function recordingRejections(provider: IAuthProvider): {
-  provider: IAuthProvider;
-  rejections: IAuthRejection[];
-} {
-  const rejections: IAuthRejection[] = [];
-  return {
-    rejections,
-    provider: {
-      kind: provider.kind,
-      prepare: () => provider.prepare(),
-      establish: (logon) => provider.establish(logon),
-      authorize: (request) => provider.authorize(request),
-      rejected: (rejection) => {
-        rejections.push(rejection);
-        return provider.rejected(rejection);
-      },
-    },
-  };
-}
-
-/** This case renews by refresh: a login would mean a browser, so it is refused. */
-const refuseLogin: IAuthorizationStrategy<string> = {
-  authorize: async () => {
-    throw new Error(
-      'this case renews by the stored refresh token; it never logs in',
-    );
-  },
-};
-
 describeWhere(
-  'jwt / authorization_code over HTTP — a BTP ABAP environment (getProvider → connection 10 CloudHttpTransport)',
+  'jwt / authorization_code over HTTP — a BTP ABAP environment (getProvider → connection 14 CloudHttpTransport)',
   jwtUnavailable(),
   () => {
     let copy: string;
@@ -388,95 +331,13 @@ describeWhere(
         );
       }
       fs.copyFileSync(original, path.join(copy, `${destination}.env`));
-      const sessions = new AbapSessionStore(copy);
-      const stored = await sessions.loadSession(destination);
-      if (!stored?.refreshToken) {
-        throw new Error(
-          `the session of "${destination}" holds no refresh token: log in again with the CLI`,
-        );
-      }
-      if (!stored.issuedFor || !stored.issuedBy) {
-        throw new Error(
-          `the session of "${destination}" answers no binding (SAP_URL and SAP_UAA_URL / SAP_UAA_CLIENT_ID, or SAP_ISSUED_FOR / SAP_ISSUED_BY): log in again with the CLI`,
-        );
-      }
-      const refused = refusedJwt();
-      // A credential written without its binding clears it (auth-stores
-      // 3.1.0): the refused token is written under the one the file answered.
-      await sessions.saveSession(destination, {
-        authorizationToken: refused,
-        refreshToken: stored.refreshToken,
-        issuedFor: stored.issuedFor,
-        issuedBy: stored.issuedBy,
+      // The check (adtProbe.ts) is shared with browserLogin.live.test.ts.
+      await expectRefusedTokenRenewed({
+        sessionsDir: copy,
+        serviceKeysDir: env.AUTH_BROKER_LIVE_SERVICE_KEYS_DIR as string,
+        destination,
+        label: 'jwt over HTTP',
       });
-
-      const keys = new AbapServiceKeyStore(
-        env.AUTH_BROKER_LIVE_SERVICE_KEYS_DIR as string,
-        { grantType: 'authorization_code' },
-      );
-      const broker = new AuthBroker({
-        serviceKeyStore: keys,
-        sessionStore: sessions,
-        authorization: () => refuseLogin,
-      });
-      const means: IConnectionConfig | null =
-        await keys.getConnectionConfig(destination);
-      if (!means?.serviceUrl) {
-        throw new Error(
-          `the service key of "${destination}" in AUTH_BROKER_LIVE_SERVICE_KEYS_DIR states no ABAP URL`,
-        );
-      }
-      const recorded = recordingRejections(
-        await broker.getProvider(destination),
-      );
-      const connector = new AdtCloudConnector(
-        asContract<ConnectorConfig>({
-          url: means.serviceUrl,
-          client: means.sapClient,
-          authType: 'jwt',
-        }),
-        recorded.provider,
-        new CloudHttpTransport(
-          () => ({}),
-          quiet,
-          asContract<ConstructorParameters<typeof CloudHttpTransport>[2]>({
-            client: means.sapClient,
-            baseUrl: means.serviceUrl,
-          }),
-        ),
-        quiet,
-      );
-      try {
-        await connector.connect();
-        const response = await connector.makeAdtRequest({
-          method: 'GET',
-          url: PROBE,
-          headers: { Accept: 'application/xml' },
-          timeout: 15_000,
-        });
-        log.info(
-          `jwt over HTTP: ${recorded.rejections.length} rejection(s) (${recorded.rejections
-            .map((r) => r.status ?? r.at)
-            .join(
-              ', ',
-            )}); GET ${PROBE} → ${response.status}, ${byteSize(response.data)} bytes`,
-        );
-        expect(response.status).toBe(200);
-      } finally {
-        await connector.disconnect();
-      }
-
-      expect(recorded.rejections.map((r) => r.status)).toEqual([401]);
-      await broker.flush();
-      const after = await sessions.loadSession(destination);
-      expect(after?.authorizationToken).toEqual(expect.any(String));
-      expect(after?.authorizationToken).not.toBe(refused);
-      // The renewal wrote the binding beside it, computed from the key.
-      expect(after?.issuedFor).toEqual(expect.any(String));
-      expect(after?.issuedBy).toEqual(expect.any(String));
-      log.info(
-        `jwt over HTTP: the session file holds a new token (${after?.authorizationToken?.length} chars)`,
-      );
     }, 90_000);
   },
 );

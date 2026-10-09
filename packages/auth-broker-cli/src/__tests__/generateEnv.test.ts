@@ -12,7 +12,10 @@ import {
   AuthBroker,
   fromServiceKeyCertificate,
 } from '@mcp-abap-adt/auth-broker';
-import { staticCodeStrategy } from '@mcp-abap-adt/auth-providers';
+import {
+  refreshThenLogin,
+  staticCodeStrategy,
+} from '@mcp-abap-adt/auth-providers';
 import {
   AbapSessionStore,
   EnvDestinationStore,
@@ -20,6 +23,8 @@ import {
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
 import { runGenerateEnv } from '../generateEnv';
+import { failureLines } from '../output';
+import { isUsageError } from '../subcommandArgs';
 import {
   CLIENT_CN,
   CLIENT_CRT,
@@ -119,6 +124,21 @@ describe('generate-env', () => {
     },
   );
 
+  it('a service key path that cannot be read: the argument, the path as given and ENOENT; nothing written', async () => {
+    const session = path.join(root, 'sessions', 'mcp.env');
+    await expect(
+      runGenerateEnv(
+        ['mcp', 'nope.json', session, '--grant', 'client_credentials'],
+        noBrowser,
+      ),
+    ).resolves.toBe(1);
+    expect(console.error).toHaveBeenCalledWith(
+      '❌ service-key-path: nope.json cannot be read (ENOENT)',
+    );
+    expect(server.requests).toHaveLength(0);
+    expect(fs.existsSync(session)).toBe(false);
+  });
+
   it('refuses a grant a service key client does not serve alone', async () => {
     await expect(
       runGenerateEnv(['mcp', xsuaaKey(), '--grant', 'password'], noBrowser),
@@ -172,7 +192,7 @@ describe('generate-env', () => {
     );
   });
 
-  it('a secret the store does not take fails the run (flush)', async () => {
+  it('a secret the store does not take fails the run (onWriteFailure: fail)', async () => {
     server.answer('/oauth/token', tokenAnswer('cc', false));
     const spy = jest
       .spyOn(AbapSessionStore.prototype, 'saveSession')
@@ -194,9 +214,33 @@ describe('generate-env', () => {
       spy.mockRestore();
     }
     expect(server.requests).toHaveLength(1);
+    // The login's own call fails with persisting-tokens: the store's words
+    // are nowhere.
     expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('The session was not stored'),
+      expect.stringContaining('persisting the tokens failed'),
     );
+    expect(JSON.stringify(jest.mocked(console.error).mock.calls)).not.toContain(
+      'disk full',
+    );
+  });
+
+  it('a session path that cannot be written: refused naming it, its path and code', async () => {
+    server.answer('/oauth/token', tokenAnswer('cc', false));
+    const locked = path.join(root, 'locked');
+    fs.mkdirSync(locked, { mode: 0o500 });
+    const session = path.join(locked, 'sub', 'TRIAL.env');
+    const thrown = await runGenerateEnv(
+      ['TRIAL', abapKey(), session, '--grant', 'client_credentials'],
+      noBrowser,
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    fs.chmodSync(locked, 0o700);
+    expect(isUsageError(thrown)).toBe(true);
+    expect(failureLines(thrown)).toEqual([
+      `❌ the session path: ${session} cannot be written (EACCES)`,
+    ]);
   });
 
   describe('the session file is changed only once the secret is stored', () => {
@@ -264,6 +308,27 @@ describe('generate-env', () => {
         spy.mockRestore();
       }
       expect(fs.readFileSync(session, 'utf8')).toBe(before);
+    });
+
+    it('a valid bound session already at the session path is never read: a new login, the file replaced', async () => {
+      server.answer('/oauth/token', tokenAnswer('uaa'));
+      const args = [
+        'TRIAL',
+        abapKey(),
+        session,
+        '--grant',
+        'authorization_code',
+      ];
+      await expect(runGenerateEnv(args, noBrowser)).resolves.toBe(0);
+      const first = fs.readFileSync(session, 'utf8');
+      await expect(runGenerateEnv(args, noBrowser)).resolves.toBe(0);
+      expect(server.requests.map((r) => r.form.grant_type)).toEqual([
+        'authorization_code',
+        'authorization_code',
+      ]);
+      const second = fs.readFileSync(session, 'utf8');
+      expect(second).not.toBe(first);
+      expect(second).toContain('SAP_REFRESH_TOKEN=uaa-refresh-2');
     });
 
     it('success replaces the means and writes the secret', async () => {
@@ -596,6 +661,8 @@ describe('generate-env --client-auth', () => {
       // The run's work directory is gone; the .env alone, where it was written.
       fs.rmSync(workDir, { recursive: true, force: true });
       const broker = new AuthBroker({
+        renewal: () => refreshThenLogin(),
+        onWriteFailure: 'fail',
         sessionStore: new AbapSessionStore(sessionDir),
         serviceKeyStore: new EnvDestinationStore(sessionDir),
         clientAuthentication: fromServiceKeyCertificate(),
@@ -897,6 +964,8 @@ describe('generate-env --client-auth', () => {
     // The run's work directory is gone; the .env alone, where it was written.
     fs.rmSync(workDir, { recursive: true, force: true });
     const broker = new AuthBroker({
+      renewal: () => refreshThenLogin(),
+      onWriteFailure: 'fail',
       sessionStore: new XsuaaSessionStore(sessionDir),
       serviceKeyStore: new EnvDestinationStore(sessionDir, {
         variables: XSUAA_DESTINATION_VARS,

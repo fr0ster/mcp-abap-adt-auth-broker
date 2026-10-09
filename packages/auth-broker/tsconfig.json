@@ -2,10 +2,16 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src",
-    "types": ["node", "jest"]
+    // The package root, not ./src: the type check covers the stand's shared
+    // test helpers too (tests/stand/*.ts). The build compiles ./src
+    // alone (tsconfig.build.json).
+    "rootDir": ".",
+    "types": ["node", "jest"],
+    // Where it would land by default moves with rootDir — into dist, which
+    // is published; kept at the package root, where `clean` removes it.
+    "tsBuildInfoFile": "./tsconfig.tsbuildinfo"
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "tests/stand/*.ts"],
   "exclude": ["node_modules", "dist"],
   "references": []
 }
