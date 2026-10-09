@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
 
-## [5.0.0]
+## [5.0.0] - 2026-10-09
 
 The broker on the auth chain's 6.0 contracts (auth-providers 6, interfaces-auth 7, auth-errors
 2). A major: what every failure is changes class, two options become required for token
