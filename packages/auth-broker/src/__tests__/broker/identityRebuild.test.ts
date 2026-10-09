@@ -1607,3 +1607,147 @@ describe('a store that changes an array of its answer in place: the held provide
     expect(next).not.toBe(held);
   });
 });
+
+describe('a store answering class instances: the snapshot is taken by the contract’s fields, whatever the prototype', () => {
+  /** The means as a class: fields as class properties. */
+  class MeansWithFields {
+    authType = 'jwt';
+    grantType = 'password';
+    serviceUrl = SERVICE_URL;
+    sapClient = '100';
+    oidcIssuerUrl: string;
+    username = 'alice';
+    password = PASSWORD;
+    constructor(
+      issuer: string,
+      readonly oidcScopes: string[],
+    ) {
+      this.oidcIssuerUrl = issuer;
+    }
+  }
+
+  /** The means as a class: getters on the prototype over private state. */
+  class MeansWithGetters {
+    readonly #scopes: string[];
+    readonly #issuer: string;
+    constructor(issuer: string, scopes: string[]) {
+      this.#issuer = issuer;
+      this.#scopes = scopes;
+    }
+    get authType() {
+      return 'jwt';
+    }
+    get grantType() {
+      return 'password';
+    }
+    get serviceUrl() {
+      return SERVICE_URL;
+    }
+    get sapClient() {
+      return '100';
+    }
+    get oidcIssuerUrl() {
+      return this.#issuer;
+    }
+    get username() {
+      return 'alice';
+    }
+    get password() {
+      return PASSWORD;
+    }
+    get oidcScopes() {
+      return this.#scopes;
+    }
+  }
+
+  function classKeyStore(means: object): IServiceKeyStore {
+    return {
+      getServiceKey: async () => null,
+      getConnectionConfig: async () => means as IConnectionConfig,
+      getAuthorizationConfig: async () => oidcClient(),
+    };
+  }
+
+  it.each([
+    ['fields as class properties', MeansWithFields],
+    ['getters on the prototype', MeansWithGetters],
+  ] as const)(
+    '%s: scopes changed in place after getProvider → the held provider keeps its scopes and binding; the next call builds anew',
+    async (_label, Means) => {
+      const scopes = ['openid', 'profile'];
+      const sessions = sessionStore();
+      const b = new AuthBroker({
+        ...STATED,
+        sessionStore: sessions.store,
+        serviceKeyStore: classKeyStore(new Means(endpoint.url, scopes)),
+      });
+      const held = await b.getProvider(D);
+
+      scopes.push('admin');
+      await bearer(held);
+
+      expect(endpoint.requests.map((r) => r.params.scope)).toEqual([
+        'openid profile',
+      ]);
+      expect(sessions.held()?.issuedBy).toBe(
+        oidcRecord(
+          'password',
+          {
+            oidcIssuerUrl: endpoint.url,
+            oidcScopes: ['openid', 'profile'],
+            username: 'alice',
+          },
+          'oidc-client',
+        ),
+      );
+      const next = await b.getProvider(D);
+      expect(next).not.toBe(held);
+      await bearer(next);
+      expect(endpoint.requests.at(-1)?.params.scope).toBe(
+        'openid profile admin',
+      );
+    },
+  );
+
+  it.each([
+    [
+      'a function',
+      () => ({ ...passwordMeans(), oidcScopes: () => ['openid'] }),
+    ],
+    [
+      'a getter that throws',
+      () =>
+        Object.defineProperty({ ...passwordMeans() }, 'oidcScopes', {
+          get: () => {
+            throw new Error('S3CRET-in-a-getter');
+          },
+          enumerable: true,
+        }),
+    ],
+    [
+      'an array holding a symbol',
+      () => ({ ...passwordMeans(), oidcScopes: ['openid', Symbol('x')] }),
+    ],
+  ] as const)(
+    'a field of an unsupported shape (%s) → DestinationConfigError naming it, nothing built',
+    async (_label, means) => {
+      const b = new AuthBroker({
+        ...STATED,
+        sessionStore: sessionStore().store,
+        serviceKeyStore: classKeyStore(means()),
+      });
+      const refused = await b.getProvider(D).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(refused).toMatchObject({
+        name: 'DestinationConfigError',
+        destination: D,
+        missingFields: ['oidcScopes'],
+      });
+      expect(JSON.stringify(refused)).not.toContain('S3CRET');
+      expect(String((refused as Error).message)).not.toContain('S3CRET');
+      expect(endpoint.requests).toEqual([]);
+    },
+  );
+});

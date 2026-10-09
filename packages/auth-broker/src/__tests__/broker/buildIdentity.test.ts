@@ -12,7 +12,10 @@ import {
 } from '../../buildIdentity';
 
 function readsOf(answer: object | null): StoreReads {
-  return new StoreReads(async (_name: SourceName) => answer);
+  return new StoreReads(
+    async (_name: SourceName) => answer,
+    (field) => new Error(field),
+  );
 }
 
 describe('IdentityRecorder', () => {

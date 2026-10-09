@@ -1049,37 +1049,45 @@ export class AuthBroker {
 
   /** This call's store reads: each source read at most once. */
   private storeReads(destination: string): StoreReads {
-    return new StoreReads((name: SourceName) => {
-      const serviceKeyStore = this.serviceKeyStore;
-      switch (name) {
-        case 'means':
-          return serviceKeyStore
-            ? this.read(destination, 'means', () =>
-                serviceKeyStore.getConnectionConfig(destination),
-              )
-            : Promise.resolve(null);
-        case 'client':
-          return serviceKeyStore
-            ? this.read(destination, 'client', () =>
-                serviceKeyStore.getAuthorizationConfig(destination),
-              )
-            : Promise.resolve(null);
-        case 'certificate':
-          return this.read(destination, 'client certificate', async () =>
-            serviceKeyStore?.getClientCertificate
-              ? serviceKeyStore.getClientCertificate(destination)
-              : null,
-          );
-        case 'sessionConnection':
-          return this.read(destination, 'session connection config', () =>
-            this.sessionStore.getConnectionConfig(destination),
-          );
-        case 'sessionClient':
-          return this.read(destination, 'session authorization config', () =>
-            this.sessionStore.getAuthorizationConfig(destination),
-          );
-      }
-    });
+    return new StoreReads(
+      (name: SourceName) => {
+        const serviceKeyStore = this.serviceKeyStore;
+        switch (name) {
+          case 'means':
+            return serviceKeyStore
+              ? this.read(destination, 'means', () =>
+                  serviceKeyStore.getConnectionConfig(destination),
+                )
+              : Promise.resolve(null);
+          case 'client':
+            return serviceKeyStore
+              ? this.read(destination, 'client', () =>
+                  serviceKeyStore.getAuthorizationConfig(destination),
+                )
+              : Promise.resolve(null);
+          case 'certificate':
+            return this.read(destination, 'client certificate', async () =>
+              serviceKeyStore?.getClientCertificate
+                ? serviceKeyStore.getClientCertificate(destination)
+                : null,
+            );
+          case 'sessionConnection':
+            return this.read(destination, 'session connection config', () =>
+              this.sessionStore.getConnectionConfig(destination),
+            );
+          case 'sessionClient':
+            return this.read(destination, 'session authorization config', () =>
+              this.sessionStore.getAuthorizationConfig(destination),
+            );
+        }
+      },
+      (field) =>
+        new DestinationConfigError(
+          destination,
+          [field],
+          `the store answered ${field} in a shape the broker cannot take`,
+        ),
+    );
   }
 
   /**

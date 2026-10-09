@@ -41,6 +41,78 @@ export type SourceName =
 export type SourceReader = (name: SourceName) => Promise<object | null>;
 
 /**
+ * The error for a store answer whose `field` the broker cannot take — a
+ * function, a symbol, a getter that throws: a configuration fault naming the
+ * field, never its value.
+ */
+export type ShapeRefusal = (field: string) => unknown;
+
+/** `IConnectionConfig`'s fields (interfaces-auth-broker). */
+const CONNECTION_FIELDS = [
+  'serviceUrl',
+  'authorizationToken',
+  'username',
+  'password',
+  'authType',
+  'grantType',
+  'expiresAt',
+  'issuedFor',
+  'issuedBy',
+  'sapClient',
+  'language',
+  'sessionCookies',
+  'sncPartnerName',
+  'sncQop',
+  'sncLib',
+  'sncMyName',
+  'oidcIssuerUrl',
+  'oidcAuthorizationEndpoint',
+  'oidcTokenEndpoint',
+  'oidcDeviceAuthorizationEndpoint',
+  'oidcScopes',
+  'oidcSubjectToken',
+  'oidcSubjectTokenType',
+  'oidcAudience',
+  'oidcActorToken',
+  'oidcActorTokenType',
+  'samlIdpSsoUrl',
+  'samlIdpEntityId',
+  'samlIdpCertificates',
+  'samlSpEntityId',
+  'samlAcsUrl',
+  'samlRelayState',
+  'samlIdpInitiated',
+  'samlClockSkewMs',
+  'samlTokenUrl',
+] as const;
+
+/** `IAuthorizationConfig`'s fields (interfaces-auth-sap). */
+const AUTHORIZATION_FIELDS = [
+  'uaaUrl',
+  'uaaClientId',
+  'uaaClientSecret',
+  'refreshToken',
+] as const;
+
+/** `IClientCertificate`'s fields (interfaces-auth-broker). */
+const CERTIFICATE_FIELDS = [
+  'uaaUrl',
+  'clientId',
+  'certificate',
+  'key',
+  'certUrl',
+] as const;
+
+/** The contract each source answers, by its fields. */
+const CONTRACT_FIELDS: Readonly<Record<SourceName, readonly string[]>> = {
+  means: CONNECTION_FIELDS,
+  sessionConnection: CONNECTION_FIELDS,
+  client: AUTHORIZATION_FIELDS,
+  sessionClient: AUTHORIZATION_FIELDS,
+  certificate: CERTIFICATE_FIELDS,
+};
+
+/**
  * The sources of one call, each read from its store at most once: the
  * comparison with the cached build and — when that finds a change — the new
  * build read the same answers.
@@ -48,7 +120,13 @@ export type SourceReader = (name: SourceName) => Promise<object | null>;
 export class StoreReads {
   private readonly answers = new Map<SourceName, Promise<object | null>>();
 
-  constructor(private readonly reader: SourceReader) {}
+  /**
+   * @param refuse The error for a field of a shape the broker cannot take.
+   */
+  constructor(
+    private readonly reader: SourceReader,
+    private readonly refuse: ShapeRefusal,
+  ) {}
 
   read(name: SourceName): Promise<object | null> {
     let answer = this.answers.get(name);
@@ -58,7 +136,7 @@ export class StoreReads {
       // changes its object afterwards — in place — changes neither.
       answer = Promise.resolve()
         .then(() => this.reader(name))
-        .then((value) => snapshot(value));
+        .then((value) => snapshot(name, value, this.refuse));
       // Read by whoever asks; a failure is theirs to see, not an unhandled
       // rejection of the memo.
       answer.catch(() => {});
@@ -105,20 +183,85 @@ type Entry =
 const NOT_FIELDS: ReadonlySet<string> = new Set(['then', 'toJSON']);
 
 /**
- * A store answer as the broker uses it: copied and frozen, deeply — arrays
- * and plain objects element by element — so nothing the store does to its
- * own object later reaches a provider built from it.
+ * A store answer as the broker uses it: a fresh, frozen plain object holding
+ * the contract's fields of the source, each read through the answer by plain
+ * property access — own or inherited, a field or a getter, whatever the
+ * answer's prototype — and copied deeply: arrays element by element, nested
+ * objects field by field. The store's own object is never handed on, so
+ * nothing the store does to it later reaches a provider built from it. A
+ * field of a shape the broker cannot take is refused naming it.
  */
-function snapshot(value: object | null): object | null {
-  return value === null ? null : (frozen(copied(value)) as object);
+function snapshot(
+  name: SourceName,
+  answer: object | null,
+  refuse: ShapeRefusal,
+): object | null {
+  if (answer === null || answer === undefined) return null;
+  if (typeof answer !== 'object') throw refuse(name);
+  const copy: Record<string, unknown> = {};
+  for (const field of CONTRACT_FIELDS[name]) {
+    let value: unknown;
+    try {
+      value = (answer as Record<string, unknown>)[field];
+    } catch {
+      throw refuse(field);
+    }
+    if (value === undefined) continue;
+    copy[field] = snapshotValue(value, field, refuse, new Set());
+  }
+  return Object.freeze(copy);
 }
 
-function frozen(value: unknown): unknown {
-  if (Array.isArray(value) || isPlainObject(value)) {
-    for (const element of Object.values(value)) frozen(element);
-    Object.freeze(value);
+/** One value of a field, copied deeply and frozen; refused when it cannot be. */
+function snapshotValue(
+  value: unknown,
+  field: string,
+  refuse: ShapeRefusal,
+  seen: Set<object>,
+): unknown {
+  if (value === null) return null;
+  switch (typeof value) {
+    case 'string':
+    case 'number':
+    case 'boolean':
+    case 'bigint':
+    case 'undefined':
+      return value;
+    case 'object':
+      break;
+    default:
+      // A function or a symbol.
+      throw refuse(field);
   }
-  return value;
+  const object = value as object;
+  if (seen.has(object)) throw refuse(field);
+  seen.add(object);
+  try {
+    if (Array.isArray(object)) {
+      const length = object.length;
+      const copy: unknown[] = [];
+      for (let i = 0; i < length; i += 1) {
+        copy.push(snapshotValue(object[i], field, refuse, seen));
+      }
+      return Object.freeze(copy);
+    }
+    const copy: Record<string, unknown> = {};
+    for (const key of Object.keys(object)) {
+      copy[key] = snapshotValue(
+        (object as Record<string, unknown>)[key],
+        field,
+        refuse,
+        seen,
+      );
+    }
+    return Object.freeze(copy);
+  } catch {
+    // A getter or a proxy that threw inside the value, or a part of it of a
+    // shape the broker cannot take: the field's fault, whatever was thrown.
+    throw refuse(field);
+  } finally {
+    seen.delete(object);
+  }
 }
 
 /** A copy of a value as read: arrays and plain objects copied, element by element. */
