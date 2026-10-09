@@ -1205,7 +1205,9 @@ platform)`), shown in `--help`:
   and the IdP-initiated paste take the ACS from, in this order: `--acs-url`,
   the SP metadata (`--saml-metadata`, or `<uaa.url>/saml/metadata` with
   `--service-key`), an `acsUrl` in `--config`. None: a usage error naming
-  `--acs-url`, before anything is read or written. The 2.x fallback
+  `--acs-url`, before anything is read or written — except a `saml2-bearer`
+  run that names SP metadata (`--saml-metadata`, `--uaa-url`, `--service-key`),
+  which is refused right after reading that metadata, one of its ACS sources. The 2.x fallback
   `http://localhost:<port>/callback` (`mcpSsoConfig.ts:782-783`, and the
   `--acs-url` help line) is gone. The IdP-initiated strategy stays the CLI's
   own (no URL exists to show), now honouring `AuthorizationRequest.signal` and
