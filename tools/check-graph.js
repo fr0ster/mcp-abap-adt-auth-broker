@@ -45,6 +45,9 @@ const ALLOWED = {
     // The SAML metadata the CLI reads (`samlMetadata.ts`): parsed, never
     // matched with regular expressions — the parser auth-providers uses.
     '@xmldom/xmldom',
+    // A session file's own lines (`readFileVariable`), read as auth-stores
+    // reads the same file: its `.env` parser, one deduplicated copy.
+    'dotenv',
   ],
 };
 

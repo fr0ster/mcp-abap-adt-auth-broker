@@ -21,9 +21,9 @@ import {
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import { clientAuthenticationStrategy } from './clientAuthentication';
 import {
+  authenticatedJsonOutput,
   completeMeans,
   flushed,
-  jsonOutput,
   openDestination,
   writeJsonFile,
   writeOutputFile,
@@ -507,18 +507,18 @@ export async function runMcpSso(
   // This CLI's choices, stated: a user at a terminal can log in, so a
   // renewal refreshes and then logs in; a secret the store did not take
   // fails the run, which then writes no output.
+  // A session file's client authentication is the file's (D25): its
+  // certificate, or the Basic encoding it records. None without one.
+  const clientAuth =
+    resolvedEnvPath === undefined || source?.kind !== 'session'
+      ? {}
+      : sessionClientAuth(files.file, options.authType, source.flag);
   const broker = new AuthBroker(
     {
       sessionStore: files.sessionStore,
       serviceKeyStore: files.keyStore,
       ...buildCollaborators(options, signal),
-      // A session file's client authentication is the file's (D25): its
-      // certificate, or the Basic encoding it records. None without one.
-      clientAuthentication: clientAuthenticationStrategy(
-        resolvedEnvPath === undefined || source?.kind !== 'session'
-          ? {}
-          : sessionClientAuth(files.file, options.authType, source.flag),
-      ),
+      clientAuthentication: clientAuthenticationStrategy(clientAuth),
       renewal: () => refreshThenLogin(),
       onWriteFailure: 'fail',
       // On only with --auth-debug (§10.7): never from the environment.
@@ -597,7 +597,12 @@ export async function runMcpSso(
     writeOutputFile(files, resolvedOutputPath);
     progress(`✅ .env file created: ${resolvedOutputPath}`);
   } else {
-    const json = await jsonOutput(files, destination, { tokenType: true });
+    const json = await authenticatedJsonOutput(
+      files,
+      destination,
+      { tokenType: true },
+      clientAuth,
+    );
     // An interrupted run writes no output: checked after the last await.
     signal?.throwIfAborted();
     writeJsonFile(resolvedOutputPath, json);

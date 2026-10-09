@@ -57,10 +57,10 @@ import {
 } from './clientAuthentication';
 import { asContract } from './contractShape';
 import {
+  authenticatedJsonOutput,
   basicEncodingVariable,
   completeMeans,
   flushed,
-  jsonOutput,
   openDestination,
   setFileVariable,
   writeJsonFile,
@@ -530,18 +530,12 @@ export async function runMcpAuth(
     progress(`🔗 Service URL: ${options.serviceUrl}`);
   }
 
-  // Who the client is, as the destination now states it.
-  let client: { uaaUrl: string; uaaClientId: string; certUrl?: string };
+  // The client the destination states, checked before the login: a
+  // certificate client, or a secret one.
   if (clientAuth.clientAuth === 'certificate') {
-    const stated = await files.keyStore.getClientCertificate(destination);
-    if (!stated) {
+    if (!(await files.keyStore.getClientCertificate(destination))) {
       throw new UsageError(`Client certificate not found for ${destination}.`);
     }
-    client = {
-      uaaUrl: stated.uaaUrl,
-      uaaClientId: stated.clientId,
-      certUrl: stated.certUrl,
-    };
   } else {
     const authConfig = await files.keyStore.getAuthorizationConfig(destination);
     if (
@@ -553,7 +547,6 @@ export async function runMcpAuth(
         `Authorization config not found for ${destination}. Service key must contain clientid, clientsecret, and url fields; a client certificate needs --client-auth certificate.`,
       );
     }
-    client = authConfig;
   }
 
   // The user's choice as the broker's strategy; none without `--client-auth`.
@@ -611,30 +604,25 @@ export async function runMcpAuth(
   } else {
     // A certificate client is no secret client, so the stores' JSON view
     // leaves it out: its identity, paths and `certurl` are added — never PEM.
-    const json = await jsonOutput(files, destination, {});
+    // The one authentication-aware export: the paths are the flags' with a
+    // service key, the session file's with --env; the Basic encoding likewise.
+    const json = await authenticatedJsonOutput(
+      files,
+      destination,
+      {},
+      {
+        ...clientAuth,
+        certPath:
+          certificateFiles?.certPath ??
+          ('certPath' in clientAuth ? clientAuth.certPath : undefined),
+        keyPath:
+          certificateFiles?.keyPath ??
+          ('keyPath' in clientAuth ? clientAuth.keyPath : undefined),
+      },
+    );
     // An interrupted run writes no output: checked after the last await.
     signal?.throwIfAborted();
-    writeJsonFile(resolvedOutputPath, {
-      ...json,
-      // The paths: the flags' with a service key, the session file's with
-      // --env; the Basic encoding likewise.
-      ...(clientAuth.clientAuth === 'secret'
-        ? { uaaBasicEncoding: clientAuth.basicEncoding }
-        : {}),
-      ...(clientAuth.clientAuth === 'certificate'
-        ? {
-            uaaUrl: client.uaaUrl,
-            uaaClientId: client.uaaClientId,
-            uaaClientCertPath:
-              certificateFiles?.certPath ??
-              ('certPath' in clientAuth ? clientAuth.certPath : undefined),
-            uaaClientKeyPath:
-              certificateFiles?.keyPath ??
-              ('keyPath' in clientAuth ? clientAuth.keyPath : undefined),
-            uaaCertUrl: client.certUrl,
-          }
-        : {}),
-    });
+    writeJsonFile(resolvedOutputPath, json);
     progress(`✅ JSON file created: ${resolvedOutputPath}`);
   }
   return 0;

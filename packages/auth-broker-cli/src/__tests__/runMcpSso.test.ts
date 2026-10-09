@@ -1447,6 +1447,82 @@ describe('D25: a session file’s client authentication, in every subcommand', (
     },
   );
 
+  it.each([
+    ['password', 'certificate'],
+    ['password', 'form'],
+    ['saml2_bearer', 'certificate'],
+    ['saml2_bearer', 'form'],
+  ] as const)(
+    '%s session, %s: --format json --output reproduces the run’s client authentication',
+    async (grant, how) => {
+      certServer.answer('/oauth/token', tokenAnswer('x509'));
+      server.answer('/oauth/token', tokenAnswer('basic'));
+      const file = await sessionFile(grant, how);
+      const output = path.join(root, 'json', `${DEST}.json`);
+      const parsed = parseSubcommandArgs(SUBCOMMAND[grant], [
+        ...sessionArgs(grant, file),
+        '--format',
+        'json',
+        '--output',
+        output,
+      ]);
+      if (parsed.kind !== 'sso') throw new Error('not a run');
+      await expect(run(parsed.options)).resolves.toBe(0);
+      const json = JSON.parse(fs.readFileSync(output, 'utf8'));
+      expect(json).toEqual(
+        expect.objectContaining(
+          how === 'certificate'
+            ? {
+                uaaUrl: server.url,
+                uaaClientId: 'cli',
+                uaaClientCertPath: CLIENT_CRT_PATH,
+                uaaClientKeyPath: CLIENT_KEY_PATH,
+                uaaCertUrl: certServer.url,
+              }
+            : {
+                uaaUrl: server.url,
+                uaaClientId: 'cli',
+                uaaClientSecret: SECRET,
+                uaaBasicEncoding: 'form',
+              },
+        ),
+      );
+    },
+  );
+
+  it('a hand-edited file: exported certificate paths and the last of two encodings, as the stores read them', async () => {
+    certServer.answer('/oauth/token', tokenAnswer('x509'));
+    const file = await sessionFile('password', 'certificate');
+    const text = fs
+      .readFileSync(file, 'utf8')
+      .split('\n')
+      .map((line) =>
+        line.startsWith('SAP_UAA_CLIENT_') ? `export ${line}` : line,
+      )
+      .join('\n');
+    fs.writeFileSync(file, text);
+    const parsed = parseSubcommandArgs('oidc', ['--env', file]);
+    if (parsed.kind !== 'sso') throw new Error('not a run');
+    await expect(run(parsed.options)).resolves.toBe(0);
+    expect(certServer.requests.map((r) => r.form.grant_type)).toEqual([
+      'refresh_token',
+    ]);
+    expect(certServer.requests[0]!.clientCertificate).toBe(CLIENT_CN);
+
+    server.answer('/oauth/token', tokenAnswer('basic'));
+    const basic = await sessionFile('password', 'form');
+    fs.appendFileSync(
+      basic,
+      '# changed by hand:\nexport SAP_UAA_BASIC_ENCODING="raw"\nSAP_UAA_BASIC_ENCODING = form # the last wins\n',
+    );
+    const again = parseSubcommandArgs('oidc', ['--env', basic]);
+    if (again.kind !== 'sso') throw new Error('not a run');
+    await expect(run(again.options)).resolves.toBe(0);
+    expect(server.requests.at(-1)!.authorization).toBe(
+      `Basic ${Buffer.from('cli:se%2Bcr%25et').toString('base64')}`,
+    );
+  });
+
   it.each([['password'], ['saml2_bearer']] as const)(
     '%s session with a recorded Basic(form) encoding: --env alone refreshes with the form-encoded Basic header',
     async (grant) => {

@@ -30,6 +30,7 @@ import {
   XSUAA_DESTINATION_VARS,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
+import * as dotenv from 'dotenv';
 import type { WithUndefined } from './contractShape';
 import {
   type LineWriter,
@@ -265,25 +266,55 @@ export function setFileVariable(
   fs.writeFileSync(file, `${kept.join('\n')}\n`, { mode: 0o600 });
 }
 
-/** The value of `name` in `file`, unquoted; `undefined` when absent. */
+/**
+ * The value of `name` in `file` as auth-stores reads it — `dotenv.parse`, the
+ * library its stores read `.env` files with: `export`, quoting, comments,
+ * whitespace, the last of duplicate assignments. `undefined` when absent.
+ */
 export function readFileVariable(
   file: string,
   name: string,
 ): string | undefined {
   if (!fs.existsSync(file)) return undefined;
-  for (const raw of fs.readFileSync(file, 'utf8').split('\n')) {
-    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
-    if (!line.startsWith(`${name}=`)) continue;
-    let value = line.slice(name.length + 1);
-    const quote = value[0];
-    if (
-      value.length >= 2 &&
-      (quote === '"' || quote === "'") &&
-      value.endsWith(quote)
-    ) {
-      value = value.slice(1, -1);
+  const variables = dotenv.parse(fs.readFileSync(file));
+  return Object.hasOwn(variables, name) ? variables[name] : undefined;
+}
+
+/** How a destination's client authenticates, for the JSON export. */
+export interface ExportedClientAuth {
+  clientAuth?: 'certificate' | 'secret' | undefined;
+  basicEncoding?: 'raw' | 'form' | undefined;
+  certPath?: string | undefined;
+  keyPath?: string | undefined;
+}
+
+/**
+ * The `--format json` output, aware of how the client authenticates — one
+ * export for every runner: what the stores hold (`jsonOutput`), and for a
+ * certificate client its identity (UAA URL, client id), both certificate
+ * paths and `certurl` (never PEM); for Basic, the encoding.
+ */
+export async function authenticatedJsonOutput(
+  files: DestinationFiles,
+  destination: string,
+  options: { tokenType?: boolean },
+  auth: ExportedClientAuth,
+): Promise<Record<string, unknown>> {
+  const output = await jsonOutput(files, destination, options);
+  if (auth.clientAuth === 'certificate') {
+    const certificate = await files.keyStore.getClientCertificate(destination);
+    const fields: [string, unknown][] = [
+      ['uaaUrl', certificate?.uaaUrl],
+      ['uaaClientId', certificate?.clientId],
+      ['uaaClientCertPath', auth.certPath],
+      ['uaaClientKeyPath', auth.keyPath],
+      ['uaaCertUrl', certificate?.certUrl],
+    ];
+    for (const [name, value] of fields) {
+      if (typeof value === 'string' && value !== '') output[name] = value;
     }
-    return value;
+  } else if (auth.clientAuth === 'secret' && auth.basicEncoding) {
+    output.uaaBasicEncoding = auth.basicEncoding;
   }
-  return undefined;
+  return output;
 }
