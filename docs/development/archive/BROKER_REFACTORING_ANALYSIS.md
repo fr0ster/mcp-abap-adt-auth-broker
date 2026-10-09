@@ -1,5 +1,9 @@
 # AuthBroker Refactoring Analysis
 
+> **Historical.** Written for 0.2.0 and kept as history; it does not describe the current
+> packages (`@mcp-abap-adt/auth-broker` 5.0.0, `@mcp-abap-adt/auth-broker-cli` 3.0.0). For what
+> they are and do, see the package READMEs and CHANGELOGs.
+
 ## Implementation Progress
 
 **Status**: ✅ **COMPLETED** - Implementation finished in version 0.2.0 (2025-12-08)
