@@ -52,7 +52,8 @@ packages/auth-broker/src/__tests__/
 │   ├── adtProbe.ts                      # the jwt case's ADT check, shared by both suites above
 │   └── x509.live.test.ts                # an x509 XSUAA key through the broker and the CLI
 ├── tools/
-│   └── shapeCheckCopy.test.ts           # tools/check-provider-shape.mjs is auth-errors 2.1.1's, byte for byte
+│   └── shapeCheck.test.ts               # auth-errors' shape check, rules 4, 5, 6: this package clean,
+│                                        # each tools/__fixtures__ file refused by its rule; the gates run it
 └── helpers/                             # fake stores, the local token endpoint, test logger, ports
 
 packages/auth-broker-cli/src/__tests__/
@@ -77,6 +78,8 @@ packages/auth-broker-cli/src/__tests__/
 ├── mcpSsoSamlProviders.test.ts          # the SAML destinations built by the real broker into real providers
 ├── samlMetadata.test.ts                 # IdP and SP metadata through the XML parser; redirects checked
 ├── fileVariables.test.ts                # a session file's own lines, read as dotenv reads them
+├── shapeCheck.test.ts                   # auth-errors' shape check, rules 4, 5, 6: this package clean,
+│                                        # each tools/__fixtures__ file refused by its rule; the gates run it
 ├── stand/                               # the built bin against the stand (below)
 │   ├── authorizationCode.test.ts        # UAA: browser login through the fake browser, SIGINT / SIGTERM,
 │   │                                    # --browser none, a revoked refresh token, --env reuse
@@ -436,12 +439,14 @@ keys with x509.
 | `npm run test:check` | both packages type-check, tests included, under the strict flags of `tsconfig.base.json` |
 | `npm run lint:check` | Biome over `packages/` and `tools/`, no warning allowed |
 | `npm run check:graph` | each package imports only what its allowlist permits, declares it, and uses every runtime dependency it declares; tests import only declared dependencies; the library never imports `auth-stores` |
-| `npm run check:shape` | `tools/check-provider-shape.mjs` (auth-errors 2.1.1's, byte for byte) with rules 4, 5, 6 over both packages' `src`: no type assertion to a contract error, refusal, outcome or failure; no spread of an error; a builder's diagnostics only from the listed sites |
+| `npm run test:shape` | auth-errors' shape check (`@mcp-abap-adt/auth-errors/shape-check`), run in-process by each package's shape-check Jest test with the repository's own `typescript`: rules 4, 5, 6 over the package's own sources (its `tsconfig.json`, no site lists) — no type assertion to a contract error, refusal, outcome or failure; no spread or `Object.assign` of an error; a builder's diagnostics only from the listed sites (none here) — and each of three fixtures under `packages/<package>/tools/__fixtures__` refused by its rule alone |
 | `npm run check:packed` | the bin smoke check: both packages packed and installed into an empty directory; `mcp-auth` runs with `--version` (the CLI's version), `help` and every subcommand's `--help`; no `mcp-sso` is installed; the library loads with no `bin`. Needs the network |
 | `npm run check:publish` | `tools/publish-changed.js` exercised against fixture repositories and a fake npm |
 
-`npm run check` does not run Jest: the library's integration suite reads real session files when
+`npm run check` runs no Jest suite but the two shape-check tests (`test:shape`), which read only
+this repository's sources: the library's integration suite reads real session files when
 configured, and a release gate must not reach a real system unasked. Run `npm test` beside it.
+The release workflow runs `npm run test:shape` after its build as well.
 
 There are no hand-run stands in the CLI package any more: 3.0.0 removed `tests/keycloak` and
 `tests/sso-demo` and their npm scripts; the library's stand covers the token grants, and the CLI's

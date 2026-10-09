@@ -46,6 +46,7 @@
     "build": "tsc -b tsconfig.build.json",
     "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
     "test:check": "tsc -p tsconfig.json --noEmit",
+    "test:shape": "cross-env NODE_OPTIONS=--experimental-vm-modules jest src/__tests__/shapeCheck.test.ts",
     "generate-env": "tsx src/generate-env-from-service-key.ts",
     "prepublishOnly": "npm run --prefix ../.. check"
   },
@@ -54,7 +55,7 @@
   },
   "dependencies": {
     "@mcp-abap-adt/auth-broker": "^5.0.0",
-    "@mcp-abap-adt/auth-errors": "^2.1.1",
+    "@mcp-abap-adt/auth-errors": "^2.2.0",
     "@mcp-abap-adt/auth-providers": "^6.0.0",
     "@mcp-abap-adt/auth-stores": "^4.0.0",
     "@mcp-abap-adt/interfaces-auth": "^7.5.0",
