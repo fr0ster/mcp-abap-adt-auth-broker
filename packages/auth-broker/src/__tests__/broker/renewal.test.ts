@@ -1,7 +1,7 @@
 /**
- * §4 — renewal is the consumer's choice: `renewal(destination, grant)` is
+ * Renewal is the consumer's choice: `renewal(destination, grant)` is
  * called once per build of every token row and its answer reaches the
- * provider as it is; there is no default. §5.4's first paragraph — a
+ * provider as it is; there is no default. A
  * destination that writes a secret needs `onWriteFailure`, also without a
  * default.
  *

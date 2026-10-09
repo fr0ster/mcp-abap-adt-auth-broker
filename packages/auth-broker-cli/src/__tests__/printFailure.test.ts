@@ -1,5 +1,5 @@
 /**
- * §10.9: every failure the CLI prints goes through `printFailure` — words
+ * Every failure the CLI prints goes through `printFailure` — words
  * auth-errors, the broker or the CLI rendered, never the message or the stack
  * of a foreign value — and the CLI's sources hold no other way to print one.
  */
@@ -448,7 +448,7 @@ describe('sources (CLI src)', () => {
     }
   });
 
-  it('no environment variable is read but AUTH_BROKER_PATH, once, in source.ts (D17, D25)', () => {
+  it('no environment variable is read but AUTH_BROKER_PATH, once, in source.ts', () => {
     const reads: string[] = [];
     for (const { file, text } of SOURCES) {
       const parts = code(text).split('process.env');
@@ -492,7 +492,7 @@ describe('sources (CLI src)', () => {
     );
   });
 
-  it('the CLI previews no authorization URL of its own (D19)', () => {
+  it('the CLI previews no authorization URL of its own', () => {
     for (const { file, text } of SOURCES) {
       const body = code(text);
       expect([file, body.includes('/oauth/authorize?')]).toEqual([file, false]);

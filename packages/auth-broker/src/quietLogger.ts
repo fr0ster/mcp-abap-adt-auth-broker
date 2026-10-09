@@ -1,5 +1,5 @@
 /**
- * The one way the broker logs (§8.1): the consumer's `ILogger` behind a
+ * The one way the broker logs: the consumer's `ILogger` behind a
  * wrapper whose every method never throws and never leaves an unhandled
  * rejection.
  *

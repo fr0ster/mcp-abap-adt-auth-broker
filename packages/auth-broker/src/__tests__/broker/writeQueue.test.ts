@@ -1,6 +1,5 @@
 /**
- * The write queue and `onWriteFailure` (§5.3, §5.4, §3.4's `flush()`; D3,
- * D9, D23).
+ * The write queue and `onWriteFailure`.
  *
  * - One plain queue per destination: its writes run one at a time, in the
  *   order they were queued, each writing what it was given; two destinations

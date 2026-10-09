@@ -329,7 +329,7 @@ export async function runGenerateEnv(
     // An XSUAA key may carry no URL.
   }
 
-  // A service key always obtains a new pair (D25): the run starts from no
+  // A service key always obtains a new pair: the run starts from no
   // file, so no session is read — not even the one at the session path,
   // which is replaced only below, once the secret is stored.
   const files = openDestination(
@@ -374,7 +374,7 @@ export async function runGenerateEnv(
       authorization: () => authorization(browser, signal),
       renewal: () => refreshThenLogin(),
       onWriteFailure: 'fail',
-      // On only with --auth-debug (§10.7): never from the environment.
+      // On only with --auth-debug: never from the environment.
       authDebug,
     },
     // The script's logger: stderr, from debug with --verbose (or
@@ -399,7 +399,7 @@ export async function runGenerateEnv(
     if (signal?.aborted) throw error;
     // A provider's failure — of any installed copy of auth-errors — in the
     // words auth-errors renders from its kind and facts; anything else in
-    // auth-errors' unfamiliar words, never its message (§10.9).
+    // auth-errors' unfamiliar words, never its message.
     printFailure(error, {
       context: 'Login failed',
       operation: 'token-request',

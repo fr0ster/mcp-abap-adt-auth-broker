@@ -1,5 +1,5 @@
 /**
- * One interrupt per run (§10.4, D18): a login ends only when the user ends it.
+ * One interrupt per run: a login ends only when the user ends it.
  *
  * `underInterrupt` gives a run its private work directory and one
  * `AbortController`, whose signal the run passes to every wait it has — the

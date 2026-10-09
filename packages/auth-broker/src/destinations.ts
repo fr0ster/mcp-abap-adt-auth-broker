@@ -110,7 +110,7 @@ function unstated(value: unknown): boolean {
 }
 
 /**
- * Whether a trust input the binding hashes (§6.1) has its expected shape —
+ * Whether a trust input the binding hashes has its expected shape —
  * or is not stated. One of another shape is refused naming it, never hashed
  * as if it were absent: two different malformed values would otherwise give
  * one digest.
@@ -342,7 +342,7 @@ function mappedFields(
  * The broker did not obtain it and cannot obtain it again, so a binding that
  * does not match is refused, never discarded: `issuedFor` must equal the
  * destination's resource — it is what stops the credential going to another
- * one — and `issuedBy` must be exactly the row's record (§6.5): a credential
+ * one — and `issuedBy` must be exactly the row's record: a credential
  * handed over with a 4.x binding, or none, is refused until it is written
  * again with 5.0.0's `bindingOf`.
  */
@@ -382,7 +382,7 @@ export function handedOverProvider(
 export type TokenGrant = Exclude<DestinationGrant, 'none'>;
 
 /**
- * A provider that has parties (§7.2): every token provider
+ * A provider that has parties: every token provider
  * (`BaseTokenProvider.attach`) and the SNC one (`SncLogonProvider.attach`).
  */
 export interface Attachable {
@@ -392,7 +392,7 @@ export interface Attachable {
 /**
  * A token row's provider, and the refresh token the builder handed it from
  * the session — the very value in the provider's config, so what the broker
- * takes as the refresh token the build owns at its start (§5.2) is what the
+ * takes as the refresh token the build owns at its start is what the
  * provider was given, for every grant, and cannot drift from it:
  * `client_credentials` is handed none (its row takes no seed), `saml2_pure`
  * none (it holds cookies), and a build that started with nothing none.
@@ -425,7 +425,7 @@ export interface TokenRowOptions {
   logger: ILogger;
   /**
    * The consumer's `authDebug === true`, decided once by the broker: every
-   * token provider a row builds is given it (§8.2).
+   * token provider a row builds is given it.
    */
   authDebug: boolean;
 }

@@ -1,6 +1,5 @@
 /**
- * What one session write is, and the refresh state a build owns (§5.2, §5.6,
- * §6.4).
+ * What one session write is, and the refresh state a build owns.
  *
  * auth-stores 4.0.0's `saveSession` merges: a field a write leaves out keeps
  * what is stored, whoever stored it. So every write the broker makes states
@@ -17,7 +16,7 @@
  * refresh token with a binding and no credential, or a store that merges
  * binding fields as plainly as any other), an in-memory store with the
  * contract's merge — a field given sets, `''` clears, absent keeps — stands in,
- * and says so. Expected records are assembled from the spec's grammar
+ * and says so. Expected records are assembled from the binding record's grammar
  * (`helpers/bindingRecord`), never by the broker's own function. Every
  * interactive part is a test double; nothing opens a browser.
  */

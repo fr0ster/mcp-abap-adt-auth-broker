@@ -264,7 +264,7 @@ describe('mcp-auth (authorization_code)', () => {
     expect(secret?.refreshToken).toBe('uaa-refresh-1');
     await expectSplit('abap');
 
-    // mcp-auth's provider is the broker's UAA row (§10.2): the record is the
+    // mcp-auth's provider is the broker's UAA row: the record is the
     // row's, `jwt/authorization_code` — never the consumer path's.
     expect(
       secret?.issuedBy?.startsWith(
@@ -339,7 +339,7 @@ describe('mcp-auth (authorization_code)', () => {
   });
 });
 
-describe('three sources, one per run (D25)', () => {
+describe('three sources, one per run', () => {
   /** A first login's destination file, copied to `<root>/<DEST>.env`. */
   async function previousSession(): Promise<string> {
     server.answer('/oauth/token', tokenAnswer('uaa'));
@@ -1104,7 +1104,7 @@ describe('mcp-auth --client-auth', () => {
       expireStoredToken(previous, 'abap');
       strategyCalls = 0;
       // --env alone: the client authentication is the file's — its
-      // certificate paths — with no flag (D25).
+      // certificate paths — with no flag.
       await expect(
         run(
           options({
@@ -1608,7 +1608,7 @@ describe('the browser is mapped only for a login that opens one', () => {
   });
 });
 
-describe('mcp-auth: state and PKCE come with the provider (§10.5)', () => {
+describe('mcp-auth: state and PKCE come with the provider', () => {
   it('the URL carries state and an S256 challenge, the exchange its verifier; a callback without the state is refused', async () => {
     server.answer('/oauth/token', tokenAnswer('pkce'));
     const opened: string[] = [];

@@ -1,5 +1,5 @@
 /**
- * Source rules (§3.1, §13.1; H4):
+ * Source rules:
  *
  * - the library's `src` reads a failure only through auth-errors: no
  *   `instanceof` at all, no read of `message` / `stack` (`.message`,
@@ -10,8 +10,8 @@
  *   auth-providers: the provider's error carries its own words;
  * - in both packages' `src`: no `timeoutMs`, no `AbortSignal.timeout`, no
  *   `INTERACTIVE_LOGIN_TIMEOUT_MS`, no `setTimeout` / `setInterval` — no wait
- *   has a bound of the package's own (§7.6);
- * - the token API never calls `getProvider` (§7.3): nothing in the library
+ *   has a bound of the package's own;
+ * - the token API never calls `getProvider`: nothing in the library
  *   calls it at all — the token API reaches the row path's provider through
  *   its own non-attaching waiter.
  *
@@ -153,7 +153,7 @@ describe('no wait has a bound of the package’s own (both packages)', () => {
   });
 });
 
-describe('the token API never calls getProvider (§7.3)', () => {
+describe('the token API never calls getProvider', () => {
   it('no call of getProvider in the library', () => {
     const found = library.flatMap(({ file, text }) => {
       const code = codeOf(text);

@@ -770,7 +770,7 @@ describe('getProvider', () => {
       // One shared resolution: one read of the means.
       expect(keys.getConnectionConfig).toHaveBeenCalledTimes(1);
       // A later call re-reads the means, compares, and answers the same
-      // provider (§6.2).
+      // provider.
       expect(await broker.getProvider('D')).toBe(a);
       expect(keys.getConnectionConfig).toHaveBeenCalledTimes(2);
     });

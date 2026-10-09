@@ -310,7 +310,7 @@ describe('generate-env', () => {
       expect(fs.readFileSync(session, 'utf8')).toBe(before);
     });
 
-    it('a valid bound session already at the session path is never read: a new login, the file replaced (D25)', async () => {
+    it('a valid bound session already at the session path is never read: a new login, the file replaced', async () => {
       server.answer('/oauth/token', tokenAnswer('uaa'));
       const args = [
         'TRIAL',

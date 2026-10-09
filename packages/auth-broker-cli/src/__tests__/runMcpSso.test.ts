@@ -507,7 +507,7 @@ describe('mcp-auth saml2-pure --cookie, the SAP client stated in --env', () => {
       {
         sessionCookies: 'SAP_SESSIONID=abc',
         // The store merges: SAML has no refresh token, and one stored beside
-        // earlier cookies or a token is not this credential's (§5.2).
+        // earlier cookies or a token is not this credential's.
         refreshToken: '',
         issuedFor: 'https://abap.example.com:443?sap-client=100',
         issuedBy: `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`,
@@ -523,7 +523,7 @@ describe('mcp-auth saml2-pure --cookie, the SAP client stated in --env', () => {
   });
 });
 
-describe('mcp-auth saml2-pure --cookie over a pre-existing session bound to other means (§13.1, the CLI path)', () => {
+describe('mcp-auth saml2-pure --cookie over a pre-existing session bound to other means', () => {
   it('the store holds the new record and no refresh token; a restart is not seeded with the old one', async () => {
     const previous = path.join(root, `${DEST}.env`);
     const OLD_RECORD = `mcp-abap-adt-binding/2;jwt/authorization_code${';'.repeat(12)}`;
@@ -824,7 +824,7 @@ describe('--service-key whose UAA URL ends in a long run of slashes', () => {
   });
 });
 
-describe('three sources, one per run (D25)', () => {
+describe('three sources, one per run', () => {
   /** What `mcp-auth <subcommand> <args>` parses to, with no --output added. */
   function bare(subcommand: SsoSubcommand, args: string[]): McpSsoOptions {
     const parsed = parseSubcommandArgs(subcommand, args);
@@ -1010,7 +1010,7 @@ describe('three sources, one per run (D25)', () => {
   });
 });
 
-describe('D25: means from flags or --config are like --service-key; --env takes none', () => {
+describe('means from flags or --config are like --service-key; --env takes none', () => {
   function bare(subcommand: SsoSubcommand, args: string[]): McpSsoOptions {
     const parsed = parseSubcommandArgs(subcommand, args);
     if (parsed.kind !== 'sso') throw new Error(`not a run: ${parsed.kind}`);
@@ -1104,7 +1104,7 @@ describe('D25: means from flags or --config are like --service-key; --env takes 
   });
 });
 
-describe('D25: --cookie hands over the secret — it is no means flag', () => {
+describe('--cookie hands over the secret — it is no means flag', () => {
   const RECORD = `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`;
 
   function bare(args: string[]): McpSsoOptions {
@@ -1159,7 +1159,7 @@ describe('D25: --cookie hands over the secret — it is no means flag', () => {
   });
 });
 
-describe('D25 fix round: --cookie only over a cookie session; the exact --env file', () => {
+describe('--cookie only over a cookie session; the exact --env file', () => {
   function bare(subcommand: SsoSubcommand, args: string[]): McpSsoOptions {
     const parsed = parseSubcommandArgs(subcommand, args);
     if (parsed.kind !== 'sso') throw new Error(`not a run: ${parsed.kind}`);
@@ -1308,7 +1308,7 @@ describe('D25 fix round: --cookie only over a cookie session; the exact --env fi
   });
 });
 
-describe('D25: a session file’s client authentication, in every subcommand', () => {
+describe('a session file’s client authentication, in every subcommand', () => {
   let certServer: LocalServer;
   trustCertServer();
   beforeEach(async () => {

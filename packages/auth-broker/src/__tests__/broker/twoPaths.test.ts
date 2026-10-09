@@ -1,5 +1,5 @@
 /**
- * Two paths, two providers (§7.1, §5.5).
+ * Two paths, two providers.
  *
  * The row path — `getProvider`, and the token API without a `provider`
  * option — and the consumer path — the token API with one — each resolve,
@@ -11,7 +11,7 @@
  *
  * The stores are in-memory stand-ins of the contract; the row's provider is
  * real, against a local token endpoint; the consumer's is a test double.
- * Expected records are assembled from the spec's grammar
+ * Expected records are assembled from the binding record's grammar
  * (`helpers/bindingRecord`). Nothing opens a browser.
  */
 

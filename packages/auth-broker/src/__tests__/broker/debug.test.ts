@@ -1,5 +1,5 @@
 /**
- * §8 — what the broker logs, and `authDebug`.
+ * What the broker logs, and `authDebug`.
  *
  * - `authDebug: true` — `true` itself — reaches every token provider the
  *   broker builds; absent, `false`, `'true'` and `1` are off. It is never read

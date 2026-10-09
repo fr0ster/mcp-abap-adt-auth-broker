@@ -1,5 +1,5 @@
 /**
- * §10.7, D17: `--auth-debug` hands the broker `authDebug: true` — in
+ * `--auth-debug` hands the broker `authDebug: true` — in
  * `mcp-auth`, every subcommand and `generate-env` — and nothing else does:
  * not `--verbose`, not an environment variable. `--verbose` (and
  * `--auth-debug`, which implies it) sets the CLI logger's level only; the
@@ -36,7 +36,7 @@ jest.mock('@mcp-abap-adt/auth-broker', () => {
   return { ...actual, AuthBroker: RecordedBroker };
 });
 
-/** Environment variables 2.x or a provider read; 3.0.0 reads none (D17). */
+/** Environment variables 2.x or a provider read; 3.0.0 reads none. */
 const DEBUG_ENVIRONMENT: Record<string, string> = {
   DEBUG: 'true',
   DEBUG_SSO: 'true',

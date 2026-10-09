@@ -447,7 +447,7 @@ describe('the token API factory beside a strategy', () => {
     expect(JSON.stringify(again.mock.calls[0])).not.toContain('-----BEGIN');
   });
 
-  it('a secret client never gets the stored refresh token through authConfig, with a strategy or without one (§5.5)', async () => {
+  it('a secret client never gets the stored refresh token through authConfig, with a strategy or without one', async () => {
     for (const clientAuthentication of [undefined, certificateStrategy]) {
       const { store } = sessions();
       const first = new AuthBroker({
@@ -588,7 +588,7 @@ describe('the token API factory beside a strategy', () => {
     expect(withStrategy[1]?.refreshToken).toBeUndefined();
     expect(JSON.stringify(withStrategy)).not.toContain('refresh-of-A');
 
-    // Without a strategy as well: the consumer path is never seeded (§5.5).
+    // Without a strategy as well: the consumer path is never seeded.
     const without = await factoryCall(
       await storedThrough(
         keyStore(SECRET_CLIENT, null),
@@ -780,7 +780,7 @@ describe('the token API factory beside a strategy', () => {
         certificateStrategy,
       );
       const session = await store.loadSession(D);
-      // Written as '' — no resource — never left to the merge (§5.2).
+      // Written as '' — no resource — never left to the merge.
       expect(session?.issuedFor).toBe('');
       expect(session?.issuedBy).toBe(certClientRecord());
 
@@ -1024,7 +1024,7 @@ describe('a session obtained for another client, on the strategy path', () => {
     expect(held()?.refreshToken).toBe('');
   });
 
-  it("without a strategy: A's access token does not seed B, A's refresh token reaches no argument, and B's result without one writes '' (§5.5, D5)", async () => {
+  it("without a strategy: A's access token does not seed B, A's refresh token reaches no argument, and B's result without one writes ''", async () => {
     const { store, held } = secretSessions();
     const tokenA = jwtExpiringIn(3600, { jti: 'A' });
     await tokenApi(
@@ -1108,7 +1108,7 @@ describe('a session obtained for another client, on the strategy path', () => {
     }
 
     // Without a strategy: the session's client, without its refresh token,
-    // and no stored secret in the seed (§5.5).
+    // and no stored secret in the seed.
     const without = await tokenApi(
       make(foreign),
       keyStore(null, null),
@@ -1222,7 +1222,7 @@ describe('a session obtained for another client, on the strategy path', () => {
       }
     }
 
-    // Without a strategy: the same allowlist (§5.5).
+    // Without a strategy: the same allowlist.
     const without = await tokenApi(
       overSession(),
       keyStore(null, null),
@@ -1316,7 +1316,7 @@ describe('a session obtained for another client, on the strategy path', () => {
       ).not.toContain(value);
     }
 
-    // Without a strategy: the same allowlist (§5.5).
+    // Without a strategy: the same allowlist.
     const without = await tokenApi(
       withConnection({ language: 'EN', ...extras } as IConnectionConfig),
       keyStore(SECRET_CLIENT, null),
@@ -1387,7 +1387,7 @@ describe('a session obtained for another client, on the strategy path', () => {
   });
 });
 
-describe('what the factory is handed: exactly the allowlist (§9, §5.5)', () => {
+describe('what the factory is handed: exactly the allowlist', () => {
   /** Every store answer full of fields — secrets, a binding, a token, extras. */
   const FULL = {
     authorizationToken: 'stored-token',

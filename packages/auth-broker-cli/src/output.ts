@@ -1,5 +1,5 @@
 /**
- * What the CLI writes, and where (§10.7–§10.9, D16, D17).
+ * What the CLI writes, and where.
  *
  * - **stdout** carries only what was asked for: `help` and `--version`. Nothing
  *   here writes to it.
@@ -36,7 +36,7 @@ export const toStderr: LineWriter = (line) => {
   console.error(line);
 };
 
-/** A progress line: stderr, never stdout (D16). */
+/** A progress line: stderr, never stdout. */
 export function progress(line: string): void {
   toStderr(line);
 }
@@ -65,7 +65,7 @@ function renderMeta(meta: unknown): string {
  * from `info` without it — the providers' prompt lines that go through a
  * logger (where the callback waits, the SSH-tunnel hint, a URL that cannot
  * be shown) are seen by default. No environment variable is read: what it writes
- * is what the command line says (D17). It never throws.
+ * is what the command line says. It never throws.
  */
 export function createCliLogger(
   { verbose }: CliLoggerOptions,
@@ -189,7 +189,7 @@ export interface PrintFailureOptions {
 }
 
 /**
- * The lines a caught value is printed as (§10.9):
+ * The lines a caught value is printed as:
  *
  * - the CLI's own usage error (its brand): its message, fixed words;
  * - a `DestinationConfigError` (its structure): its message — names only —

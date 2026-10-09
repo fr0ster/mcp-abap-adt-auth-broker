@@ -1,5 +1,5 @@
 /**
- * The manual SAML login always declares its ACS (§10.5): `--assertion-flow
+ * The manual SAML login always declares its ACS: `--assertion-flow
  * manual` and the IdP-initiated paste take it from `--acs-url`, the SP
  * metadata (`--saml-metadata`, or `<uaa.url>/saml/metadata` with
  * `--service-key`) or an `acsUrl` in `--config`; with none, a usage error
@@ -292,7 +292,7 @@ describe('no ACS from any source: refused naming --acs-url, nothing read or writ
   });
 });
 
-describe('no ACS from any source: refused before any metadata is fetched (§10.5)', () => {
+describe('no ACS from any source: refused before any metadata is fetched', () => {
   it.each([
     ...FLOWS.map(
       ([name, flow]) =>

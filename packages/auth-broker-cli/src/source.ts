@@ -1,6 +1,5 @@
 /**
- * Where a run's destination comes from — three sources, one per run (§10.1,
- * D25), the same for every subcommand:
+ * Where a run's destination comes from — three sources, one per run, the same for every subcommand:
  *
  * - `--service-key <path>`: always a new pair. The means come from the key;
  *   no session is read — not even an existing `--output` file — so every run

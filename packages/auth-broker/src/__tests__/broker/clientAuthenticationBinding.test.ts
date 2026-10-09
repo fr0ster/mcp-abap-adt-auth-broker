@@ -366,7 +366,7 @@ describe('a certificate destination stating no resource (Ruling 14)', () => {
   it('the same client: the stored token is reused — no login, no request', async () => {
     const { store, held } = sessions();
     await storedFor(store, unstated);
-    // Written as '' — no resource — never left to the merge (§5.2).
+    // Written as '' — no resource — never left to the merge.
     expect(held()?.issuedFor).toBe('');
     const stored = held()?.authorizationToken;
     const requests = endpoint.requests.length;

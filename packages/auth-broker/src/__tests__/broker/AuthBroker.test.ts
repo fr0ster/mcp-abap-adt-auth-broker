@@ -411,7 +411,7 @@ describe('AuthBroker', () => {
       expect(everythingWritten(sessionStore)).not.toContain('uaaClientSecret');
     });
 
-    it('writes refreshToken "" when the result has none: the stored one is never carried (D5)', async () => {
+    it('writes refreshToken "" when the result has none: the stored one is never carried', async () => {
       const sessionStore = mockSessionStore({ serviceUrl: SERVICE_URL }, null, {
         refreshToken: 'stored-refresh',
         issuedFor: 'https://elsewhere.example.com:443',
@@ -520,7 +520,7 @@ describe('AuthBroker', () => {
     });
   });
 
-  describe('the binding is fixed when the provider is built; changed means build a new one (§6.3)', () => {
+  describe('the binding is fixed when the provider is built; changed means build a new one', () => {
     /** A session store over a map: what is written is what a new broker reads. */
     function mapSessionStore(conn: () => IConnectionConfig | null) {
       const held = new Map<string, Record<string, unknown>>();
@@ -767,7 +767,7 @@ describe('AuthBroker', () => {
   });
 
   describe('provider factory', () => {
-    it('is handed the service URL and the client — never the stored token or refresh token (§5.5)', async () => {
+    it('is handed the service URL and the client — never the stored token or refresh token', async () => {
       const sessionStore = mockSessionStore(
         { serviceUrl: SERVICE_URL, authorizationToken: 'stored-access' },
         null,
@@ -1325,7 +1325,7 @@ describe('AuthBroker', () => {
 
       await second.getToken('DEST');
 
-      // The consumer path is never seeded (§5.5): the means and the client.
+      // The consumer path is never seeded: the means and the client.
       expect(factory).toHaveBeenCalledWith(
         'DEST',
         { ...KEY_AUTH, refreshToken: undefined },

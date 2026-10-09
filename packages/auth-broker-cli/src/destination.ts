@@ -58,7 +58,7 @@ export interface DestinationFiles {
  * `--env` (or found by `--destination`) is copied there first, so the broker
  * judges its session against its means; the original is never written. With
  * no seed the file starts absent — whatever an earlier run left there — so no
- * session is read (D25: a service key always logs in).
+ * session is read (a service key always logs in).
  */
 export function openDestination(
   directory: string,
@@ -159,7 +159,7 @@ export async function flushed(
     if (signal?.aborted) throw error;
     // Each destination still pending, in its SessionWriteFailure's words —
     // the store's error as auth-errors classified it — never the store's
-    // message (§10.9).
+    // message.
     for (const line of writeFailureLines(error)) write(line);
     return false;
   }

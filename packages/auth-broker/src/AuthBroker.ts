@@ -14,7 +14,7 @@
  * consumer's provider — the consumer path's, resolved, cached and bound on its
  * own — whose every answer it writes through the same write path.
  *
- * A provider is never changed (§6.2): every call re-reads what its path's
+ * A provider is never changed: every call re-reads what its path's
  * provider was built from and builds a new one, starting with nothing, when
  * anything of it changed (`buildIdentity.ts`).
  *
@@ -106,7 +106,7 @@ import { SessionWriter, type WriteOutcome } from './SessionWriter';
 
 /**
  * What queuing a write came to: written (landed, or the store's error), or
- * dropped — a retired build's write, never written (§5.3).
+ * dropped — a retired build's write, never written.
  */
 type Submitted =
   | ({ readonly written: true } & WriteOutcome)
@@ -121,7 +121,7 @@ import type {
   ISessionStore,
 } from './stores/interfaces';
 
-/** What a caller of `getProvider`, the token API and `flush()` may pass (§7). */
+/** What a caller of `getProvider`, the token API and `flush()` may pass. */
 export interface BrokerCallOptions {
   /**
    * This caller no longer needs the answer: an abort releases this caller
@@ -133,7 +133,7 @@ export interface BrokerCallOptions {
 }
 
 /**
- * A shared start's answer (§7.1): never thenable — no `then` member, frozen.
+ * A shared start's answer: never thenable — no `then` member, frozen.
  * Every start of the broker's slots resolves one and never throws, so the
  * only failure a waiter gets from `sharedAttempt` itself is `aborted`; what
  * the work threw is carried out as a value and rethrown, unchanged, outside
@@ -171,7 +171,7 @@ async function joined<T>(
 
 /**
  * One wait of one caller — on the write queue, or a store read outside a
- * resolution — as a waiter of a slot of its own (§7.5): the caller's signal
+ * resolution — as a waiter of a slot of its own: the caller's signal
  * releases that caller only, and the work runs on.
  */
 function waitFor<T>(
@@ -204,7 +204,7 @@ function tokenOptions(
 /**
  * Builds the token API's provider for one destination, from the means and the
  * client — never from a stored secret: the consumer path is never seeded
- * (§5.5). A consumer whose provider must resume after a restart composes that
+ *. A consumer whose provider must resume after a restart composes that
  * itself: its provider's own seed and persistence.
  *
  * It is handed exactly these, and nothing else a store answered:
@@ -225,7 +225,7 @@ function tokenOptions(
  *   factory gets three arguments, as 4.0.0.
  *
  * Called once per build: the broker keeps the provider it returns while what
- * it was handed is unchanged, re-reading it on every token API call (§6.3);
+ * it was handed is unchanged, re-reading it on every token API call;
  * when any of it changes, the factory is called again and the new provider
  * starts with nothing.
  */
@@ -254,7 +254,7 @@ export interface TokenProviderClient {
   readonly clientId?: string;
   /**
    * Never set — not even as a key: the consumer path is handed no stored
-   * secret (§5.5). Kept in the type, which 5.0.0 leaves unchanged (§9).
+   * secret. Kept in the type, which 5.0.0 leaves unchanged.
    */
   readonly refreshToken?: string;
 }
@@ -293,7 +293,7 @@ export interface AuthBrokerConfig {
   provider?: IRefreshableTokenProvider | TokenProviderFactory | undefined;
 
   // Collaborators — each a function of the destination, called once per build
-  // of that destination's provider (again for every new build, §6.2), each
+  // of that destination's provider (again for every new build), each
   // required only by the grants that use it. The broker supplies no default
   // and disposes none.
 
@@ -325,7 +325,7 @@ export interface AuthBrokerConfig {
    * every grant that authenticates one (`ClientAuthenticationGrant`). Called
    * once per build of the destination's provider, with the client the key
    * store answers and its certificate, read only if the strategy asks — and
-   * then re-read on every call, a change building a new provider (§6.2).
+   * then re-read on every call, a change building a new provider.
    *
    * A given strategy always answers one, or throws: there is no "nothing"
    * answer, so an explicit choice never falls back to the secret. A throw
@@ -406,7 +406,7 @@ const SEED_MEANS = [
  * The token API factory's seed: the connection means from an allowlist
  * (`SEED_MEANS`) and nothing else — never the session secret's own fields
  * (`SECRET_FIELDS`), whatever the stored record says: the consumer path is
- * never seeded (§5.5). `serviceUrl` is the one resolved for the destination.
+ * never seeded. `serviceUrl` is the one resolved for the destination.
  */
 function consumerSeed(
   connConfig: IConnectionConfig | null,
@@ -443,14 +443,14 @@ interface SecretWrite {
   /**
    * The refresh token written beside the credential, decided when the write
    * was submitted — the one its build owns, or `''`, which clears the stored
-   * one — never read from the store at write time (§5.2).
+   * one — never read from the store at write time.
    */
   refreshToken: string;
   binding: Binding;
 }
 
 /**
- * The refresh token a build owns, after one reported refresh token (§5.2): a
+ * The refresh token a build owns, after one reported refresh token: a
  * string written makes it owned; `null` (a discard) writes `''` and makes it
  * none; `undefined` writes the owned one, or `''` when the build owns none.
  */
@@ -464,7 +464,7 @@ function ownedAfter(
 }
 
 /**
- * The two paths a destination's provider is resolved on (§7.1): the row path
+ * The two paths a destination's provider is resolved on: the row path
  * — `getProvider`, and the token API without a `provider` option — and the
  * consumer path — the token API with one. Each has its own resolution, cache
  * entry, identity and generation counter per destination; they share nothing
@@ -479,8 +479,8 @@ function perPath<T>(): Record<Path, Map<string, T>> {
 
 /**
  * One path's provider for a destination, as resolved: the provider, what its
- * build read (compared on every call, §6.2), and the generation it took from
- * its path's counter when it was committed (§5.3).
+ * build read (compared on every call), and the generation it took from
+ * its path's counter when it was committed.
  */
 interface Resolved<P> {
   readonly provider: P;
@@ -489,7 +489,7 @@ interface Resolved<P> {
 }
 
 /**
- * The row path's resolution, with the provider's parties (§7.2): the provider
+ * The row path's resolution, with the provider's parties: the provider
  * itself when the row it was built from is a token row or `snc`, else
  * `undefined` — decided by the row, never by looking at the instance.
  */
@@ -558,7 +558,7 @@ interface ConsumerInputs {
 }
 
 /**
- * The consumer path's identity (§6.3). A factory's: everything it is handed —
+ * The consumer path's identity. A factory's: everything it is handed —
  * the client, the seed — and what its binding is made of — the row, the
  * resource. An instance's, which is handed nothing: the destination's
  * identity it was first used for — the row, the resource, the issuer
@@ -581,7 +581,7 @@ function consumerIdentity(inputs: ConsumerInputs, instance: boolean): unknown {
 /**
  * The token API's refusal of a destination whose means changed under the
  * consumer's instance: the instance cannot be rebuilt, and the identity of
- * the credential it holds is unknown to the broker (§6.3).
+ * the credential it holds is unknown to the broker.
  */
 function instanceRefusal(destination: string): DestinationConfigError {
   return new DestinationConfigError(
@@ -649,7 +649,7 @@ export class AuthBroker {
   private readonly resolvedRow = new Map<string, RowResolved>();
   private readonly resolvedConsumer = new Map<string, ConsumerResolved>();
   /**
-   * Per (destination, path): the slot of shared resolutions (§7.1) — every
+   * Per (destination, path): the slot of shared resolutions — every
    * caller of that path is a waiter of its attempt.
    */
   private readonly rowSlots = new Map<
@@ -660,7 +660,7 @@ export class AuthBroker {
     string,
     SharedAttempt<SlotOutcome<ConsumerResolved>>
   >();
-  /** The broker-wide slot every `flush()` caller joins (§7.5). */
+  /** The broker-wide slot every `flush()` caller joins. */
   private readonly flushSlot =
     sharedAttempt<SlotOutcome<void>>('persisting-tokens');
   /** Per (destination, path): the last generation a build took. */
@@ -669,7 +669,7 @@ export class AuthBroker {
   private readonly newestWriter = perPath<number>();
   /**
    * The destinations whose means changed under the consumer's instance: the
-   * token API refuses them until a new broker (§6.3).
+   * token API refuses them until a new broker.
    */
   private readonly instanceRefused = new Set<string>();
   private readonly authorization: AuthBrokerConfig['authorization'];
@@ -748,7 +748,7 @@ export class AuthBroker {
     this.onWriteFailure = config.onWriteFailure;
     // Every line the broker writes, and every line of a provider it builds,
     // goes through one guard: a consumer logger that throws or rejects
-    // changes no outcome (§8.1).
+    // changes no outcome.
     this.logger = quietLogger(logger);
     this.authDebug = config.authDebug === true;
     this.writer = new SessionWriter<SecretWrite>(
@@ -810,7 +810,7 @@ export class AuthBroker {
   /**
    * The token API's one body. The call's signal releases this caller from
    * every wait it has — the write checks, the means read, the resolution
-   * (whose waiter it is, never attaching: §7.3), its own write — and is
+   * (whose waiter it is, never attaching), its own write — and is
    * passed to the provider's `getTokens` / `refreshTokens`.
    */
   private async obtain(
@@ -839,7 +839,7 @@ export class AuthBroker {
       ? await this.obtainFromConsumer(destination, method, reads, signal)
       : await this.obtainShared(destination, method, means, reads, signal);
     // A write queued meanwhile — a discard of the destination's provider the
-    // store rejected, say — is caught here (§5.4).
+    // store rejected, say — is caught here.
     await this.settlePending(destination, signal);
     // A signal that aborted after the last wait: never success.
     await stillWanted(signal);
@@ -848,7 +848,7 @@ export class AuthBroker {
 
   /**
    * Under `onWriteFailure: 'fail'`, a call of the destination is refused while
-   * its last write is pending (§5.4) — not yet landed: failed, or still queued
+   * its last write is pending — not yet landed: failed, or still queued
    * or in flight. Asked on entry and right before success: the call awaits
    * every write of the destination queued before this moment, and a failed
    * one that no later write replaced is written once more — the destination's
@@ -858,7 +858,7 @@ export class AuthBroker {
    * Under `'continue'` nothing is asked.
    *
    * The one wait is `writer.retry(destination)`'s promise, a waiter of its
-   * own slot with the call's signal (§7.5): an abort releases the caller
+   * own slot with the call's signal: an abort releases the caller
    * (`aborted`), never with success, and the write runs on.
    */
   private async settlePending(
@@ -928,7 +928,7 @@ export class AuthBroker {
       );
     }
     // The row path's provider, through a waiter of its slot that never
-    // attaches (§7.3): a token call can neither keep a later moment's login
+    // attaches: a token call can neither keep a later moment's login
     // alive nor bound it.
     const { provider } = await this.resolveRow(destination, signal, reads);
     if (!obtainsTokens(provider)) {
@@ -965,14 +965,14 @@ export class AuthBroker {
     this.logger.debug(`[AuthBroker] ${method} for ${destination}`);
     const result = checked(await provider[method](...tokenOptions(signal)));
     // The call's own write, queued whatever the caller does next, and awaited
-    // raced against its signal (§5.5): an abort releases the caller
+    // raced against its signal: an abort releases the caller
     // (`aborted`, never success) and the write runs on.
     const queued = this.submit('consumer', destination, generation, {
       credential: result.authorizationToken,
       cookies: result.tokenType === 'saml',
       expiresAt: expiryOf(result),
       // The result is authoritative: no refresh token in it writes `''` — the
-      // store merges, and the stored one is never carried (§5.5).
+      // store merges, and the stored one is never carried.
       refreshToken: present(result.refreshToken) ? result.refreshToken : '',
       binding,
     });
@@ -990,7 +990,7 @@ export class AuthBroker {
   }
 
   /**
-   * The slot of one (destination, path)'s resolutions (§7.1): a caller of
+   * The slot of one (destination, path)'s resolutions: a caller of
    * the path arriving while an attempt is active joins it; when every caller
    * of an attempt has aborted, the attempt leaves the slot at once and the
    * next caller starts afresh. A failed or aborted resolution is not kept.
@@ -1012,7 +1012,7 @@ export class AuthBroker {
     return this.generations[path].has(destination);
   }
 
-  /** A committed build's generation, from its path's counter (§5.3). */
+  /** A committed build's generation, from its path's counter. */
   private nextGeneration(path: Path, destination: string): number {
     const generation = (this.generations[path].get(destination) ?? 0) + 1;
     this.generations[path].set(destination, generation);
@@ -1022,9 +1022,9 @@ export class AuthBroker {
   /**
    * Queues one write of a build of `path`. A write of a build older than the
    * newest build of the same path that has queued a write for the destination
-   * is dropped — never written, never pending (§5.3); a build of the other
+   * is dropped — never written, never pending; a build of the other
    * path never retires this one. A dropped write is not a failed one: the
-   * retired provider's holder keeps it (§6.2), and the destination's session
+   * retired provider's holder keeps it, and the destination's session
    * is the newer build's.
    */
   private async submit(
@@ -1091,7 +1091,7 @@ export class AuthBroker {
   }
 
   /**
-   * The consumer path's provider for the destination (§6.3): the cached one
+   * The consumer path's provider for the destination: the cached one
    * while everything it was built from is unchanged; else, for a factory, a
    * new build — the factory called again, its provider starting with nothing
    * — and, for an instance, which cannot be rebuilt, a refusal naming
@@ -1113,7 +1113,7 @@ export class AuthBroker {
         const cached = this.resolvedConsumer.get(destination);
         if (cached) {
           if (await cached.identity.unchanged(reads)) return cached;
-          // A doomed attempt changes nothing (§7.1): every caller left while
+          // A doomed attempt changes nothing: every caller left while
           // it re-read, and a fresh attempt may have committed meanwhile —
           // the entry is no longer this attempt's to remove. A live attempt
           // is the slot's only one, so the entry is still the one it read.
@@ -1131,7 +1131,7 @@ export class AuthBroker {
           attempt.signal,
         );
         // The commit, one step, only if the attempt was not aborted: a build
-        // every caller left is never cached nor handed out (§7.1).
+        // every caller left is never cached nor handed out.
         if (attempt.signal.aborted) throw attempt.signal.reason;
         const resolved: ConsumerResolved = Object.freeze({
           ...built,
@@ -1163,7 +1163,7 @@ export class AuthBroker {
       | TokenProviderFactory;
     const instance = typeof provider !== 'function';
     // The identity is what this path takes from its stores — never what else
-    // the session store holds, which this broker's own writes change (§6.3).
+    // the session store holds, which this broker's own writes change.
     const inputs = await this.consumerInputs(destination, recorder.reads);
     recorder.derived(consumerIdentity(inputs, instance), async (reads) =>
       consumerIdentity(await this.consumerInputs(destination, reads), instance),
@@ -1175,7 +1175,7 @@ export class AuthBroker {
         binding: consumerBinding(row, serviceUrl, sapClient, null),
       };
     }
-    // Never seeded (§5.5): the factory is handed the means and the client
+    // Never seeded: the factory is handed the means and the client
     // only — no stored token, cookies, expiry or refresh token, in any
     // argument, whatever the stored session's record says. The broker
     // cannot know what the factory composes from what it is handed.
@@ -1281,7 +1281,7 @@ export class AuthBroker {
    * What a consumer's factory's credentials are composed from, read in the
    * 3.x order: the session's authorization config; only when it has none, the
    * key store's client. The stored session is not read: nothing of it is
-   * handed to the factory (§5.5). A session store of auth-stores 3
+   * handed to the factory. A session store of auth-stores 3
    * answers no client, so the key store's is what is found.
    */
   private async readAuthorization(
@@ -1447,7 +1447,7 @@ export class AuthBroker {
    * built from the means the service key store holds and the secret the
    * session store holds.
    *
-   * A provider is never changed (§6.2): every call re-reads what the
+   * A provider is never changed: every call re-reads what the
    * destination's provider was built from — the means, the client, and the
    * certificate client when the build read it — and answers the cached
    * provider while all of it is unchanged. When anything changed, by a single
@@ -1468,7 +1468,7 @@ export class AuthBroker {
    * `options.signal` releases this caller from every wait (`aborted`), and is
    * attached to the token or SNC provider answered — built or cached — so a
    * login it starts later is aborted once every session holding it has gone
-   * (§7.2). Without a signal nothing is attached.
+   *. Without a signal nothing is attached.
    *
    * @throws DestinationConfigError when the destination lacks what its type
    *   needs — naming the fields or options, never a value.
@@ -1485,7 +1485,7 @@ export class AuthBroker {
     await stillWanted(signal);
     // Attached after the resolution, to the provider answered — built or
     // from the cache — so a login it starts later in a moment is aborted once
-    // every session holding it has gone (§7.2). Nothing kept to detach: a
+    // every session holding it has gone. Nothing kept to detach: a
     // session ends by aborting its signal.
     if (signal !== undefined) parties?.attach(signal);
     return provider;
@@ -1493,7 +1493,7 @@ export class AuthBroker {
 
   /**
    * The row path's provider for the destination: the cached one while what
-   * its build read is unchanged (§6.2), else a new build, committed with the
+   * its build read is unchanged, else a new build, committed with the
    * next generation of the row path.
    */
   private resolveRow(
@@ -1508,7 +1508,7 @@ export class AuthBroker {
         const cached = this.resolvedRow.get(destination);
         if (cached) {
           if (await cached.identity.unchanged(reads)) return cached;
-          // A doomed attempt changes nothing (§7.1): every caller left while
+          // A doomed attempt changes nothing: every caller left while
           // it re-read, and a fresh attempt may have committed meanwhile —
           // the entry is no longer this attempt's to remove. A live attempt
           // is the slot's only one, so the entry is still the one it read.
@@ -1528,7 +1528,7 @@ export class AuthBroker {
         // The commit — the cache set, the generation taken — is one step that
         // runs only if the attempt was not aborted: a build every caller left
         // is never cached, never handed out, and, never asked for a token,
-        // writes nothing (§7.1).
+        // writes nothing.
         if (attempt.signal.aborted) throw attempt.signal.reason;
         commit.generation = this.nextGeneration('row', destination);
         const resolved: RowResolved = Object.freeze({
@@ -1549,7 +1549,7 @@ export class AuthBroker {
    * through `recorder` — what it read is its identity. `seeded`: whether the
    * build may start from the stored session; `commit`: the generation its
    * writes carry, set when the build is committed; `signal`: the build's
-   * attempt, handed to the `clientAuthentication` strategy (D11). Answers
+   * attempt, handed to the `clientAuthentication` strategy. Answers
    * the provider and the row it stated.
    */
   private async build(
@@ -1661,7 +1661,7 @@ export class AuthBroker {
           ? strategyBinding(computed)
           : computed;
         // Only a first build reads the session: a replacement for changed
-        // means starts with nothing (§6.2). client_credentials takes no seed.
+        // means starts with nothing. client_credentials takes no seed.
         const stored =
           grant === 'client_credentials' || !seeded
             ? null
@@ -1672,7 +1672,7 @@ export class AuthBroker {
         // The refresh token this build owns: the one the builder handed its
         // provider from the checked session (`RowBuild`), then whatever each
         // of its writes made of it — never one read from the store at write
-        // time (§5.2, §6.2). Set before the provider can write.
+        // time. Set before the provider can write.
         let owned: string | undefined;
         // The provider's persistence writes through here: resolved when the
         // write landed, rejected with the store's error when it did not —
@@ -1858,10 +1858,10 @@ export class AuthBroker {
    * the destination's next write or `flush()` does, so call it on shutdown to
    * know whether every token a provider obtained is stored.
    *
-   * Every caller joins one broker-wide slot (§7.5): its signal releases that
+   * Every caller joins one broker-wide slot: its signal releases that
    * caller alone (`aborted`); the attempts run on, and a write still failing
    * stays pending. The `AggregateError` is rethrown as the same object to
-   * every caller (D9).
+   * every caller.
    */
   flush(options?: BrokerCallOptions): Promise<void> {
     return joined(this.flushSlot, () => this.writer.flush(), options?.signal);
@@ -1870,7 +1870,7 @@ export class AuthBroker {
   /**
    * One write of the destination's session secret — and nothing else — in one
    * `saveSession`, built from the write alone: the store merges, so every
-   * field that must not survive from an earlier write is stated (§5.2).
+   * field that must not survive from an earlier write is stated.
    *
    * - A credential: `{ authorizationToken, expiresAt, refreshToken, issuedFor,
    *   issuedBy }`, or for `saml2_pure`'s cookies (`tokenType: 'saml'`)
@@ -1935,7 +1935,7 @@ export class AuthBroker {
   /**
    * An `ITokenRefresher` for one destination, for injection into a connection:
    * `getToken()` is the broker's `getToken`, `refreshToken()` its forced
-   * `refreshToken` — each call a waiter with `options.signal` (D10), so a
+   * `refreshToken` — each call a waiter with `options.signal`, so a
    * refresher held by a session ends with it.
    */
   createTokenRefresher(

@@ -1,5 +1,5 @@
 /**
- * Cancellation (§7; D10, D11; H4, H5).
+ * Cancellation.
  *
  * - One resolution per (destination, path) is an auth-errors `sharedAttempt`:
  *   one caller's abort releases that caller only; when every caller has
@@ -476,7 +476,7 @@ describe('one resolution per (destination, path), through sharedAttempt', () => 
 
 // ---- a doomed attempt changes nothing -----------------------------------------
 
-describe('a doomed attempt never removes what a fresh attempt committed (§7.1, §7.4)', () => {
+describe('a doomed attempt never removes what a fresh attempt committed', () => {
   it('the row path: the doomed identity re-read answers "changed" after a fresh build was committed — the fresh provider stays cached', async () => {
     const conn: IConnectionConfig = means('client_credentials');
     let hold: Promise<void> | undefined;
@@ -958,7 +958,7 @@ describe('the token API never attaches', () => {
 
 // ---- the clientAuthentication context's signal --------------------------------
 
-describe('ClientAuthenticationContext.signal (D11)', () => {
+describe('ClientAuthenticationContext.signal', () => {
   it('aborts when every build waiter has left, not before', async () => {
     const contexts: ClientAuthenticationContext[] = [];
     const sessions = sessionStore();
@@ -1066,7 +1066,7 @@ describe.each(['fail', 'continue'] as const)(
       );
     });
 
-    it('the consumer path: its write held after the provider returned (§5.5)', async () => {
+    it('the consumer path: its write held after the provider returned', async () => {
       const sessions = sessionStore();
       const provider = consumerProvider();
       const broker = new AuthBroker({

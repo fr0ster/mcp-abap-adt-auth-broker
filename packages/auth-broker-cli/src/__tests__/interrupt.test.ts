@@ -1,5 +1,5 @@
 /**
- * §10.4, D18: a login ends only when the user ends it.
+ * A login ends only when the user ends it.
  *
  * - One interrupt per run: `SIGINT` / `SIGTERM` abort the run's controller,
  *   whose signal every wait of the run takes; the run settles `aborted`, the

@@ -1,5 +1,5 @@
 /**
- * §10.8, D16, D19, H2: what the CLI writes where — observed on the built
+ * What the CLI writes where — observed on the built
  * `mcp-auth` bin, run under `node` as a user runs it, against local token
  * endpoints (nothing leaves the machine; no browser: `--browser none`, and the
  * test itself answers the callback the provider's prompt names).
@@ -56,7 +56,7 @@ const REFUSAL = {
   body: { error: 'invalid_grant', error_description: SERVER_TEXT },
 };
 
-/** Environment variables 2.x or a provider read; 3.0.0 reads none (D17). */
+/** Environment variables 2.x or a provider read; 3.0.0 reads none. */
 const DEBUG_ENVIRONMENT = {
   DEBUG: 'true',
   DEBUG_SSO: 'true',
@@ -479,7 +479,7 @@ describe('mcp-auth --credential', () => {
       expect(run.code).toBe(0);
       expect(run.stdout).toBe('');
       expectNoSecrets(run);
-      // No variable turns the debug lines on (D17).
+      // No variable turns the debug lines on.
       expect(run.stderr).not.toContain('[debug]');
     }
   });

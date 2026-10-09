@@ -4,7 +4,7 @@
  * mcp-auth - log in to a SAP BTP or ABAP destination and write it: its means
  * and the secret the login obtained.
  *
- * One command (D24): `mcp-auth [auth-code]` (UAA authorization code, or
+ * One command: `mcp-auth [auth-code]` (UAA authorization code, or
  * `--credential` client credentials), `mcp-auth oidc`, `mcp-auth saml2-pure`
  * and `mcp-auth saml2-bearer` — 2.x's `mcp-sso`, with the same flags — all run
  * in this process. The command line is read by `subcommandArgs.ts`.
@@ -628,7 +628,7 @@ function showHelp(subcommand: Subcommand | undefined): void {
 
 /**
  * `mcp-auth [auth-code]`: the authorization code or client credentials login,
- * under the run's interrupt (§10.4): `SIGINT` / `SIGTERM` end it.
+ * under the run's interrupt: `SIGINT` / `SIGTERM` end it.
  */
 function runAuthCode(options: McpAuthOptions): Promise<number> {
   // The work directory is removed on any exit, error and signal included:
@@ -686,7 +686,7 @@ main().then(
   (code) => process.exit(code),
   (error: unknown) => {
     // In words auth-errors, the broker or this CLI rendered: never a
-    // foreign value's message, never a stack (§10.9).
+    // foreign value's message, never a stack.
     printFailure(error);
     // A usage error found at run time ends as one found while parsing.
     if (isUsageError(error)) {

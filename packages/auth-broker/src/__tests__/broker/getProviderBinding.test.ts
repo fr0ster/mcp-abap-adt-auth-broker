@@ -12,7 +12,7 @@
  * a credential it cannot obtain again, so a mismatch there is a
  * `DestinationConfigError` naming the field.
  *
- * The expected values are assembled here from the spec's grammar
+ * The expected values are assembled here from the binding record's grammar
  * (`helpers/bindingRecord`), never computed by the broker's own function: a
  * test that used it would agree with any bug in it.
  *
@@ -452,7 +452,7 @@ describe.each(['authorization_code', 'passcode'] as const)(
           authorizationToken: endpoint.issued[0]!,
           expiresAt: expect.any(Number),
           refreshToken: 'refresh-1',
-          // Stated even when the means lack its source: '' (§5.2).
+          // Stated even when the means lack its source: ''.
           issuedFor: noResource ? '' : FOR,
           issuedBy: by(grant),
         };
@@ -605,7 +605,7 @@ describe('persist writes the binding with every secret, and nothing else', () =>
       authorizationToken: endpoint.issued[0],
       expiresAt: expect.any(Number),
       // client_credentials obtains none, so the build owns none: '' clears
-      // whatever the merging store holds (§5.2).
+      // whatever the merging store holds.
       refreshToken: '',
       issuedFor: FOR,
       issuedBy: by('client_credentials'),

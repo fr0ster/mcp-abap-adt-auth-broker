@@ -1,5 +1,5 @@
 /**
- * A build's identity: everything the build read to make its provider (§6.2).
+ * A build's identity: everything the build read to make its provider.
  *
  * A provider is never changed: the broker hands out the provider it built
  * while nothing that build read has changed, and builds a new one — which

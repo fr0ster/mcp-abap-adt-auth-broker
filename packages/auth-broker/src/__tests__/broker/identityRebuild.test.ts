@@ -1,6 +1,6 @@
 /**
  * One rule: a provider is never changed — changed means get a new one
- * (§6.2, §6.3).
+ *.
  *
  * Every call of `getProvider` and of the token API re-reads what the
  * destination's provider was built from — the means, the client, the
@@ -17,7 +17,7 @@
  * state the test changes between calls, and a session store with the
  * contract's merge; a "restart" is a fresh broker over the same stores. The
  * providers are real, against local token endpoints and a mock SAML identity
- * provider. Expected records are assembled from the spec's grammar
+ * provider. Expected records are assembled from the binding record's grammar
  * (`helpers/bindingRecord`), never by the broker's own function. Nothing opens
  * a browser.
  */

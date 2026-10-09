@@ -1,5 +1,5 @@
 /**
- * The versioned binding record (`issuedBy`, spec §6.1):
+ * The versioned binding record (`issuedBy`):
  *
  *   mcp-abap-adt-binding/2;<row>;<eleven encoded address fields>;<trust>
  *
@@ -8,7 +8,7 @@
  * the SHA-256 of the row's non-secret trust input. The record is compared by
  * exact equality and never parsed.
  *
- * The expected records are assembled here from the spec's grammar — field
+ * The expected records are assembled here from the binding record's grammar — field
  * order, `encodeURIComponent`, the trust serialisation — never by the broker's
  * own functions: a test that used them would agree with any bug in them.
  */
@@ -65,7 +65,7 @@ import {
 
 type Field = RecordField;
 
-/** The record as the spec's grammar writes it. */
+/** The record as the binding record's grammar writes it. */
 function expected(
   row: string,
   filled: Partial<Record<Field, string>>,
@@ -241,7 +241,7 @@ describe('the trust digest', () => {
     ['clientCertificate', CERTIFICATE],
   ];
 
-  it('is the SHA-256 of the spec serialisation, lower-case hex', () => {
+  it('is the SHA-256 of the documented serialisation, lower-case hex', () => {
     expect(trustDigest(PAIRS)).toBe(digest(PAIRS));
   });
 
@@ -383,7 +383,7 @@ describe('the trust digest', () => {
   });
 });
 
-describe('per row, exactly the fields of §6.1’s table, as the exact strings the provider receives', () => {
+describe('per row, exactly the fields of the binding record’s table, as the exact strings the provider receives', () => {
   const CLIENT_FIELDS = {
     clientId: 'sb-broker!t42',
     uaaUrl: 'https://uaa.example.com',
@@ -608,7 +608,7 @@ describe('per row, exactly the fields of §6.1’s table, as the exact strings t
   });
 });
 
-describe('fully stated, per §6.1’s table', () => {
+describe('fully stated, per the binding record’s table', () => {
   const NO_ISSUER = { oidcIssuerUrl: undefined };
   const fully = (
     authType: 'jwt' | 'saml',

@@ -435,7 +435,7 @@ export function envKeys(file: string): Record<string, string> {
 }
 
 /**
- * What a run given the fake browser never prints (§10.8, D19): the
+ * What a run given the fake browser never prints: the
  * authorization URL, its `state` and the code that came back. The provider
  * prompts the URL only when the browser cannot be launched
  * (auth-providers' `openInBrowser`), and the fake always launches. Says

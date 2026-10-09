@@ -1,5 +1,5 @@
 /**
- * §3 — what the broker relays, and how it reads a failure: through
+ * What the broker relays, and how it reads a failure: through
  * auth-errors only, never by class, so a failure of another installed copy of
  * auth-errors reads the same; its own refusals carry the provider's error.
  */
@@ -36,7 +36,7 @@ import { fakeKeyStore, fakeSessionStore } from '../helpers/fakeStores';
 
 /**
  * Every value a broker slot's `start` resolves, as auth-errors' real
- * `sharedAttempt` receives it: the wrapper only records it (§7.1's outcome
+ * `sharedAttempt` receives it: the wrapper only records it (the outcome
  * shape is asserted on what it saw).
  */
 const slotOutcomes: unknown[] = [];
@@ -456,7 +456,7 @@ describe('isDestinationConfigError', () => {
   });
 });
 
-describe('error identity through the shared slots (§7.1, §7.5)', () => {
+describe('error identity through the shared slots', () => {
   /** A manual promise. */
   function gate(): { promise: Promise<void>; open: () => void } {
     let open = () => {};

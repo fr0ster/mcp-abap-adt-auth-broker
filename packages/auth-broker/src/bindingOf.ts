@@ -26,7 +26,7 @@ import { isOidcGrant, isStatedRow } from './destinations';
  * The binding of a `jwt` or `saml` destination with the grant it states — a
  * pair of the closed list, checked before (`statedGrant`): the UAA grants,
  * the OIDC grants, `saml2_pure`, `saml2_bearer` and `none`, each with the
- * fields of its row (§6.1). `certificate` is the certificate client the build
+ * fields of its row. `certificate` is the certificate client the build
  * read for the `clientAuthentication` strategy, or `null` when it read none.
  */
 export function destinationBinding(

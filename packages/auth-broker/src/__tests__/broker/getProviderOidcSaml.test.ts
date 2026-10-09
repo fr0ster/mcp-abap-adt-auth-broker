@@ -1045,7 +1045,7 @@ describe('getProvider — the SAML grants', () => {
       expect(held()).toEqual({
         sessionCookies: COOKIES,
         expiresAt: expect.any(Number),
-        // SAML has no refresh token: '' clears any the store holds (§5.2).
+        // SAML has no refresh token: '' clears any the store holds.
         refreshToken: '',
         issuedFor: FOR,
         issuedBy: acsBy(),

@@ -45,7 +45,7 @@ import { generateEnvStrategy, runGenerateEnv } from './generateEnv';
 import { underInterrupt } from './interrupt';
 import { printFailure } from './output';
 
-// Under the run's interrupt (§10.4): SIGINT / SIGTERM end the login; the
+// Under the run's interrupt: SIGINT / SIGTERM end the login; the
 // work directory — it holds the secret — is removed on any exit.
 underInterrupt('generate-env', ({ signal, workDir }) =>
   runGenerateEnv(process.argv.slice(2), {
@@ -60,7 +60,7 @@ underInterrupt('generate-env', ({ signal, workDir }) =>
   .then((code) => process.exit(code))
   .catch((error: unknown) => {
     // auth-errors', the broker's or this CLI's words: never a foreign
-    // value's message, never a stack (§10.9).
+    // value's message, never a stack.
     printFailure(error);
     process.exit(1);
   });

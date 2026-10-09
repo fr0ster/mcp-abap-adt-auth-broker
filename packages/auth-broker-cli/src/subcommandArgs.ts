@@ -2,7 +2,7 @@
  * `mcp-auth`'s command line, read from an argument array it is handed —
  * never from the process's own arguments — so every form is testable and the bin is a thin shell.
  *
- * One command (§10, D24): `mcp-auth [auth-code]` is the UAA authorization code
+ * One command: `mcp-auth [auth-code]` is the UAA authorization code
  * login (or `--credential` client credentials); `oidc`, `saml2-pure` and
  * `saml2-bearer` are what 2.x's `mcp-sso` did, with the same flags. The
  * subcommand is the protocol and flow, so `--protocol` is refused; `--dev` is
@@ -241,7 +241,7 @@ function parseAuthCodeArgs(args: readonly string[]): McpAuthOptions {
     i++;
   }
 
-  // One source per run (D25); `--output` is where a service key's new pair
+  // One source per run; `--output` is where a service key's new pair
   // goes — a session file is written back to itself unless it is given.
   checkSourceFlags(
     { serviceKeyPath, envFilePath, destination, destinationDir },
@@ -274,7 +274,7 @@ function parseAuthCodeArgs(args: readonly string[]): McpAuthOptions {
   };
 }
 
-/** `--verbose` and `--auth-debug`: present only when given (§10.7, D17). */
+/** `--verbose` and `--auth-debug`: present only when given. */
 export interface DebugFlags {
   /** `--verbose`: the CLI's logger from `debug`; the broker's logger is it. */
   verbose?: true | undefined;
@@ -483,7 +483,7 @@ function parseSsoArgs(
         throw unknownArgument(arg, i);
     }
   }
-  // At most one source (D25): with none, the run states its means by flags
+  // At most one source: with none, the run states its means by flags
   // or --config and logs in, as with a service key.
   checkSourceFlags(options, { required: false });
   return options;

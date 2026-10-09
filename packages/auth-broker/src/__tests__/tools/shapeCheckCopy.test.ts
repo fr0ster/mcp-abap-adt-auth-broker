@@ -1,6 +1,6 @@
 /**
  * The repository's `tools/check-provider-shape.mjs` is a copy of the one
- * `@mcp-abap-adt/auth-errors` publishes (its Decision D4): byte for byte, so a
+ * `@mcp-abap-adt/auth-errors` publishes: byte for byte, so a
  * new auth-errors that changes the check fails here until the copy follows.
  */
 import { readFileSync } from 'node:fs';

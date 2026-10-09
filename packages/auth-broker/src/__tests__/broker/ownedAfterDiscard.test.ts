@@ -1,5 +1,5 @@
 /**
- * A discard makes the refresh token a build owns none (§5.2), whatever the
+ * A discard makes the refresh token a build owns none, whatever the
  * persistence reports afterwards.
  *
  * auth-providers' `refreshStatePersistence` stays `cleared` after a discard

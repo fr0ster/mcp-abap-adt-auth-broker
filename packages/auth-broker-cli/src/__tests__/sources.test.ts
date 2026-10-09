@@ -1,5 +1,5 @@
 /**
- * Where `--destination <name>` is looked for (D25): `--destination-dir`, else
+ * Where `--destination <name>` is looked for: `--destination-dir`, else
  * the environment variable `AUTH_BROKER_PATH` (one or several base folders,
  * split by plain code), else the standard folder of the platform — each level
  * overriding the next. The pure resolver is tested per platform; the built bin

@@ -1,5 +1,5 @@
 /**
- * §13.3: the pasted SAML logins of `mcp-auth saml2-pure` and `saml2-bearer`
+ * The pasted SAML logins of `mcp-auth saml2-pure` and `saml2-bearer`
  * — the built bin, a child process — with the stand's Keycloak as the
  * identity provider, each with its ACS declared and the SAMLResponse given on
  * the CLI's stdin, as a user pastes it.

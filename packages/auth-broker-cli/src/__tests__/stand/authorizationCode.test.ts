@@ -1,5 +1,5 @@
 /**
- * §13.3: `mcp-auth`'s authorization-code login — the built bin, a child
+ * `mcp-auth`'s authorization-code login — the built bin, a child
  * process — against the stand's Cloud Foundry UAA, started by
  * `npm run test:stand` (packages/auth-broker/tests/stand/run.sh).
  *
@@ -214,7 +214,7 @@ describeWhere(
         run.child.kill(signal);
 
         expect(await run.ended).toEqual({ code, signal: null });
-        // … and is gone once the interrupted run has ended (§10.8).
+        // … and is gone once the interrupted run has ended.
         expect(tmpOf(run)).toEqual([]);
         expectNoLoginOnStreams(run, {
           url,

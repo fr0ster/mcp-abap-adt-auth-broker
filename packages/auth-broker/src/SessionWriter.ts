@@ -1,6 +1,6 @@
 /**
  * The broker's writes of a destination's session secret: one plain queue per
- * destination (§5.3, D23).
+ * destination.
  *
  * - **One at a time, in order.** The writes of one destination run one after
  *   another, in the order they were queued, each writing what it was given;

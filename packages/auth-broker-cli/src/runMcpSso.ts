@@ -63,7 +63,7 @@ import { withoutTrailingSlashes } from './urlText';
  * The flags that state means (`buildDestinationMeans` reads them), each by
  * the name the user typed. With no source they are the run's means — a fresh
  * login, as with a service key; beside a session file (`--env`, or
- * `--destination` finding one) each is refused (D25): the file is used as it
+ * `--destination` finding one) each is refused: the file is used as it
  * is. The rest — the flow, the browser, a one-time code or passcode, an
  * assertion — run the login and state nothing a destination keeps; nor does
  * `--cookie`, which hands over the secret itself.
@@ -220,7 +220,7 @@ export async function runMcpSso(
   options: McpSsoOptions,
   { logger, workDir, platform, signal, environment }: McpSsoContext,
 ): Promise<number> {
-  // The run's source (D25): a service key (a new login), a session file
+  // The run's source: a service key (a new login), a session file
   // (reused, refreshed or logged in, written back), or none — the run states
   // its means by flags or --config and logs in, as with a service key.
   const source = resolveSource(
@@ -265,7 +265,7 @@ export async function runMcpSso(
     }
   }
 
-  // A session file states its means (D25) and is used as it is: a flag that
+  // A session file states its means and is used as it is: a flag that
   // states means beside it is refused; the subcommand is checked against the
   // file's grant.
   if (source?.kind === 'session') {
@@ -360,7 +360,7 @@ export async function runMcpSso(
   // when --config wasn't given.
   applyFileConfig(options, providerConfigFromFile);
 
-  // A pasted SAML login declares its ACS (§10.5), refused naming --acs-url
+  // A pasted SAML login declares its ACS, refused naming --acs-url
   // before anything is read or fetched. The --config file, read above, is
   // one source; the other is the SP metadata — only saml2-bearer's, and only
   // when the run names one (--saml-metadata, a UAA URL, --service-key) — so
@@ -428,7 +428,7 @@ export async function runMcpSso(
   // provider's trust from --idp-metadata, and for saml2-bearer the Audience,
   // Recipient and token endpoint from XSUAA's own metadata (--saml-metadata,
   // else <uaa.url>/saml/metadata from the service key).
-  // The run's signal ends a metadata fetch or body read in flight (§10.4).
+  // The run's signal ends a metadata fetch or body read in flight.
   try {
     await applySamlMetadata(
       options,
@@ -519,7 +519,7 @@ export async function runMcpSso(
   // This CLI's choices, stated: a user at a terminal can log in, so a
   // renewal refreshes and then logs in; a secret the store did not take
   // fails the run, which then writes no output.
-  // A session file's client authentication is the file's (D25): its
+  // A session file's client authentication is the file's: its
   // certificate, or the Basic encoding it records. None without one.
   const clientAuth =
     resolvedEnvPath === undefined || source?.kind !== 'session'
@@ -533,7 +533,7 @@ export async function runMcpSso(
       clientAuthentication: clientAuthenticationStrategy(clientAuth),
       renewal: () => refreshThenLogin(),
       onWriteFailure: 'fail',
-      // On only with --auth-debug (§10.7): never from the environment.
+      // On only with --auth-debug: never from the environment.
       authDebug: options.authDebug === true,
     },
     logger,
@@ -545,7 +545,7 @@ export async function runMcpSso(
     // resource with its SAP client — so the broker presents them there and
     // nowhere else. The CLI composes no binding of its own. The store
     // merges, so the write states everything a credential write states
-    // (§5.2, §6.4): both binding fields (`issuedFor` '' when the means lack
+    //: both binding fields (`issuedFor` '' when the means lack
     // its source) and `refreshToken: ''` — SAML has none, and one left
     // beside earlier cookies or a token is not this credential's.
     // A session file's cookies, with none handed over, stay as they are.

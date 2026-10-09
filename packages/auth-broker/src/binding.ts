@@ -185,7 +185,7 @@ export interface Binding {
   issuedBy: string;
   /**
    * The record holds the client the row authenticates and every server
-   * address its provider sends a credential to (§6.1's table). Only such a
+   * address its provider sends a credential to. Only such a
    * binding is seeded from a stored session, or carries its refresh token.
    */
   fullyStated: boolean;
@@ -424,7 +424,7 @@ export function samlBearerBinding(
  * A `none` row: the resource, and the record — for `jwt` the client id,
  * `uaaUrl` and `oidcIssuerUrl` as the means state them, for `saml` the ACS;
  * no trust. A handed-over credential is compared by exact equality of the
- * whole record (§6.5); it is never seeded into a renewal, so it is not
+ * whole record; it is never seeded into a renewal, so it is not
  * "fully stated".
  */
 export function handedOverBinding(

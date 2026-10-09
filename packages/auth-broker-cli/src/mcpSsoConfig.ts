@@ -71,13 +71,13 @@ export interface McpSsoOptions {
   /** `--auth-debug`: the broker's `authDebug: true`; implies `--verbose`. */
   authDebug?: true | undefined;
   outputFile?: string | undefined;
-  /** `--env`: the session file — one of the three sources (D25). */
+  /** `--env`: the session file — one of the three sources. */
   envFilePath?: string | undefined;
-  /** `--destination`: a destination of the standard folder (D25). */
+  /** `--destination`: a destination of the standard folder. */
   destination?: string | undefined;
   /** `--destination-dir`: the folder `--destination` reads. */
   destinationDir?: string | undefined;
-  /** `--service-key`: always a new login (D25). */
+  /** `--service-key`: always a new login. */
   serviceKeyPath?: string | undefined;
   authType: 'abap' | 'xsuaa';
   format: 'json' | 'env';
@@ -179,7 +179,7 @@ export async function readManualInput(
   }
   const rl = createInterface({
     input: process.stdin,
-    // The prompt on stderr: stdout carries only help and --version (D16).
+    // The prompt on stderr: stdout carries only help and --version.
     output: process.stderr,
   });
   // A closed stdin never answers the question, and a promise that never
@@ -309,7 +309,7 @@ const CONFIG_BACKFILL_FIELDS: (keyof McpSsoOptions)[] = [
  * Also backfills `options.flow` from the file when the command line didn't
  * set it — `mcp-auth oidc --config f` must still resolve to a real flow, or
  * nothing downstream ever calls a builder at all. A file naming another
- * subcommand than the run's is refused naming `--config` (D24).
+ * subcommand than the run's is refused naming `--config`.
  *
  * A no-op when `fileConfig` is `null` (no `--config` was given), so callers
  * can invoke this unconditionally.
@@ -328,7 +328,7 @@ export function applyFileConfig(
     return;
   }
 
-  // The file belongs to the subcommand its protocol and flow name (D24): a
+  // The file belongs to the subcommand its protocol and flow name: a
   // run's protocol — and a SAML run's flow — is the subcommand's. A file
   // that names no protocol, a SAML file that names no flow, and a file naming
   // another subcommand are refused, never merged. An OIDC file names `oidc`
@@ -796,7 +796,7 @@ export function buildDestinationMeans(options: McpSsoOptions): StatedMeans {
  * The browser a run states — `--browser` or a `--config` file's `browser`,
  * mapped by the same table (`browserFor`), or `--browser-program` — on this
  * platform; nothing stated is `auto`, the default of every flow that opens a
- * browser (D15); `undefined` for `none` / `headless`. Throws
+ * browser; `undefined` for `none` / `headless`. Throws
  * `BrowserUsageError` for an unknown name (naming `browser`), for both flags
  * together, and for a launcher this platform has none of. Reads and launches
  * nothing.

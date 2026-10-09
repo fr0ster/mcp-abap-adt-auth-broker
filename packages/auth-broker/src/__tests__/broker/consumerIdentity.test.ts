@@ -1,6 +1,6 @@
 /**
  * The consumer path's identity is the means it reads — never the session
- * store's answers, which the broker's own writes change (§6.3, §5.5).
+ * store's answers, which the broker's own writes change.
  *
  * On auth-stores 4.0.0's own session stores — `SafeAbapSessionStore` in
  * memory and `AbapSessionStore` files — whose `getConnectionConfig` answers

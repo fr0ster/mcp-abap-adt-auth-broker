@@ -376,7 +376,7 @@ describe('getProvider with a clientAuthentication strategy: the context', () => 
     }
 
     // Without a strategy too: the token API's factory gets the key store's
-    // client, never a refresh token it answered (§5.5).
+    // client, never a refresh token it answered.
     const factory = jest.fn(
       (_d: string, _a: IAuthorizationConfig | null) => provider,
     );

@@ -1,5 +1,5 @@
 /**
- * §10.3 — `--browser` and `--browser-program`, mapped by the CLI's own table
+ * `--browser` and `--browser-program`, mapped by the CLI's own table
  * per platform. Every factory is a recording double: nothing is launched,
  * and each answer is checked by identity, with the argument the factory got.
  */
@@ -58,7 +58,7 @@ function recording(): BrowserFactories & { made: Made[] } {
   };
 }
 
-/** §10.3's table: each name on each launching platform → factory and argument. */
+/** The table: each name on each launching platform → factory and argument. */
 const TABLE: Array<
   [string, BrowserName, keyof BrowserFactories, string | undefined]
 > = [

@@ -5,7 +5,7 @@
  * changed: the arguments are a parameter instead of `process.argv`, `help` /
  * `version` are left out, and a usage error throws instead of exiting. It is
  * written apart from `subcommandArgs.ts` on purpose: every 2.x form given as
- * its `mcp-auth` form must yield what this yields for the original (§13.2).
+ * its `mcp-auth` form must yield what this yields for the original.
  * Inputs are the tests' own literals.
  */
 

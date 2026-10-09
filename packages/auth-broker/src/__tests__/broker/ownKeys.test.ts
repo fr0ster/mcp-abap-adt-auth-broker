@@ -139,7 +139,7 @@ describe('own keys of what the token API hands out and writes', () => {
       'expiresAt',
       'issuedBy',
       'issuedFor',
-      // Always stated: the result's refresh token, or '' (§5.5).
+      // Always stated: the result's refresh token, or ''.
       'refreshToken',
     ]);
   });
@@ -165,7 +165,7 @@ describe('own keys of what the token API hands out and writes', () => {
       'destination',
       'grant',
       'readCertificate',
-      // The build's attempt signal (D11).
+      // The build's attempt signal.
       'signal',
     ]);
     expect(shape(contexts[0]!.client)).toEqual([
@@ -179,7 +179,7 @@ describe('own keys of what the token API hands out and writes', () => {
       'expiresAt',
       'issuedBy',
       'issuedFor',
-      // Always stated: the result's refresh token, or '' (§5.5).
+      // Always stated: the result's refresh token, or ''.
       'refreshToken',
     ]);
   });

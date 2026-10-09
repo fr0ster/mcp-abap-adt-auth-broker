@@ -1,5 +1,5 @@
 /**
- * §13.3: `mcp-auth oidc --flow device` — the built bin, a child process —
+ * `mcp-auth oidc --flow device` — the built bin, a child process —
  * against the stand's Keycloak (the `test` realm's public client
  * `oidc-device`, tests/stand/keycloak/realm-test.json).
  *

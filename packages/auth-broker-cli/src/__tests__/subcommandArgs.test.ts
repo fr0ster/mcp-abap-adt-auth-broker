@@ -1,5 +1,5 @@
 /**
- * §10 (D24): one command. Every 2.x `mcp-sso` form of §11.2's table, given as
+ * One command. Every 2.x `mcp-sso` form of the subcommand table, given as
  * its `mcp-auth` form, yields the options 2.1.0's `mcp-sso` parse yields for
  * the original — the oracle is 2.1.0's parser, copied apart from the code
  * under test (`helpers/mcpSso210.ts`). `--protocol` is refused naming it; a
@@ -33,7 +33,7 @@ const PACKAGE_ROOT = path.resolve(__dirname, '..', '..');
 /**
  * Every flag 2.1.0's `mcp-sso` read that takes a value, each given once — of
  * the three sources one, `--service-key`: two together are a usage error
- * (D25), tested below.
+ *, tested below.
  */
 const VALUE_FLAGS = [
   ['--output', './sso.env'],
@@ -93,7 +93,7 @@ const TYPICAL = [
   'xsuaa',
 ];
 
-/** One row of §11.2's table: the 2.x form, the subcommand and its arguments. */
+/** One row of the subcommand table: the 2.x form, the subcommand and its arguments. */
 type Form = [label: string, original: string[], Subcommand, string[]];
 
 function formsWith(rest: readonly string[]): Form[] {
@@ -545,7 +545,7 @@ describe('the parser reads no process.argv; the package installs mcp-auth alone'
   });
 });
 
-describe('three sources, one per run (D25)', () => {
+describe('three sources, one per run', () => {
   const SOURCES = [
     ['--service-key', './k.json'],
     ['--env', './o.env'],

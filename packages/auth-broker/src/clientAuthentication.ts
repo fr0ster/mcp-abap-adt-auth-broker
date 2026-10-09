@@ -55,7 +55,7 @@ export interface ClientAuthenticationContext {
   readCertificate(): Promise<IClientCertificate | null>;
   /**
    * The build's attempt: aborts when every caller waiting on the build has
-   * gone (D11). A strategy that waits on the network — a loader's
+   * gone. A strategy that waits on the network — a loader's
    * `tlsMaterial()` — ends its wait on it; the broker sets no bound of its
    * own.
    */

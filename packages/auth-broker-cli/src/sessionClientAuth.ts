@@ -1,5 +1,5 @@
 /**
- * How a session file's client authenticates, as the file records it (D25):
+ * How a session file's client authenticates, as the file records it:
  * one reader for every runner, so `--env` and a session `--destination` run
  * every subcommand with the client authentication the file was written with.
  *

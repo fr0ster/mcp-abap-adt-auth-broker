@@ -10,7 +10,7 @@
  * later `--env` run and a server's `getProvider` over the output reuse it.
  * `flush()` before the output is written.
  *
- * The run's source (D25, `source.ts`): `--service-key` writes the means and
+ * The run's source (`source.ts`): `--service-key` writes the means and
  * always logs in, reading no session; `--env` (or `--destination` finding a
  * session) takes the means and session from that file and lets the broker
  * reuse, refresh or log in, written back to the file unless `--output` is
@@ -81,11 +81,11 @@ import { UsageError } from './subcommandArgs';
 export type AuthorizationStrategy = ReturnType<typeof staticCodeStrategy>;
 
 export interface McpAuthOptions {
-  /** `--service-key`: always a new pair by login (D25). */
+  /** `--service-key`: always a new pair by login. */
   serviceKeyPath?: string | undefined;
-  /** `--env`: the session file — its means and session, written back (D25). */
+  /** `--env`: the session file — its means and session, written back. */
   envFilePath?: string | undefined;
-  /** `--destination`: a destination of the standard folder (D25). */
+  /** `--destination`: a destination of the standard folder. */
   destination?: string | undefined;
   /** `--destination-dir`: the folder `--destination` reads. */
   destinationDir?: string | undefined;
@@ -208,14 +208,14 @@ const SUBCOMMAND_OF_GRANT: Record<string, string> = {
 };
 
 /**
- * The flags that state means: a session source holds its own (D25), so each
+ * The flags that state means: a session source holds its own, so each
  * is refused beside it, named.
  */
 function refuseMeansFlags(
   options: McpAuthOptions,
   flag: '--env' | '--destination',
 ): void {
-  // How the client authenticates is the file's too (D25): its certificate
+  // How the client authenticates is the file's too: its certificate
   // paths, or the Basic encoding it records.
   const stated = [
     ['--credential', options.credential],
@@ -245,7 +245,7 @@ export async function runMcpAuth(
     environment,
   }: McpAuthContext,
 ): Promise<number> {
-  // The run's one source (D25), resolved before anything is read or written.
+  // The run's one source, resolved before anything is read or written.
   const source: RunSource | undefined = resolveSource(
     options,
     options.outputFile,
@@ -478,7 +478,7 @@ export async function runMcpAuth(
       }),
     );
     // The Basic encoding, beside the client it applies to: a later --env
-    // run reads it back (D25).
+    // run reads it back.
     setFileVariable(
       files.file,
       basicEncodingVariable(options.authType),
@@ -555,7 +555,7 @@ export async function runMcpAuth(
   // The user's choice as the broker's strategy; none without `--client-auth`.
   const clientAuthentication = clientAuthenticationStrategy(clientAuth);
 
-  // The provider is the broker's UAA row (§10.2), the same composition a
+  // The provider is the broker's UAA row, the same composition a
   // server's getProvider builds over the output: the client the destination
   // states — with `--client-auth`, the strategy's answer and no client secret
   // — seeded from an `--env` session only when it is bound to these means. It
@@ -565,7 +565,7 @@ export async function runMcpAuth(
     {
       renewal: () => refreshThenLogin(),
       onWriteFailure: 'fail',
-      // On only with --auth-debug (§10.7): never from the environment.
+      // On only with --auth-debug: never from the environment.
       authDebug: options.authDebug === true,
       sessionStore: files.sessionStore,
       serviceKeyStore: files.keyStore,

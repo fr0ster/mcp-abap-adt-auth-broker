@@ -1,5 +1,5 @@
 /**
- * The `issuedBy` record as the spec's grammar writes it (§6.1), assembled
+ * The `issuedBy` record as the binding record's grammar writes it, assembled
  * apart from the broker's own function — a test that used that function
  * would agree with any bug in it:
  *
@@ -13,7 +13,7 @@
 
 import { createHash } from 'node:crypto';
 
-/** The eleven address fields, in the spec's order. */
+/** The eleven address fields, in the binding record's order. */
 export const RECORD_ORDER = [
   'clientId',
   'uaaUrl',
@@ -103,7 +103,7 @@ const orNull = <T>(value: T | null | undefined): T | null =>
   value === undefined ? null : value;
 
 /**
- * An OIDC row's record (§6.1's table): the client id, the issuer, the token
+ * An OIDC row's record: the client id, the issuer, the token
  * endpoint, the grant's own endpoint or audience, `certUrl`; trust the
  * scopes, `username` (password), the token types (token_exchange), the
  * client certificate.

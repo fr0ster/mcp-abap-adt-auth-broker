@@ -1,7 +1,7 @@
 /**
  * The recording accessor notes the fields a build reads — and nothing a
  * promise check touches: awaiting an answer reads its `then`, which is no
- * field of the means (§6.2).
+ * field of the means.
  */
 
 import {
