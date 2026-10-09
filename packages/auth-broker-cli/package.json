@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/auth-broker-cli",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "The mcp-auth command: log in to a SAP BTP or ABAP destination and write it — its means and the secret the login obtained — through @mcp-abap-adt/auth-broker",
   "bin": {
     "mcp-auth": "./dist/mcp-auth.js"

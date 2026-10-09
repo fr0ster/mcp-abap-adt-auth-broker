@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
 
+## [5.0.1] - 2026-10-09
+
+Development only; the code is the same as 5.0.0.
+
+### Changed
+- The auth error contract's shape check runs as a Jest test from
+  `@mcp-abap-adt/auth-errors` 2.2.0 (`test:shape`, run by `check` before every
+  publish); the copied script and `check:shape` are gone.
+- Dev dependencies: `@mcp-abap-adt/auth-mocks` ^0.4.0 (no node-forge),
+  `typescript` ^5.9.2; `@mcp-abap-adt/auth-errors` ^2.2.0.
+
 ## [5.0.0] - 2026-10-09
 
 The broker on the auth chain's 6.0 contracts (auth-providers 6, interfaces-auth 7, auth-errors

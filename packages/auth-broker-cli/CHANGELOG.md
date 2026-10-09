@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-10-09
+
+Development only; the code is the same as 3.0.0.
+
+### Changed
+- The auth error contract's shape check runs as a Jest test from
+  `@mcp-abap-adt/auth-errors` 2.2.0 (`test:shape`, run by `check` before every
+  publish); the copied script is gone.
+- Dev dependency `@mcp-abap-adt/auth-mocks` ^0.4.0 (no node-forge);
+  `@mcp-abap-adt/auth-errors` ^2.2.0.
+
 ## [3.0.0] - 2026-10-09
 
 The commands on `@mcp-abap-adt/auth-broker` 5.0.0 (`^5.0.0`, released together) and the 6.0
