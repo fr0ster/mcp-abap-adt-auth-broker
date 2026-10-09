@@ -19,6 +19,7 @@ import {
   XsuaaServiceKeyStore,
 } from '@mcp-abap-adt/auth-stores';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { clientAuthenticationStrategy } from './clientAuthentication';
 import {
   completeMeans,
   flushed,
@@ -43,6 +44,7 @@ import {
 } from './mcpSsoConfig';
 import { printFailure, progress } from './output';
 import { applySamlMetadata, loadMetadata } from './samlMetadata';
+import { sessionClientAuth } from './sessionClientAuth';
 import {
   noGrantRefusal,
   processEnvironment,
@@ -510,6 +512,13 @@ export async function runMcpSso(
       sessionStore: files.sessionStore,
       serviceKeyStore: files.keyStore,
       ...buildCollaborators(options, signal),
+      // A session file's client authentication is the file's (D25): its
+      // certificate, or the Basic encoding it records. None without one.
+      clientAuthentication: clientAuthenticationStrategy(
+        resolvedEnvPath === undefined || source?.kind !== 'session'
+          ? {}
+          : sessionClientAuth(files.file, options.authType, source.flag),
+      ),
       renewal: () => refreshThenLogin(),
       onWriteFailure: 'fail',
       // On only with --auth-debug (§10.7): never from the environment.

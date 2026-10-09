@@ -62,12 +62,12 @@ import {
   flushed,
   jsonOutput,
   openDestination,
-  readFileVariable,
   setFileVariable,
   writeJsonFile,
   writeOutputFile,
 } from './destination';
 import { progress } from './output';
+import { sessionClientAuth } from './sessionClientAuth';
 import {
   noGrantRefusal,
   processEnvironment,
@@ -232,29 +232,6 @@ function refuseMeansFlags(
       );
     }
   }
-}
-
-/**
- * How a session file's client authenticates, as the file records it: the
- * certificate when it names certificate files, Basic with the encoding it
- * records, else the client secret in the request.
- */
-function fileClientAuth(
-  file: string,
-  type: 'abap' | 'xsuaa',
-  flag: '--env' | '--destination',
-): { clientAuth?: 'certificate' | 'secret'; basicEncoding?: 'raw' | 'form' } {
-  const prefix = type === 'xsuaa' ? 'XSUAA' : 'SAP';
-  if (readFileVariable(file, `${prefix}_UAA_CLIENT_CERT_PATH`) !== undefined) {
-    return { clientAuth: 'certificate' };
-  }
-  const name = basicEncodingVariable(type);
-  const encoding = readFileVariable(file, name);
-  if (encoding === undefined) return {};
-  if (encoding !== 'raw' && encoding !== 'form') {
-    throw new UsageError(`${flag}: ${name} must be raw or form`);
-  }
-  return { clientAuth: 'secret', basicEncoding: encoding };
 }
 
 export async function runMcpAuth(
@@ -529,7 +506,7 @@ export async function runMcpAuth(
   const clientAuth =
     source.kind === 'service-key'
       ? { clientAuth: options.clientAuth, basicEncoding: options.basicEncoding }
-      : fileClientAuth(files.file, options.authType, source.flag);
+      : sessionClientAuth(files.file, options.authType, source.flag);
   if (clientAuth.clientAuth === 'secret') {
     progress(
       `🔏 Client authentication: secret (Basic, ${clientAuth.basicEncoding})`,
@@ -639,13 +616,21 @@ export async function runMcpAuth(
     signal?.throwIfAborted();
     writeJsonFile(resolvedOutputPath, {
       ...json,
-      // The paths are the flags' (a session file's stay in that file).
+      // The paths: the flags' with a service key, the session file's with
+      // --env; the Basic encoding likewise.
+      ...(clientAuth.clientAuth === 'secret'
+        ? { uaaBasicEncoding: clientAuth.basicEncoding }
+        : {}),
       ...(clientAuth.clientAuth === 'certificate'
         ? {
             uaaUrl: client.uaaUrl,
             uaaClientId: client.uaaClientId,
-            uaaClientCertPath: certificateFiles?.certPath,
-            uaaClientKeyPath: certificateFiles?.keyPath,
+            uaaClientCertPath:
+              certificateFiles?.certPath ??
+              ('certPath' in clientAuth ? clientAuth.certPath : undefined),
+            uaaClientKeyPath:
+              certificateFiles?.keyPath ??
+              ('keyPath' in clientAuth ? clientAuth.keyPath : undefined),
             uaaCertUrl: client.certUrl,
           }
         : {}),

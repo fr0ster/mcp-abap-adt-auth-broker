@@ -38,6 +38,7 @@ import {
   CLIENT_CRT_PATH,
   CLIENT_KEY,
   CLIENT_KEY_PATH,
+  PEM,
   pemFilesUnder,
   startCertServer,
   trustCertServer,
@@ -1181,6 +1182,41 @@ describe('mcp-auth --client-auth', () => {
       );
     });
 
+    it('--env <certificate session> --format json --output: the client, both paths and certurl from the session file', async () => {
+      certServer.answer('/oauth/token', tokenAnswer('x509'));
+      await expect(
+        run(
+          options({
+            serviceKeyPath: x509Key(),
+            serviceUrl: SERVICE_URL,
+            ...certificate,
+          }),
+        ),
+      ).resolves.toBe(0);
+      const previous = path.join(root, `${DEST}.env`);
+      fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
+      const output = path.join(root, 'json', `${DEST}.json`);
+      await expect(
+        run(
+          options({
+            envFilePath: previous,
+            outputFile: output,
+            format: 'json',
+          }),
+        ),
+      ).resolves.toBe(0);
+      const json = JSON.parse(fs.readFileSync(output, 'utf8'));
+      expect(json).toEqual(
+        expect.objectContaining({
+          uaaClientId: 'key-client',
+          uaaClientCertPath: CLIENT_CRT_PATH,
+          uaaClientKeyPath: CLIENT_KEY_PATH,
+          uaaCertUrl: certServer.url,
+        }),
+      );
+      expect(JSON.stringify(json)).not.toContain(PEM);
+    });
+
     it('--type abap writes the SAP_UAA_* certificate variables', async () => {
       certServer.answer('/oauth/token', tokenAnswer('x509', false));
       await expect(
@@ -1380,6 +1416,49 @@ describe('mcp-auth --client-auth', () => {
         `Basic ${Buffer.from('key-client:se%2Bcr%25et').toString('base64')}`,
       );
       expect(readEnvKeys(previous).SAP_UAA_BASIC_ENCODING).toBe('form');
+    });
+
+    it('--format json carries the Basic encoding: from the flag with a key, from the file with --env', async () => {
+      server.answer('/oauth/token', tokenAnswer('basic'));
+      const jsonOut = path.join(root, 'json', `${DEST}.json`);
+      await expect(
+        run(
+          options({
+            serviceKeyPath: abapKey(),
+            clientAuth: 'secret',
+            basicEncoding: 'form',
+            format: 'json',
+            outputFile: jsonOut,
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(
+        JSON.parse(fs.readFileSync(jsonOut, 'utf8')).uaaBasicEncoding,
+      ).toBe('form');
+      await expect(
+        run(
+          options({
+            serviceKeyPath: abapKey(),
+            clientAuth: 'secret',
+            basicEncoding: 'form',
+          }),
+        ),
+      ).resolves.toBe(0);
+      const previous = path.join(root, `${DEST}.env`);
+      fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
+      fs.rmSync(jsonOut);
+      await expect(
+        run(
+          options({
+            envFilePath: previous,
+            outputFile: jsonOut,
+            format: 'json',
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(
+        JSON.parse(fs.readFileSync(jsonOut, 'utf8')).uaaBasicEncoding,
+      ).toBe('form');
     });
 
     it('an x509 key without a secret is refused', async () => {

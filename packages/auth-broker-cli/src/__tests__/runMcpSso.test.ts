@@ -17,7 +17,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+import { AuthBroker, bindingOf } from '@mcp-abap-adt/auth-broker';
 import { readFailure } from '@mcp-abap-adt/auth-errors';
 import { refreshThenLogin } from '@mcp-abap-adt/auth-providers';
 import {
@@ -30,7 +30,14 @@ import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import type { McpSsoOptions } from '../mcpSsoConfig';
 import { runMcpSso } from '../runMcpSso';
 import { parseSubcommandArgs, type SsoSubcommand } from '../subcommandArgs';
-import { CLIENT_CRT } from './helpers/certificates';
+import {
+  CLIENT_CN,
+  CLIENT_CRT,
+  CLIENT_CRT_PATH,
+  CLIENT_KEY_PATH,
+  startCertServer,
+  trustCertServer,
+} from './helpers/certificates';
 import {
   meansKeys,
   readEnvKeys,
@@ -1299,4 +1306,146 @@ describe('D25 fix round: --cookie only over a cookie session; the exact --env fi
       '--env: the session file holds XSUAA_* variables: add --type xsuaa',
     );
   });
+});
+
+describe('D25: a session file’s client authentication, in every subcommand', () => {
+  let certServer: LocalServer;
+  trustCertServer();
+  beforeEach(async () => {
+    certServer = await startCertServer();
+  });
+  afterEach(async () => {
+    await certServer.close();
+  });
+
+  const SECRET = 'se+cr%et';
+
+  /**
+   * A session file of `grant`, with the client authentication stated, and a
+   * session bound to its means whose token expired an hour ago: the run
+   * must refresh.
+   */
+  async function sessionFile(
+    grant: 'password' | 'saml2_bearer',
+    how: 'certificate' | 'form',
+  ): Promise<string> {
+    const dir = path.join(root, `session-${grant}-${how}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const keyStore = new EnvDestinationStore(dir);
+    const client =
+      how === 'certificate'
+        ? {
+            uaaUrl: server.url,
+            uaaClientId: 'cli',
+            uaaCertUrl: certServer.url,
+            uaaClientCertPath: CLIENT_CRT_PATH,
+            uaaClientKeyPath: CLIENT_KEY_PATH,
+          }
+        : { uaaUrl: server.url, uaaClientId: 'cli', uaaClientSecret: SECRET };
+    const means =
+      grant === 'password'
+        ? {
+            authType: 'jwt',
+            grantType: 'password',
+            oidcTokenEndpoint: `${server.url}/oauth/token`,
+            username: 'alice',
+            password: 'alice-password',
+          }
+        : {
+            authType: 'saml',
+            grantType: 'saml2_bearer',
+            samlIdpSsoUrl: 'https://idp.example.com/sso',
+            samlIdpEntityId: 'https://idp.example.com/metadata',
+            samlIdpCertificates: [CLIENT_CRT],
+            samlSpEntityId: 'my-sp',
+            samlAcsUrl: `${server.url}/saml/SSO`,
+            samlIdpInitiated: true,
+            samlTokenUrl: `${server.url}/oauth/token`,
+          };
+    await keyStore.setDestination(DEST, {
+      serviceUrl: SERVICE_URL,
+      ...means,
+      ...client,
+    } as never);
+    const file = path.join(dir, `${DEST}.env`);
+    if (how === 'form') {
+      fs.appendFileSync(file, 'SAP_UAA_BASIC_ENCODING=form\n');
+    }
+    // The binding the broker computes for these means, this client and —
+    // with a certificate — the certificate it reads (its own function: the
+    // record holds the certificate's hash, which no public API computes).
+    const stated = (await keyStore.getConnectionConfig(DEST)) ?? {};
+    let binding: { issuedFor?: string; issuedBy?: string };
+    if (how === 'certificate') {
+      const { destinationBinding } = require(
+        require.resolve('@mcp-abap-adt/auth-broker/dist/bindingOf'),
+      ) as {
+        destinationBinding: (...args: unknown[]) => {
+          issuedFor?: string;
+          issuedBy?: string;
+        };
+      };
+      const certificate = await keyStore.getClientCertificate(DEST);
+      binding = destinationBinding(
+        stated.authType,
+        stated.grantType,
+        stated,
+        { uaaUrl: certificate?.uaaUrl, uaaClientId: certificate?.clientId },
+        certificate,
+      );
+    } else {
+      binding = bindingOf(stated, await keyStore.getAuthorizationConfig(DEST));
+    }
+    const past = Math.floor(Date.now() / 1000) - 3600;
+    const part = (value: object) =>
+      Buffer.from(JSON.stringify(value)).toString('base64url');
+    await new AbapSessionStore(dir).saveSession(DEST, {
+      authorizationToken: `${part({ alg: 'none' })}.${part({ sub: 'old', exp: past })}.`,
+      expiresAt: past * 1000,
+      refreshToken: 'stored-refresh',
+      issuedFor: binding.issuedFor ?? '',
+      issuedBy: binding.issuedBy ?? '',
+    } as never);
+    return file;
+  }
+
+  const SUBCOMMAND = {
+    password: 'oidc',
+    saml2_bearer: 'saml2-bearer',
+  } as const;
+
+  it.each([['password'], ['saml2_bearer']] as const)(
+    '%s session with certificate paths: --env alone refreshes at certurl with the client certificate',
+    async (grant) => {
+      certServer.answer('/oauth/token', tokenAnswer('x509'));
+      const file = await sessionFile(grant, 'certificate');
+      const parsed = parseSubcommandArgs(SUBCOMMAND[grant], ['--env', file]);
+      if (parsed.kind !== 'sso') throw new Error('not a run');
+      await expect(run(parsed.options)).resolves.toBe(0);
+      expect(server.requests).toHaveLength(0);
+      expect(certServer.requests.map((r) => r.form.grant_type)).toEqual([
+        'refresh_token',
+      ]);
+      expect(certServer.requests[0]!.form.refresh_token).toBe('stored-refresh');
+      expect(certServer.requests[0]!.clientCertificate).toBe(CLIENT_CN);
+    },
+  );
+
+  it.each([['password'], ['saml2_bearer']] as const)(
+    '%s session with a recorded Basic(form) encoding: --env alone refreshes with the form-encoded Basic header',
+    async (grant) => {
+      server.answer('/oauth/token', tokenAnswer('basic'));
+      const file = await sessionFile(grant, 'form');
+      const parsed = parseSubcommandArgs(SUBCOMMAND[grant], ['--env', file]);
+      if (parsed.kind !== 'sso') throw new Error('not a run');
+      await expect(run(parsed.options)).resolves.toBe(0);
+      expect(server.requests.map((r) => r.form.grant_type)).toEqual([
+        'refresh_token',
+      ]);
+      expect(server.requests[0]!.form).not.toHaveProperty('client_secret');
+      expect(server.requests[0]!.authorization).toBe(
+        `Basic ${Buffer.from('cli:se%2Bcr%25et').toString('base64')}`,
+      );
+    },
+  );
 });
