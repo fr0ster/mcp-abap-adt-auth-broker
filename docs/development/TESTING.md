@@ -81,6 +81,7 @@ packages/auth-broker-cli/src/__tests__/
 │   ├── deviceCode.test.ts               # Keycloak: oidc --flow device, the code read from stderr
 │   ├── samlManual.test.ts               # Keycloak as IdP: saml2-pure --assertion-flow manual,
 │   │                                    # saml2-bearer --idp-initiated, the SAMLResponse on stdin
+│   ├── uaaProxy.test.ts                 # the proxy closes what it opened upstream (no stand needed)
 │   └── cliStand.ts                      # the bin as a child, the fake browser, the recording UAA proxy
 ├── helpers/                             # the local token endpoint, reading what a run wrote, the oracle
 └── fixtures/                            # metadata documents and test certificates (trusted by nothing)
@@ -208,7 +209,9 @@ login waits and gone after exit 130 / 143. Skipped, each suite prints
 
 - **UAA** (`authorizationCode.test.ts`): the service key names a recording proxy in front of UAA
   (it forwards everything, records each token request's grant and whether it carried a
-  `code_verifier`, never a value). The browser login — the URL carries `state` and an S256
+  `code_verifier`, never a value; each upstream request has its own socket and is destroyed when
+  its client goes or the proxy closes, whose close settles only once nothing upstream remains —
+  `uaaProxy.test.ts` proves it against an upstream that never answers). The browser login — the URL carries `state` and an S256
   `code_challenge`, one code exchange with its verifier, the `.env` holds the pair; `SIGINT` and
   `SIGTERM` while the fake holds the URL — exit 130 / 143, "the authorization was aborted", the
   callback port bound by the test afterwards, no output file; `--browser none` — the URL read from

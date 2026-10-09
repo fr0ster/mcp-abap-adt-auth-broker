@@ -303,10 +303,21 @@ export interface UaaProxy {
   close(): Promise<void>;
 }
 
-/** Starts a loopback proxy to `uaaUrl` that records every token request. */
+/**
+ * Starts a loopback proxy to `uaaUrl` that records every token request.
+ *
+ * It owns what it opens upstream: each forwarded request has a socket of its
+ * own (`agent: false`, nothing pooled) and is tracked until it closes. It is
+ * destroyed when its downstream request ends early — the client gone — and
+ * on `close()`, which settles only once the listener is closed and no
+ * upstream request remains. A stalled upstream cannot keep the test process
+ * (and so `run.sh`, whose cleanup stops the stand) alive.
+ */
 export async function startUaaProxy(uaaUrl: string): Promise<UaaProxy> {
   const upstream = new URL(uaaUrl);
   const tokenRequests: SeenTokenRequest[] = [];
+  /** Every upstream request still open, and the promise of its close. */
+  const open = new Map<http.ClientRequest, Promise<void>>();
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -322,6 +333,7 @@ export async function startUaaProxy(uaaUrl: string): Promise<UaaProxy> {
       }
       const forwarded = http.request(
         {
+          agent: false,
           host: upstream.hostname,
           port: upstream.port,
           method: req.method,
@@ -333,7 +345,25 @@ export async function startUaaProxy(uaaUrl: string): Promise<UaaProxy> {
           answer.pipe(res);
         },
       );
+      open.set(
+        forwarded,
+        new Promise<void>((resolve) =>
+          forwarded.once('close', () => {
+            open.delete(forwarded);
+            resolve();
+          }),
+        ),
+      );
+      // The client gone before the answer was relayed: nothing upstream
+      // waits for it any longer.
+      res.once('close', () => {
+        if (!res.writableFinished) forwarded.destroy();
+      });
       forwarded.on('error', () => {
+        if (res.headersSent || res.destroyed) {
+          res.destroy();
+          return;
+        }
         res.writeHead(502);
         res.end();
       });
@@ -345,11 +375,15 @@ export async function startUaaProxy(uaaUrl: string): Promise<UaaProxy> {
   return {
     url: `http://127.0.0.1:${port}${upstream.pathname.replace(/\/+$/, '')}`,
     tokenRequests,
-    close: () =>
-      new Promise<void>((resolve) => {
-        server.closeAllConnections();
-        server.close(() => resolve());
-      }),
+    close: async () => {
+      const listening = new Promise<void>((resolve) =>
+        server.close(() => resolve()),
+      );
+      server.closeAllConnections();
+      const closing = [...open.values()];
+      for (const forwarded of open.keys()) forwarded.destroy();
+      await Promise.all([listening, ...closing]);
+    },
   };
 }
 
