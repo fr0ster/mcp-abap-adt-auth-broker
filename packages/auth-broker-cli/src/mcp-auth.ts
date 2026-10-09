@@ -56,14 +56,55 @@ function showMainHelp(): void {
   console.log('Usage:');
   console.log('  mcp-auth <auth-code|oidc|saml2-pure|saml2-bearer> [options]');
   console.log('  mcp-auth --service-key <path> --output <path> [options]');
-  console.log('');
-  console.log('Required Options:');
-  console.log('  --output <path>         Output file path');
-  console.log('');
-  console.log('Service Key or Env (one required):');
-  console.log('  --service-key <path>    Path to service key JSON file');
+  console.log('  mcp-auth --env <path> [--output <path>] [options]');
   console.log(
-    '  --env <path>            Path to an existing .env file: its session is reused while valid',
+    '  mcp-auth --destination <name> [--destination-dir <dir>] [options]',
+  );
+  console.log('');
+  console.log('Source (exactly one; two together are refused):');
+  console.log(
+    '  --service-key <path>    A service key JSON file: always a new login, a new token pair',
+  );
+  console.log(
+    '                          written to --output (required); no stored session is read',
+  );
+  console.log(
+    '  --env <path>            A session file (it holds the means too): a valid token is reused',
+  );
+  console.log(
+    '                          with no request, an expired one refreshed, else a login; the',
+  );
+  console.log(
+    '                          result is written back to that file, or to --output when given',
+  );
+  console.log(
+    '  --destination <name>    A destination of the destination folder: <dir>/sessions/<name>.env',
+  );
+  console.log(
+    '                          when it exists (as --env), else <dir>/service-keys/<name>.json',
+  );
+  console.log(
+    '                          (as --service-key, the session written to <dir>/sessions/<name>.env)',
+  );
+  console.log(
+    '  --destination-dir <dir> The destination folder. Not given: the folders of the environment',
+  );
+  console.log(
+    "                          variable AUTH_BROKER_PATH (separated by ';', on Unix also ':'; read",
+  );
+  console.log(
+    '                          from the first that holds the destination, a new session written to',
+  );
+  console.log(
+    '                          the first), else the standard folder: ~/.config/mcp-abap-adt on Unix,',
+  );
+  console.log(
+    '                          <home>\\Documents\\mcp-abap-adt on Windows',
+  );
+  console.log('');
+  console.log('Output:');
+  console.log(
+    '  --output <path>         Output file path (required with --service-key)',
   );
   console.log('');
   console.log('Optional Options:');
@@ -223,9 +264,12 @@ function showMainHelp(): void {
   console.log(
     '  # XSUAA reusing the session of an existing .env, refreshed or logged in again only when needed',
   );
+  console.log('  mcp-auth --env ./mcp.env --type xsuaa');
+  console.log('');
   console.log(
-    '  mcp-auth --env ./mcp.env --service-key ./service-key.json --output ./mcp.env --type xsuaa',
+    '  # The destination TRIAL of the destination folder: its session, else its service key',
   );
+  console.log('  mcp-auth --destination TRIAL --type xsuaa');
   console.log('');
   console.log('  # XSUAA with client_credentials (special cases)');
   console.log(
@@ -257,12 +301,20 @@ function showMainHelp(): void {
   console.log('Notes:');
   console.log('  - --type determines the provider (xsuaa or abap)');
   console.log(
-    '  - With --env, a valid stored token bound to these means is reused: no request is sent.',
+    '  - With --env (or --destination finding a session), a valid stored token bound to the',
   );
   console.log(
-    '    An expired one is refreshed with the stored refresh token; if that fails, or there is',
+    "    file's means is reused: no request is sent. An expired one is refreshed with the stored",
   );
-  console.log('    none, the login runs. To log in anew, run without --env.');
+  console.log(
+    '    refresh token; if that fails, or there is none, or the session is not bound to these',
+  );
+  console.log(
+    "    means, the login runs. The means are the file's: --credential, --service-url, --cert-path",
+  );
+  console.log(
+    '    and --key-path are refused beside it. To log in anew, run with --service-key.',
+  );
   console.log('  - Authentication flow:');
   console.log('    * Default: authorization_code (browser-based OAuth2)');
   console.log(
@@ -336,23 +388,46 @@ function showSsoHelp(subcommand: SsoSubcommand): void {
   );
   console.log('');
   console.log('Required Options:');
-  console.log('  --output <path>           Output file path');
+  console.log(
+    '  --output <path>           Output file path (not with --env or --destination: written back)',
+  );
   if (subcommand === 'oidc') {
     console.log(
       "  --flow <flow>             browser|device|password|token_exchange (or the --config file's flow)",
     );
   }
   console.log('');
+  console.log(
+    'Source (at most one; none: the flags state the means, a new login):',
+  );
+  console.log(
+    '  --service-key <path>      Service key JSON (XSUAA): always a new login, written to --output',
+  );
+  console.log(
+    '  --env <path>              A session file holding the means: a valid token reused, an expired',
+  );
+  console.log(
+    '                            one refreshed, else a login; written back, or to --output. Means',
+  );
+  console.log(
+    "                            flags given beside it are written over the file's",
+  );
+  console.log(
+    '  --destination <name>      <dir>/sessions/<name>.env (as --env), else',
+  );
+  console.log(
+    '                            <dir>/service-keys/<name>.json (as --service-key)',
+  );
+  console.log(
+    "  --destination-dir <dir>   <dir>; not given: AUTH_BROKER_PATH (';', on Unix also ':'), else",
+  );
+  console.log(
+    '                            ~/.config/mcp-abap-adt (Unix), <home>\\Documents\\mcp-abap-adt (Windows)',
+  );
+  console.log('');
   console.log('Common Options:');
-  console.log('  --service-key <path>      Service key JSON (XSUAA/ABAP)');
   console.log('  --type <abap|xsuaa>       Output type (default: abap)');
   console.log('  --format <env|json>       Output format (default: env)');
-  console.log(
-    '  --env <path>              Optional existing env file: its session is reused while valid, refreshed when expired',
-  );
-  console.log(
-    '  --destination <name>      Destination name (default: output file base)',
-  );
   console.log(
     '  --service-url <url>       Service URL (ABAP: SAP URL, XSUAA: MCP URL)',
   );
