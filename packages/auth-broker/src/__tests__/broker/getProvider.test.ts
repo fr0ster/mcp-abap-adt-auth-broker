@@ -354,7 +354,7 @@ describe('getProvider', () => {
       },
     );
 
-    it("turns the provider's own ValidationError into one naming sncQop, and carries none of its text", async () => {
+    it("turns the provider's configuration refusal (kind configuration) into one naming sncQop, and carries none of its text", async () => {
       const QOP_SENTINEL = 'S3NTINEL-qop-must-not-leak';
       const error = await refusal(
         new AuthBroker({
