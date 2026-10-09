@@ -479,7 +479,11 @@ describe('three sources, one per run (D25)', () => {
           (error: unknown) => error,
         );
         expect(isUsageError(thrown)).toBe(true);
-        expect((thrown as Error).message).toContain(flag);
+        expect((thrown as Error).message).toBe(
+          flag.includes(' and ')
+            ? `${flag}: the session file names the certificate files`
+            : `${flag} and --env: the session file holds the means and is used as it is; state the means with --service-key instead`,
+        );
       }
       expect(fs.readFileSync(previous)).toEqual(before);
     });

@@ -54,45 +54,58 @@ import { UsageError } from './subcommandArgs';
 import { withoutTrailingSlashes } from './urlText';
 
 /**
- * The flags that state means (`buildDestinationMeans` reads them): given
- * beside a session file, they are written over its means. The rest — the
- * flow, the browser, a one-time code or passcode, an assertion — run the
- * login and state nothing a destination keeps.
+ * The flags that state means (`buildDestinationMeans` reads them), each by
+ * the name the user typed. With no source they are the run's means — a fresh
+ * login, as with a service key; beside a session file (`--env`, or
+ * `--destination` finding one) each is refused (D25): the file is used as it
+ * is. The rest — the flow, the browser, a one-time code or passcode, an
+ * assertion — run the login and state nothing a destination keeps.
  */
-const MEANS_OPTIONS = [
-  'configPath',
-  'serviceUrl',
-  'issuerUrl',
-  'authorizationEndpoint',
-  'tokenEndpoint',
-  'deviceAuthorizationEndpoint',
-  'clientId',
-  'clientSecret',
-  'scopes',
-  'scope',
-  'username',
-  'password',
-  'subjectToken',
-  'subjectTokenType',
-  'audience',
-  'actorToken',
-  'actorTokenType',
-  'idpSsoUrl',
-  'spEntityId',
-  'acsUrl',
-  'relayState',
-  'cookie',
-  'uaaUrl',
-  'samlMetadataPath',
-  'idpCertificates',
-  'idpCertificateFiles',
-  'idpEntityId',
-  'idpMetadata',
-  'idpInitiated',
-] as const satisfies readonly (keyof McpSsoOptions)[];
+const MEANS_FLAGS = {
+  configPath: '--config',
+  serviceUrl: '--service-url',
+  issuerUrl: '--issuer',
+  authorizationEndpoint: '--authorization-endpoint',
+  tokenEndpoint: '--token-endpoint',
+  deviceAuthorizationEndpoint: '--device-authorization-endpoint',
+  clientId: '--client-id',
+  clientSecret: '--client-secret',
+  scopes: '--scopes',
+  scope: '--scope',
+  username: '--username',
+  password: '--password',
+  subjectToken: '--subject-token',
+  subjectTokenType: '--subject-token-type',
+  audience: '--audience',
+  actorToken: '--actor-token',
+  actorTokenType: '--actor-token-type',
+  idpSsoUrl: '--idp-sso-url',
+  spEntityId: '--sp-entity-id',
+  acsUrl: '--acs-url',
+  relayState: '--relay-state',
+  cookie: '--cookie',
+  uaaUrl: '--uaa-url',
+  samlMetadataPath: '--saml-metadata',
+  // Inline certificates come only from a --config file.
+  idpCertificates: '--config',
+  idpCertificateFiles: '--idp-cert',
+  idpEntityId: '--idp-entity-id',
+  idpMetadata: '--idp-metadata',
+  idpInitiated: '--idp-initiated',
+} as const satisfies Partial<Record<keyof McpSsoOptions, string>>;
 
-function statesMeans(options: McpSsoOptions): boolean {
-  return MEANS_OPTIONS.some((field) => options[field] !== undefined);
+/** Refuses the first means flag given beside a session file, naming both. */
+function refuseMeansBesideSession(
+  options: McpSsoOptions,
+  flag: '--env' | '--destination',
+): void {
+  for (const [field, name] of Object.entries(MEANS_FLAGS)) {
+    if (options[field as keyof typeof MEANS_FLAGS] !== undefined) {
+      throw new UsageError(
+        `${name} and ${flag}: the session file holds the means and is used as it is; state the means with --service-key or flags alone instead`,
+      );
+    }
+  }
 }
 
 /** The subcommand and flow each grant a destination states is run by. */
@@ -224,14 +237,14 @@ export async function runMcpSso(
     process.exit(1);
   }
 
-  // A session file states its means (D25): a run that states none of its
-  // own takes them from the file, its subcommand checked against the file's
-  // grant; a run that states means writes them over the file's, and the
-  // broker then judges the session against them.
+  // A session file states its means (D25) and is used as it is: a flag that
+  // states means beside it is refused; the subcommand is checked against the
+  // file's grant.
+  if (source?.kind === 'session') {
+    refuseMeansBesideSession(options, source.flag);
+  }
   const fileRow =
-    source?.kind === 'session' && !statesMeans(options)
-      ? await sessionRow(options, source)
-      : undefined;
+    source?.kind === 'session' ? await sessionRow(options, source) : undefined;
 
   const allowTokenEndpointWithServiceKey =
     options.protocol === 'saml2' && options.flow === 'bearer';

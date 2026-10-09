@@ -218,7 +218,7 @@ function refuseMeansFlags(
   for (const [name, given] of stated) {
     if (given) {
       throw new UsageError(
-        `${name} states the means, which the session file of ${flag} holds: state them with --service-key`,
+        `${name} and ${flag}: the session file holds the means and is used as it is; state the means with --service-key instead`,
       );
     }
   }

@@ -397,20 +397,24 @@ function showSsoHelp(subcommand: SsoSubcommand): void {
     );
   }
   console.log('');
+  console.log('Source (at most one):');
   console.log(
-    'Source (at most one; none: the flags state the means, a new login):',
+    '  (none)                    Means from flags or --config = like --service-key: a fresh login,',
+  );
+  console.log(
+    '                            a new pair written to --output; no stored session is read',
   );
   console.log(
     '  --service-key <path>      Service key JSON (XSUAA): always a new login, written to --output',
   );
   console.log(
-    '  --env <path>              A session file holding the means: a valid token reused, an expired',
+    '  --env <path>              A session file holding the means, used as it is: a valid token',
   );
   console.log(
-    '                            one refreshed, else a login; written back, or to --output. Means',
+    '                            reused, an expired one refreshed, else a login; written back, or',
   );
   console.log(
-    "                            flags given beside it are written over the file's",
+    '                            to --output. A flag or --config stating means beside it is refused',
   );
   console.log(
     '  --destination <name>      <dir>/sessions/<name>.env (as --env), else',

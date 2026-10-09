@@ -335,8 +335,8 @@ describe('mcp-auth oidc --flow password', () => {
   });
 });
 
-describe('mcp-auth oidc --env with a destination written for another grant', () => {
-  it("keeps none of the other grant's means: the password goes when the grant changes", async () => {
+describe('mcp-auth oidc over an --output written for another grant', () => {
+  it("means from flags are a fresh login: none of the other grant's means is kept — the password goes", async () => {
     server.answer('/token', tokenAnswer('pw'));
     await run(
       options({
@@ -348,16 +348,10 @@ describe('mcp-auth oidc --env with a destination written for another grant', () 
         password: 'alice-password',
       }),
     );
-    const previous = path.join(root, `${DEST}.env`);
-    fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
-    fs.rmSync(workDir, { recursive: true });
-    fs.mkdirSync(workDir);
-
     server.answer('/tx', tokenAnswer('tx'));
     await expect(
       run(
         options({
-          envFilePath: previous,
           ...form('oidc', ['--flow', 'token_exchange']),
           clientId: 'cli',
           tokenEndpoint: `${server.url}/tx`,
@@ -370,7 +364,6 @@ describe('mcp-auth oidc --env with a destination written for another grant', () 
     expect(keys).not.toHaveProperty('SAP_PASSWORD');
     expect(keys).not.toHaveProperty('SAP_USERNAME');
     expect(keys).not.toHaveProperty('SAP_OIDC_ISSUER_URL');
-    // The system's own means stay.
     expect(keys.SAP_URL).toBe(SERVICE_URL);
   });
 });
@@ -488,43 +481,34 @@ describe('mcp-auth saml2-pure --cookie', () => {
   });
 });
 
-describe('mcp-auth saml2-pure --cookie, the SAP client stated in --env', () => {
-  it('binds the cookies to the resource with its client: getProvider presents them', async () => {
+describe('mcp-auth saml2-pure --cookie beside --env', () => {
+  it('is refused naming both: --env works on the session file as it is', async () => {
     const previous = path.join(root, `${DEST}.env`);
     fs.writeFileSync(previous, `SAP_URL=${SERVICE_URL}\nSAP_CLIENT=100\n`);
-    const code = await run(
+    const before = fs.readFileSync(previous);
+    const thrown = await run(
       options({
         envFilePath: previous,
+        outputFile: undefined,
         serviceUrl: undefined,
         ...form('saml2-pure'),
         cookie: 'SAP_SESSIONID=abc',
       }),
+    ).catch((e: unknown) => e);
+    expect((thrown as Error).message).toBe(
+      '--cookie and --env: the session file holds the means and is used as it is; state the means with --service-key or flags alone instead',
     );
-    expect(code).toBe(0);
-    // The binding the broker computes — never one the CLI composes.
-    expect(sessionWrites.map((w) => w.config)).toEqual([
-      {
-        sessionCookies: 'SAP_SESSIONID=abc',
-        // The store merges: SAML has no refresh token, and one stored beside
-        // earlier cookies or a token is not this credential's (§5.2).
-        refreshToken: '',
-        issuedFor: 'https://abap.example.com:443?sap-client=100',
-        issuedBy: `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`,
-      },
-    ]);
-    const broker = new AuthBroker({
-      renewal: () => refreshThenLogin(),
-      onWriteFailure: 'fail',
-      sessionStore: sessionStoreOf('abap'),
-      serviceKeyStore: keyStoreOf('abap'),
-    });
-    await expect(broker.getProvider(DEST)).resolves.toBeDefined();
+    expect(sessionWrites).toEqual([]);
+    expect(fs.readFileSync(previous)).toEqual(before);
   });
 });
 
 describe('mcp-auth saml2-pure --cookie over a pre-existing session bound to other means (§13.1, the CLI path)', () => {
   it('the store holds the new record and no refresh token; a restart is not seeded with the old one', async () => {
-    const previous = path.join(root, `${DEST}.env`);
+    // The old session sits in the --output file: cookies by flags are a
+    // fresh run, so it is read nowhere and replaced whole.
+    fs.mkdirSync(outDir, { recursive: true });
+    const previous = path.join(outDir, `${DEST}.env`);
     const OLD_RECORD = `mcp-abap-adt-binding/2;jwt/authorization_code${';'.repeat(12)}`;
     fs.writeFileSync(
       previous,
@@ -542,8 +526,6 @@ describe('mcp-auth saml2-pure --cookie over a pre-existing session bound to othe
     );
     const code = await run(
       options({
-        envFilePath: previous,
-        serviceUrl: undefined,
         ...form('saml2-pure'),
         cookie: 'SAP_SESSIONID=new',
       }),
@@ -555,7 +537,7 @@ describe('mcp-auth saml2-pure --cookie over a pre-existing session bound to othe
     expect(session).toEqual(
       expect.objectContaining({
         sessionCookies: 'SAP_SESSIONID=new',
-        issuedFor: 'https://abap.example.com:443?sap-client=100',
+        issuedFor: 'https://abap.example.com:443',
         issuedBy: `mcp-abap-adt-binding/2;saml/none${';'.repeat(12)}`,
       }),
     );
@@ -1005,5 +987,94 @@ describe('three sources, one per run (D25)', () => {
       path.join(dests, 'sessions'),
     ).loadSession(DEST);
     expect(jwtName(written?.authorizationToken)).toBe('key-access-1');
+  });
+});
+
+describe('D25: means from flags or --config are like --service-key; --env takes none', () => {
+  function bare(subcommand: SsoSubcommand, args: string[]): McpSsoOptions {
+    const parsed = parseSubcommandArgs(subcommand, args);
+    if (parsed.kind !== 'sso') throw new Error(`not a run: ${parsed.kind}`);
+    return parsed.options;
+  }
+
+  const passwordRun = () =>
+    options({
+      ...form('oidc', ['--flow', 'password']),
+      clientId: 'cli',
+      clientSecret: 'cli-secret',
+      issuerUrl: server.url,
+      tokenEndpoint: `${server.url}/token`,
+      username: 'alice',
+      password: 'alice-password',
+    });
+
+  it('means by flags, twice into the same --output: two logins — the existing output session is not read', async () => {
+    server.answer('/token', tokenAnswer('pw'));
+    await expect(run(passwordRun())).resolves.toBe(0);
+    await expect(run(passwordRun())).resolves.toBe(0);
+    expect(server.requests.map((r) => r.form.grant_type)).toEqual([
+      'password',
+      'password',
+    ]);
+    expect(
+      jwtName(
+        (await sessionStoreOf('abap').loadSession(DEST))?.authorizationToken,
+      ),
+    ).toBe('pw-access-2');
+  });
+
+  /** A session file of the password grant, from a first login. */
+  async function sessionFile(): Promise<string> {
+    server.answer('/token', tokenAnswer('pw'));
+    await expect(run(passwordRun())).resolves.toBe(0);
+    const previous = path.join(root, `${DEST}.env`);
+    fs.copyFileSync(path.join(outDir, `${DEST}.env`), previous);
+    return previous;
+  }
+
+  const WORDS =
+    'the session file holds the means and is used as it is; state the means with --service-key or flags alone instead';
+
+  it.each([
+    ['oidc', ['--flow', 'password', '--client-id', 'other'], '--client-id'],
+    ['oidc', ['--flow', 'password', '--username', 'bob'], '--username'],
+    ['oidc', ['--config', './provider.json'], '--config'],
+    ['saml2-pure', ['--idp-entity-id', 'https://idp'], '--idp-entity-id'],
+    ['saml2-pure', ['--cookie', 'A=1'], '--cookie'],
+    ['saml2-bearer', ['--uaa-url', 'https://uaa'], '--uaa-url'],
+    ['saml2-bearer', ['--idp-initiated'], '--idp-initiated'],
+  ] as [SsoSubcommand, string[], string][])(
+    'mcp-auth %s %j beside --env: a usage error naming both, nothing sent or written',
+    async (subcommand, args, flag) => {
+      const previous = await sessionFile();
+      const before = fs.readFileSync(previous);
+      const sent = server.requests.length;
+      const thrown = await run(
+        bare(subcommand, [...args, '--env', previous]),
+      ).catch((e: unknown) => e);
+      expect((thrown as Error).message).toBe(`${flag} and --env: ${WORDS}`);
+      expect(server.requests).toHaveLength(sent);
+      expect(fs.readFileSync(previous)).toEqual(before);
+    },
+  );
+
+  it('a means flag beside a session found by --destination: refused naming --destination', async () => {
+    const previous = await sessionFile();
+    const dests = path.join(root, 'dests');
+    fs.mkdirSync(path.join(dests, 'sessions'), { recursive: true });
+    fs.copyFileSync(previous, path.join(dests, 'sessions', `${DEST}.env`));
+    const thrown = await run(
+      bare('oidc', [
+        '--client-id',
+        'other',
+        '--destination',
+        DEST,
+        '--destination-dir',
+        dests,
+      ]),
+    ).catch((e: unknown) => e);
+    expect((thrown as Error).message).toBe(
+      `--client-id and --destination: ${WORDS}`,
+    );
   });
 });
