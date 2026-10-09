@@ -3,8 +3,12 @@
  * through auth-errors' module with this repository's own `typescript`. The
  * package's own sources must be clean; each fixture under `tools/__fixtures__`
  * breaks one rule and must be refused by that rule alone, so a rule dropped
- * from `SHAPE_CHECK` turns its fixture's case red.
+ * from `SHAPE_CHECK` turns its fixture's case red. Every path that publishes
+ * runs this test: the root `check` (which `release:publish` and this
+ * package's `prepublishOnly` run) and the release workflow run
+ * `npm run test:shape`, and this package's `test:shape` runs this file.
  */
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   checkProviderShape,
@@ -15,6 +19,7 @@ import {
 } from '@mcp-abap-adt/auth-errors/shape-check';
 import ts from 'typescript';
 
+const REPOSITORY_ROOT = join(__dirname, '..', '..', '..', '..');
 const PACKAGE_ROOT = join(__dirname, '..', '..');
 
 /** This package's whole configuration of the check. */
@@ -34,6 +39,14 @@ const FIXTURES: readonly (readonly [string, ShapeRule])[] = [
 ];
 
 jest.setTimeout(120_000);
+
+/** The scripts of the `package.json` in `dir`. */
+function scripts(dir: string): Readonly<Record<string, string>> {
+  const manifest = JSON.parse(
+    readFileSync(join(dir, 'package.json'), 'utf8'),
+  ) as { scripts?: Record<string, string> };
+  return manifest.scripts ?? {};
+}
 
 function findings(report: ShapeCheckReport): readonly ShapeFinding[] {
   if (report.status !== 'checked') {
@@ -61,5 +74,21 @@ describe('the shape check (auth-errors) over @mcp-abap-adt/auth-broker-cli', () 
     expect(found.map((finding) => [finding.file, finding.rule])).toEqual([
       [`tools/__fixtures__/${fixture}`, rule],
     ]);
+  });
+
+  it('runs on every path that publishes', () => {
+    const root = scripts(REPOSITORY_ROOT);
+    expect(root.check?.split(' && ')).toContain('npm run test:shape');
+    expect(root['test:shape']).toBe('npm run test:shape --workspaces');
+    const own = scripts(PACKAGE_ROOT);
+    expect(own.prepublishOnly).toBe('npm run --prefix ../.. check');
+    expect(own['test:shape']).toBe(
+      'cross-env NODE_OPTIONS=--experimental-vm-modules jest src/__tests__/shapeCheck.test.ts',
+    );
+    const release = readFileSync(
+      join(REPOSITORY_ROOT, '.github', 'workflows', 'release.yml'),
+      'utf8',
+    );
+    expect(release).toContain('run: npm run test:shape\n');
   });
 });

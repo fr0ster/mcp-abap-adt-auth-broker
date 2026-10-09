@@ -49,6 +49,7 @@
     "stand:up": "tests/stand/up.sh",
     "stand:down": "tests/stand/down.sh",
     "test:check": "tsc -p tsconfig.json --noEmit",
+    "test:shape": "cross-env NODE_OPTIONS=--experimental-vm-modules jest src/__tests__/tools/shapeCheck.test.ts",
     "prepublishOnly": "npm run --prefix ../.. check"
   },
   "engines": {

@@ -32,6 +32,9 @@ jobs:
       - name: Build workspaces
         run: npm run build
 
+      - name: Shape check of the error contract
+        run: npm run test:shape
+
       - name: Resolve the workspace the tag names
         id: workspace
         run: |
