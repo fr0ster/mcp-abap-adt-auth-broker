@@ -1061,7 +1061,20 @@ Every command builds its broker with explicit choices, in its own code (H1):
   session read even when `--output` names an existing file. `--env` (and a
   session `--destination` finds) is used as it is: any flag that states
   means, or `--config`, beside it is a usage error naming both, in every
-  subcommand.
+  subcommand. The file is read exactly as named (`.env`, `session.backup`),
+  never a `<name>.env` beside it. Client authentication is means too: the
+  file's certificate paths, or the Basic encoding it records
+  (`SAP_UAA_BASIC_ENCODING` / `XSUAA_UAA_BASIC_ENCODING`, written by a run
+  given `--basic-encoding`), so `--client-auth`, `--basic-encoding`,
+  `--cert-path` and `--key-path` beside it are refused. `--cookie` is the one
+  exception: it hands over the secret, not means — `saml2-pure --cookie`
+  beside a session file is accepted only when the file's grant is
+  `saml/none` or `saml/saml2_pure` (or it states none); the run then changes
+  only `authType` / `grantType` to `saml/none`, keeps every other means field,
+  binds the cookies to them with `bindingOf` and writes them back. Beside any
+  other grant it is a usage error naming `--cookie` and the grant.
+  `generate-env` has `--service-key`'s semantics: every run logs in and reads
+  no session, not even the file it writes.
   - **`--service-key <path>`: always a new pair.** The means come from the key;
     the CLI reads no session — stored files can be anywhere and it knows
     nothing about earlier runs — so every run logs in and writes a new token
@@ -1083,8 +1096,12 @@ Every command builds its broker with explicit choices, in its own code (H1):
        `mcp-abap-adt` already reads for the same folder, so the CLI and the
        server see the same destinations; like the server, it may list several
        base folders (separated by `;`, and on Unix also `:`, split by plain
-       code, never a regex): a destination is read from the first folder that
-       holds it, and a new session is written to the first folder;
+       code, never a regex), read exactly as the server's `getPlatformPaths`:
+       an entry ending in the subfolder looked for (`sessions`,
+       `service-keys`) is read as its parent; sessions and service keys are
+       their own folder lists, each searched in order without duplicates — a
+       session in any folder is used before a service key in any folder — and
+       a new session is written to the first sessions folder;
     3. the standard folder: `~/.config/mcp-abap-adt` on Unix,
        `Documents/mcp-abap-adt` under the user's home on Windows — stated in
        the CLI's own code and help, never guessed.
@@ -2089,5 +2106,10 @@ if present, else the service key; folder stated per platform,
 `--destination-dir`, then `AUTH_BROKER_PATH`, then the standard folder). One source per run. The
 SSO subcommands with means from flags or `--config` and no source act as
 `--service-key` (a fresh login, no session read); a means flag or `--config`
-beside `--env` is refused in every subcommand — the file is used as it is. This replaces the Task 9
+beside `--env` is refused in every subcommand — the file is used as it is, its
+client authentication included (certificate paths, a recorded Basic
+encoding); `--cookie`, the secret, is accepted beside a cookie session
+(`saml/none`, `saml/saml2_pure`) only, changing nothing but its row.
+`AUTH_BROKER_PATH` is read as the server's `getPlatformPaths`. `generate-env`
+always logs in and reads no session. This replaces the Task 9
 ruling and the earlier drafts of D25.
