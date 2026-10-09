@@ -124,7 +124,7 @@ function showMainHelp(): void {
     "                            - auto/system: the platform's default browser; the URL is also shown if it fails",
   );
   console.log(
-    '                            - none/headless: Show URL in console and wait for callback',
+    '                            - none/headless: no browser; the URL is shown on stderr and the callback waits',
   );
   console.log(
     '                            - chrome/edge/firefox, per platform:',
@@ -210,7 +210,7 @@ function showMainHelp(): void {
     '  --idp-initiated            The IdP starts the login; required for saml2-bearer against XSUAA',
   );
   console.log(
-    '  --authn-request-id <id>    AuthnRequest ID an --assertion answers, when sent elsewhere',
+    '  --authn-request-id <id>    Refused since 2.0.0: a destination cannot state a request ID',
   );
   console.log(
     '  --sp-entity-id <id>        SP entityID, the Audience (saml2-bearer: read from XSUAA metadata)',
@@ -329,10 +329,17 @@ function showMainHelp(): void {
   );
   console.log('  - Browser options for authorization_code:');
   console.log(
-    '    * auto (default): Try to open browser, fallback to showing URL',
+    "    * auto/system (default auto): the platform's default browser; the URL is also shown on stderr if it fails",
   );
-  console.log('    * none/headless: Show URL in console and wait for callback');
-  console.log('    * system/chrome/edge/firefox: Open specific browser');
+  console.log(
+    '    * chrome/edge/firefox: that browser, by its name on this platform (see --browser above)',
+  );
+  console.log(
+    '    * none/headless: no browser; the URL is shown on stderr and the callback waits',
+  );
+  console.log(
+    '    * other platforms: none/headless only; --browser-program <p> runs a program of your own',
+  );
   console.log('  - Both providers (xsuaa and abap) support both flows');
   console.log(
     '  - --redirect-port: Port for OAuth redirect URI (default: from auth-providers, currently 61001)',
