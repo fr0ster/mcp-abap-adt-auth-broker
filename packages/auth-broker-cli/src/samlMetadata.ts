@@ -65,20 +65,44 @@ function isHttpUrl(source: string): boolean {
  * A response body, read only up to `MAX_METADATA_BYTES`: past it the stream
  * is cancelled and the document refused.
  */
-async function boundedText(response: Response, flag: string): Promise<string> {
+async function boundedText(
+  response: Response,
+  flag: string,
+  signal: AbortSignal | undefined,
+): Promise<string> {
   const reader = response.body?.getReader();
   if (reader === undefined) return '';
+  // The run's signal cancels the read in flight, whatever the fetch did.
+  const onAbort = () => {
+    reader.cancel().catch(() => undefined);
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    return await readBounded(reader, flag, signal);
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+  }
+}
+
+async function readBounded(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  flag: string,
+  signal: AbortSignal | undefined,
+): Promise<string> {
   const chunks: Uint8Array[] = [];
   let total = 0;
   for (;;) {
+    signal?.throwIfAborted();
     let read: Awaited<ReturnType<typeof reader.read>>;
     try {
       read = await reader.read();
     } catch (error) {
+      signal?.throwIfAborted();
       throw new UsageError(
         `${flag}: the metadata could not be fetched${systemCodeOf(error)}`,
       );
     }
+    signal?.throwIfAborted();
     const { done, value } = read;
     if (done) break;
     total += value.byteLength;
@@ -91,40 +115,93 @@ async function boundedText(response: Response, flag: string): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/** How many redirects a metadata fetch follows: a count, not a clock. */
+const MAX_REDIRECTS = 5;
+
+/**
+ * `url`, if SAML metadata may come from it — https, or http to a loopback
+ * host — else refused naming `flag`. Checked for the URL given and for every
+ * redirect, so no hop downgrades the channel the trust comes over.
+ */
+function checkedMetadataUrl(url: URL, flag: string): URL {
+  if (url.protocol !== 'https:' && !LOOPBACK.has(url.hostname)) {
+    throw new UsageError(
+      `${flag}: refusing SAML metadata over ${url.protocol.slice(0, -1)}: it carries the certificates assertions are verified against, so it must come over https`,
+    );
+  }
+  return url;
+}
+
+/**
+ * The response of `url`, its redirects followed by hand — each Location
+ * checked as the URL given was (`checkedMetadataUrl`), at most
+ * `MAX_REDIRECTS` of them. `signal` (the run's) ends the request.
+ */
+async function fetchMetadata(
+  first: URL,
+  flag: string,
+  signal: AbortSignal | undefined,
+): Promise<Response> {
+  let url = checkedMetadataUrl(first, flag);
+  for (let hop = 0; ; hop++) {
+    signal?.throwIfAborted();
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        redirect: 'manual',
+        ...(signal === undefined ? {} : { signal }),
+      });
+    } catch (error) {
+      signal?.throwIfAborted();
+      throw new UsageError(
+        `${flag}: the metadata could not be fetched${systemCodeOf(error)}`,
+      );
+    }
+    const location = response.headers.get('location');
+    if (response.status < 300 || response.status > 399 || location === null) {
+      return response;
+    }
+    await response.body?.cancel().catch(() => undefined);
+    if (hop >= MAX_REDIRECTS) {
+      throw new UsageError(
+        `${flag}: the metadata server redirected more than ${MAX_REDIRECTS} times`,
+      );
+    }
+    let next: URL;
+    try {
+      next = new URL(location, url);
+    } catch {
+      throw new UsageError(`${flag}: the metadata server redirected to no URL`);
+    }
+    url = checkedMetadataUrl(next, flag);
+  }
+}
+
 /**
  * A metadata document from an https URL, a loopback http URL, or a file.
  * `flag` is where the source came from (`--idp-metadata`, `--saml-metadata`,
  * `--service-key`): a failure of the CLI's own read or fetch is refused naming
  * it — the path the user gave, or no URL at all (it may carry a query or
  * userinfo) — with an allowlisted system code, never the failure's message.
- * A document larger than `MAX_METADATA_BYTES` is refused, never read whole.
+ * A redirect is followed only to where the URL given could point (https, or
+ * loopback http). A document larger than `MAX_METADATA_BYTES` is refused,
+ * never read whole. `signal` — the run's — ends a fetch or a body read in
+ * flight: it rejects with the signal's reason.
  */
 export async function loadMetadata(
   source: string,
   flag: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   if (isHttpUrl(source)) {
-    const url = new URL(source);
-    if (url.protocol !== 'https:' && !LOOPBACK.has(url.hostname)) {
-      throw new UsageError(
-        `${flag}: refusing SAML metadata over ${url.protocol}: it carries the certificates assertions are verified against, so it must come over https`,
-      );
-    }
-    let response: Response;
-    try {
-      response = await fetch(url);
-    } catch (error) {
-      throw new UsageError(
-        `${flag}: the metadata could not be fetched${systemCodeOf(error)}`,
-      );
-    }
+    const response = await fetchMetadata(new URL(source), flag, signal);
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       throw new UsageError(
         `${flag}: the metadata server answered ${response.status}`,
       );
     }
-    return boundedText(response, flag);
+    return boundedText(response, flag, signal);
   }
   const file = resolvePath(source);
   const unreadable = (error: unknown) =>
@@ -488,13 +565,18 @@ export interface SamlMetadataTarget {
 export async function applySamlMetadata(
   options: SamlMetadataTarget,
   explicitTokenEndpoint: string | undefined,
-  load: (source: string, flag: string) => Promise<string> = loadMetadata,
+  load: (
+    source: string,
+    flag: string,
+    signal?: AbortSignal,
+  ) => Promise<string> = loadMetadata,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (options.protocol !== 'saml2') return;
 
   if (options.idpMetadata) {
     const idp = readIdpMetadata(
-      await load(options.idpMetadata, '--idp-metadata'),
+      await load(options.idpMetadata, '--idp-metadata', signal),
       options.idpEntityId,
       '--idp-metadata',
     );
@@ -528,7 +610,7 @@ export async function applySamlMetadata(
       ? '--saml-metadata'
       : '--service-key';
   const sp = readSpMetadata(
-    await load(spSource, spFlag),
+    await load(spSource, spFlag, signal),
     options.spEntityId,
     spFlag,
   );

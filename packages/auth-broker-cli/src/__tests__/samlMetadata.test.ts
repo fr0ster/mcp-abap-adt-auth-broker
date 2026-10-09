@@ -8,6 +8,7 @@
  */
 import * as fs from 'node:fs';
 import * as http from 'node:http';
+import * as https from 'node:https';
 import type { AddressInfo } from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -25,6 +26,7 @@ import {
 } from '../samlMetadata';
 import { isUsageError } from '../subcommandArgs';
 import { withoutTrailingSlashes } from '../urlText';
+import { trustCertServer } from './helpers/certificates';
 
 const fixture = (name: string) =>
   fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
@@ -760,5 +762,236 @@ describe('sources: no regular expression over untrusted input', () => {
     expect(
       regularExpressionsIn('__tests__/helpers/destinationFiles.ts').length,
     ).toBeGreaterThan(0);
+  });
+});
+
+/** A local server answering every request with `handler`; closed after the test. */
+async function serve(
+  handler: http.RequestListener,
+  tlsOptions?: { cert: string; key: string },
+): Promise<{ url: string; requests: string[]; close: () => Promise<void> }> {
+  const requests: string[] = [];
+  const listener: http.RequestListener = (request, response) => {
+    requests.push(request.url ?? '');
+    handler(request, response);
+  };
+  const server = tlsOptions
+    ? https.createServer(tlsOptions, listener)
+    : http.createServer(listener);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `${tlsOptions ? 'https' : 'http'}://127.0.0.1:${port}`,
+    requests,
+    close: async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+/** What `load` rejects with, in the CLI's words. */
+async function refusalWords(load: Promise<string>): Promise<string> {
+  const thrown = await load.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  expect(isUsageError(thrown)).toBe(true);
+  return failureLines(thrown).join('\n');
+}
+
+const OVER_HTTP =
+  'refusing SAML metadata over http: it carries the certificates assertions are verified against, so it must come over https';
+
+describe('loadMetadata: every redirect is checked as the first URL is', () => {
+  const redirectTo =
+    (location: string): http.RequestListener =>
+    (_request, response) => {
+      response.writeHead(302, { location });
+      response.end();
+    };
+
+  it('loopback http redirected to a public http host: refused, the host never asked', async () => {
+    const server = await serve(redirectTo('http://idp.example.invalid/meta'));
+    try {
+      expect(
+        await refusalWords(
+          loadMetadata(`${server.url}/meta`, '--idp-metadata'),
+        ),
+      ).toBe(`❌ --idp-metadata: ${OVER_HTTP}`);
+      expect(server.requests).toEqual(['/meta']);
+    } finally {
+      await server.close();
+    }
+  });
+
+  describe('over https', () => {
+    trustCertServer();
+
+    it('https redirected to a public http host: refused naming the flag', async () => {
+      const server = await serve(
+        redirectTo('http://idp.example.invalid/meta'),
+        {
+          cert: fs.readFileSync(
+            path.join(__dirname, 'fixtures', 'certificates', 'server.crt'),
+            'utf8',
+          ),
+          key: fs.readFileSync(
+            path.join(__dirname, 'fixtures', 'certificates', 'server.key'),
+            'utf8',
+          ),
+        },
+      );
+      try {
+        expect(
+          await refusalWords(
+            loadMetadata(`${server.url}/meta`, '--saml-metadata'),
+          ),
+        ).toBe(`❌ --saml-metadata: ${OVER_HTTP}`);
+        expect(server.requests).toEqual(['/meta']);
+      } finally {
+        await server.close();
+      }
+    });
+  });
+
+  it('a redirect within loopback is followed, relative Location included', async () => {
+    const server = await serve((request, response) => {
+      if (request.url === '/first') {
+        response.writeHead(301, { location: '/second' });
+        response.end();
+        return;
+      }
+      response.writeHead(200);
+      response.end('THE-DOCUMENT');
+    });
+    try {
+      await expect(
+        loadMetadata(`${server.url}/first`, '--idp-metadata'),
+      ).resolves.toBe('THE-DOCUMENT');
+      expect(server.requests).toEqual(['/first', '/second']);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('more than five redirects: refused, a count and not a clock', async () => {
+    const server = await serve((request, response) => {
+      response.writeHead(302, { location: `${request.url}x` });
+      response.end();
+    });
+    try {
+      expect(
+        await refusalWords(loadMetadata(`${server.url}/r`, '--idp-metadata')),
+      ).toBe(
+        '❌ --idp-metadata: the metadata server redirected more than 5 times',
+      );
+      expect(server.requests).toHaveLength(6);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('a redirect with no Location: refused with its status', async () => {
+    const server = await serve((_request, response) => {
+      response.writeHead(302);
+      response.end();
+    });
+    try {
+      expect(
+        await refusalWords(loadMetadata(`${server.url}/r`, '--idp-metadata')),
+      ).toBe('❌ --idp-metadata: the metadata server answered 302');
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("loadMetadata: the run's signal ends the fetch", () => {
+  it('a server that never answers: the abort ends the load', async () => {
+    let asked: () => void = () => {};
+    const askedPromise = new Promise<void>((resolve) => {
+      asked = resolve;
+    });
+    const server = await serve(() => {
+      asked();
+    });
+    try {
+      const controller = new AbortController();
+      const loading = loadMetadata(
+        `${server.url}/meta`,
+        '--idp-metadata',
+        controller.signal,
+      );
+      const rejected = expect(loading).rejects.toBeDefined();
+      await askedPromise;
+      controller.abort();
+      await rejected;
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('a server that stalls in the body: the abort ends the read', async () => {
+    let started: () => void = () => {};
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const server = await serve((_request, response) => {
+      response.writeHead(200);
+      response.write('<md:EntityDescriptor');
+      started();
+    });
+    try {
+      const controller = new AbortController();
+      const loading = loadMetadata(
+        `${server.url}/meta`,
+        '--idp-metadata',
+        controller.signal,
+      );
+      const rejected = expect(loading).rejects.toBeDefined();
+      await startedPromise;
+      controller.abort();
+      await rejected;
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('a signal aborted before the load: nothing is asked', async () => {
+    const server = await serve((_request, response) => {
+      response.writeHead(200);
+      response.end('doc');
+    });
+    try {
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        loadMetadata(`${server.url}/meta`, '--idp-metadata', controller.signal),
+      ).rejects.toBeDefined();
+      expect(server.requests).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('applySamlMetadata hands the signal to every load', async () => {
+    const signals: Array<AbortSignal | undefined> = [];
+    const controller = new AbortController();
+    await applySamlMetadata(
+      {
+        protocol: 'saml2',
+        flow: 'bearer',
+        idpMetadata: IAS_URL,
+        uaaUrl: UAA_URL,
+      },
+      undefined,
+      async (source, _flag, signal) => {
+        signals.push(signal);
+        return source === IAS_URL ? IAS : XSUAA;
+      },
+      controller.signal,
+    );
+    expect(signals).toEqual([controller.signal, controller.signal]);
   });
 });

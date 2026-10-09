@@ -38,7 +38,7 @@ import {
   ssoRow,
 } from './mcpSsoConfig';
 import { printFailure, progress } from './output';
-import { applySamlMetadata } from './samlMetadata';
+import { applySamlMetadata, loadMetadata } from './samlMetadata';
 import { UsageError } from './subcommandArgs';
 import { withoutTrailingSlashes } from './urlText';
 
@@ -234,9 +234,17 @@ export async function runMcpSso(
   // provider's trust from --idp-metadata, and for saml2-bearer the Audience,
   // Recipient and token endpoint from XSUAA's own metadata (--saml-metadata,
   // else <uaa.url>/saml/metadata from the service key).
+  // The run's signal ends a metadata fetch or body read in flight (§10.4).
   try {
-    await applySamlMetadata(options, explicitTokenEndpoint);
+    await applySamlMetadata(
+      options,
+      explicitTokenEndpoint,
+      loadMetadata,
+      signal,
+    );
   } catch (error) {
+    // Interrupted: the run's interrupt reports it, never this catch.
+    if (signal?.aborted) throw error;
     // The CLI's own words, else auth-errors': never a fetch's or a file
     // reader's message, which may quote what a server answered.
     printFailure(error, { context: 'SAML metadata' });

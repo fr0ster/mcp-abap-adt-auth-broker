@@ -393,6 +393,98 @@ describe('the built bin: a signal to its pid ends the waiting login', () => {
   }
 });
 
+describe('the built bin: a signal ends a stalled SAML metadata fetch', () => {
+  /**
+   * A metadata server that stalls: never answering the headers, or sending
+   * them and a first chunk of the body and then nothing. Once it has done
+   * that much, `signal` goes to the child's pid.
+   */
+  async function stallingServer(
+    stall: 'headers' | 'body',
+    deliver: () => void,
+  ): Promise<string> {
+    const server = http.createServer((_req, res) => {
+      if (stall === 'body') {
+        res.writeHead(200, { 'content-type': 'application/xml' });
+        res.write('<md:EntityDescriptor');
+      }
+      deliver();
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    const { port } = server.address() as net.AddressInfo;
+    return `http://127.0.0.1:${port}`;
+  }
+
+  for (const stall of ['headers', 'body'] as const) {
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      it(`stalled ${stall}, ${signal}: aborted, exit ${EXIT_CODES[signal]}, no stack, work directory gone, output untouched`, async () => {
+        const tmp = path.join(root, 'tmp');
+        fs.mkdirSync(tmp);
+        const output = path.join(root, 'out', 'TRIAL.env');
+        fs.mkdirSync(path.dirname(output));
+        fs.writeFileSync(output, UNTOUCHED);
+        let child: ChildProcess | undefined;
+        const metadata = await stallingServer(stall, () => {
+          if (child?.pid !== undefined) process.kill(child.pid, signal);
+        });
+        child = spawn(
+          process.execPath,
+          [
+            BIN,
+            'saml2-pure',
+            '--idp-metadata',
+            `${metadata}/saml2/metadata`,
+            '--assertion-flow',
+            'manual',
+            '--acs-url',
+            'https://acs.example.com/saml/acs',
+            '--sp-entity-id',
+            'my-sp',
+            '--service-url',
+            'https://abap.example.com',
+            '--output',
+            output,
+          ],
+          {
+            cwd: root,
+            env: { PATH: process.env.PATH ?? '', HOME: root, TMPDIR: tmp },
+            stdio: ['pipe', 'pipe', 'pipe'],
+          },
+        );
+        children.push(child);
+        let stdout = '';
+        let stderr = '';
+        child.stdout?.on('data', (chunk: Buffer) => {
+          stdout += chunk.toString('utf8');
+        });
+        child.stderr?.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString('utf8');
+        });
+        const exit = await new Promise<{
+          code: number | null;
+          signal: NodeJS.Signals | null;
+        }>((resolve, reject) => {
+          child?.on('error', reject);
+          child?.on('close', (code, killed) =>
+            resolve({ code, signal: killed }),
+          );
+        });
+        expect(exit.signal).toBeNull();
+        expect(exit.code).toBe(EXIT_CODES[signal]);
+        expect(stderr).toContain(ABORTED);
+        expect(stderr).not.toContain(STACK);
+        expect(stderr).not.toContain('SAML metadata');
+        expect(stdout).toBe('');
+        expect(fs.readdirSync(tmp)).toEqual([]);
+        expect(fs.readFileSync(output, 'utf8')).toBe(UNTOUCHED);
+      }, 20_000);
+    }
+  }
+});
+
 describe('the generate-env script itself: a signal to its pid ends the waiting login', () => {
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     it(`${signal}: aborted, exit ${EXIT_CODES[signal]}, no stack, port free, its work directory gone, the session file untouched`, async () => {
