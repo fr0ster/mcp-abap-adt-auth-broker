@@ -34,11 +34,11 @@ import type {
   IAuthProvider,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
+import { authorizeByForm, FormBrowser } from '../../../tests/stand/formLogin';
 import { AuthBroker, type StrategyGrant } from '../../index';
 import { uaaRecord } from '../helpers/bindingRecord';
 import { describeWhere } from '../helpers/describeWhere';
 import { STATED } from '../helpers/stated';
-import { authorizeByForm, FormBrowser } from './formLogin';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
 

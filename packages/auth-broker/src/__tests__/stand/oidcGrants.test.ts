@@ -34,11 +34,11 @@ import type {
   IAuthProvider,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
+import { approveDevice, authorizeByForm } from '../../../tests/stand/formLogin';
 import { AuthBroker } from '../../index';
 import { oidcRecord } from '../helpers/bindingRecord';
 import { describeWhere } from '../helpers/describeWhere';
 import { STATED } from '../helpers/stated';
-import { approveDevice, authorizeByForm } from './formLogin';
 
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL?.replace(/\/+$/, '');
 

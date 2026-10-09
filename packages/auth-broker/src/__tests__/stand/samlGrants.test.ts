@@ -20,7 +20,8 @@
  * by default Keycloak's `Conditions` expire a minute after issue, inside the
  * one-minute margin a token provider keeps, so stored cookies would count as
  * expired the moment they arrived. The tests in this file run one after
- * another; no other suite touches that client.
+ * another; the CLI's stand suite (run after this one by run.sh) points the
+ * same client elsewhere, so each test sets it before use (`standAdmin.ts`).
  *
  * Runs only with both UAA_URL and KEYCLOAK_URL set (`npm run test:stand`).
  */
@@ -40,11 +41,16 @@ import type {
   IAuthProvider,
   IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
+import { FormBrowser } from '../../../tests/stand/formLogin';
+import {
+  idpInitiatedSsoTo,
+  trustKeycloakInUaa,
+  uaaAcs,
+} from '../../../tests/stand/standAdmin';
 import { AuthBroker, type StrategyGrant } from '../../index';
 import { samlBearerRecord, samlPureRecord } from '../helpers/bindingRecord';
 import { describeWhere } from '../helpers/describeWhere';
 import { STATED } from '../helpers/stated';
-import { FormBrowser } from './formLogin';
 
 const UAA_URL = process.env.UAA_URL?.replace(/\/+$/, '');
 const KEYCLOAK_URL = process.env.KEYCLOAK_URL?.replace(/\/+$/, '');
@@ -54,67 +60,6 @@ const UNAUTHORIZED = { at: 'request', status: 401, error: null } as const;
 
 const claims = (jwt: string): Record<string, unknown> =>
   JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString('utf8'));
-
-const basic = (client: string) =>
-  `Basic ${Buffer.from(`${client}:secret`).toString('base64')}`;
-
-/** Register — or refresh — Keycloak as UAA's `keycloak` SAML provider. */
-async function trustKeycloakInUaa(): Promise<void> {
-  const metadata = await (
-    await fetch(`${KEYCLOAK_URL}/protocol/saml/descriptor`)
-  ).text();
-  const token = (
-    (await (
-      await fetch(`${UAA_URL}/oauth/token`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Authorization: basic('stand_admin'),
-        },
-        body: 'grant_type=client_credentials',
-      })
-    ).json()) as { access_token: string }
-  ).access_token;
-  const headers = {
-    Authorization: `Bearer ${token}`,
-    'Content-Type': 'application/json',
-  };
-  const provider = {
-    type: 'saml',
-    originKey: 'keycloak',
-    name: 'keycloak',
-    active: true,
-    config: {
-      metaDataLocation: metadata,
-      idpEntityAlias: 'keycloak',
-      nameID: 'urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified',
-      assertionConsumerIndex: 0,
-      metadataTrustCheck: false,
-      showSamlLink: false,
-      addShadowUserOnLogin: true,
-    },
-  };
-  const existing = (
-    (await (
-      await fetch(`${UAA_URL}/identity-providers?rawConfig=true`, { headers })
-    ).json()) as { id: string; originKey: string }[]
-  ).find((p) => p.originKey === 'keycloak');
-  const response = await fetch(
-    existing
-      ? `${UAA_URL}/identity-providers/${existing.id}?rawConfig=true`
-      : `${UAA_URL}/identity-providers?rawConfig=true`,
-    {
-      method: existing ? 'PUT' : 'POST',
-      headers,
-      body: JSON.stringify(
-        existing ? { ...provider, id: existing.id } : provider,
-      ),
-    },
-  );
-  if (!response.ok) {
-    throw new Error(`UAA refused the Keycloak provider: ${response.status}`);
-  }
-}
 
 /**
  * The certificates under every `KeyDescriptor use="signing"` in Keycloak's
@@ -138,61 +83,6 @@ async function keycloakCertificates(): Promise<string[]> {
     throw new Error('no signing certificate in Keycloak metadata');
   }
   return [...found];
-}
-
-/** UAA's ACS for a binding, from its own SAML metadata. */
-async function uaaAcs(binding: 'HTTP-POST' | 'URI'): Promise<string> {
-  const metadata = await (await fetch(`${UAA_URL}/saml/metadata`)).text();
-  const acs = new RegExp(
-    `AssertionConsumerService[^>]*bindings:${binding}"[^>]*Location="([^"]+)"`,
-  ).exec(metadata)?.[1];
-  if (!acs) throw new Error(`no ${binding}-binding ACS in UAA metadata`);
-  return acs;
-}
-
-/**
- * Point Keycloak's `uaa-sp` client's IdP-initiated SSO at `acsUrl`, with
- * assertions valid for an hour, and return the URL that starts it.
- */
-async function idpInitiatedSsoTo(acsUrl: string): Promise<string> {
-  const base = (KEYCLOAK_URL as string).replace(/\/realms\/.*$/, '');
-  const admin = (
-    (await (
-      await fetch(`${base}/realms/master/protocol/openid-connect/token`, {
-        method: 'POST',
-        body: new URLSearchParams({
-          grant_type: 'password',
-          client_id: 'admin-cli',
-          username: 'admin',
-          password: 'admin',
-        }),
-      })
-    ).json()) as { access_token: string }
-  ).access_token;
-  const headers = {
-    Authorization: `Bearer ${admin}`,
-    'Content-Type': 'application/json',
-  };
-  const [client] = (await (
-    await fetch(`${base}/admin/realms/test/clients?clientId=uaa-sp`, {
-      headers,
-    })
-  ).json()) as { id: string; attributes: Record<string, string> }[];
-  if (!client) throw new Error('Keycloak has no uaa-sp client');
-  client.attributes = {
-    ...client.attributes,
-    saml_idp_initiated_sso_url_name: 'uaa-sp',
-    saml_assertion_consumer_url_post: acsUrl,
-    'saml.assertion.lifespan': '3600',
-  };
-  const updated = await fetch(
-    `${base}/admin/realms/test/clients/${client.id}`,
-    { method: 'PUT', headers, body: JSON.stringify(client) },
-  );
-  if (!updated.ok) {
-    throw new Error(`Keycloak refused the client update: ${updated.status}`);
-  }
-  return `${KEYCLOAK_URL}/protocol/saml/clients/uaa-sp`;
 }
 
 /**
@@ -298,10 +188,10 @@ describeWhere(
     let sessionsDir: string;
 
     beforeAll(async () => {
-      await trustKeycloakInUaa();
+      await trustKeycloakInUaa(UAA_URL as string, KEYCLOAK_URL as string);
       certificates = await keycloakCertificates();
-      webSsoAcs = await uaaAcs('HTTP-POST');
-      bearerAcs = await uaaAcs('URI');
+      webSsoAcs = await uaaAcs(UAA_URL as string, 'HTTP-POST');
+      bearerAcs = await uaaAcs(UAA_URL as string, 'URI');
     });
 
     beforeEach(() => {
@@ -358,7 +248,7 @@ describeWhere(
     }
 
     it('saml / saml2_pure: Keycloak’s assertion becomes a UAA session cookie, persisted, reused by a new broker, and renewed after a 401', async () => {
-      const ssoUrl = await idpInitiatedSsoTo(webSsoAcs);
+      const ssoUrl = await idpInitiatedSsoTo(KEYCLOAK_URL as string, webSsoAcs);
       const logins: string[] = [];
       const grants: StrategyGrant[] = [];
       const posted: string[] = [];
@@ -430,7 +320,7 @@ describeWhere(
     }, 90_000);
 
     it('saml / saml2_bearer: Keycloak’s assertion exchanged at UAA for a token, written as a token, renewed by refresh after a 401', async () => {
-      const ssoUrl = await idpInitiatedSsoTo(bearerAcs);
+      const ssoUrl = await idpInitiatedSsoTo(KEYCLOAK_URL as string, bearerAcs);
       const logins: string[] = [];
       const { broker, sessions, sessionFile } = await destination(
         'BEARER',

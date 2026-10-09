@@ -45,8 +45,7 @@ packages/auth-broker/src/__tests__/
 ├── stand/
 │   ├── uaaGrants.test.ts                # the UAA grants against UAA in Docker
 │   ├── oidcGrants.test.ts               # the OIDC grants against Keycloak in Docker
-│   ├── samlGrants.test.ts               # the SAML grants, Keycloak to UAA, in Docker
-│   └── formLogin.ts                     # plays the user on the stand's login pages
+│   └── samlGrants.test.ts               # the SAML grants, Keycloak to UAA, in Docker
 ├── live/
 │   ├── getProvider.live.test.ts         # getProvider through connection 14 against real systems
 │   └── x509.live.test.ts                # an x509 XSUAA key through the broker and the CLI
@@ -76,6 +75,13 @@ packages/auth-broker-cli/src/__tests__/
 ├── mcpSsoSamlProviders.test.ts          # the SAML destinations built by the real broker into real providers
 ├── samlMetadata.test.ts                 # IdP and SP metadata through the XML parser; redirects checked
 ├── fileVariables.test.ts                # a session file's own lines, read as dotenv reads them
+├── stand/                               # the built bin against the stand (below)
+│   ├── authorizationCode.test.ts        # UAA: browser login through the fake browser, SIGINT / SIGTERM,
+│   │                                    # --browser none, a revoked refresh token, --env reuse
+│   ├── deviceCode.test.ts               # Keycloak: oidc --flow device, the code read from stderr
+│   ├── samlManual.test.ts               # Keycloak as IdP: saml2-pure --assertion-flow manual,
+│   │                                    # saml2-bearer --idp-initiated, the SAMLResponse on stdin
+│   └── cliStand.ts                      # the bin as a child, the fake browser, the recording UAA proxy
 ├── helpers/                             # the local token endpoint, reading what a run wrote, the oracle
 └── fixtures/                            # metadata documents and test certificates (trusted by nothing)
 ```
@@ -86,7 +92,7 @@ tests run one at a time). The library's `jest.config.js` ignores `__tests__/live
 
 ## What each suite needs
 
-- **The library's `broker/` suites and every CLI suite**: nothing — no network beyond the
+- **The library's `broker/` suites and every CLI suite outside `stand/`**: nothing — no network beyond the
   loopback, no configuration, no browser. Stores are in-memory fakes of the contract, or
   `@mcp-abap-adt/auth-stores` 4 (a dev dependency) in temporary directories. Token grants talk to
   a token endpoint the test starts on `127.0.0.1` (`helpers/tokenEndpoint.ts`, which also serves
@@ -96,8 +102,8 @@ tests run one at a time). The library's `jest.config.js` ignores `__tests__/live
   provider. The SNC case writes a 64-byte ELF header for the host's architecture into a temporary
   directory as its `sncLib`. `connection14.test.ts` runs `@mcp-abap-adt/connection` 14 over its
   real HTTP wire. A released port is proved by binding it, never by a log line.
-- **`stand/*.test.ts`**: the stand (below). Without `UAA_URL` / `KEYCLOAK_URL` each is skipped,
-  printing why.
+- **`stand/*.test.ts`** (both packages): the stand (below). Without `UAA_URL` / `KEYCLOAK_URL`
+  each is skipped, printing why; the CLI's also skip off Linux, and need the built bin.
 - **`AuthBroker.integration.test.ts`**: a real destination. It reads
   `packages/auth-broker/tests/test-config.yaml`; without it the template
   (`test-config.yaml.template`) is read, its placeholders disable every case, and each case
@@ -128,18 +134,26 @@ These variables belong to the test harness only: neither package's code reads th
 
 `packages/auth-broker/tests/stand/` runs Cloud Foundry UAA (`cfidentity/uaa` v79.7.0) and
 Keycloak (26.7.4) in Docker, on the loopback address only: real token endpoints for the token
-grants `getProvider` builds. It is `@mcp-abap-adt/auth-providers`' stand copied whole and owned
-here: `compose.yaml`, `up.sh` / `run.sh` / `down.sh`, the UAA configuration, the Keycloak realm
-and the test SAML IdP's key — committed test fixtures, trusted by nothing but the local stand, so
-a clone needs only Docker. `src/__tests__/stand/formLogin.ts` plays the user on UAA's login form
-and `/passcode` page and on Keycloak's login, device and consent pages — no browser is opened.
+grants `getProvider` builds and the `mcp-auth` logins. It is `@mcp-abap-adt/auth-providers`'
+stand copied whole and owned here: `compose.yaml`, `up.sh` / `run.sh` / `down.sh`, the UAA
+configuration, the Keycloak realm and the test SAML IdP's key — committed test fixtures, trusted
+by nothing but the local stand, so a clone needs only Docker. Beside them, two test-only helpers
+both packages' stand suites import (reused, never copied; `tools/check-graph.js` allows exactly
+these two relative imports out of a package's `src`; each package's `tsconfig.json` type-checks
+them, its `tsconfig.build.json` compiles `src` alone): `formLogin.ts` plays the user on UAA's
+login form and `/passcode` page and on Keycloak's login, device, consent and SAML pages — no
+browser is opened; `standAdmin.ts` makes UAA trust Keycloak, reads UAA's ACS from its metadata
+and sets a Keycloak SAML client's attributes through the admin API.
 
 ```bash
-npm run test:stand                   # start the stand, run the suites, stop what it started
+npm run test:stand                   # start the stand, build the CLI, run both packages' suites,
+                                     # stop what it started
 npm run test:stand -- -t "passcode"  # one case
 npm run stand:up                     # or keep it running: start it once …
 UAA_URL=http://localhost:8080/uaa KEYCLOAK_URL=http://localhost:8081/realms/test \
   npm test -w @mcp-abap-adt/auth-broker -- src/__tests__/stand
+npm run build && UAA_URL=http://localhost:8080/uaa KEYCLOAK_URL=http://localhost:8081/realms/test \
+  npm test -w @mcp-abap-adt/auth-broker-cli -- src/__tests__/stand
 npm run stand:down                   # … and stop it
 ```
 
@@ -175,6 +189,42 @@ written as cookies, reused by a new broker, renewed by a new login after a 401) 
 - **What it does not prove** is SAP ICF's own SAML handling, nor the difference between the two
   validators (Keycloak signs both the Response and the Assertion; the unit suite's identity
   providers sign one each).
+
+### The CLI against the stand
+
+`packages/auth-broker-cli/src/__tests__/stand/` runs the **built** `mcp-auth` bin (`run.sh`
+builds it first) as a child process, under `node`, with an environment of its own: `PATH` is an
+empty directory — no browser or URL launcher can be found by name — and `HOME` / `TMPDIR` the
+test's directory. No real browser starts: a browser login is given the suite's **fake browser**
+by absolute path (`--browser-program`), a node script the suite writes at run time; it hands the
+URL to the test over a loopback inbox and exits, and the test plays the user with `formLogin`,
+then brings the redirect to the CLI's callback — or holds the URL without answering. Every case
+asserts stdout empty and no token or refresh token on either stream.
+
+- **UAA** (`authorizationCode.test.ts`): the service key names a recording proxy in front of UAA
+  (it forwards everything, records each token request's grant and whether it carried a
+  `code_verifier`, never a value). The browser login — the URL carries `state` and an S256
+  `code_challenge`, one code exchange with its verifier, the `.env` holds the pair; `SIGINT` and
+  `SIGTERM` while the fake holds the URL — exit 130 / 143, "the authorization was aborted", the
+  callback port bound by the test afterwards, no output file; `--browser none` — the URL read from
+  stderr; a refused refresh — UAA revokes the stored refresh token
+  (`DELETE /oauth/token/revoke/{token}` with the user's own access token), the next `--env` run
+  sends the refresh, is refused, logs in and writes back a new pair that never holds the revoked
+  token; `--env` reuse — a valid bound session, no token request at the proxy, no browser, the
+  file byte for byte unchanged. Clients `cli_authcode` and `cli_short` (access tokens of 30 s,
+  inside the one-minute margin, so the next run renews) register
+  `http://localhost:61001/callback`, the CLI's default callback.
+- **Keycloak** (`deviceCode.test.ts`): `oidc --flow device` with `oidc-device`; the user code and
+  complete verification URI read from stderr (the presenter has no logger), approved on
+  Keycloak's pages.
+- **SAML** (`samlManual.test.ts`), Keycloak as the identity provider: `saml2-pure --assertion-flow
+  manual` sends its AuthnRequest to Keycloak's `sap-sp` client with a declared ACS; the test
+  pastes the SAMLResponse on stdin, the CLI validates it, then asks for the session cookies — no
+  SAP system is on the stand to set them, and UAA's web SSO refuses an SP-initiated assertion, so
+  the test pastes a cookie of its own (the CLI's paste, validation and write are measured, not
+  ICF). `saml2-bearer --idp-initiated` reads UAA's SP metadata itself (`--uaa-url`: ACS, Audience,
+  token alias); the SAMLResponse of an IdP-initiated login at Keycloak is pasted and exchanged at
+  UAA. Both Keycloak clients get hour-long assertions at run time (`standAdmin.ts`).
 
 ## Live checks: getProvider against real systems
 

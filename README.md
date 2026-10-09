@@ -68,7 +68,7 @@ npm run check      # build, type checks, lint, dependency graph, shape check, pa
 | `check:publish` | `tools/test-publish-changed.js`: the release tool against fixture repositories |
 | `check` | all of the above but Jest |
 | `test:live` | the library's live suite against real systems — not in `test` or `check`; each case skips, printing why, where its variables, platform or RFC SDK are missing ([`TESTING.md`](docs/development/TESTING.md#live-checks-getprovider-against-real-systems)) |
-| `test:stand` | the library's token-grant suites against UAA and Keycloak in Docker (`packages/auth-broker/tests/stand`): starts the stand, runs them, stops what it started; CI runs it as its own job. `stand:up` / `stand:down` keep it running between runs ([`TESTING.md`](docs/development/TESTING.md#the-stand-uaa-and-keycloak-in-docker)) |
+| `test:stand` | the library's token-grant suites and the CLI's (the built `mcp-auth` bin as a child process, a fake browser) against UAA and Keycloak in Docker (`packages/auth-broker/tests/stand`): starts the stand, builds the CLI, runs both, stops what it started; CI runs it as its own job. `stand:up` / `stand:down` keep it running between runs ([`TESTING.md`](docs/development/TESTING.md#the-stand-uaa-and-keycloak-in-docker)) |
 | `release:publish` | `tools/publish-changed.js` |
 | `chrono` | `tools/version-stats.sh` |
 

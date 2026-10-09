@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# One command for the broker's stand suites: start UAA and Keycloak in Docker,
-# run the tests against them, and stop them again — the same locally and in CI.
-# Run it as `npm run test:stand` from the repository root or from
-# packages/auth-broker; extra arguments go to Jest (`-t "<case>"`).
+# One command for the stand suites of both packages: start UAA and Keycloak in
+# Docker, run the library's suites (packages/auth-broker/src/__tests__/stand)
+# and the CLI's (packages/auth-broker-cli/src/__tests__/stand, which run the
+# built `mcp-auth` bin, built here first) against them, and stop them again —
+# the same locally and in CI. Run it as `npm run test:stand` from the
+# repository root or from packages/auth-broker; extra arguments go to both
+# Jest runs (`-t "<case>"`).
 #
 # Whoever starts a server stops it, per service: one that was already running
 # (from `npm run stand:up`, or started by hand) is left running, and only the
@@ -13,6 +16,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PACKAGE="$(cd "$HERE/../.." && pwd)"
+CLI_PACKAGE="$(cd "$PACKAGE/../auth-broker-cli" && pwd)"
 cd "$HERE"
 PORT="${UAA_PORT:-8080}"
 KC_PORT="${KEYCLOAK_PORT:-8081}"
@@ -75,7 +79,12 @@ stop() {
 trap stop EXIT
 
 UAA_PORT="$PORT" KEYCLOAK_PORT="$KC_PORT" "$HERE/up.sh"
-cd "$PACKAGE"
-UAA_URL="http://localhost:$PORT/uaa" \
-  KEYCLOAK_URL="http://localhost:$KC_PORT/realms/test" \
-  npm test -- src/__tests__/stand "$@"
+# The CLI's suites run its dist: built (with the library it references) before
+# any suite, so a build failure ends the run first.
+(cd "$CLI_PACKAGE" && npm run build)
+for suites in "$PACKAGE" "$CLI_PACKAGE"; do
+  (cd "$suites" &&
+    UAA_URL="http://localhost:$PORT/uaa" \
+      KEYCLOAK_URL="http://localhost:$KC_PORT/realms/test" \
+      npm test -- src/__tests__/stand "$@")
+done
