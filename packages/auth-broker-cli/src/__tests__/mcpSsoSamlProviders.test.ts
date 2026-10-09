@@ -1,5 +1,5 @@
 /**
- * The SAML destinations mcp-sso writes, built by the real broker into the real
+ * The SAML destinations `mcp-auth saml2-pure` / `saml2-bearer` write, built by the real broker into the real
  * auth-providers SAML providers — no mock of either package. What this pins,
  * without an identity provider:
  *
@@ -114,7 +114,7 @@ async function providerFor(
   options: McpSsoOptions,
 ): Promise<{ getTokens: () => Promise<unknown> }> {
   const run = { ...options, flow };
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-sso-dest-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-auth-sso-dest-'));
   dirs.push(dir);
   const keyStore = new EnvDestinationStore(dir);
   await keyStore.setDestination(
@@ -157,13 +157,13 @@ afterAll(() => {
 });
 
 describe.each([['bearer' as const], ['pure' as const]])(
-  'mcp-sso %s config against the real SAML provider',
+  'mcp-auth saml2-* %s config against the real SAML provider',
   (flow) => {
     let tempDir: string;
     let certFile: string;
 
     beforeEach(() => {
-      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-sso-saml-'));
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-auth-sso-saml-'));
       certFile = path.join(tempDir, 'idp.pem');
       fs.writeFileSync(certFile, TEST_IDP_CERT);
     });
@@ -218,8 +218,8 @@ describe.each([
   ['bearer' as const, 'saml2_bearer'],
   ['pure' as const, 'saml2_pure'],
 ])('the %s destination, read back through the key store', (flow, grant) => {
-  it('holds saml / its grant, the trust and the request settings mcp-sso stated', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-sso-means-'));
+  it('holds saml / its grant, the trust and the request settings the run stated', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-auth-sso-means-'));
     dirs.push(dir);
     const keyStore = new EnvDestinationStore(dir);
     await keyStore.setDestination(
@@ -279,7 +279,7 @@ function assertionSignedResponse(key: KeyMaterial): string {
   return Buffer.from(signXml(xml, key)).toString('base64');
 }
 
-describe('the validator the broker builds from the trust mcp-sso writes, against a signed assertion', () => {
+describe('the validator the broker builds from the trust the run writes, against a signed assertion', () => {
   let tempDir: string;
   let trusted: KeyMaterial;
   let other: KeyMaterial;
@@ -288,7 +288,7 @@ describe('the validator the broker builds from the trust mcp-sso writes, against
   beforeAll(() => {
     trusted = generateKeyMaterial();
     other = generateKeyMaterial();
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-sso-signed-'));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-auth-sso-signed-'));
     trustedCertFile = path.join(tempDir, 'idp.pem');
     fs.writeFileSync(trustedCertFile, trusted.certificatePem);
   });

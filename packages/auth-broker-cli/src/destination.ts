@@ -7,7 +7,8 @@
  *   write method (the store contract is read-only).
  * - **The secret** — the token or cookies, their expiry, the refresh token, and
  *   what they are bound to — reaches the session store only through the
- *   broker's persistence (`onTokens`, the token API, `flush()`). The one
+ *   broker's persistence (the provider's `refreshStatePersistence`, the token
+ *   API, `flush()`). The one
  *   exception is `mcp-auth saml2-pure --cookie`, whose cookies no
  *   provider obtains: the user handed them over, and the CLI writes them.
  *

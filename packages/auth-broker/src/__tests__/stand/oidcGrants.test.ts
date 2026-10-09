@@ -188,7 +188,7 @@ describeWhere(
 
     /**
      * The destination's means written as a consumer writes them — the issuer,
-     * and the client as `mcp-sso` writes it (`uaaUrl` the issuer); a broker
+     * and the client as `mcp-auth oidc` writes it (`uaaUrl` the issuer); a broker
      * over both stores with the collaborators given.
      */
     async function destination(

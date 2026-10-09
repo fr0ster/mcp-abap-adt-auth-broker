@@ -2,10 +2,11 @@ import { inspect } from 'node:util';
 /**
  * getProvider for the UAA grants — `jwt` / `authorization_code`,
  * `client_credentials`, `passcode` — and the persistence every token provider
- * the broker builds gets through `onTokens`.
+ * the broker builds gets through its persistence (`refreshStatePersistence`
+ * over the broker's write).
  *
  * The stores are in-memory fakes of the contract; the providers are real
- * (auth-providers 5.1) against a local token endpoint, and are only ever driven
+ * (auth-providers 6) against a local token endpoint, and are only ever driven
  * through `IAuthProvider`. The interactive part of a grant is a recording
  * strategy — nothing here opens a browser.
  */
@@ -588,7 +589,7 @@ describe('getProvider — the UAA grants', () => {
   });
 });
 
-describe('persistence through onTokens', () => {
+describe('persistence through the provider’s refreshStatePersistence', () => {
   /** A destination seeded with a token the server will refuse, and a refresh token. */
   function seeded(grant: UaaGrant = 'authorization_code', logger?: ILogger) {
     const refused = jwtExpiringIn(3600, { jti: 'refused' });

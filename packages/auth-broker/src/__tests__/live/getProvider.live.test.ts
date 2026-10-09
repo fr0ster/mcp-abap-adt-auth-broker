@@ -1,6 +1,6 @@
 /**
  * getProvider against real systems: the provider a
- * destination states, handed to a `@mcp-abap-adt/connection` 10 connector,
+ * destination states, handed to a `@mcp-abap-adt/connection` 14 connector,
  * logs on and is answered.
  *
  * Not part of `npm test`. Run with `npm run test:live` (from the repository
@@ -21,7 +21,7 @@
  *                        AUTH_BROKER_LIVE_SESSIONS_DIR
  *
  * AUTH_BROKER_LIVE_KEYS_DIR is a directory of `<destination>.env` files read by
- * auth-stores 3's `EnvDestinationStore` — the means (`SAP_URL`,
+ * auth-stores 4's `EnvDestinationStore` — the means (`SAP_URL`,
  * `SAP_AUTH_TYPE`, `SAP_CLIENT`, `SAP_USERNAME` / `SAP_PASSWORD`, the
  * `SAP_SNC_*` keys). The address the connector dials is read from the same
  * means (`serviceUrl`, `sapClient`); the RFC system number is derived from the
@@ -29,24 +29,26 @@
  *
  * The `jwt` case's means come from the destination's SAP service key,
  * `<destination>.json` in AUTH_BROKER_LIVE_SERVICE_KEYS_DIR, read by auth-stores
- * 3's `AbapServiceKeyStore`: the client (`uaa.*`), the ABAP URL and client. The
+ * 4's `AbapServiceKeyStore`: the client (`uaa.*`), the ABAP URL and client. The
  * grant is stated by whoever builds the store, never read from the key (a SAP
  * key cannot state one): `new AbapServiceKeyStore(dir, { grantType:
- * 'authorization_code' })` (auth-stores 3.1.0). The URL the
- * connector dials is the key's; `getProvider` needs none. Its session —
- * `<destination>.env` in AUTH_BROKER_LIVE_SESSIONS_DIR, read by auth-stores 3's
- * `AbapSessionStore`, which reads a 2.x/3.x file's secret keys only — must hold
- * a refresh token from an earlier login, and its binding must be the key's:
- * a file written before auth-stores 3.1.0 answers `issuedFor`
- * from its `SAP_URL` (+ `SAP_CLIENT`) and `issuedBy` from `SAP_UAA_URL` +
- * `SAP_UAA_CLIENT_ID`, which the 3.x CLI wrote from that same key. The case
- * copies that file to a temporary directory and never writes the original; it
- * seeds the copy with a well-formed JWT the system refuses (an `exp` an hour
- * ahead, so the provider trusts it) under the binding the file answered, and
- * the 401 is renewed by the stored refresh token in `rejected()` — no login,
- * no browser: the `authorization` strategy it passes refuses. A binding that
- * is not the key's is discarded by the broker, and the refused login then
- * fails the case — log in again with the CLI. Where the server rotates
+ * 'authorization_code' })`. The URL the connector dials is the key's;
+ * `getProvider` needs none. Its session — `<destination>.env` in
+ * AUTH_BROKER_LIVE_SESSIONS_DIR, read by auth-stores 4's `AbapSessionStore` —
+ * must hold a refresh token from an earlier login, and its binding must be the
+ * one auth-broker 5 computes for that key: `issuedFor` the key's URL (+ SAP
+ * client) and `issuedBy` the version-2 record of `jwt/authorization_code` with
+ * the key's client and UAA URL — what `mcp-auth --service-key <the key> --type
+ * abap` (CLI 3.0.0) writes. A session written before 5.0.0 (a bare-URI
+ * `issuedBy`, or one auth-stores composes from `SAP_UAA_URL` +
+ * `SAP_UAA_CLIENT_ID`) reads as unbound. The case copies that file to a
+ * temporary directory and never writes the original; it seeds the copy with a
+ * well-formed JWT the system refuses (an `exp` an hour ahead, so the provider
+ * trusts it) under the binding the file answered, and the 401 is renewed by the
+ * stored refresh token in `rejected()` — no login, no browser: the
+ * `authorization` strategy it passes refuses. A binding that is not the key's
+ * (a pre-5.0.0 session included) is not used by the broker, and the refused
+ * login then fails the case — log in again with CLI 3.0.0. Where the server rotates
  * refresh tokens, the run spends the original file's refresh token; log in
  * again afterwards (I have not measured whether XSUAA rotates them).
  *
@@ -399,12 +401,12 @@ describeWhere(
       }
       if (!stored.issuedFor || !stored.issuedBy) {
         throw new Error(
-          `the session of "${destination}" answers no binding (SAP_URL and SAP_UAA_URL / SAP_UAA_CLIENT_ID, or SAP_ISSUED_FOR / SAP_ISSUED_BY): log in again with the CLI`,
+          `the session of "${destination}" answers no binding (SAP_ISSUED_FOR / SAP_ISSUED_BY): log in again with mcp-auth 3`,
         );
       }
       const refused = refusedJwt();
-      // A credential written without its binding clears it (auth-stores
-      // 3.1.0): the refused token is written under the one the file answered.
+      // auth-stores merges: the refused token is written under the binding
+      // the file answered, its refresh token kept.
       await sessions.saveSession(destination, {
         authorizationToken: refused,
         refreshToken: stored.refreshToken,

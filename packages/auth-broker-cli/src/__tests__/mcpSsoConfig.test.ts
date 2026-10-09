@@ -2,7 +2,8 @@
  * Coverage for the CLI/config merge in mcpSsoConfig.ts, and for what a run
  * states: the destination's means and the collaborators it hands the broker.
  *
- * This is the code `mcp-sso` uses to reconcile `--protocol`/`--flow`/flag
+ * This is the code `mcp-auth oidc | saml2-pure | saml2-bearer` (2.x's
+ * `mcp-sso`) uses to reconcile the subcommand's protocol and flow and its flag
  * options with an optional `--config <path.json>` file before building the
  * destination and the strategies the broker's provider will use. A
  * `browser`/`redirectPort`/`authorizationCode`/`assertionFlow` serialized in
@@ -171,7 +172,7 @@ function strategyOf(options: McpSsoOptions): unknown {
   );
 }
 
-describe('mcp-sso CLI/config merge', () => {
+describe('mcp-auth oidc / saml2-* CLI/config merge', () => {
   let exitSpy: jest.SpyInstance;
   let errorSpy: jest.SpyInstance;
 
@@ -462,7 +463,7 @@ describe('mcp-sso CLI/config merge', () => {
         defaultReplayStore,
       );
       expect(typeof collaborators.samlCookies('dest')).toBe('function');
-      // mcp-sso states no authorization_code destination: mcp-auth does.
+      // These subcommands state no authorization_code destination: auth-code does.
       expect(() =>
         collaborators.authorization('dest', 'authorization_code'),
       ).toThrow('no interactive strategy for authorization_code');
@@ -539,7 +540,7 @@ describe('mcp-sso CLI/config merge', () => {
     let tempDir: string;
 
     beforeEach(() => {
-      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-sso-trust-'));
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-auth-sso-trust-'));
     });
 
     afterEach(() => {

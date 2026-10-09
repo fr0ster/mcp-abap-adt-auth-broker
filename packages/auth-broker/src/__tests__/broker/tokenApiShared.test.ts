@@ -3,11 +3,11 @@
  * `refreshToken` and `createTokenRefresher` ask the very provider
  * `getProvider` hands out for the destination — one per destination, one token,
  * one refresh token, one renewal in flight — and write nothing themselves: the
- * provider's `onTokens` does. A failure of that write still reaches
- * the token API's caller, as in 3.x.
+ * provider's persistence does. Under `onWriteFailure: 'fail'` a failure of that
+ * write still reaches the token API's caller.
  *
  * The stores are in-memory fakes of the contract; the providers are real
- * (auth-providers 5) against a local token endpoint, driven through
+ * (auth-providers 6) against a local token endpoint, driven through
  * `IAuthProvider` and the token API only.
  */
 
@@ -221,7 +221,7 @@ describe('the token API on the getProvider cache (no consumer provider)', () => 
     expect(held()?.authorizationToken).toBe(token);
   });
 
-  it('writes nothing itself: a cache hit writes nothing, a renewal is written once by onTokens', async () => {
+  it('writes nothing itself: a cache hit writes nothing, a renewal is written once by the provider’s persistence', async () => {
     const { broker, store, held, stored } = seededAuthorizationCode();
 
     await expect(broker.getToken(D)).resolves.toBe(stored);

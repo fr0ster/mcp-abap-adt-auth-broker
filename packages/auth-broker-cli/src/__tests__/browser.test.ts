@@ -194,7 +194,7 @@ describe('any other platform: nothing guessed', () => {
   });
 });
 
-describe('mcp-sso: the flag and the --config field map the same', () => {
+describe('mcp-auth oidc / saml2-*: the flag and the --config field map the same', () => {
   function fromFile(browser: unknown): McpSsoOptions {
     const options: McpSsoOptions = { authType: 'abap', format: 'env' };
     applyFileConfig(

@@ -64,7 +64,7 @@ let spies: jest.SpyInstance[];
 
 beforeEach(async () => {
   server = await startLocalServer();
-  root = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-sso-run-'));
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-auth-sso-run-'));
   workDir = path.join(root, 'work');
   outDir = path.join(root, 'out');
   fs.mkdirSync(workDir);
