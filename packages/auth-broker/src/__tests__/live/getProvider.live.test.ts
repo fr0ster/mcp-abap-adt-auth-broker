@@ -21,7 +21,7 @@
  *                        AUTH_BROKER_LIVE_SESSIONS_DIR
  *
  * AUTH_BROKER_LIVE_KEYS_DIR is a directory of `<destination>.env` files read by
- * auth-stores 4's `EnvDestinationStore` — the means (`SAP_URL`,
+ * auth-stores 5's `EnvDestinationStore` — the means (`SAP_URL`,
  * `SAP_AUTH_TYPE`, `SAP_CLIENT`, `SAP_USERNAME` / `SAP_PASSWORD`, the
  * `SAP_SNC_*` keys). The address the connector dials is read from the same
  * means (`serviceUrl`, `sapClient`); the RFC system number is derived from the
@@ -29,19 +29,20 @@
  *
  * The `jwt` case's means come from the destination's SAP service key,
  * `<destination>.json` in AUTH_BROKER_LIVE_SERVICE_KEYS_DIR, read by auth-stores
- * 4's `AbapServiceKeyStore`: the client (`uaa.*`), the ABAP URL and client. The
+ * 5's `AbapServiceKeyStore`: the client (`uaa.*`), the ABAP URL and client. The
  * grant is stated by whoever builds the store, never read from the key (a SAP
  * key cannot state one): `new AbapServiceKeyStore(dir, { grantType:
  * 'authorization_code' })`. The URL the connector dials is the key's;
  * `getProvider` needs none. Its session — `<destination>.env` in
- * AUTH_BROKER_LIVE_SESSIONS_DIR, read by auth-stores 4's `AbapSessionStore` —
+ * AUTH_BROKER_LIVE_SESSIONS_DIR, read by auth-stores 5's `AbapSessionStore` —
  * must hold a refresh token from an earlier login, and its binding must be the
  * one auth-broker 5 computes for that key: `issuedFor` the key's URL (+ SAP
  * client) and `issuedBy` the version-2 record of `jwt/authorization_code` with
  * the key's client and UAA URL — what `mcp-auth --service-key <the key> --type
- * abap` (CLI 3.0.0) writes. A session written before 5.0.0 (a bare-URI
- * `issuedBy`, or one auth-stores composes from `SAP_UAA_URL` +
- * `SAP_UAA_CLIENT_ID`) reads as unbound. The case copies that file to a
+ * abap` (CLI 3.0.0) writes. A session written by auth-broker 4.x (a bare-URI
+ * `issuedBy`) reads as unbound; one with no binding keys beside its token
+ * (written before auth-stores 3.1.0, or by hand) is refused by auth-stores 5
+ * as a whole (`StorageError`, `record-format`) — regenerate it with mcp-auth. The case copies that file to a
  * temporary directory and never writes the original; it seeds the copy with a
  * well-formed JWT the system refuses (an `exp` an hour ahead, so the provider
  * trusts it) under the binding the file answered, and the 401 is renewed by the
