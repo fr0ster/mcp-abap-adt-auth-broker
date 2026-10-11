@@ -102,7 +102,10 @@ the library README, *A Provider for a Connector*.
   id, a scope, a certificate, a password — a new provider that starts with nothing and logs in.
 - **A stored secret is reused only when bound exactly.** The session's `issuedFor` and the
   versioned `issuedBy` record must equal what the current means give. A session written before
-  5.0.0 reads as unbound once: one login per token destination after upgrading.
+  5.0.0 reads as unbound once: one login per token destination after upgrading. A session file
+  with no binding keys beside its credential is refused by auth-stores 5 (`StorageError`,
+  `reason: 'record-format'`), and that error reaches you: regenerate it with `mcp-auth` (from
+  auth-broker-cli 3.1.0, `mcp-auth --env <file>` over it discards the session and logs in anew).
 - **Every token a provider obtains is written** before it answers, one write at a time per
   destination; what a failed write means is your `onWriteFailure` (`'fail'`: the call fails, and
   the destination's calls are refused until a write lands; `'continue'`: logged). Nothing retries
@@ -243,7 +246,7 @@ Authenticates* in the
 ## Store Methods
 
 Stores answer through the contracts of `@mcp-abap-adt/interfaces-auth-broker`, each for its role
-(auth-stores 4):
+(auth-stores 5):
 
 ```typescript
 import { XsuaaServiceKeyStore, XsuaaSessionStore } from '@mcp-abap-adt/auth-stores';
@@ -307,7 +310,7 @@ const withDbSessions = new AuthBroker({
 
 ### Environment Variables
 
-auth-stores 4 exports its key names, each table for one role:
+auth-stores 5 exports its key names, each table for one role:
 
 - **The secret** — `ABAP_SESSION_VARS` (`AbapSessionStore`, `EnvFileSessionStore`):
   `SAP_JWT_TOKEN`, `SAP_SESSION_COOKIES_B64`, `SAP_EXPIRES_AT`, `SAP_REFRESH_TOKEN`,

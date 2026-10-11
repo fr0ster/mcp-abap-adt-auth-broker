@@ -1,7 +1,7 @@
 /**
  * What one session write is, and the refresh state a build owns.
  *
- * auth-stores 4.0.0's `saveSession` merges: a field a write leaves out keeps
+ * auth-stores 5.0.0's `saveSession` merges: a field a write leaves out keeps
  * what is stored, whoever stored it. So every write the broker makes states
  * the refresh token — the one the build owns, or `''` — and, beside a
  * credential, both binding fields; a credential-free write states only
@@ -9,7 +9,7 @@
  * that was seeded with it or obtained it — never from the store at write
  * time.
  *
- * End to end over auth-stores 4.0.0's `EnvDestinationStore` (the means) and
+ * End to end over auth-stores 5.0.0's `EnvDestinationStore` (the means) and
  * `AbapSessionStore` (the secret) files, with real providers against a local
  * token endpoint; a "restart" is a fresh broker over fresh stores on the same
  * files. Where a case needs a store the auth-stores files cannot hold (a
@@ -36,6 +36,7 @@ import {
   AbapSessionStore,
   type DestinationMeans,
   EnvDestinationStore,
+  StorageError,
 } from '@mcp-abap-adt/auth-stores';
 import type {
   AuthorizationRequest,
@@ -144,26 +145,28 @@ async function seed(session: IConfig): Promise<void> {
   await new AbapSessionStore(sessionsDir()).saveSession(D, session);
 }
 
-/** A session file as 4.x wrote it: the bare issuer URI, or no issuedBy. */
+/**
+ * A session file as 4.x wrote it: the bare issuer URI, or no issuedBy (not of
+ * auth-stores 5.0.0's format). Returns the text written.
+ */
 function seed4x(fields: {
   token: string;
   refreshToken: string;
   issuedBy?: string;
-}): void {
+}): string {
   const V = ABAP_SESSION_VARS;
-  fs.writeFileSync(
-    path.join(sessionsDir(), `${D}.env`),
-    [
-      `${V.AUTHORIZATION_TOKEN}=${fields.token}`,
-      `${V.EXPIRES_AT}=${Date.now() + HOUR}`,
-      `${V.REFRESH_TOKEN}=${fields.refreshToken}`,
-      `${V.ISSUED_FOR}=${FOR}`,
-      ...(fields.issuedBy === undefined
-        ? []
-        : [`${V.ISSUED_BY}=${fields.issuedBy}`]),
-      '',
-    ].join('\n'),
-  );
+  const text = [
+    `${V.AUTHORIZATION_TOKEN}=${fields.token}`,
+    `${V.EXPIRES_AT}=${Date.now() + HOUR}`,
+    `${V.REFRESH_TOKEN}=${fields.refreshToken}`,
+    `${V.ISSUED_FOR}=${FOR}`,
+    ...(fields.issuedBy === undefined
+      ? []
+      : [`${V.ISSUED_BY}=${fields.issuedBy}`]),
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(sessionsDir(), `${D}.env`), text);
+  return text;
 }
 
 /** A token answer without a refresh token: a token-only result. */
@@ -627,20 +630,13 @@ describe('a session bound to other means: what the write leaves in the store, an
     ],
     [
       '4.x: a bare issuer URI',
-      async () =>
+      async () => {
         seed4x({
           token: jwtExpiringIn(3600, { jti: 'identity-4x' }),
           refreshToken: R_OLD,
           issuedBy: `${endpoint.url}?client_id=sb-broker%21t42`,
-        }),
-    ],
-    [
-      '4.x: no issuedBy',
-      async () =>
-        seed4x({
-          token: jwtExpiringIn(3600, { jti: 'identity-4x' }),
-          refreshToken: R_OLD,
-        }),
+        });
+      },
     ],
   ];
 
@@ -904,6 +900,104 @@ describe('a session bound to other means: what the write leaves in the store, an
       expiresAt: expect.any(Number),
       issuedBy: by(),
     });
+  });
+});
+
+// auth-stores 5.0.0 composes no binding and refuses a credential without both
+// binding keys as a record not of its format (StorageError, reason
+// 'record-format'). Every path that reads the session passes that refusal to
+// the caller as the store raised it: no login, no request, no write. The one
+// path that reads no session — the broker's own client_credentials — writes
+// its new credential, which the store lets replace the malformed record whole.
+describe('the store holds 4.x with no issuedBy: not of auth-stores 5.0.0’s format', () => {
+  const legacy = () =>
+    seed4x({
+      token: jwtExpiringIn(3600, { jti: 'identity-4x' }),
+      refreshToken: R_OLD,
+    });
+  const file = () =>
+    fs.readFileSync(path.join(sessionsDir(), `${D}.env`), 'utf8');
+
+  async function refused(call: Promise<unknown>): Promise<void> {
+    const error = await call.then(
+      () => {
+        throw new Error('expected the store’s refusal');
+      },
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(StorageError);
+    expect(error).toMatchObject({
+      code: 'STORAGE_ERROR',
+      reason: 'record-format',
+      message: `AbapSessionStore: the stored session for "${D}" is not in this store's format; regenerate it with mcp-auth`,
+    });
+    expect(String((error as Error).stack)).not.toContain(R_OLD);
+  }
+
+  it('authorization_code: getToken rejects with the store’s error; nothing sent, nothing written', async () => {
+    await state(uaaMeans('authorization_code'));
+    const text = legacy();
+    const first = broker();
+
+    await refused(first.broker.getToken(D));
+
+    expect(endpoint.requests).toEqual([]);
+    expect(first.writes).toEqual([]);
+    expect(file()).toBe(text);
+  });
+
+  it('saml2_pure: getProvider rejects with the store’s error; no login, nothing written', async () => {
+    await state(samlMeans());
+    const text = legacy();
+    const first = samlBroker();
+
+    await refused(first.broker.getProvider(D));
+
+    expect(first.logins()).toBe(0);
+    expect(first.writes).toEqual([]);
+    expect(file()).toBe(text);
+  });
+
+  it.each([
+    ['a consumer factory', () => () => clientCredentials()],
+    ['a consumer instance', () => clientCredentials()],
+  ] as const)(
+    '%s: getToken rejects with the store’s error; nothing sent, nothing written',
+    async (_label, provider) => {
+      await state(uaaMeans('client_credentials'));
+      const text = legacy();
+      const first = broker({ provider: provider() });
+
+      await refused(first.broker.getToken(D));
+
+      expect(endpoint.requests).toEqual([]);
+      expect(first.writes).toEqual([]);
+      expect(file()).toBe(text);
+    },
+  );
+
+  it('the broker’s client_credentials reads no session: its new credential replaces the record whole, no R_old; a restart sends no refresh token', async () => {
+    await state(uaaMeans('client_credentials'));
+    legacy();
+    const first = broker();
+
+    await first.broker.getToken(D);
+
+    expect(await stored()).toEqual({
+      authorizationToken: endpoint.issued[0],
+      expiresAt: expect.any(Number),
+      issuedFor: FOR,
+      issuedBy: by('client_credentials'),
+    });
+    expectStated(first.writes);
+
+    const restarted = broker();
+    await restarted.broker.refreshToken(D);
+    expect(endpoint.requests.map((r) => r.grantType)).toEqual([
+      'client_credentials',
+      'client_credentials',
+    ]);
+    neverSent(R_OLD);
   });
 });
 

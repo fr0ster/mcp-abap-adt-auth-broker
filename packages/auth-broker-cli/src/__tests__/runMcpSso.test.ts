@@ -28,6 +28,7 @@ import {
 } from '@mcp-abap-adt/auth-stores';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 import type { McpSsoOptions } from '../mcpSsoConfig';
+import { failureLines } from '../output';
 import { runMcpSso } from '../runMcpSso';
 import { parseSubcommandArgs, type SsoSubcommand } from '../subcommandArgs';
 import {
@@ -1008,6 +1009,46 @@ describe('three sources, one per run', () => {
     ).loadSession(DEST);
     expect(jwtName(written?.authorizationToken)).toBe('key-access-1');
   });
+
+  it('--env over an old session (no binding keys): the fixed line, a new login, the means unchanged, a session with both binding keys', async () => {
+    const previous = await previousSession();
+    const old = readEnvKeys(previous);
+    const text = fs
+      .readFileSync(previous, 'utf8')
+      .split('\n')
+      .filter((line) => !line.startsWith('SAP_ISSUED_'))
+      .join('\n');
+    fs.writeFileSync(previous, text);
+    const session = new Set(sessionKeys('abap'));
+    const meansLines = (t: string) =>
+      t.split('\n').filter((l) => !session.has(l.slice(0, l.indexOf('='))));
+    (console.error as jest.Mock).mockClear();
+    const sent = server.requests.length;
+    await expect(
+      run(bare('oidc', ['--flow', 'password', '--env', previous])),
+    ).resolves.toBe(0);
+    expect(console.error).toHaveBeenCalledWith(
+      `⚠️  The stored session for "${DEST}" is not in the store's format; logging in anew`,
+    );
+    const after = server.requests.slice(sent);
+    expect(after.map((r) => r.form.grant_type)).toEqual(['password']);
+    expect(JSON.stringify(after)).not.toContain(old.SAP_REFRESH_TOKEN!);
+    expect(meansLines(fs.readFileSync(previous, 'utf8'))).toEqual(
+      meansLines(text),
+    );
+    const keys = readEnvKeys(previous);
+    expect(keys.SAP_ISSUED_FOR).toBeDefined();
+    expect(keys.SAP_ISSUED_BY).toBeDefined();
+    expect(jwtName((await sessionAt(previous))?.authorizationToken)).toBe(
+      'pw-access-2',
+    );
+    const printed = (console.error as jest.Mock).mock.calls
+      .map((call) => call.map(String).join(' '))
+      .join('\n');
+    expect(printed).not.toContain(old.SAP_JWT_TOKEN!);
+    expect(printed).not.toContain(old.SAP_REFRESH_TOKEN!);
+    expect(console.log).not.toHaveBeenCalled();
+  });
 });
 
 describe('means from flags or --config are like --service-key; --env takes none', () => {
@@ -1156,6 +1197,43 @@ describe('--cookie hands over the secret — it is no means flag', () => {
         issuedFor: 'https://abap.example.com:443?sap-client=200',
       }),
     );
+  });
+
+  describe('over an old cookie session (no binding keys)', () => {
+    const OLD = Buffer.from('SAP_SESSIONID=OLD-COOKIE-MARKER').toString(
+      'base64',
+    );
+    function oldCookieFile(): string {
+      const file = path.join(root, `${DEST}.env`);
+      fs.writeFileSync(
+        file,
+        `SAP_URL=${SERVICE_URL}\nSAP_CLIENT=100\nSAP_AUTH_TYPE=saml\nSAP_GRANT_TYPE=none\nSAP_SESSION_COOKIES_B64=${OLD}\n`,
+      );
+      return file;
+    }
+
+    it('--cookie: the new cookies replace the record, bound', async () => {
+      const file = oldCookieFile();
+      await expect(
+        run(bare(['--cookie', 'SAP_SESSIONID=new', '--env', file])),
+      ).resolves.toBe(0);
+      expect(await new AbapSessionStore(root).loadSession(DEST)).toEqual(
+        expect.objectContaining({
+          sessionCookies: 'SAP_SESSIONID=new',
+          issuedBy: RECORD,
+        }),
+      );
+    });
+
+    it('no --cookie: no login can replace them — the CLI’s words, the file as it was', async () => {
+      const file = oldCookieFile();
+      const before = fs.readFileSync(file);
+      const thrown = await run(bare(['--env', file])).catch((e: unknown) => e);
+      expect(failureLines(thrown)).toEqual([
+        `❌ the stored session for "${DEST}" is not in the store's format`,
+      ]);
+      expect(fs.readFileSync(file)).toEqual(before);
+    });
   });
 });
 

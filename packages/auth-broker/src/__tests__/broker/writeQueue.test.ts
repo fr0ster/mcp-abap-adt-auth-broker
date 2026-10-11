@@ -13,7 +13,7 @@
  *   `'continue'`: nothing fails, each failed write is one `warn` line.
  *
  * The queue cases run on in-memory stand-ins of the stores (the contract's
- * merge); the restart cases on auth-stores 4.0.0's `EnvDestinationStore` and
+ * merge); the restart cases on auth-stores 5.0.0's `EnvDestinationStore` and
  * `AbapSessionStore` files, with real providers against a local token
  * endpoint. A "restart" is a fresh broker over fresh stores on the same files.
  * Nothing opens a browser.

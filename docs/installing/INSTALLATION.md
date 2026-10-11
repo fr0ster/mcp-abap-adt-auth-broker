@@ -23,7 +23,7 @@ npm install @mcp-abap-adt/auth-broker @mcp-abap-adt/auth-providers @mcp-abap-adt
 The library depends on `@mcp-abap-adt/auth-providers` 6 and `@mcp-abap-adt/auth-errors` 2, but
 declare them yourself: your code imports the renewal strategies (`refreshThenLogin`,
 `refreshOnly`) and the interactive strategies from auth-providers, and reads failures with
-auth-errors. The stores are yours to choose: `@mcp-abap-adt/auth-stores` 4, or your own on the
+auth-errors. The stores are yours to choose: `@mcp-abap-adt/auth-stores` 5, or your own on the
 `@mcp-abap-adt/interfaces-auth-broker` contracts. Everything must be on the same contract majors
 (`@mcp-abap-adt/interfaces-auth` 7): check that one copy of each is installed —
 
@@ -78,7 +78,7 @@ builds the key store states it — `new AbapServiceKeyStore(dir, { grantType:
 ### Environment File Setup
 
 A destination may also be stated in `{destination}.env` — what `mcp-auth` writes, or a file you
-write yourself. With auth-stores 4 the file has two roles: the means, read by
+write yourself. With auth-stores 5 the file has two roles: the means, read by
 `EnvDestinationStore`, and the secret, written by the broker through a session store
 (`AbapSessionStore`); each touches only its own keys.
 
@@ -236,6 +236,16 @@ Every session written before auth-broker 5.0.0 reads as unbound once: each token
 logs in once (interactive grants) or requests a token once (`client_credentials`, `password`,
 `token_exchange`). Run `mcp-auth --env <file>` (or `--service-key`) once per destination for a
 headless consumer.
+
+A session file with no binding keys (`SAP_ISSUED_FOR` / `SAP_ISSUED_BY`, or the `XSUAA_*` pair)
+beside its token or cookies — written by auth-stores 2.x/3.0.0, auth-broker 3.x, or by hand — is
+not read at all: auth-stores 5 refuses it as a whole with a `StorageError` (`code:
+'STORAGE_ERROR'`, `reason: 'record-format'`), and `getProvider` / `getToken` reject with that
+error instead of logging in. Regenerate the session with
+`mcp-auth --service-key <key.json> --output <file> --type abap|xsuaa`, which reads no stored
+session, or delete the file's session lines; a file holding only the means is no session. From
+`@mcp-abap-adt/auth-broker-cli` 3.1.0, `mcp-auth --env <file>` (or `--destination <name>`) over
+such a file discards its session and logs in anew, every means line kept byte for byte.
 
 ### Token Refresh Issues
 

@@ -175,7 +175,7 @@ export type { ILogger } from '@mcp-abap-adt/interfaces-utils';
 
 Concrete implementations are **not** in this package:
 
-- Stores live in `@mcp-abap-adt/auth-stores` (4 for this version).
+- Stores live in `@mcp-abap-adt/auth-stores` (5 for this version).
 - Providers live in `@mcp-abap-adt/auth-providers` 6 — a runtime dependency, since `getProvider`
   builds `BasicAuthProvider`, `SncLogonProvider`, `TokenAuthProvider`, `SamlAuthProvider`,
   `AuthorizationCodeProvider`, `ClientCredentialsProvider`, `UaaPasscodeProvider`,

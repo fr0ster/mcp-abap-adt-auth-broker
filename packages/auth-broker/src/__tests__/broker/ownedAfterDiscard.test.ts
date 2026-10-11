@@ -10,7 +10,7 @@
  * write `''` then, never the refresh token the provider discarded. In its own
  * file, so the mock touches no other suite.
  *
- * Over auth-stores 4.0.0's `EnvDestinationStore` and `AbapSessionStore` files,
+ * Over auth-stores 5.0.0's `EnvDestinationStore` and `AbapSessionStore` files,
  * a real `AuthorizationCodeProvider` and the local token endpoint; nothing
  * opens a browser.
  */

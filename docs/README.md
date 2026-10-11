@@ -1,8 +1,8 @@
 # Documentation
 
 Complete documentation for the `@mcp-abap-adt/auth-broker` repository: the library
-(`packages/auth-broker`, 5.0.0) and its command, `@mcp-abap-adt/auth-broker-cli`
-(`packages/auth-broker-cli`, 3.0.0). Upgrading: *Migrating to 5.0.0* in the
+(`packages/auth-broker`, 5.0.2) and its command, `@mcp-abap-adt/auth-broker-cli`
+(`packages/auth-broker-cli`, 3.1.0). Upgrading: *Migrating to 5.0.0* in the
 [library README](../packages/auth-broker/README.md#migrating-to-500), and *Migrating to
 3.0.0* in the [CLI README](../packages/auth-broker-cli/README.md#migrating-to-300); earlier
 migrations are in each package's CHANGELOG.
@@ -78,4 +78,4 @@ For a destination name:
 - **The service key store** (`IServiceKeyStore`) answers the *means*: `authType`, `grantType`, the client, user and password, the SNC, OIDC and SAML settings, the URL — and a client certificate (`getClientCertificate`, read only beside a `clientAuthentication` strategy). The broker never writes it.
 - **The session store** (`ISessionStore`) holds the *secret*: the token or cookies, its expiry, the refresh token, and what it is bound to (`issuedFor`, and `issuedBy` — a versioned record of the row, the client, every server address and the trust). The broker writes the secret alone, every field stated; the store must settle every `saveSession`.
 
-Where they live is the stores' business: `@mcp-abap-adt/auth-stores` 4 keeps both in `{destination}.env` files (and reads SAP service keys, `{destination}.json`), in the directories you give each store's constructor; any implementation of the contracts serves.
+Where they live is the stores' business: `@mcp-abap-adt/auth-stores` 5 keeps both in `{destination}.env` files (and reads SAP service keys, `{destination}.json`), in the directories you give each store's constructor; any implementation of the contracts serves.

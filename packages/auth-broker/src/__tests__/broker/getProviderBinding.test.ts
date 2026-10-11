@@ -17,14 +17,14 @@
  * test that used it would agree with any bug in it.
  *
  * Stores are in-memory fakes of the contract — and, for the legacy file, the
- * real `AbapSessionStore` of auth-stores 4.0.0; providers are real, against a
+ * real `AbapSessionStore` of auth-stores 5.0.0; providers are real, against a
  * local token endpoint; nothing opens a browser.
  */
 
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { ABAP_SESSION_VARS, AbapSessionStore } from '@mcp-abap-adt/auth-stores';
+import { AbapSessionStore, StorageError } from '@mcp-abap-adt/auth-stores';
 import type {
   AuthorizationRequest,
   IAuthorizationStrategy,
@@ -682,7 +682,7 @@ describe('persist writes the binding with every secret, and nothing else', () =>
   );
 });
 
-describe('a session file written before auth-stores 3.1.0 (the real AbapSessionStore of auth-stores 4.0.0)', () => {
+describe('a session file written before auth-stores 3.1.0 (the real AbapSessionStore of auth-stores 5.0.0)', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -693,69 +693,83 @@ describe('a session file written before auth-stores 3.1.0 (the real AbapSessionS
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  /** `KEY=value` on a line of its own, the value bare or in the quotes auth-stores picks. */
-  function line(key: string, value: string): RegExp {
-    const v = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`^${key}=(${v}|'${v}'|\`${v}\`|"${v}")$`, 'm');
-  }
-
   /** What the 3.x CLI and persist left: means and secret in one file, no binding keys. */
-  function legacyFile(url: string): void {
-    fs.writeFileSync(
-      path.join(dir, `${D}.env`),
-      [
-        `SAP_URL=${url}`,
-        'SAP_CLIENT=100',
-        'SAP_AUTH_TYPE=jwt',
-        `SAP_UAA_URL=${endpoint.url}`,
-        `SAP_UAA_CLIENT_ID=${CLIENT_ID}`,
-        `SAP_UAA_CLIENT_SECRET=${CLIENT_SECRET}`,
-        `SAP_JWT_TOKEN=${STORED_TOKEN}`,
-        `SAP_REFRESH_TOKEN=${STORED_RT}`,
-        '',
-      ].join('\n'),
-    );
+  function legacyFile(url: string): string {
+    const text = [
+      `SAP_URL=${url}`,
+      'SAP_CLIENT=100',
+      'SAP_AUTH_TYPE=jwt',
+      `SAP_UAA_URL=${endpoint.url}`,
+      `SAP_UAA_CLIENT_ID=${CLIENT_ID}`,
+      `SAP_UAA_CLIENT_SECRET=${CLIENT_SECRET}`,
+      `SAP_JWT_TOKEN=${STORED_TOKEN}`,
+      `SAP_REFRESH_TOKEN=${STORED_RT}`,
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(dir, `${D}.env`), text);
+    return text;
   }
 
-  it('is not seeded even when its SAP_URL, SAP_CLIENT and SAP_UAA_* are this destination’s means: the binding auth-stores composes is 4.x’s, no record', async () => {
-    legacyFile('https://abap.example.com/sap/bc/adt/');
-    const { broker: b, login } = broker('authorization_code', null, {
-      sessions: new AbapSessionStore(dir),
-    });
+  // auth-stores 5.0.0 composes no legacy binding: a credential without both
+  // binding keys is not of the store's format, and the store refuses the
+  // record whole. The broker passes that refusal to the caller as the store
+  // raised it — no login, no request, no write — so the user regenerates the
+  // session with mcp-auth instead of being logged in over a file they kept.
+  it.each([
+    [
+      'its SAP_URL, SAP_CLIENT and SAP_UAA_* are this destination’s means',
+      'https://abap.example.com/sap/bc/adt/',
+    ],
+    [
+      'its SAP_URL names another system',
+      'https://other.example.com/sap/bc/adt',
+    ],
+  ])(
+    '%s: getProvider and getToken reject with the store’s record-format error; nothing sent, no login, the file untouched, nothing of it in the error or the log',
+    async (_case, url) => {
+      const text = legacyFile(url);
+      const {
+        broker: b,
+        login,
+        logger,
+      } = broker('authorization_code', null, {
+        sessions: new AbapSessionStore(dir),
+      });
 
-    const provider = await b.getProvider(D);
-    expect(await provider.prepare()).toEqual({ ok: true });
-    await b.flush();
+      for (const call of [() => b.getProvider(D), () => b.getToken(D)]) {
+        const error = await call().then(
+          () => {
+            throw new Error('expected the store’s refusal');
+          },
+          (e: unknown) => e,
+        );
+        expect(error).toBeInstanceOf(StorageError);
+        expect(error).toMatchObject({
+          code: 'STORAGE_ERROR',
+          reason: 'record-format',
+          message: `AbapSessionStore: the stored session for "${D}" is not in this store's format; regenerate it with mcp-auth`,
+        });
+        const e = error as unknown as Record<string, unknown>;
+        const rendered = [
+          String(error),
+          (error as Error).stack,
+          ...Object.getOwnPropertyNames(e).map((n) => JSON.stringify(e[n])),
+        ].join('\n');
+        for (const value of [STORED_TOKEN, STORED_RT, CLIENT_SECRET, url]) {
+          expect(rendered).not.toContain(value);
+        }
+      }
+      await b.flush();
 
-    expect(endpoint.requests.map((r) => r.grantType)).toEqual([
-      'authorization_code',
-    ]);
-    expect(JSON.stringify(endpoint.requests)).not.toContain(STORED_RT);
-    expect(login.authorize).toHaveBeenCalledTimes(1);
-    expect(await bearer(provider)).toBe(endpoint.issued[0]);
-    const file = fs.readFileSync(path.join(dir, `${D}.env`), 'utf8');
-    expect(file).toMatch(line(ABAP_SESSION_VARS.ISSUED_BY, by()));
-  });
-
-  it('is not seeded when its SAP_URL names another system; the new secret is written with the binding keys', async () => {
-    legacyFile('https://other.example.com/sap/bc/adt');
-    const { broker: b } = broker('authorization_code', null, {
-      sessions: new AbapSessionStore(dir),
-    });
-
-    const provider = await b.getProvider(D);
-    expect(await provider.prepare()).toEqual({ ok: true });
-    await b.flush();
-
-    expect(endpoint.requests.map((r) => r.grantType)).toEqual([
-      'authorization_code',
-    ]);
-    expect(await bearer(provider)).toBe(endpoint.issued[0]);
-    const file = fs.readFileSync(path.join(dir, `${D}.env`), 'utf8');
-    expect(file).toMatch(line(ABAP_SESSION_VARS.ISSUED_FOR, FOR));
-    expect(file).toMatch(line(ABAP_SESSION_VARS.ISSUED_BY, by()));
-    expect(file).not.toContain(STORED_RT);
-  });
+      expect(endpoint.requests).toEqual([]);
+      expect(login.authorize).not.toHaveBeenCalled();
+      expect(fs.readFileSync(path.join(dir, `${D}.env`), 'utf8')).toBe(text);
+      const logged = allLogged(logger);
+      for (const value of [STORED_TOKEN, STORED_RT, CLIENT_SECRET]) {
+        expect(logged).not.toContain(value);
+      }
+    },
+  );
 });
 
 describe('the none rows: a handed-over credential is refused, never discarded', () => {

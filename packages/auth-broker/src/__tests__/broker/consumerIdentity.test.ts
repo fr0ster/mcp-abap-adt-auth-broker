@@ -2,7 +2,7 @@
  * The consumer path's identity is the means it reads — never the session
  * store's answers, which the broker's own writes change.
  *
- * On auth-stores 4.0.0's own session stores — `SafeAbapSessionStore` in
+ * On auth-stores 5.0.0's own session stores — `SafeAbapSessionStore` in
  * memory and `AbapSessionStore` files — whose `getConnectionConfig` answers
  * `null` before the first write and the written secret after it: two token
  * API calls keep one consumer provider (one factory call, no refusal of an

@@ -69,6 +69,11 @@ import {
 import { cannotReadFile, progress, unreadableFile } from './output';
 import { sessionClientAuth } from './sessionClientAuth';
 import {
+  asRunFailure,
+  discardSession,
+  isRecordFormatRefusal,
+} from './sessionRecord';
+import {
   noGrantRefusal,
   processEnvironment,
   type RunSource,
@@ -561,39 +566,55 @@ export async function runMcpAuth(
   // — seeded from an `--env` session only when it is bound to these means. It
   // renews as this CLI states (a refresh, then a login: a user at a terminal
   // can log in), and a secret the store did not take fails the run.
-  const broker = new AuthBroker(
-    {
-      renewal: () => refreshThenLogin(),
-      onWriteFailure: 'fail',
-      // On only with --auth-debug: never from the environment.
-      authDebug: options.authDebug === true,
-      sessionStore: files.sessionStore,
-      serviceKeyStore: files.keyStore,
-      clientAuthentication,
-      // Asked only for the authorization_code row; `--credential` logs in
-      // with the client alone.
-      authorization: () => authorization(options, signal),
-    },
-    logger,
-  );
+  const newBroker = () =>
+    new AuthBroker(
+      {
+        renewal: () => refreshThenLogin(),
+        onWriteFailure: 'fail',
+        // On only with --auth-debug: never from the environment.
+        authDebug: options.authDebug === true,
+        sessionStore: files.sessionStore,
+        serviceKeyStore: files.keyStore,
+        clientAuthentication,
+        // Asked only for the authorization_code row; `--credential` logs in
+        // with the client alone.
+        authorization: () => authorization(options, signal),
+      },
+      logger,
+    );
 
   progress(`🔐 Getting token for destination "${destination}"...`);
   // Whether the login threw, beside what it threw: a falsy value thrown
   // (undefined, 0, '') is a failure too.
-  let failed = false;
-  let obtainError: unknown;
-  try {
-    await broker.getToken(destination, { signal });
-    progress(`✅ Token obtained successfully`);
-  } catch (error) {
-    // A failed login, or a token obtained whose write failed: either way the
-    // run fails, after one more attempt at any write still pending.
-    failed = true;
-    obtainError = error;
+  const obtain = async (broker: AuthBroker) => {
+    try {
+      await broker.getToken(destination, { signal });
+      progress(`✅ Token obtained successfully`);
+      return { failed: false, error: undefined };
+    } catch (error) {
+      // A failed login, or a token obtained whose write failed: either way the
+      // run fails, after one more attempt at any write still pending.
+      return { failed: true, error: error as unknown };
+    }
+  };
+  let broker = newBroker();
+  let attempt = await obtain(broker);
+  // A session the store refuses as not of its format (an old or hand-written
+  // file): discarded in the work copy — its session keys alone — and a new
+  // login, once. The original is written only after success, below.
+  if (
+    attempt.failed &&
+    source.kind === 'session' &&
+    !signal?.aborted &&
+    isRecordFormatRefusal(attempt.error)
+  ) {
+    await discardSession(files, destination, progress);
+    broker = newBroker();
+    attempt = await obtain(broker);
   }
   const stored = await flushed(broker, signal);
-  if (failed) {
-    throw obtainError;
+  if (attempt.failed) {
+    throw asRunFailure(destination, attempt.error);
   }
   if (!stored) {
     return 1;

@@ -147,7 +147,7 @@ const SAML_TRUST: [string, unknown][] = [
   ['samlIdpInitiated', true],
 ];
 
-describe('the record round-trips byte for byte through every auth-stores 4.0.0 session store', () => {
+describe('the record round-trips byte for byte through every auth-stores 5.0.0 session store', () => {
   /** Raw values holding / ? & = % ; # and a space, one per field. */
   const raw = (n: number) => `https://f${n}.example/p a?x=1&y=%2F;z#f`;
   const RAW_FIELDS: RecordFields = Object.fromEntries(
