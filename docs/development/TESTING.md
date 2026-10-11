@@ -15,10 +15,11 @@ packages/auth-broker/src/__tests__/
 ├── broker/
 │   ├── getProvider.test.ts              # every row through IAuthProvider: fake stores, real providers
 │   ├── getProviderTokens.test.ts        # the UAA grants and what they persist: a local token endpoint
-│   ├── getProviderBinding.test.ts       # a stored secret used only where it is bound; 4.x records unbound
+│   ├── getProviderBinding.test.ts       # a stored secret used only where it is bound; 4.x records unbound;
+│   │                                    # a pre-3.1.0 file: the store's record-format error
 │   ├── getProviderOidcSaml.test.ts      # the OIDC and SAML grants: discovery, device flow, auth-mocks' IdP
 │   ├── bindingRecord.test.ts            # the version-2 record and trust digest; round trips through
-│   │                                    # every auth-stores 4 session store
+│   │                                    # every auth-stores 5 session store
 │   ├── identityRebuild.test.ts          # a changed value builds a new provider that starts with nothing;
 │   │                                    # restarts on the same files
 │   ├── buildIdentity.test.ts            # what a build read, compared exactly
@@ -100,7 +101,7 @@ tests run one at a time). The library's `jest.config.js` ignores `__tests__/live
 
 - **The library's `broker/` suites and every CLI suite outside `stand/`**: nothing — no network beyond the
   loopback, no configuration, no browser. Stores are in-memory fakes of the contract, or
-  `@mcp-abap-adt/auth-stores` 4 (a dev dependency) in temporary directories. Token grants talk to
+  `@mcp-abap-adt/auth-stores` 5 (a dev dependency) in temporary directories. Token grants talk to
   a token endpoint the test starts on `127.0.0.1` (`helpers/tokenEndpoint.ts`, which also serves
   OIDC discovery and device authorization, can prefix what it issues and can withhold a response
   until released); their interactive half is a recording strategy or presenter, or one that
@@ -115,7 +116,8 @@ tests run one at a time). The library's `jest.config.js` ignores `__tests__/live
   (`test-config.yaml.template`) is read, its placeholders disable every case, and each case
   returns at once. With it, the cases read the service keys and sessions it points at and may open
   a browser for a login. A session written before 5.0.0 reads as unbound: the first case of each
-  token destination logs in once.
+  token destination logs in once. A session with no binding keys beside its token is refused by
+  auth-stores 5 (`record-format`): regenerate it with `mcp-auth --service-key`.
 
 ## Running
 
@@ -170,7 +172,7 @@ npm run stand:down                   # … and stop it
 - The compose project and containers are named `auth-broker-stand`, `auth-broker-uaa`,
   `auth-broker-keycloak`; auth-providers' stand uses the same default ports, so only one runs at a
   time unless one is moved.
-- Each suite composes the broker as a consumer does — auth-stores 4's `EnvDestinationStore` for
+- Each suite composes the broker as a consumer does — auth-stores 5's `EnvDestinationStore` for
   the means, its `AbapSessionStore` for the secret, `renewal` and `onWriteFailure` stated — and
   reads the session file back from disk, asserting the version-2 binding record. It takes UAA's
   issuer from its discovery document, never from `UAA_URL`.
@@ -271,7 +273,8 @@ logs in — its `authorization` strategy refuses — and never writes the origin
 works on a copy). The means are the destination's SAP service key, read by
 `new AbapServiceKeyStore(dir, { grantType: 'authorization_code' })`. **The session must be bound
 to that key by auth-broker 5**: a session written before 5.0.0 reads as unbound — the broker does
-not use its refresh token, the refusing strategy fails the login, and the case fails. **Measured**
+not use its refresh token, the refusing strategy fails the login, and the case fails; one with no
+binding keys beside its token is refused by auth-stores 5 (`record-format`) before any request. **Measured**
 2026-10-09 against the BTP trial: a session written by `mcp-auth --service-key <the key>`
 (CLI 3.0.0, `--type abap`) carries exactly the binding this case computes — the case passed on
 it (one 401, renewed, `200`). A session written by a 5.0.0 `getProvider` over the same key is
@@ -318,7 +321,7 @@ A program is run as given: on macOS `program:` names an application (`open -a`),
 program for `Start-Process`.
 
 **The destinations.** `AUTH_BROKER_LIVE_KEYS_DIR` is a directory of `<destination>.env` files read
-by auth-stores 4's `EnvDestinationStore`. A `basic` destination:
+by auth-stores 5's `EnvDestinationStore`. A `basic` destination:
 
 ```bash
 SAP_URL=http://127.0.0.1:8000

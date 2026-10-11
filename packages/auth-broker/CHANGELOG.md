@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
 
+## [5.0.2] - 2026-10-11
+
+Built and tested on `@mcp-abap-adt/auth-stores` 5.0.0; the code is the same as
+5.0.1. auth-stores is not a dependency of the library: the consumer composes
+the stores, and 5.0.2 works with auth-stores 4 or 5 alike.
+
+### Migration (for a consumer moving to auth-stores 5)
+
+- **A session file with no binding keys beside its credential** — written by
+  auth-stores 2.x/3.0.0, auth-broker 3.x, or by hand — is no longer composed a
+  binding by the store and read as unbound (one login). auth-stores 5 refuses
+  the record whole with a `StorageError` (`code: 'STORAGE_ERROR'`,
+  `reason: 'record-format'`, fixed words, no value of the record), and the
+  broker passes it unchanged to the caller of `getProvider` and the token API
+  (every row that reads the session; the broker's own `client_credentials`
+  reads none, and its new credential replaces the record). This is 5.0.0's
+  rule that a store's read failure other than `FILE_NOT_FOUND` reaches the
+  caller, not a change of the broker.
+- **What to do:** regenerate the session with
+  `mcp-auth --service-key <key.json> --output <file> --type abap|xsuaa`, or
+  remove its session lines; a file holding only the means is no session.
+
+### Changed
+- Dev dependency `@mcp-abap-adt/auth-stores` ^5.0.0.
+- Tests: a pre-3.1.0 session file, and a 4.x token beside `issuedFor` alone,
+  now assert the store's `record-format` error reaching the caller — no
+  request, no login, no write, the file byte for byte, no record value in the
+  error or the log — where they asserted a login over a composed binding.
+
+### Documentation
+- README (*Errors*, *A Credential Stays Bound to Its Identity*, the upgrade
+  note), `docs/` and `CLAUDE.md` describe the record-format refusal and name
+  auth-stores 5.
+
 ## [5.0.1] - 2026-10-09
 
 Development only; the code is the same as 5.0.0.

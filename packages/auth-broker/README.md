@@ -16,7 +16,9 @@ the renewal strategy's you give it; where means and secrets live is the stores'
 short — a token destination needs two options the broker has no default for (`renewal`,
 `onWriteFailure`); every failure is an `AuthProviderFailure` read through
 `@mcp-abap-adt/auth-errors`; every session written before 5.0.0 reads as unbound once, so each
-token destination logs in once after the upgrade.
+token destination logs in once after the upgrade. A session file with no binding keys at all
+(written before auth-stores 3.1.0, or by hand) is refused by auth-stores 5 as a whole, and that
+error reaches you: regenerate it with `mcp-auth` (see [*Errors*](#errors)).
 
 The `mcp-auth` command that writes destination files is
 [`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md) (3.0.0, on this version), in the
@@ -312,7 +314,7 @@ success — and the write runs on, landing or failing on its own.
 
 **The store's contract.** `saveSession` settles: it resolves or rejects. A store whose
 `saveSession` never settles holds its destination's queue; avoiding that is yours (each waiting
-caller is still released by its own signal). auth-stores 4's `saveSession` **merges** — a field
+caller is still released by its own signal). auth-stores 5's `saveSession` **merges** — a field
 left out keeps what is stored — so the broker states every field that must not survive:
 
 | What the provider reported | What one `saveSession` writes |
@@ -439,6 +441,15 @@ means lacking what the record needs, or no `serviceUrl`) gets a `debug` line ins
 start. An OIDC destination with explicit endpoints and a client but no issuer is fully stated,
 and is reused after a restart when its means are unchanged.
 
+**A record the store refuses is not "no session".** auth-stores 5 reads a session only in its
+own format — beside a token or cookies, both binding keys (`SAP_ISSUED_FOR` / `SAP_ISSUED_BY`,
+or the `XSUAA_*` pair), present even when empty — and refuses any other record as a whole with
+a `StorageError` (`reason: 'record-format'`): a file written by auth-stores 2.x/3.0.0 or
+auth-broker 3.x, or by hand. The broker does not read that as an absent session and log in over
+it; `getProvider` and the token API reject with the store's error, unchanged, before any
+request (every row that reads the session; the broker's own `client_credentials` reads none,
+and its new credential replaces the record). Regenerate the session with `mcp-auth`.
+
 **The `none` rows** present a credential the broker cannot obtain again, so a mismatch is
 refused, not discarded: a `DestinationConfigError` naming `issuedFor` when the stored resource
 differs or is absent (or the means state no `serviceUrl`), and `issuedBy` when the stored record
@@ -468,7 +479,7 @@ import { bindingOf } from '@mcp-abap-adt/auth-broker';
 const means = await keyStore.getConnectionConfig('DEV'); // saml / none
 await sessionStore.saveSession('DEV', {
   sessionCookies: cookies,
-  refreshToken: '', // auth-stores 4 merges: clear what an earlier session left
+  refreshToken: '', // auth-stores 5 merges: clear what an earlier session left
   ...bindingOf(means ?? {}),
   // { issuedFor: 'https://dev.example.com:443?sap-client=100',
   //   issuedBy: 'mcp-abap-adt-binding/2;saml/none;;;;;;;;;;;;' }
@@ -930,7 +941,11 @@ needs a clientAuthentication strategy`.
 
 - **A store's read failure** (anything but `FILE_NOT_FOUND`, which is absence) reaches the
   caller as the store raised it — your collaborator's error, returned to you, also through the
-  shared resolution. A store that answers `null`, or fails with `FILE_NOT_FOUND` (logged at
+  shared resolution. With auth-stores 5 that includes a session record not of the store's
+  format: a `StorageError` with `code: 'STORAGE_ERROR'` and `reason: 'record-format'`, in the
+  store's fixed words (`AbapSessionStore: the stored session for "<destination>" is not in this
+  store's format; regenerate it with mcp-auth`) — no value of the record. Regenerate the session
+  (`mcp-auth --service-key <key.json> --output <file>`), or remove its session lines. A store that answers `null`, or fails with `FILE_NOT_FOUND` (logged at
   debug), means "nothing here".
 - **The constructor's argument checks** (`AuthBroker: sessionStore is required`, …) are plain
   `Error`s naming option names: a programming error.
@@ -983,7 +998,7 @@ its level from `AUTH_LOG_LEVEL`.)
 
 ### File Structure
 
-With `@mcp-abap-adt/auth-stores` 4 one `<destination>.env` file can hold a destination whole,
+With `@mcp-abap-adt/auth-stores` 5 one `<destination>.env` file can hold a destination whole,
 each store reading and writing only its own keys — the means through `EnvDestinationStore`, the
 secret through `AbapSessionStore` (or both in separate directories, as you compose them):
 
@@ -1171,7 +1186,7 @@ What a 4.x consumer must now do, row by row. The full list of changes is the
 
 | 4.x | 5.0.0 — what to do |
 |---|---|
-| `@mcp-abap-adt/auth-providers` 5, `interfaces-auth` 3, `auth-stores` 3 | auth-providers `^6.0.0`, interfaces-auth `^7.5.0`, auth-errors `^2.1.1`, auth-stores `^4.0.0`; one installed copy of each contract (`npm ls`) |
+| `@mcp-abap-adt/auth-providers` 5, `interfaces-auth` 3, `auth-stores` 3 | auth-providers `^6.0.0`, interfaces-auth `^7.5.0`, auth-errors `^2.1.1`, auth-stores `^4.0.0` (`^5.0.0` from 5.0.2: a session record without binding keys is refused, see *Errors*); one installed copy of each contract (`npm ls`) |
 | token rows renewed by the provider's built-in rule | pass `renewal: () => refreshThenLogin()` — 4.x's steps; without `renewal` a token row is refused (`missingFields: ['renewal']`) |
 | a `getProvider` provider's failed write never failed the authentication; the token API threw the store's error | pass `onWriteFailure`: `'continue'` keeps 4.x's connector behaviour (best effort); `'fail'` keeps 4.x's token-API behaviour and extends it to the connector and to every later call of the destination while the write is pending. Without it a destination that writes a secret is refused |
 | errors of the token API: auth-providers 5.x classes (`ValidationError`, `BrowserAuthError`, `RefreshError`, …) | `AuthProviderFailure`: read it with `readFailure(error, operation)` and `matchKind` (auth-errors); auth-providers' *Migrating to 6.0.0* maps each class to its kind |
@@ -1215,7 +1230,7 @@ npm test -w @mcp-abap-adt/auth-broker -- AuthBroker.test.ts -t "name of the case
 ```
 
 Tests run sequentially (`maxWorkers: 1`, `maxConcurrency: 1`). The broker suites need nothing:
-fake stores of the contract or auth-stores 4 in temporary directories, real providers, a token
+fake stores of the contract or auth-stores 5 in temporary directories, real providers, a token
 endpoint the test starts on `127.0.0.1`. `AuthBroker.integration.test.ts` reads real service
 keys and sessions only when `packages/auth-broker/tests/test-config.yaml` exists (from the
 template beside it); without it every case returns at once. The stand (`npm run test:stand`,

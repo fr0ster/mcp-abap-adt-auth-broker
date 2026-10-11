@@ -149,7 +149,10 @@ line, or `debug` for a binding that can never be seeded) and the provider obtain
 `none` rows refuse a mismatch naming `issuedFor` / `issuedBy`. On the `clientAuthentication`
 strategy path a resource neither side states matches (`strategyBinding`), and the record holds
 the certificate client's `certUrl` and, in the trust digest, its certificate. Every session
-written before 5.0.0 — a bare-URI `issuedBy`, or none — reads as unbound. `bindingOf(means,
+written before 5.0.0 — a bare-URI `issuedBy`, or an empty one — reads as unbound; a record
+with no binding keys beside its credential (written before auth-stores 3.1.0, or by hand) is
+refused by auth-stores 5 as a whole (`StorageError`, `reason: 'record-format'`), and that error
+reaches the caller. `bindingOf(means,
 client)` gives a consumer handing over a credential exactly the binding `getProvider` compares.
 
 ### Persistence (`SessionWriter`)
@@ -157,7 +160,7 @@ client)` gives a consumer handing over a credential exactly the binding `getProv
 Every token provider `getProvider` builds reports to `refreshStatePersistence`, which writes
 through the broker before the provider answers — so a renewal inside a connector is stored
 before the connector resends. One report is one `saveSession` of the secret alone, every field
-stated (auth-stores 4 merges): the token or cookies, `expiresAt`, the refresh token the build
+stated (auth-stores 5 merges): the token or cookies, `expiresAt`, the refresh token the build
 owns (`ownedAfter`) or `''`, `issuedFor` (`''` when absent) and `issuedBy`; `saml2_pure`'s
 cookies write `refreshToken: ''`; a refresh token discarded before any credential writes only
 `refreshToken: ''`. No means field is ever written; a destination the key store states as
@@ -202,7 +205,7 @@ Each store has one role (contracts from `@mcp-abap-adt/interfaces-auth-broker` 1
   `expiresAt`, the refresh token, `issuedFor` and `issuedBy`. Its contract: `saveSession`
   settles, the two binding strings are kept byte for byte, and `refreshToken: ''` clears.
 
-Concrete stores live in `@mcp-abap-adt/auth-stores` 4; the library never imports it, and any
+Concrete stores live in `@mcp-abap-adt/auth-stores` 5; the library never imports it, and any
 implementation of the contracts serves.
 
 ### Providers
@@ -265,7 +268,9 @@ line name the request's secrets in their prepared form.
   provider's or a strategy's failure caused it), recognised structurally by
   `isDestinationConfigError`.
 - Store reads: `null` or `FILE_NOT_FOUND` is absence; any other store failure reaches the caller
-  as the store raised it, also through the shared resolution.
+  as the store raised it, also through the shared resolution — auth-stores 5's `record-format`
+  refusal of a session record not of its format included: never read as "no session", never
+  turned into a login.
 - `flush()`: an `AggregateError` of `SessionWriteFailure`s.
 
 ## The CLI

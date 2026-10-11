@@ -25,13 +25,16 @@ npm install -g @mcp-abap-adt/auth-broker-cli
 
 The current versions are the library's 5.0.0 and the CLI's 3.0.0, which
 depends on it (`^5.0.0`); both are on the 6.0 auth chain (`auth-providers` 6,
-`interfaces-auth` 7, `auth-errors` 2, `auth-stores` 4). Both are majors:
+`interfaces-auth` 7, `auth-errors` 2, `auth-stores` 5). Both are majors:
 
 - **A 4.x consumer of the library**: *Migrating to 5.0.0* in its
   [README](packages/auth-broker/README.md#migrating-to-500) — `renewal` and
   `onWriteFailure` are required for token destinations, failures are
   `AuthProviderFailure`s, and every session written before 5.0.0 reads as
-  unbound once (one login per token destination).
+  unbound once (one login per token destination). With auth-stores 5 a
+  session file with no binding keys at all (written before auth-stores 3.1.0,
+  or by hand) is refused by the store, and the error reaches you: regenerate
+  it with `mcp-auth --service-key`.
 - **A 2.x user of the CLI**: *Migrating to 3.0.0* in its
   [README](packages/auth-broker-cli/README.md#migrating-to-300) — the
   `mcp-sso` command is gone (every form is an `mcp-auth` subcommand), a run
