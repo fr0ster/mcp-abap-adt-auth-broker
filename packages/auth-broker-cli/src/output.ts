@@ -26,6 +26,7 @@ import type {
   Operation,
 } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '@mcp-abap-adt/interfaces-utils';
+import { isSessionStoreFailure, isStorageError } from './sessionRecord';
 import { isUsageError, UsageError } from './subcommandArgs';
 
 /** Where a line goes: stderr, unless a test states otherwise. */
@@ -197,6 +198,11 @@ export interface PrintFailureOptions {
  *   diagnostics;
  * - an `AuthProviderFailure` of any copy: `readFailure`'s reason and hint,
  *   then its diagnostics (a foreign copy's are dropped by auth-errors);
+ * - a store's `StorageError` (own `code === 'STORAGE_ERROR'`), as a run
+ *   carries it (`SessionStoreFailure`, naming the destination) or bare: the
+ *   CLI's fixed words — the session store failed, or the stored session is
+ *   not in its format — with the store's operation and an allowlisted system
+ *   code, never the store's message;
  * - anything else: `readFailure(thrown, 'unfamiliar-error')`'s words.
  *
  * Never a stack, never the message of anything else. Total.
@@ -233,10 +239,43 @@ export function failureLines(
         lead,
       );
     }
+    if (isSessionStoreFailure(thrown)) {
+      return [`❌ ${lead}${storeFailureWords(thrown.destination, thrown)}`];
+    }
+    if (isStorageError(thrown)) {
+      return [`❌ ${lead}${storeFailureWords(undefined, thrown)}`];
+    }
   } catch {
     // Fall through to the unfamiliar words.
   }
   return errorLines(readFailure(thrown, 'unfamiliar-error'), lead);
+}
+
+/**
+ * A store's failure in the CLI's fixed words: the destination when known, the
+ * store's `operation` (`read` / `write`) and an allowlisted system code — never
+ * the store's message, which names a path, or its cause.
+ */
+function storeFailureWords(
+  destination: string | undefined,
+  failure: unknown,
+): string {
+  const named =
+    destination === undefined ? 'the destination' : `"${destination}"`;
+  const reason = isSessionStoreFailure(failure)
+    ? failure.recordFormat
+      ? 'record-format'
+      : undefined
+    : ownData(failure, 'reason');
+  if (reason === 'record-format') {
+    return `the stored session for ${named} is not in the store's format`;
+  }
+  const raw = isSessionStoreFailure(failure)
+    ? failure.operation
+    : ownData(failure, 'operation');
+  const op = raw === 'read' || raw === 'write' ? ` (${raw})` : '';
+  const thrown = isSessionStoreFailure(failure) ? failure.thrown : failure;
+  return `the session store for ${named} failed${op}${systemCodeOf(thrown)}`;
 }
 
 /** Prints a caught value on stderr, as `failureLines` words it. */

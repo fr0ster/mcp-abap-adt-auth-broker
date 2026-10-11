@@ -18,7 +18,9 @@ short — a token destination needs two options the broker has no default for (`
 `@mcp-abap-adt/auth-errors`; every session written before 5.0.0 reads as unbound once, so each
 token destination logs in once after the upgrade. A session file with no binding keys at all
 (written before auth-stores 3.1.0, or by hand) is refused by auth-stores 5 as a whole, and that
-error reaches you: regenerate it with `mcp-auth` (see [*Errors*](#errors)).
+error reaches you: regenerate it with `mcp-auth` (see [*Errors*](#errors)) — from
+auth-broker-cli 3.1.0, `mcp-auth --env <file>` (or `--destination <name>`) over such a file
+discards its session and logs in anew.
 
 The `mcp-auth` command that writes destination files is
 [`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md) (3.0.0, on this version), in the
@@ -448,7 +450,10 @@ a `StorageError` (`reason: 'record-format'`): a file written by auth-stores 2.x/
 auth-broker 3.x, or by hand. The broker does not read that as an absent session and log in over
 it; `getProvider` and the token API reject with the store's error, unchanged, before any
 request (every row that reads the session; the broker's own `client_credentials` reads none,
-and its new credential replaces the record). Regenerate the session with `mcp-auth`.
+and its new credential replaces the record). Regenerate the session with `mcp-auth`: from
+auth-broker-cli 3.1.0, a run over the file (`--env`, `--destination`) discards its session — the
+session keys alone, in a private copy, the original written only after the new login is stored —
+and logs in anew.
 
 **The `none` rows** present a credential the broker cannot obtain again, so a mismatch is
 refused, not discarded: a `DestinationConfigError` naming `issuedFor` when the stored resource
@@ -945,7 +950,9 @@ needs a clientAuthentication strategy`.
   format: a `StorageError` with `code: 'STORAGE_ERROR'` and `reason: 'record-format'`, in the
   store's fixed words (`AbapSessionStore: the stored session for "<destination>" is not in this
   store's format; regenerate it with mcp-auth`) — no value of the record. Regenerate the session
-  (`mcp-auth --service-key <key.json> --output <file>`), or remove its session lines. A store that answers `null`, or fails with `FILE_NOT_FOUND` (logged at
+  (`mcp-auth --service-key <key.json> --output <file>`, or from auth-broker-cli 3.1.0
+  `mcp-auth --env <file>`, which discards the refused session and logs in anew), or remove its
+  session lines. A store that answers `null`, or fails with `FILE_NOT_FOUND` (logged at
   debug), means "nothing here".
 - **The constructor's argument checks** (`AuthBroker: sessionStore is required`, …) are plain
   `Error`s naming option names: a programming error.

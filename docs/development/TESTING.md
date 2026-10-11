@@ -63,7 +63,8 @@ packages/auth-broker-cli/src/__tests__/
 │                                        # --protocol refused, --dev unknown, only the mcp-auth bin
 ├── sources.test.ts                      # --service-key / --env / --destination; the folder order
 ├── runMcpAuth.test.ts                   # mcp-auth end to end: state + PKCE, --env reuse, JSON, XSUAA keys,
-│                                        # --client-auth, a write the store refuses
+│                                        # --client-auth, a write the store refuses; an old session
+│                                        # (no binding keys): discarded, a new login, means unchanged
 ├── runMcpSso.test.ts                    # oidc / saml2-pure end to end, one case per row of the CLI's table
 ├── generateEnv.test.ts                  # generate-env: --grant required, always a login, --client-auth
 ├── interrupt.test.ts                    # SIGINT / SIGTERM during each kind of login: 130 / 143, the port
@@ -71,6 +72,8 @@ packages/auth-broker-cli/src/__tests__/
 ├── outputStreams.test.ts                # the built bin: stdout only help and --version; nothing secret on
 │                                        # either stream
 ├── printFailure.test.ts                 # failures in fixed words, no stack; no @mcp-abap-adt/logger
+├── sessionRecord.test.ts                # each session store's deleteSession: the session keys alone;
+│                                        # a StorageError recognised by structure, in fixed words
 ├── authDebugFlag.test.ts                # --auth-debug wired in every subcommand; no environment variable
 ├── browser.test.ts                      # every cell of the browser table; other platforms refused
 ├── samlAcs.test.ts                      # a pasted SAML login declares its ACS; no localhost fallback
@@ -117,7 +120,8 @@ tests run one at a time). The library's `jest.config.js` ignores `__tests__/live
   returns at once. With it, the cases read the service keys and sessions it points at and may open
   a browser for a login. A session written before 5.0.0 reads as unbound: the first case of each
   token destination logs in once. A session with no binding keys beside its token is refused by
-  auth-stores 5 (`record-format`): regenerate it with `mcp-auth --service-key`.
+  auth-stores 5 (`record-format`): regenerate it with `mcp-auth --service-key`, or
+  `mcp-auth --env <file>` (auth-broker-cli 3.1.0 discards such a session and logs in anew).
 
 ## Running
 

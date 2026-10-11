@@ -30,6 +30,9 @@ the stores, and 5.0.2 works with auth-stores 4 or 5 alike.
 - **What to do:** regenerate the session with
   `mcp-auth --service-key <key.json> --output <file> --type abap|xsuaa`, or
   remove its session lines; a file holding only the means is no session.
+  `@mcp-abap-adt/auth-broker-cli` 3.1.0 (released together) does it for you:
+  `mcp-auth --env <file>` or `--destination <name>` over such a file discards
+  its session and logs in anew, the means kept byte for byte.
 
 ### Changed
 - Dev dependency `@mcp-abap-adt/auth-stores` ^5.0.0.

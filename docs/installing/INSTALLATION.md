@@ -243,7 +243,9 @@ not read at all: auth-stores 5 refuses it as a whole with a `StorageError` (`cod
 'STORAGE_ERROR'`, `reason: 'record-format'`), and `getProvider` / `getToken` reject with that
 error instead of logging in. Regenerate the session with
 `mcp-auth --service-key <key.json> --output <file> --type abap|xsuaa`, which reads no stored
-session, or delete the file's session lines; a file holding only the means is no session.
+session, or delete the file's session lines; a file holding only the means is no session. From
+`@mcp-abap-adt/auth-broker-cli` 3.1.0, `mcp-auth --env <file>` (or `--destination <name>`) over
+such a file discards its session and logs in anew, every means line kept byte for byte.
 
 ### Token Refresh Issues
 

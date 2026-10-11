@@ -50,6 +50,11 @@ import {
 import { applySamlMetadata, loadMetadata } from './samlMetadata';
 import { sessionClientAuth } from './sessionClientAuth';
 import {
+  asRunFailure,
+  discardSession,
+  isRecordFormatRefusal,
+} from './sessionRecord';
+import {
   noGrantRefusal,
   processEnvironment,
   type RunSource,
@@ -525,19 +530,21 @@ export async function runMcpSso(
     resolvedEnvPath === undefined || source?.kind !== 'session'
       ? {}
       : sessionClientAuth(files.file, options.authType, source.flag);
-  const broker = new AuthBroker(
-    {
-      sessionStore: files.sessionStore,
-      serviceKeyStore: files.keyStore,
-      ...buildCollaborators(options, signal),
-      clientAuthentication: clientAuthenticationStrategy(clientAuth),
-      renewal: () => refreshThenLogin(),
-      onWriteFailure: 'fail',
-      // On only with --auth-debug: never from the environment.
-      authDebug: options.authDebug === true,
-    },
-    logger,
-  );
+  const newBroker = () =>
+    new AuthBroker(
+      {
+        sessionStore: files.sessionStore,
+        serviceKeyStore: files.keyStore,
+        ...buildCollaborators(options, signal),
+        clientAuthentication: clientAuthenticationStrategy(clientAuth),
+        renewal: () => refreshThenLogin(),
+        onWriteFailure: 'fail',
+        // On only with --auth-debug: never from the environment.
+        authDebug: options.authDebug === true,
+      },
+      logger,
+    );
+  let broker = newBroker();
 
   if (row.grantType === 'none') {
     // The cookies were handed over, not obtained: the CLI writes them, with
@@ -560,7 +567,13 @@ export async function runMcpSso(
       });
     }
     // The destination as the broker will read it: refused here, not later.
-    await broker.getProvider(destination, { signal });
+    // Cookies kept from a session the store refuses cannot be logged in
+    // anew: the store's refusal ends the run, in the CLI's words.
+    try {
+      await broker.getProvider(destination, { signal });
+    } catch (error) {
+      throw asRunFailure(destination, error);
+    }
     progress(
       options.cookie === undefined
         ? '✅ Session cookies kept'
@@ -572,7 +585,29 @@ export async function runMcpSso(
   let failed = false;
   let obtainError: unknown;
   if (row.grantType !== 'none') {
-    const provider = await broker.getProvider(destination, { signal });
+    // The provider, read from the session; a session the store refuses as
+    // not of its format (an old or hand-written file) is discarded in the
+    // work copy — its session keys alone — and a new login runs, once. The
+    // original is written only after success, below.
+    let provider: Awaited<ReturnType<AuthBroker['getProvider']>>;
+    try {
+      provider = await broker.getProvider(destination, { signal });
+    } catch (error) {
+      if (
+        source?.kind !== 'session' ||
+        signal?.aborted ||
+        !isRecordFormatRefusal(error)
+      ) {
+        throw asRunFailure(destination, error);
+      }
+      await discardSession(files, destination, progress);
+      broker = newBroker();
+      try {
+        provider = await broker.getProvider(destination, { signal });
+      } catch (again) {
+        throw asRunFailure(destination, again);
+      }
+    }
     const tokens = provider as Partial<{
       getTokens: (options?: { signal?: AbortSignal }) => Promise<unknown>;
     }>;
@@ -597,7 +632,7 @@ export async function runMcpSso(
 
   const stored = await flushed(broker, signal);
   if (failed) {
-    throw obtainError;
+    throw asRunFailure(destination, obtainError);
   }
   if (!stored) {
     return 1;

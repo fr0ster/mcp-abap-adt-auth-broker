@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-10-11
+
+On `@mcp-abap-adt/auth-stores` 5. A run over a session the store refuses as not of its
+format discards that session and logs in anew — the same outcome a user had on auth-stores 4.
+
+### Added
+- **An old session is discarded and logged in anew.** auth-stores 5 refuses a session record
+  not of its format — a token or cookies without both binding keys (written by CLI 2.x,
+  auth-stores 2.x/3.0.0, or by hand) — with a `StorageError` (`code: 'STORAGE_ERROR'`,
+  `reason: 'record-format'`), which the broker passes on unchanged. On that refusal, over a
+  session file (`--env`, or the session `--destination` finds; `mcp-auth`, `oidc`,
+  `saml2-bearer`, `saml2-pure` logins), the run prints one fixed line on stderr (`The stored
+  session for "<destination>" is not in the store's format; logging in anew`), removes the
+  session keys alone from its private copy through the session store's `deleteSession` — every
+  means line byte for byte — and logs in once more. The new session is written with both
+  binding keys; the original file is written only after it is stored. A failed login or a
+  second refusal leaves the file byte for byte. The refusal is recognised by own data, never
+  `instanceof` or a message. README: *An Old Session*.
+
+### Changed
+- Dependency `@mcp-abap-adt/auth-stores` ^5.0.0.
+- **A store's failure in the CLI's words.** A `StorageError` that ends a run is printed as `the
+  session store for "<destination>" failed (read|write)` with an allowlisted system code, or
+  `the stored session for "<destination>" is not in the store's format` — no longer as "an
+  authentication error of a kind this version does not know". Never the store's message.
+
 ## [3.0.1] - 2026-10-09
 
 Development only; the code is the same as 3.0.0.

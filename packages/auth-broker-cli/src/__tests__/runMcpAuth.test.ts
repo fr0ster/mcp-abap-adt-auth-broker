@@ -26,6 +26,7 @@ import {
 import {
   AbapSessionStore,
   EnvDestinationStore,
+  StorageError,
   XSUAA_DESTINATION_VARS,
   XsuaaSessionStore,
 } from '@mcp-abap-adt/auth-stores';
@@ -753,6 +754,186 @@ describe('three sources, one per run', () => {
         ).resolves.toBe(0);
         expect(fs.readFileSync(output())).toEqual(fromStandard);
       });
+    });
+  });
+
+  describe('an old session — a token without the binding keys — is discarded and logged in anew', () => {
+    const SESSION_KEYS = new Set(sessionKeys('abap'));
+    /** The lines of `text` that are no session key: the destination's means, comments, blanks. */
+    const meansLines = (text: string) =>
+      text
+        .split('\n')
+        .filter((line) => !SESSION_KEYS.has(line.slice(0, line.indexOf('='))));
+
+    /**
+     * A session file as CLI 2.x left it: a first login's file with its binding
+     * keys removed — means, a token, a refresh token, an expiry. Answers the
+     * old secrets.
+     */
+    async function oldSession(file?: string) {
+      const previous = await previousSession();
+      const target = file ?? previous;
+      if (target !== previous) {
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(previous, target);
+      }
+      const keys = readEnvKeys(target);
+      const text = fs
+        .readFileSync(target, 'utf8')
+        .split('\n')
+        .filter(
+          (line) =>
+            !line.startsWith('SAP_ISSUED_FOR=') &&
+            !line.startsWith('SAP_ISSUED_BY='),
+        )
+        .join('\n');
+      fs.writeFileSync(target, text);
+      await expect(sessionAt(target)).rejects.toMatchObject({
+        code: 'STORAGE_ERROR',
+        reason: 'record-format',
+      });
+      return {
+        file: target,
+        before: Buffer.from(text),
+        token: keys.SAP_JWT_TOKEN!,
+        refresh: keys.SAP_REFRESH_TOKEN!,
+      };
+    }
+
+    /** Every line the run printed, stdout and stderr. */
+    const printed = () =>
+      [
+        ...(console.log as jest.Mock).mock.calls,
+        ...(console.error as jest.Mock).mock.calls,
+      ]
+        .map((call) => call.map(String).join(' '))
+        .join('\n');
+
+    const discarded = `⚠️  The stored session for "${DEST}" is not in the store's format; logging in anew`;
+
+    /** The file after the run: the means byte for byte, a new session with both binding keys. */
+    async function expectRenewed(file: string, before: Buffer) {
+      const after = fs.readFileSync(file, 'utf8');
+      expect(meansLines(after)).toEqual(meansLines(before.toString('utf8')));
+      const keys = readEnvKeys(file);
+      expect(keys.SAP_ISSUED_FOR).toBeDefined();
+      expect(keys.SAP_ISSUED_BY).toBeDefined();
+      const renewed = await sessionAt(file);
+      expect(jwtName(renewed?.authorizationToken)).toBe('uaa-access-2');
+      expect(renewed?.refreshToken).toBe('uaa-refresh-2');
+    }
+
+    /** Nothing of the old record printed, and nothing on stdout. */
+    function expectQuiet(old: { token: string; refresh: string }) {
+      const text = printed();
+      expect(text).not.toContain(old.token);
+      expect(text).not.toContain(old.refresh);
+      expect(text).not.toContain(SERVICE_URL);
+      expect(text).not.toContain(server.url);
+      expect(console.log).not.toHaveBeenCalled();
+    }
+
+    it('--env: the fixed line, a login — the old refresh token sent nowhere — and the file written back with its means unchanged', async () => {
+      const old = await oldSession();
+      (console.error as jest.Mock).mockClear();
+      (console.log as jest.Mock).mockClear();
+      const sent = server.requests.length;
+      await expect(run(envRun(old.file))).resolves.toBe(0);
+      expect(console.error).toHaveBeenCalledWith(discarded);
+      expect(
+        (console.error as jest.Mock).mock.calls.filter(
+          ([line]) => line === discarded,
+        ),
+      ).toHaveLength(1);
+      expect(strategyCalls).toBe(1);
+      const after = server.requests.slice(sent);
+      expect(after.map((r) => r.form.grant_type)).toEqual([
+        'authorization_code',
+      ]);
+      expect(JSON.stringify(after)).not.toContain(old.refresh);
+      await expectRenewed(old.file, old.before);
+      expectQuiet(old);
+    });
+
+    it('--destination: sessions/<name>.env discarded and logged in anew, written back there', async () => {
+      const dests = path.join(root, 'dests');
+      const old = await oldSession(path.join(dests, 'sessions', `${DEST}.env`));
+      (console.error as jest.Mock).mockClear();
+      (console.log as jest.Mock).mockClear();
+      const sent = server.requests.length;
+      await expect(
+        run(
+          options({
+            destination: DEST,
+            destinationDir: dests,
+            outputFile: undefined,
+          }),
+        ),
+      ).resolves.toBe(0);
+      expect(console.error).toHaveBeenCalledWith(discarded);
+      expect(strategyCalls).toBe(1);
+      expect(server.requests.slice(sent).map((r) => r.form.grant_type)).toEqual(
+        ['authorization_code'],
+      );
+      await expectRenewed(old.file, old.before);
+      expectQuiet(old);
+    });
+
+    it('a login that fails after the discard: the run fails, the file byte for byte as it was', async () => {
+      const old = await oldSession();
+      (console.error as jest.Mock).mockClear();
+      (console.log as jest.Mock).mockClear();
+      server.answer('/oauth/token', {
+        status: 401,
+        body: { error: 'invalid_client' },
+      });
+      const thrown = await run(envRun(old.file)).catch((e: unknown) => e);
+      expect(thrown).toBeDefined();
+      expect(console.error).toHaveBeenCalledWith(discarded);
+      expect(strategyCalls).toBe(1);
+      expect(fs.readFileSync(old.file)).toEqual(old.before);
+      const lines = failureLines(thrown);
+      expect(lines.join('\n')).not.toContain(old.token);
+      expect(lines.join('\n')).not.toContain(old.refresh);
+      expectQuiet(old);
+    });
+
+    it('a second refusal ends the run in the CLI’s words, no login, the file as it was', async () => {
+      const old = await oldSession();
+      const refuse = jest
+        .spyOn(AbapSessionStore.prototype, 'loadSession')
+        .mockRejectedValue(
+          new StorageError(
+            'read',
+            `${old.token} not of the format`,
+            undefined,
+            'record-format',
+          ),
+        );
+      try {
+        const thrown = await run(envRun(old.file)).catch((e: unknown) => e);
+        expect(failureLines(thrown)).toEqual([
+          `❌ the stored session for "${DEST}" is not in the store's format`,
+        ]);
+        expect(console.error).toHaveBeenCalledWith(discarded);
+        expect(strategyCalls).toBe(0);
+        expect(refuse).toHaveBeenCalledTimes(2);
+        expect(fs.readFileSync(old.file)).toEqual(old.before);
+      } finally {
+        refuse.mockRestore();
+      }
+    });
+
+    it('--service-key over an old --output: no session read, so nothing discarded', async () => {
+      const old = await oldSession(path.join(outDir, `${DEST}.env`));
+      (console.error as jest.Mock).mockClear();
+      await expect(run(options({ serviceKeyPath: abapKey() }))).resolves.toBe(
+        0,
+      );
+      expect(console.error).not.toHaveBeenCalledWith(discarded);
+      expect(jwtName((await sessionAt(old.file))?.authorizationToken)).toBe(
+        'uaa-access-2',
+      );
     });
   });
 });
