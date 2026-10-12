@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
 
-## [Unreleased]
+## [5.0.3] - 2026-10-12
 
 Development only; the published library is unchanged.
 
@@ -19,6 +19,8 @@ Development only; the published library is unchanged.
   tests and live checks close no longer leaves its SAP session open until the
   server's timeout. The connection is the consumer's; the broker does not
   depend on it.
+- README: a consumer should use `@mcp-abap-adt/connection` 14.1.0 or later. From
+  14.1.0, `disconnect()` ends the SAP session.
 
 ## [5.0.2] - 2026-10-11
 

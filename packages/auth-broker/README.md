@@ -845,6 +845,10 @@ const renewed = await tokenRefresher.refreshToken();
 A `@mcp-abap-adt/connection` 14 connector takes an `IAuthProvider` instead: give it `await
 broker.getProvider('TRIAL', { signal })`.
 
+Use `@mcp-abap-adt/connection` 14.1.0 or later. From 14.1.0 its `disconnect()` sends the
+session's logoff. An earlier 14.x left each closed connection's SAP session open until the
+server's own timeout, so a process that connects again and again collects sessions.
+
 ## Errors
 
 **A provider's failure passes as the same object.** Whatever a provider throws from
