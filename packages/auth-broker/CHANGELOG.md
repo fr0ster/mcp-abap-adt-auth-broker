@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
 
+## [Unreleased]
+
+Development only; the published library is unchanged.
+
+### Changed
+- The tests and live checks run on `@mcp-abap-adt/connection` 15.0.0 (dev dependency
+  `^15.0.0`, on `@mcp-abap-adt/interfaces-adt-connection` 2.0.0, one copy). Their
+  end-to-end suite is renamed `adtConnector.test.ts`.
+- The docs name `connection` 14 or 15 as the connector `getProvider`'s provider is for.
+  The README says why a consumer that also uses `adt-clients` should take 15.
+
 ## [5.0.4] - 2026-10-12
 
 The first published release after 5.0.1. The code is the same as 5.0.2 and 5.0.3, which were

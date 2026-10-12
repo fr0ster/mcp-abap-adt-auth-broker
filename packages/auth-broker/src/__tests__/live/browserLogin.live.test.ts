@@ -2,7 +2,7 @@
  * A browser login through the built `mcp-auth` (CLI 3.0.0) with a real
  * browser, a human at the keyboard: the browser the run states opens the
  * login, the person logs in, the CLI writes the `.env`, and that `.env` opens
- * ADT through `getProvider` and connection 14 — the `jwt` case's check
+ * ADT through `getProvider` and connection 15 — the `jwt` case's check
  * (`adtProbe.ts`, shared). This is how the per-platform browser runs of the
  * auth-broker 5.0.0 / CLI 3.0.0 release are measured (macOS, Windows 11,
  * Linux): a test, not hand commands.
@@ -186,7 +186,7 @@ interface CommandResult {
 }
 
 describeWhere(
-  'browser login — mcp-auth with a real browser, a person logs in (CLI 3.0.0 → .env → getProvider → connection 14)',
+  'browser login — mcp-auth with a real browser, a person logs in (CLI 3.0.0 → .env → getProvider → connection 15)',
   unavailable(),
   () => {
     // Jest collects a skipped block too: no path may be built from an unset variable.

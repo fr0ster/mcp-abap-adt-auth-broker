@@ -4,7 +4,7 @@
 A per-destination credential broker for SAP BTP and ABAP systems. For a destination — a name,
 such as `TRIAL` — `getProvider` builds the `IAuthProvider` the destination states (basic, SNC, a
 UAA, OIDC or SAML grant, or a credential handed over) from the *means* in the service key store
-and the *secret* in the session store, ready for a `@mcp-abap-adt/connection` 14 connector, and
+and the *secret* in the session store, ready for a `@mcp-abap-adt/connection` 14 or 15 connector, and
 stores back every token or set of SAML session cookies that provider obtains or renews. The
 token API (`getToken`, `refreshToken`, `createTokenRefresher`) serves whoever wants a token and
 nothing else. It decides nothing about tokens itself: whether the cached token is still good,
@@ -100,7 +100,7 @@ const provider = await broker.getProvider('TRIAL', { signal: session.signal });
 ```
 
 `getProvider(destination)` returns the `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth`
-7) that a `@mcp-abap-adt/connection` 14 connector takes as it is. The broker reads two stores,
+7) that a `@mcp-abap-adt/connection` 14 or 15 connector takes as it is. The broker reads two stores,
 each for one role:
 
 - **the means** — `authType`, `grantType`, basic's user and password, the SNC, OIDC and SAML
@@ -842,12 +842,15 @@ const current = await tokenRefresher.getToken();
 const renewed = await tokenRefresher.refreshToken();
 ```
 
-A `@mcp-abap-adt/connection` 14 connector takes an `IAuthProvider` instead: give it `await
+A `@mcp-abap-adt/connection` 14 or 15 connector takes an `IAuthProvider` instead: give it `await
 broker.getProvider('TRIAL', { signal })`.
 
 Use `@mcp-abap-adt/connection` 14.1.0 or later. From 14.1.0 its `disconnect()` sends the
 session's logoff. An earlier 14.x left each closed connection's SAP session open until the
 server's own timeout, so a process that connects again and again collects sessions.
+Connection 15 is built on `@mcp-abap-adt/interfaces-adt-connection` 2, as `adt-clients` is.
+If your consumer uses both, choose 15: with 14 it installs two copies of that contract.
+The broker hands either one the same `IAuthProvider`.
 
 ## Errors
 
