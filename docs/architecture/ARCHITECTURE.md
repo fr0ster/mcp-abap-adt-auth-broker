@@ -4,7 +4,7 @@ This document describes the architecture and design decisions of the `@mcp-abap-
 
 ## Overview
 
-For a destination name, `auth-broker` builds the `IAuthProvider` the destination states — from the means in its service key store and the secret in its session store — for a `@mcp-abap-adt/connection` 14 connector, and stores back every secret that provider obtains or renews, bound to the identity it was obtained under. The token API (`getToken`, `refreshToken`, `createTokenRefresher`) serves a consumer that wants a token and nothing else, on that same provider or on one the consumer injects. Storage is the stores'; token acquisition, refresh and how a login is conducted are the providers' and their collaborators'; when to renew is the consumer's `renewal` strategy's, and what a failed write means its `onWriteFailure`.
+For a destination name, `auth-broker` builds the `IAuthProvider` the destination states — from the means in its service key store and the secret in its session store — for a `@mcp-abap-adt/connection` 14 or 15 connector, and stores back every secret that provider obtains or renews, bound to the identity it was obtained under. The token API (`getToken`, `refreshToken`, `createTokenRefresher`) serves a consumer that wants a token and nothing else, on that same provider or on one the consumer injects. Storage is the stores'; token acquisition, refresh and how a login is conducted are the providers' and their collaborators'; when to renew is the consumer's `renewal` strategy's, and what a failed write means its `onWriteFailure`.
 
 Supported destinations (`authType` / `grantType`):
 - **`basic`**, **`snc`** — a user and password; passwordless RFC logon through an SNC product
@@ -87,7 +87,7 @@ tools/                     check-graph.js, check-packed.js, publish-changed.js,
 
 ### `getProvider`
 
-`getProvider(destination, { signal? })` builds the `IAuthProvider` a `connection` 14 connector
+`getProvider(destination, { signal? })` builds the `IAuthProvider` a `connection` 14 or 15 connector
 takes:
 
 - reads the means from the service key store (`getConnectionConfig`); none, or no `authType`, is

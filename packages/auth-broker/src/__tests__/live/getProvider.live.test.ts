@@ -1,6 +1,6 @@
 /**
  * getProvider against real systems: the provider a
- * destination states, handed to a `@mcp-abap-adt/connection` 14 connector,
+ * destination states, handed to a `@mcp-abap-adt/connection` 15 connector,
  * logs on and is answered.
  *
  * Not part of `npm test`. Run with `npm run test:live` (from the repository
@@ -25,7 +25,7 @@
  * `SAP_AUTH_TYPE`, `SAP_CLIENT`, `SAP_USERNAME` / `SAP_PASSWORD`, the
  * `SAP_SNC_*` keys). The address the connector dials is read from the same
  * means (`serviceUrl`, `sapClient`); the RFC system number is derived from the
- * URL's port by connection 14 unless `SAP_SYSNR` is set.
+ * URL's port by connection 15 unless `SAP_SYSNR` is set.
  *
  * The `jwt` case's means come from the destination's SAP service key,
  * `<destination>.json` in AUTH_BROKER_LIVE_SERVICE_KEYS_DIR, read by auth-stores
@@ -64,7 +64,7 @@ import {
   EnvDestinationStore,
   SafeAbapSessionStore,
 } from '@mcp-abap-adt/auth-stores';
-// connection 14 loads without the RFC addon: rfcConversationFrom requires it
+// connection 15 loads without the RFC addon: rfcConversationFrom requires it
 // only when a conversation is opened, so the HTTP case runs where it is absent.
 import {
   AdtOnPremConnector,
@@ -94,7 +94,7 @@ function unset(names: string[]): string[] {
 
 /**
  * Why the RFC wire cannot be taken here, or null when it can. The probe asks
- * from where connection 14 itself will `require` it (`rfcConversationFrom`):
+ * from where connection 15 itself will `require` it (`rfcConversationFrom`):
  * the addon is connection's optional dependency, built at install time only
  * when the NW RFC SDK is found (`SAPNWRFC_HOME`), and must also load — which
  * needs the SDK's libraries on the loader path.
@@ -202,7 +202,7 @@ async function addressOf(
 }
 
 describeWhere(
-  'basic over HTTP — an on-premise system (getProvider → connection 14 OnPremHttpTransport)',
+  'basic over HTTP — an on-premise system (getProvider → connection 15 OnPremHttpTransport)',
   basicHttpUnavailable(),
   () => {
     it('logs on with the provider getProvider built and is answered 200', async () => {
@@ -307,7 +307,7 @@ describeWhere(
 );
 
 describeWhere(
-  'jwt / authorization_code over HTTP — a BTP ABAP environment (getProvider → connection 14 CloudHttpTransport)',
+  'jwt / authorization_code over HTTP — a BTP ABAP environment (getProvider → connection 15 CloudHttpTransport)',
   jwtUnavailable(),
   () => {
     let copy: string;
