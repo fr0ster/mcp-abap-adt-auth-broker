@@ -105,7 +105,7 @@ the library README, *A Provider for a Connector*.
   5.0.0 reads as unbound once: one login per token destination after upgrading. A session file
   with no binding keys beside its credential is refused by auth-stores 5 (`StorageError`,
   `reason: 'record-format'`), and that error reaches you: regenerate it with `mcp-auth` (from
-  auth-broker-cli 3.1.0, `mcp-auth --env <file>` over it discards the session and logs in anew).
+  auth-broker-cli 3.1.1, `mcp-auth --env <file>` over it discards the session and logs in anew).
 - **Every token a provider obtains is written** before it answers, one write at a time per
   destination; what a failed write means is your `onWriteFailure` (`'fail'`: the call fails, and
   the destination's calls are refused until a write lands; `'continue'`: logged). Nothing retries

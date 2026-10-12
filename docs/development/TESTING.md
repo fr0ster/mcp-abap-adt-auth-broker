@@ -121,7 +121,7 @@ tests run one at a time). The library's `jest.config.js` ignores `__tests__/live
   a browser for a login. A session written before 5.0.0 reads as unbound: the first case of each
   token destination logs in once. A session with no binding keys beside its token is refused by
   auth-stores 5 (`record-format`): regenerate it with `mcp-auth --service-key`, or
-  `mcp-auth --env <file>` (auth-broker-cli 3.1.0 discards such a session and logs in anew).
+  `mcp-auth --env <file>` (auth-broker-cli 3.1.1 discards such a session and logs in anew).
 
 ## Running
 
