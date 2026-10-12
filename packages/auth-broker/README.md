@@ -1197,7 +1197,7 @@ What a 4.x consumer must now do, row by row. The full list of changes is the
 
 | 4.x | 5.0.0 — what to do |
 |---|---|
-| `@mcp-abap-adt/auth-providers` 5, `interfaces-auth` 3, `auth-stores` 3 | auth-providers `^6.0.0`, interfaces-auth `^7.5.0`, auth-errors `^2.1.1`, auth-stores `^4.0.0` (`^5.0.0` from 5.0.2: a session record without binding keys is refused, see *Errors*); one installed copy of each contract (`npm ls`) |
+| `@mcp-abap-adt/auth-providers` 5, `interfaces-auth` 3, `auth-stores` 3 | auth-providers `^6.0.0`, interfaces-auth `^7.5.0`, auth-errors `^2.1.1`, auth-stores `^4.0.0` (`^5.0.0` from 5.0.4, the first published since 5.0.1: a session record without binding keys is refused, see *Errors*); one installed copy of each contract (`npm ls`) |
 | token rows renewed by the provider's built-in rule | pass `renewal: () => refreshThenLogin()` — 4.x's steps; without `renewal` a token row is refused (`missingFields: ['renewal']`) |
 | a `getProvider` provider's failed write never failed the authentication; the token API threw the store's error | pass `onWriteFailure`: `'continue'` keeps 4.x's connector behaviour (best effort); `'fail'` keeps 4.x's token-API behaviour and extends it to the connector and to every later call of the destination while the write is pending. Without it a destination that writes a secret is refused |
 | errors of the token API: auth-providers 5.x classes (`ValidationError`, `BrowserAuthError`, `RefreshError`, …) | `AuthProviderFailure`: read it with `readFailure(error, operation)` and `matchKind` (auth-errors); auth-providers' *Migrating to 6.0.0* maps each class to its kind |

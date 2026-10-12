@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The first published 3.1. The code is the same as 3.1.0, which was tagged but never published.
 It is built and tested with `@mcp-abap-adt/connection` 14.1.0 as a development dependency
-(auth-broker 5.0.3). Everything 3.1.0 lists below arrives with 3.1.1.
+(auth-broker 5.0.4). Everything 3.1.0 lists below arrives with 3.1.1.
 
 ## [3.1.0] - 2026-10-11
 
