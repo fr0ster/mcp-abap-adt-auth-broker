@@ -1,6 +1,6 @@
 # Exported Entities
 
-This document lists the public exports of `@mcp-abap-adt/auth-broker` 5.0.0 (`src/index.ts`) and how they relate.
+This document lists the public exports of `@mcp-abap-adt/auth-broker` 5.0.4 (`src/index.ts`) and how they relate.
 
 ## Primary Exports
 

@@ -43,8 +43,8 @@ same repository. This package has no `bin`.
 npm install @mcp-abap-adt/auth-broker @mcp-abap-adt/auth-providers @mcp-abap-adt/auth-errors @mcp-abap-adt/auth-stores
 ```
 
-5.0.0 depends on `@mcp-abap-adt/auth-providers` `^6.0.0`, `@mcp-abap-adt/auth-errors`
-`^2.1.1`, `@mcp-abap-adt/interfaces-auth` `^7.5.0`, `@mcp-abap-adt/interfaces-auth-sap`
+5.0.4 depends on `@mcp-abap-adt/auth-providers` `^6.0.0`, `@mcp-abap-adt/auth-errors`
+`^2.2.0`, `@mcp-abap-adt/interfaces-auth` `^7.5.0`, `@mcp-abap-adt/interfaces-auth-sap`
 `^3.3.0`, `@mcp-abap-adt/interfaces-auth-broker` `^1.3.0` and
 `@mcp-abap-adt/interfaces-utils` `^1.1.0`. Declare `auth-providers` yourself — the renewal
 strategies (`refreshThenLogin`, `refreshOnly`) and the interactive strategies come from it —

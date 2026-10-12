@@ -1,6 +1,6 @@
 # Installation Guide
 
-This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` package (5.0.0)
+This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` package (5.0.4)
 and its command, `@mcp-abap-adt/auth-broker-cli` (3.0.0). Upgrading from 4.x: *Migrating to
 5.0.0* in the [library README](../../packages/auth-broker/README.md#migrating-to-500); from CLI
 2.x: *Migrating to 3.0.0* in the [CLI README](../../packages/auth-broker-cli/README.md#migrating-to-300).
@@ -35,7 +35,7 @@ npm ls @mcp-abap-adt/interfaces-auth @mcp-abap-adt/auth-errors
 
 ```bash
 npm install -g @mcp-abap-adt/auth-broker-cli
-mcp-auth --version   # 3.0.0
+mcp-auth --version   # 3.1.1
 ```
 
 Its only bin is `mcp-auth`; the `mcp-sso` command of 2.x is gone (every form of it is an
