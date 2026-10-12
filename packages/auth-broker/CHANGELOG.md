@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
 
-## [Unreleased]
+## [5.0.5] - 2026-10-12
 
-Development only; the published library is unchanged.
+The library's code and runtime dependencies are the same as 5.0.4. What changed is the
+docs, the README's connection note included, and the tests.
 
 ### Changed
 - The tests and live checks run on `@mcp-abap-adt/connection` 15.0.0 (dev dependency

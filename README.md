@@ -23,7 +23,7 @@ The commands:
 npm install -g @mcp-abap-adt/auth-broker-cli
 ```
 
-The current versions are the library's 5.0.4 and the CLI's 3.1.1, which
+The current versions are the library's 5.0.5 and the CLI's 3.1.1, which
 depends on it (`^5.0.0`); both are on the 6.0 auth chain (`auth-providers` 6,
 `interfaces-auth` 7, `auth-errors` 2, `auth-stores` 5). Both are majors:
 

@@ -4,7 +4,7 @@ How this repository is tested: where each suite lives, what it needs, and the ch
 before a release.
 
 The repository is an npm workspace with two packages, `packages/auth-broker` (the library,
-5.0.4) and `packages/auth-broker-cli` (the `mcp-auth` command, 3.1.1). Every command below runs
+5.0.5) and `packages/auth-broker-cli` (the `mcp-auth` command, 3.1.1). Every command below runs
 from the repository root, where the dev dependencies are installed. Never run `npx jest`
 directly: the npm scripts set `--experimental-vm-modules`, without which the suites do not load.
 
