@@ -23,7 +23,7 @@ auth-broker-cli 3.1.1, `mcp-auth --env <file>` (or `--destination <name>`) over 
 discards its session and logs in anew.
 
 The `mcp-auth` command that writes destination files is
-[`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md) (3.1.1, on this version), in the
+[`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md) (3.1.2, on this version), in the
 same repository. This package has no `bin`.
 
 ## Features
@@ -43,10 +43,10 @@ same repository. This package has no `bin`.
 npm install @mcp-abap-adt/auth-broker @mcp-abap-adt/auth-providers @mcp-abap-adt/auth-errors @mcp-abap-adt/auth-stores
 ```
 
-5.0.5 depends on `@mcp-abap-adt/auth-providers` `^6.0.0`, `@mcp-abap-adt/auth-errors`
+5.0.6 depends on `@mcp-abap-adt/auth-providers` `^6.0.0`, `@mcp-abap-adt/auth-errors`
 `^2.2.0`, `@mcp-abap-adt/interfaces-auth` `^7.5.0`, `@mcp-abap-adt/interfaces-auth-sap`
 `^3.3.0`, `@mcp-abap-adt/interfaces-auth-broker` `^1.3.0` and
-`@mcp-abap-adt/interfaces-utils` `^1.1.0`. Declare `auth-providers` yourself — the renewal
+`@mcp-abap-adt/interfaces-utils` `^1.1.1`. Declare `auth-providers` yourself — the renewal
 strategies (`refreshThenLogin`, `refreshOnly`) and the interactive strategies come from it —
 and `auth-errors` to read a failure. The stores are yours to choose: `@mcp-abap-adt/auth-stores`
 `^4.0.0`, or any implementation of the `@mcp-abap-adt/interfaces-auth-broker` contracts. Keep

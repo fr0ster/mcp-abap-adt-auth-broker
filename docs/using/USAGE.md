@@ -1,7 +1,7 @@
 # Usage Guide
 
-This guide shows how to use `@mcp-abap-adt/auth-broker` (5.0.5) and its command
-(`@mcp-abap-adt/auth-broker-cli` 3.1.1). The full API is the
+This guide shows how to use `@mcp-abap-adt/auth-broker` (5.0.6) and its command
+(`@mcp-abap-adt/auth-broker-cli` 3.1.2). The full API is the
 [library README](../../packages/auth-broker/README.md); every flag of `mcp-auth` is in the
 [CLI README](../../packages/auth-broker-cli/README.md). Coming from 4.x: *Migrating to 5.0.0* in
 the library README; from CLI 2.x: *Migrating to 3.0.0* in the CLI README.
