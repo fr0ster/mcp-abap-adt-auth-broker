@@ -1,6 +1,6 @@
 # Installation Guide
 
-This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` package (5.0.0)
+This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` package (5.0.4)
 and its command, `@mcp-abap-adt/auth-broker-cli` (3.0.0). Upgrading from 4.x: *Migrating to
 5.0.0* in the [library README](../../packages/auth-broker/README.md#migrating-to-500); from CLI
 2.x: *Migrating to 3.0.0* in the [CLI README](../../packages/auth-broker-cli/README.md#migrating-to-300).
@@ -35,7 +35,7 @@ npm ls @mcp-abap-adt/interfaces-auth @mcp-abap-adt/auth-errors
 
 ```bash
 npm install -g @mcp-abap-adt/auth-broker-cli
-mcp-auth --version   # 3.0.0
+mcp-auth --version   # 3.1.1
 ```
 
 Its only bin is `mcp-auth`; the `mcp-sso` command of 2.x is gone (every form of it is an
@@ -244,7 +244,7 @@ not read at all: auth-stores 5 refuses it as a whole with a `StorageError` (`cod
 error instead of logging in. Regenerate the session with
 `mcp-auth --service-key <key.json> --output <file> --type abap|xsuaa`, which reads no stored
 session, or delete the file's session lines; a file holding only the means is no session. From
-`@mcp-abap-adt/auth-broker-cli` 3.1.0, `mcp-auth --env <file>` (or `--destination <name>`) over
+`@mcp-abap-adt/auth-broker-cli` 3.1.1, `mcp-auth --env <file>` (or `--destination <name>`) over
 such a file discards its session and logs in anew, every means line kept byte for byte.
 
 ### Token Refresh Issues

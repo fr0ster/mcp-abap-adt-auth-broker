@@ -17,7 +17,7 @@ and every form of it is an `mcp-auth` subcommand with the same flags — a run t
 source (`--service-key`, `--env` or `--destination`), a login waits until you end it, and only
 `help` and `--version` go to stdout. See [*Migrating to 3.0.0*](#migrating-to-300).
 
-**3.1.0** runs on `@mcp-abap-adt/auth-stores` 5, which refuses a session written before
+**3.1.1** runs on `@mcp-abap-adt/auth-stores` 5, which refuses a session written before
 auth-stores 3.1.0 (a token without `SAP_ISSUED_FOR` / `SAP_ISSUED_BY`). A run over such a file
 discards its session and logs in anew, as 3.0.0 did: see [*An Old Session*](#an-old-session).
 
@@ -27,7 +27,7 @@ discards its session and logs in anew, as 3.0.0 did: see [*An Old Session*](#an-
 npm install -g @mcp-abap-adt/auth-broker-cli
 ```
 
-3.1.0 depends on `@mcp-abap-adt/auth-broker` `^5.0.0`, `@mcp-abap-adt/auth-providers`
+3.1.1 depends on `@mcp-abap-adt/auth-broker` `^5.0.0`, `@mcp-abap-adt/auth-providers`
 `^6.0.0`, `@mcp-abap-adt/auth-stores` `^5.0.0`, `@mcp-abap-adt/auth-errors` `^2.2.0`,
 `@mcp-abap-adt/interfaces-auth` `^7.5.0`, `@mcp-abap-adt/interfaces-utils` `^1.1.0`,
 `@xmldom/xmldom` (SAML metadata) and `dotenv` (reading a session file as auth-stores does). Its
@@ -533,7 +533,7 @@ What a CLI 2.x user must now do, row by row. The full list of changes is the
 | `--env <path>` beside `--service-key`: the refresh token tried first, else a login | `--env <path>` alone: the session file (it holds the means too) — a valid token reused, an expired one refreshed, else a login, written back to the file. `--service-key` alone now always logs in and writes a new pair. New: `--destination <name>` for the destination folder. Two sources together are a usage error |
 | a means flag (`--credential`, `--service-url`, `--client-auth`, …) beside `--env` restated the means | refused: the file is used as it is, its client authentication included; run with `--service-key` to state new means |
 | `mcp-sso … --cookie` sessions written by 2.x | refused naming `issuedBy` by auth-broker 5: run `mcp-auth saml2-pure … --cookie` again |
-| sessions written by 2.x (any grant) | read as unbound once by auth-broker 5: the first run (or the server's first use) of each token destination logs in once. From 3.1.0 (auth-stores 5) a 2.x session with no binding keys is discarded by the run, which logs in anew ([*An Old Session*](#an-old-session)); a server reading it directly gets the store's refusal until a run rewrites it |
+| sessions written by 2.x (any grant) | read as unbound once by auth-broker 5: the first run (or the server's first use) of each token destination logs in once. From 3.1.1 (auth-stores 5) a 2.x session with no binding keys is discarded by the run, which logs in anew ([*An Old Session*](#an-old-session)); a server reading it directly gets the store's refusal until a run rewrites it |
 | the `mcp-sso` command | **gone in 3.0.0**: every form is an `mcp-auth` subcommand with the same flags (table below) |
 | `mcp-auth oidc` / `saml2-pure` / `saml2-bearer` started a second process (`mcp-sso`) | they run in `mcp-auth`'s process; a signal to it ends the login, frees the port and removes the work directory |
 | `mcp-auth saml2-bearer` required `--dev` | it does not, and `--dev` is removed: drop it from the command line (it is refused as an unknown option) |

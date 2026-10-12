@@ -23,7 +23,7 @@ The commands:
 npm install -g @mcp-abap-adt/auth-broker-cli
 ```
 
-The current versions are the library's 5.0.2 and the CLI's 3.1.0, which
+The current versions are the library's 5.0.4 and the CLI's 3.1.1, which
 depends on it (`^5.0.0`); both are on the 6.0 auth chain (`auth-providers` 6,
 `interfaces-auth` 7, `auth-errors` 2, `auth-stores` 5). Both are majors:
 
@@ -34,7 +34,7 @@ depends on it (`^5.0.0`); both are on the 6.0 auth chain (`auth-providers` 6,
   unbound once (one login per token destination). With auth-stores 5 a
   session file with no binding keys at all (written before auth-stores 3.1.0,
   or by hand) is refused by the store, and the error reaches you: regenerate
-  it with `mcp-auth --service-key`, or run `mcp-auth` (3.1.0) over the file —
+  it with `mcp-auth --service-key`, or run `mcp-auth` (3.1.1) over the file —
   `--env <file>` or `--destination <name>` — which discards its session and
   logs in anew.
 - **A 2.x user of the CLI**: *Migrating to 3.0.0* in its

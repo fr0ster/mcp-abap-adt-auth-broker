@@ -1,8 +1,8 @@
 # Documentation
 
 Complete documentation for the `@mcp-abap-adt/auth-broker` repository: the library
-(`packages/auth-broker`, 5.0.2) and its command, `@mcp-abap-adt/auth-broker-cli`
-(`packages/auth-broker-cli`, 3.1.0). Upgrading: *Migrating to 5.0.0* in the
+(`packages/auth-broker`, 5.0.4) and its command, `@mcp-abap-adt/auth-broker-cli`
+(`packages/auth-broker-cli`, 3.1.1). Upgrading: *Migrating to 5.0.0* in the
 [library README](../packages/auth-broker/README.md#migrating-to-500), and *Migrating to
 3.0.0* in the [CLI README](../packages/auth-broker-cli/README.md#migrating-to-300); earlier
 migrations are in each package's CHANGELOG.

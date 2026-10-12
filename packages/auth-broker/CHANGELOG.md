@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
 
+## [5.0.4] - 2026-10-12
+
+The first published release after 5.0.1. The code is the same as 5.0.2 and 5.0.3, which were
+tagged but not published. It is released together with auth-broker-cli 3.1.1, so that one
+publish from the main checkout carries both. 5.0.2 (built and tested on auth-stores 5) and
+5.0.3 (tests on connection 14.1.0, the README's connection note) arrive with 5.0.4.
+
 ## [5.0.3] - 2026-10-12
 
 Development only; the published library is unchanged.

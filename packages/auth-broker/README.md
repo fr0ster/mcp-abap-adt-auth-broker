@@ -19,11 +19,11 @@ short — a token destination needs two options the broker has no default for (`
 token destination logs in once after the upgrade. A session file with no binding keys at all
 (written before auth-stores 3.1.0, or by hand) is refused by auth-stores 5 as a whole, and that
 error reaches you: regenerate it with `mcp-auth` (see [*Errors*](#errors)) — from
-auth-broker-cli 3.1.0, `mcp-auth --env <file>` (or `--destination <name>`) over such a file
+auth-broker-cli 3.1.1, `mcp-auth --env <file>` (or `--destination <name>`) over such a file
 discards its session and logs in anew.
 
 The `mcp-auth` command that writes destination files is
-[`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md) (3.0.0, on this version), in the
+[`@mcp-abap-adt/auth-broker-cli`](../auth-broker-cli/README.md) (3.1.1, on this version), in the
 same repository. This package has no `bin`.
 
 ## Features
@@ -43,8 +43,8 @@ same repository. This package has no `bin`.
 npm install @mcp-abap-adt/auth-broker @mcp-abap-adt/auth-providers @mcp-abap-adt/auth-errors @mcp-abap-adt/auth-stores
 ```
 
-5.0.0 depends on `@mcp-abap-adt/auth-providers` `^6.0.0`, `@mcp-abap-adt/auth-errors`
-`^2.1.1`, `@mcp-abap-adt/interfaces-auth` `^7.5.0`, `@mcp-abap-adt/interfaces-auth-sap`
+5.0.4 depends on `@mcp-abap-adt/auth-providers` `^6.0.0`, `@mcp-abap-adt/auth-errors`
+`^2.2.0`, `@mcp-abap-adt/interfaces-auth` `^7.5.0`, `@mcp-abap-adt/interfaces-auth-sap`
 `^3.3.0`, `@mcp-abap-adt/interfaces-auth-broker` `^1.3.0` and
 `@mcp-abap-adt/interfaces-utils` `^1.1.0`. Declare `auth-providers` yourself — the renewal
 strategies (`refreshThenLogin`, `refreshOnly`) and the interactive strategies come from it —
@@ -451,7 +451,7 @@ auth-broker 3.x, or by hand. The broker does not read that as an absent session 
 it; `getProvider` and the token API reject with the store's error, unchanged, before any
 request (every row that reads the session; the broker's own `client_credentials` reads none,
 and its new credential replaces the record). Regenerate the session with `mcp-auth`: from
-auth-broker-cli 3.1.0, a run over the file (`--env`, `--destination`) discards its session — the
+auth-broker-cli 3.1.1, a run over the file (`--env`, `--destination`) discards its session — the
 session keys alone, in a private copy, the original written only after the new login is stored —
 and logs in anew.
 
@@ -954,7 +954,7 @@ needs a clientAuthentication strategy`.
   format: a `StorageError` with `code: 'STORAGE_ERROR'` and `reason: 'record-format'`, in the
   store's fixed words (`AbapSessionStore: the stored session for "<destination>" is not in this
   store's format; regenerate it with mcp-auth`) — no value of the record. Regenerate the session
-  (`mcp-auth --service-key <key.json> --output <file>`, or from auth-broker-cli 3.1.0
+  (`mcp-auth --service-key <key.json> --output <file>`, or from auth-broker-cli 3.1.1
   `mcp-auth --env <file>`, which discards the refused session and logs in anew), or remove its
   session lines. A store that answers `null`, or fails with `FILE_NOT_FOUND` (logged at
   debug), means "nothing here".
@@ -1197,7 +1197,7 @@ What a 4.x consumer must now do, row by row. The full list of changes is the
 
 | 4.x | 5.0.0 — what to do |
 |---|---|
-| `@mcp-abap-adt/auth-providers` 5, `interfaces-auth` 3, `auth-stores` 3 | auth-providers `^6.0.0`, interfaces-auth `^7.5.0`, auth-errors `^2.1.1`, auth-stores `^4.0.0` (`^5.0.0` from 5.0.2: a session record without binding keys is refused, see *Errors*); one installed copy of each contract (`npm ls`) |
+| `@mcp-abap-adt/auth-providers` 5, `interfaces-auth` 3, `auth-stores` 3 | auth-providers `^6.0.0`, interfaces-auth `^7.5.0`, auth-errors `^2.1.1`, auth-stores `^4.0.0` (`^5.0.0` from 5.0.4, the first published since 5.0.1: a session record without binding keys is refused, see *Errors*); one installed copy of each contract (`npm ls`) |
 | token rows renewed by the provider's built-in rule | pass `renewal: () => refreshThenLogin()` — 4.x's steps; without `renewal` a token row is refused (`missingFields: ['renewal']`) |
 | a `getProvider` provider's failed write never failed the authentication; the token API threw the store's error | pass `onWriteFailure`: `'continue'` keeps 4.x's connector behaviour (best effort); `'fail'` keeps 4.x's token-API behaviour and extends it to the connector and to every later call of the destination while the write is pending. Without it a destination that writes a secret is refused |
 | errors of the token API: auth-providers 5.x classes (`ValidationError`, `BrowserAuthError`, `RefreshError`, …) | `AuthProviderFailure`: read it with `readFailure(error, operation)` and `matchKind` (auth-errors); auth-providers' *Migrating to 6.0.0* maps each class to its kind |

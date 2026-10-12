@@ -4,7 +4,7 @@ How this repository is tested: where each suite lives, what it needs, and the ch
 before a release.
 
 The repository is an npm workspace with two packages, `packages/auth-broker` (the library,
-5.0.0) and `packages/auth-broker-cli` (the `mcp-auth` command, 3.0.0). Every command below runs
+5.0.4) and `packages/auth-broker-cli` (the `mcp-auth` command, 3.1.1). Every command below runs
 from the repository root, where the dev dependencies are installed. Never run `npx jest`
 directly: the npm scripts set `--experimental-vm-modules`, without which the suites do not load.
 
@@ -121,7 +121,7 @@ tests run one at a time). The library's `jest.config.js` ignores `__tests__/live
   a browser for a login. A session written before 5.0.0 reads as unbound: the first case of each
   token destination logs in once. A session with no binding keys beside its token is refused by
   auth-stores 5 (`record-format`): regenerate it with `mcp-auth --service-key`, or
-  `mcp-auth --env <file>` (auth-broker-cli 3.1.0 discards such a session and logs in anew).
+  `mcp-auth --env <file>` (auth-broker-cli 3.1.1 discards such a session and logs in anew).
 
 ## Running
 

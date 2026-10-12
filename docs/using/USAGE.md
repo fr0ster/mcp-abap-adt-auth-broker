@@ -1,7 +1,7 @@
 # Usage Guide
 
-This guide shows how to use `@mcp-abap-adt/auth-broker` (5.0.0) and its command
-(`@mcp-abap-adt/auth-broker-cli` 3.0.0). The full API is the
+This guide shows how to use `@mcp-abap-adt/auth-broker` (5.0.4) and its command
+(`@mcp-abap-adt/auth-broker-cli` 3.1.1). The full API is the
 [library README](../../packages/auth-broker/README.md); every flag of `mcp-auth` is in the
 [CLI README](../../packages/auth-broker-cli/README.md). Coming from 4.x: *Migrating to 5.0.0* in
 the library README; from CLI 2.x: *Migrating to 3.0.0* in the CLI README.
@@ -105,7 +105,7 @@ the library README, *A Provider for a Connector*.
   5.0.0 reads as unbound once: one login per token destination after upgrading. A session file
   with no binding keys beside its credential is refused by auth-stores 5 (`StorageError`,
   `reason: 'record-format'`), and that error reaches you: regenerate it with `mcp-auth` (from
-  auth-broker-cli 3.1.0, `mcp-auth --env <file>` over it discards the session and logs in anew).
+  auth-broker-cli 3.1.1, `mcp-auth --env <file>` over it discards the session and logs in anew).
 - **Every token a provider obtains is written** before it answers, one write at a time per
   destination; what a failed write means is your `onWriteFailure` (`'fail'`: the call fails, and
   the destination's calls are refused until a write lands; `'continue'`: logged). Nothing retries
