@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
 
+## [5.0.6] - 2026-10-12
+
+The code is the same as 5.0.5.
+
+### Changed
+- Dependency `@mcp-abap-adt/interfaces-utils` `^1.1.1` (was `^1.1.0`), the current release of
+  the contract; its API is unchanged. The other contracts were already current.
+- The lockfile is refreshed from the registry: the tests run on auth-providers 6.0.2,
+  auth-errors 2.2.1 and auth-stores 5.0.1.
+
 ## [5.0.5] - 2026-10-12
 
 The library's code and runtime dependencies are the same as 5.0.4. What changed is the

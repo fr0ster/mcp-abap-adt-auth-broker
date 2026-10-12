@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.2] - 2026-10-12
+
+The code is the same as 3.1.1.
+
+### Changed
+- Dependency `@mcp-abap-adt/interfaces-utils` `^1.1.1` (was `^1.1.0`), the current release of
+  the contract; its API is unchanged. Built and tested on auth-providers 6.0.2,
+  auth-errors 2.2.1, auth-stores 5.0.1 and auth-broker 5.0.6.
+
 ## [3.1.1] - 2026-10-12
 
 The first published 3.1. The code is the same as 3.1.0, which was tagged but never published.
