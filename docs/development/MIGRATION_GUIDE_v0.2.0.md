@@ -1,7 +1,7 @@
 # Migration Guide: v0.1.x → v0.2.0
 
 > **Historical.** Written for 0.2.0 and kept as history; it does not describe the current
-> packages (`@mcp-abap-adt/auth-broker` 5.0.4, `@mcp-abap-adt/auth-broker-cli` 3.1.1). For what
+> packages (`@mcp-abap-adt/auth-broker` 5.0.5, `@mcp-abap-adt/auth-broker-cli` 3.1.1). For what
 > they are and do, see the package READMEs and CHANGELOGs.
 
 This guide helps you migrate from `@mcp-abap-adt/auth-broker` v0.1.x to v0.2.0.

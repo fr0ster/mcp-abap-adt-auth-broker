@@ -1,6 +1,6 @@
 # Installation Guide
 
-This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` package (5.0.4)
+This guide explains how to install and set up the `@mcp-abap-adt/auth-broker` package (5.0.5)
 and its command, `@mcp-abap-adt/auth-broker-cli` (3.0.0). Upgrading from 4.x: *Migrating to
 5.0.0* in the [library README](../../packages/auth-broker/README.md#migrating-to-500); from CLI
 2.x: *Migrating to 3.0.0* in the [CLI README](../../packages/auth-broker-cli/README.md#migrating-to-300).
