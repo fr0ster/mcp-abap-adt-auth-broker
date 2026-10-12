@@ -17,7 +17,7 @@ and every form of it is an `mcp-auth` subcommand with the same flags — a run t
 source (`--service-key`, `--env` or `--destination`), a login waits until you end it, and only
 `help` and `--version` go to stdout. See [*Migrating to 3.0.0*](#migrating-to-300).
 
-**3.1.0** runs on `@mcp-abap-adt/auth-stores` 5, which refuses a session written before
+**3.1.1** runs on `@mcp-abap-adt/auth-stores` 5, which refuses a session written before
 auth-stores 3.1.0 (a token without `SAP_ISSUED_FOR` / `SAP_ISSUED_BY`). A run over such a file
 discards its session and logs in anew, as 3.0.0 did: see [*An Old Session*](#an-old-session).
 
@@ -27,7 +27,7 @@ discards its session and logs in anew, as 3.0.0 did: see [*An Old Session*](#an-
 npm install -g @mcp-abap-adt/auth-broker-cli
 ```
 
-3.1.0 depends on `@mcp-abap-adt/auth-broker` `^5.0.0`, `@mcp-abap-adt/auth-providers`
+3.1.1 depends on `@mcp-abap-adt/auth-broker` `^5.0.0`, `@mcp-abap-adt/auth-providers`
 `^6.0.0`, `@mcp-abap-adt/auth-stores` `^5.0.0`, `@mcp-abap-adt/auth-errors` `^2.2.0`,
 `@mcp-abap-adt/interfaces-auth` `^7.5.0`, `@mcp-abap-adt/interfaces-utils` `^1.1.0`,
 `@xmldom/xmldom` (SAML metadata) and `dotenv` (reading a session file as auth-stores does). Its

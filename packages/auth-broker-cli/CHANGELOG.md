@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2026-10-12
+
+The first published 3.1. The code is the same as 3.1.0, which was tagged but never published.
+It is built and tested with `@mcp-abap-adt/connection` 14.1.0 as a development dependency
+(auth-broker 5.0.3). Everything 3.1.0 lists below arrives with 3.1.1.
+
 ## [3.1.0] - 2026-10-11
 
 On `@mcp-abap-adt/auth-stores` 5. A run over a session the store refuses as not of its
