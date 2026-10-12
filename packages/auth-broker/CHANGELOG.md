@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
 
+## [Unreleased]
+
+Development only; the published library is unchanged.
+
+### Changed
+- The tests run on `@mcp-abap-adt/connection` 14.1.0 (a dev dependency, `^14.1.0`):
+  its `disconnect()` sends the session's logoff, so a connection the broker's
+  tests and live checks close no longer leaves its SAP session open until the
+  server's timeout. The connection is the consumer's; the broker does not
+  depend on it.
+
 ## [5.0.2] - 2026-10-11
 
 Built and tested on `@mcp-abap-adt/auth-stores` 5.0.0; the code is the same as
