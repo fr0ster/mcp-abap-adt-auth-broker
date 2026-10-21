@@ -66,7 +66,7 @@ API reference and usage examples:
 ### AuthBroker Class
 
 For a destination name:
-- **getProvider()** - The `IAuthProvider` the destination states (basic, SNC, a UAA, OIDC or SAML grant, a credential handed over), built from the key store's means and the session store's secret, for a `@mcp-abap-adt/connection` 14 or 15 connector; everything it obtains is stored back, bound to the means it was obtained under; rebuilt when those means change
+- **getProvider()** - The `IAuthProvider` the destination states (basic, SNC, a UAA, OIDC or SAML grant, a credential handed over), built from the key store's means and the session store's secret, for a `@mcp-abap-adt/connection` connector (14 or later; the tests run on 18); everything it obtains is stored back, bound to the means it was obtained under; rebuilt when those means change
 - **getToken()** - The destination's current token (cached while valid, else renewed as the `renewal` strategy says) — from `getProvider`'s provider, or from a `provider` you give the broker
 - **refreshToken()** - A new token, never the cached one (`refreshTokens()`)
 - **createTokenRefresher()** - `ITokenRefresher` for one destination, for injection into a connection of your own

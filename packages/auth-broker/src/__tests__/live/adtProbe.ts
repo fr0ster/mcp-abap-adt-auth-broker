@@ -1,6 +1,6 @@
 /**
  * What the live suites share to open ADT through `getProvider`: the probe a
- * connection 15 connector reads, and the check the `jwt` case runs — a
+ * connection 18 connector reads, and the check the `jwt` case runs — a
  * session seeded with a token the system refuses, the 401 renewed by the
  * stored refresh token in `rejected()`, the request answered 200, the new
  * token and its binding in the session file. `getProvider.live.test.ts`'s
@@ -39,7 +39,7 @@ export const quiet = {
   debug: () => {},
 };
 
-/** The lightest ADT read connection 15's own live suite measures. */
+/** The lightest ADT read connection 18's own live suite measures. */
 export const PROBE = '/sap/bc/adt/compatibility/graph';
 
 export type ConnectorConfig = ConstructorParameters<
@@ -105,7 +105,7 @@ export interface RefusedTokenCheck {
 /**
  * The `jwt` case's check, on the session file `<sessionsDir>/<destination>.env`:
  * seeds a refused token under the binding the file answers, opens ADT through
- * `getProvider` and connection 15's `AdtCloudConnector`, and asserts one 401,
+ * `getProvider` and connection 18's `AdtCloudConnector`, and asserts one 401,
  * renewed by refresh, a 200, and a new token with its binding written back.
  */
 export async function expectRefusedTokenRenewed(

@@ -48,7 +48,7 @@ packages/auth-broker/src/__tests__/
 │   ├── oidcGrants.test.ts               # the OIDC grants against Keycloak in Docker
 │   └── samlGrants.test.ts               # the SAML grants, Keycloak to UAA, in Docker
 ├── live/
-│   ├── getProvider.live.test.ts         # getProvider through connection 15 against real systems
+│   ├── getProvider.live.test.ts         # getProvider through connection 18 against real systems
 │   ├── browserLogin.live.test.ts        # mcp-auth with a real browser, a person logs in; the .env opens ADT
 │   ├── adtProbe.ts                      # the jwt case's ADT check, shared by both suites above
 │   └── x509.live.test.ts                # an x509 XSUAA key through the broker and the CLI
@@ -110,7 +110,7 @@ tests run one at a time). The library's `jest.config.js` ignores `__tests__/live
   until released); their interactive half is a recording strategy or presenter, or one that
   waits until aborted. The SAML grants' assertions come from `@mcp-abap-adt/auth-mocks`' identity
   provider. The SNC case writes a 64-byte ELF header for the host's architecture into a temporary
-  directory as its `sncLib`. `adtConnector.test.ts` runs `@mcp-abap-adt/connection` 15 over its
+  directory as its `sncLib`. `adtConnector.test.ts` runs `@mcp-abap-adt/connection` 18 over its
   real HTTP wire. A released port is proved by binding it, never by a log line.
 - **`stand/*.test.ts`** (both packages): the stand (below). Without `UAA_URL` / `KEYCLOAK_URL`
   each is skipped, printing why; the CLI's also skip off Linux, and need the built bin.
@@ -248,7 +248,7 @@ login waits and gone after exit 130 / 143. Skipped, each suite prints
 ## Live checks: getProvider against real systems
 
 `packages/auth-broker/src/__tests__/live/getProvider.live.test.ts` hands the provider
-`getProvider` builds to a `@mcp-abap-adt/connection` 15 connector and reads
+`getProvider` builds to a `@mcp-abap-adt/connection` 18 connector and reads
 `/sap/bc/adt/compatibility/graph` from a real system. It is not part of `npm test` or `npm run
 check`:
 

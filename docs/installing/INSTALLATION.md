@@ -155,7 +155,7 @@ The `mcp-auth` command's `--destination <name>` looks in `<dir>/sessions/` and
      authorization: () => browserCallbackStrategy({ browser: linuxDefaultBrowser() }),
    });
 
-   const provider = await broker.getProvider('TRIAL'); // for a connection 14 or 15 connector
+   const provider = await broker.getProvider('TRIAL'); // for a connection connector (14 or later; the tests run on 18)
    const token = await broker.getToken('TRIAL');       // the same provider's token
    await broker.flush();                               // every token stored?
    ```
