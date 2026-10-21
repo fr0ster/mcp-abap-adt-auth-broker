@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
 
+## [Unreleased]
+
+### Changed
+- The tests and live checks run on `@mcp-abap-adt/connection` 18.0.1 (dev dependency
+  `^18.0.1`, was `^15.0.0`); no test needed a change. Connection is a development
+  dependency only: no runtime dependency range on it exists, so nothing changes for a
+  consumer of the package.
+- The docs name `connection` 14 or later as the connector `getProvider`'s provider is for,
+  with the tests on 18; the README's connection note says that from 16 one connection
+  instance is one session.
+
 ## [5.0.6] - 2026-10-12
 
 The code is the same as 5.0.5.
