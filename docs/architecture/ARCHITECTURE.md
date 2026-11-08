@@ -197,7 +197,7 @@ and has no timer; the token API never attaches its signal to a provider.
 
 ### Stores
 
-Each store has one role (contracts from `@mcp-abap-adt/interfaces-auth-broker` 1.3):
+Each store has one role (contracts from `@mcp-abap-adt/interfaces-auth-broker` 1.4):
 
 - `IServiceKeyStore` answers the means — `getConnectionConfig` and `getAuthorizationConfig`, and
   optionally `getClientCertificate`. It is read-only: the broker never writes means.

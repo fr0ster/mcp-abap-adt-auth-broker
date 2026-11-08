@@ -1,6 +1,6 @@
 # Exported Entities
 
-This document lists the public exports of `@mcp-abap-adt/auth-broker` 5.0.6 (`src/index.ts`) and how they relate.
+This document lists the public exports of `@mcp-abap-adt/auth-broker` 5.1.0 (`src/index.ts`) and how they relate.
 
 ## Primary Exports
 
@@ -130,8 +130,8 @@ destination that states no `jwt` / `saml` type or no grant.
 
 ### Store contracts (for consumers)
 
-The store contracts come from `@mcp-abap-adt/interfaces-auth-broker` 1.3, `IAuthorizationConfig`
-from `@mcp-abap-adt/interfaces-auth-sap` 3:
+The store contracts come from `@mcp-abap-adt/interfaces-auth-broker` 1.4, `IAuthorizationConfig`
+from `@mcp-abap-adt/interfaces-auth-sap` 3 or 4 (the same in both):
 
 ```typescript
 export type {

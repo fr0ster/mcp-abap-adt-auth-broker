@@ -43,13 +43,13 @@ same repository. This package has no `bin`.
 npm install @mcp-abap-adt/auth-broker @mcp-abap-adt/auth-providers @mcp-abap-adt/auth-errors @mcp-abap-adt/auth-stores
 ```
 
-5.0.6 depends on `@mcp-abap-adt/auth-providers` `^6.0.0`, `@mcp-abap-adt/auth-errors`
+5.1.0 depends on `@mcp-abap-adt/auth-providers` `^6.0.0`, `@mcp-abap-adt/auth-errors`
 `^2.2.0`, `@mcp-abap-adt/interfaces-auth` `^7.5.0`, `@mcp-abap-adt/interfaces-auth-sap`
-`^3.3.0`, `@mcp-abap-adt/interfaces-auth-broker` `^1.3.0` and
+`^3.3.0 || ^4.0.0`, `@mcp-abap-adt/interfaces-auth-broker` `^1.4.0` and
 `@mcp-abap-adt/interfaces-utils` `^1.1.1`. Declare `auth-providers` yourself — the renewal
 strategies (`refreshThenLogin`, `refreshOnly`) and the interactive strategies come from it —
 and `auth-errors` to read a failure. The stores are yours to choose: `@mcp-abap-adt/auth-stores`
-`^4.0.0`, or any implementation of the `@mcp-abap-adt/interfaces-auth-broker` contracts. Keep
+`^5.0.0` (5.1.0 reads the RFC address), or any implementation of the `@mcp-abap-adt/interfaces-auth-broker` contracts. Keep
 one installed copy of each contract package (`npm ls @mcp-abap-adt/interfaces-auth`,
 `npm ls @mcp-abap-adt/auth-errors`): a failure of another copy is still read correctly, but
 loses its diagnostics.
@@ -1174,7 +1174,9 @@ export type TokenProviderFactory = (
   one destination and signal.
 - **`getConnectionConfig(destination)`** — the key store's means with the session's
   `authorizationToken`, `sessionCookies`, `expiresAt`, `issuedFor` and `issuedBy` laid over
-  them; `null` when neither store holds anything. **`getAuthorizationConfig(destination)`** —
+  them; `null` when neither store holds anything. Every means field the key store answers is
+  passed on as it is — the RFC address (`ashost`, `sysnr`, `mshost`, `msserv`, `sysid`, `group`,
+  `saprouter`; interfaces-auth-broker 1.4) included. **`getAuthorizationConfig(destination)`** —
   the key store's client (`uaaUrl`, `uaaClientId`, `uaaClientSecret`) with the session's refresh
   token; `null` when the key store has no client (an x509 key's included). Store reads with no
   signal.

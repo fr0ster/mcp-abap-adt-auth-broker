@@ -1,7 +1,7 @@
 # Development Roadmap
 
 > **Historical.** This roadmap was written for 0.1.0 and is kept as history; it
-> does not describe the current packages (`@mcp-abap-adt/auth-broker` 5.0.6,
+> does not describe the current packages (`@mcp-abap-adt/auth-broker` 5.1.0,
 > `@mcp-abap-adt/auth-broker-cli` 3.1.2). For what they are and do, see the
 > package READMEs and CHANGELOGs.
 
