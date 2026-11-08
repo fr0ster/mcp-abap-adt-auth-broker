@@ -9,9 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Thank you to all contributors! See [CONTRIBUTORS.md](../../CONTRIBUTORS.md) for the complete list.
 
-## [Unreleased]
+## [5.1.0] - 2026-11-08
+
+The library's code is the same as 5.0.6: `getConnectionConfig` already passes on every
+non-secret means field the key store answers. What changed is the contracts it accepts.
 
 ### Changed
+- Dependency `@mcp-abap-adt/interfaces-auth-broker` `^1.4.0` (was `^1.3.0`): its
+  `IConnectionConfig` carries the RFC address as optional means — `ashost`, `sysnr`, `mshost`,
+  `msserv`, `sysid`, `group`, `saprouter` — and `getConnectionConfig` answers each as the key
+  store gives it. No row of `getProvider` reads them, and nothing is required or refused: the
+  consumer validates the address.
+- Dependency `@mcp-abap-adt/interfaces-auth-sap` `^3.3.0 || ^4.0.0` (was `^3.3.0`). The broker
+  uses only `IAuthorizationConfig` and `AuthType` from it, the same in 4.0.0; 4.0.0 changes
+  `ISapConfig`, which the broker does not use. The lockfile still resolves 3.4.0, one copy,
+  since `auth-providers` 6 and `connection` 18 require `^3`.
+- The tests run on `@mcp-abap-adt/auth-stores` 5.1.0 (dev dependency `^5.1.0`, was `^5.0.0`),
+  whose `EnvDestinationStore` reads and writes the RFC address (`SAP_ASHOST` …
+  `SAP_SAPROUTER`, or `XSUAA_…`); a new suite shows `getConnectionConfig` answering each of
+  the seven from such a file. The README names auth-stores `^5.0.0` as the stores' range (it
+  said `^4.0.0`).
 - The tests and live checks run on `@mcp-abap-adt/connection` 18.0.1 (dev dependency
   `^18.0.1`, was `^15.0.0`); no test needed a change. Connection is a development
   dependency only: no runtime dependency range on it exists, so nothing changes for a
